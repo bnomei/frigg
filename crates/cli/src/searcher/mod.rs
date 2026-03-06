@@ -273,17 +273,18 @@ impl HybridRankingIntent {
             "replay",
             "trace artifact",
         ]);
-        let wants_benchmarks = has_any(&[
-            "benchmark",
-            "benchmarks",
-            "metric",
-            "metrics",
-            "acceptance metric",
-            "acceptance metrics",
-            "replayability",
-            "deterministic replay",
-        ]) || (has_any(&["deterministic", "replay", "suite", "fixture", "fixtures"])
-            && has_any(&["trace artifact", "citation", "citations", "playbook"]));
+        let wants_benchmarks =
+            has_any(&[
+                "benchmark",
+                "benchmarks",
+                "metric",
+                "metrics",
+                "acceptance metric",
+                "acceptance metrics",
+                "replayability",
+                "deterministic replay",
+            ]) || (has_any(&["deterministic", "replay", "suite", "fixture", "fixtures"])
+                && has_any(&["trace artifact", "citation", "citations", "playbook"]));
         let wants_error_taxonomy = has_any(&[
             "invalid_params",
             "-32602",
@@ -307,7 +308,8 @@ impl HybridRankingIntent {
             "core versus extended",
             "core vs extended",
             "extended_only",
-        ]) || (has_any(&["mcp", "tool", "tools"]) && has_any(&["core", "extended", "schema"]));
+        ]) || (has_any(&["mcp", "tool", "tools"])
+            && has_any(&["core", "extended", "schema"]));
 
         Self {
             wants_docs,
@@ -1005,11 +1007,16 @@ impl TextSearcher {
                         },
                         filters.clone(),
                     )?;
-                    merge_hybrid_lexical_search_output(&mut lexical_output, expanded, lexical_limit);
+                    merge_hybrid_lexical_search_output(
+                        &mut lexical_output,
+                        expanded,
+                        lexical_limit,
+                    );
                 }
             }
         }
-        let lexical_hits = build_hybrid_lexical_hits_with_intent(&lexical_output.matches, &ranking_intent);
+        let lexical_hits =
+            build_hybrid_lexical_hits_with_intent(&lexical_output.matches, &ranking_intent);
 
         let matches = rank_hybrid_evidence_for_query(
             &lexical_hits,
@@ -1717,15 +1724,6 @@ fn walk_candidate_files_for_repository(
 
         file_candidates.push((rel_path, path.to_path_buf()));
     }
-    extend_with_force_visible_candidates(
-        &mut file_candidates,
-        repository_id,
-        root,
-        query,
-        filters,
-        diagnostics,
-    );
-
     file_candidates.sort_by(|left, right| left.0.cmp(&right.0));
     file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
     file_candidates
@@ -1733,20 +1731,7 @@ fn walk_candidate_files_for_repository(
 
 fn search_walk_builder(root: &Path) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
-    builder.standard_filters(true);
-    builder
-}
-
-const FORCE_VISIBLE_SEARCH_ROOTS: &[&str] = &["contracts", "benchmarks"];
-
-fn force_visible_search_walk_builder(root: &Path, relative_root: &str) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root.join(relative_root));
-    builder
-        .standard_filters(true)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .ignore(false);
+    builder.standard_filters(true).require_git(false);
     builder
 }
 
@@ -1766,57 +1751,6 @@ fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
         component.as_os_str().to_string_lossy().as_ref(),
         ".frigg" | ".git" | "target"
     )
-}
-
-fn extend_with_force_visible_candidates(
-    file_candidates: &mut Vec<(String, std::path::PathBuf)>,
-    repository_id: &str,
-    root: &Path,
-    query: &SearchTextQuery,
-    filters: &NormalizedSearchFilters,
-    diagnostics: &mut SearchExecutionDiagnostics,
-) {
-    for relative_root in FORCE_VISIBLE_SEARCH_ROOTS {
-        let force_visible_root = root.join(relative_root);
-        if !force_visible_root.exists() {
-            continue;
-        }
-
-        for dent in force_visible_search_walk_builder(root, relative_root).build() {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(err) => {
-                    diagnostics.entries.push(SearchDiagnostic {
-                        repository_id: repository_id.to_owned(),
-                        path: None,
-                        kind: SearchDiagnosticKind::Walk,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path();
-            let rel_path = normalize_repository_relative_path(root, path);
-
-            if let Some(language) = filters.language {
-                if !language.matches_path(path) {
-                    continue;
-                }
-            }
-
-            if let Some(path_regex) = &query.path_regex {
-                if !path_regex.is_match(&rel_path) {
-                    continue;
-                }
-            }
-
-            file_candidates.push((rel_path, path.to_path_buf()));
-        }
-    }
 }
 
 pub fn compile_safe_regex(pattern: &str) -> Result<Regex, RegexSearchError> {
@@ -2391,8 +2325,7 @@ fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRanking
     if intent.wants_error_taxonomy && class == HybridSourceClass::ErrorContracts {
         multiplier *= 1.95;
     }
-    if path == "contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts)
-    {
+    if path == "contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts) {
         multiplier *= 1.70;
     }
     if intent.wants_error_taxonomy && path == "crates/cli/src/mcp/server.rs" {
@@ -2517,9 +2450,9 @@ fn hybrid_class_novelty_bonus(class: HybridSourceClass) -> f32 {
         HybridSourceClass::ErrorContracts
         | HybridSourceClass::ToolContracts
         | HybridSourceClass::BenchmarkDocs => 0.08,
-        HybridSourceClass::Documentation | HybridSourceClass::Runtime | HybridSourceClass::Tests => {
-            0.04
-        }
+        HybridSourceClass::Documentation
+        | HybridSourceClass::Runtime
+        | HybridSourceClass::Tests => 0.04,
         HybridSourceClass::Fixtures => 0.035,
         HybridSourceClass::Readme => 0.02,
         HybridSourceClass::Playbooks | HybridSourceClass::Specs | HybridSourceClass::Other => 0.0,
@@ -2871,7 +2804,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_search_walk_fallback_includes_gitignored_contract_artifacts() -> FriggResult<()> {
+    fn literal_search_walk_fallback_respects_gitignored_contract_artifacts() -> FriggResult<()> {
         let root = temp_workspace_root("literal-search-gitignored-contracts");
         prepare_workspace(&root, &[("contracts/errors.md", "invalid_params\n")])?;
         fs::write(root.join(".gitignore"), "contracts\n").map_err(FriggError::Io)?;
@@ -2889,8 +2822,8 @@ mod tests {
         assert!(
             matches
                 .iter()
-                .any(|entry| entry.path == "contracts/errors.md"),
-            "walk fallback should not drop gitignored contract artifacts from literal search"
+                .all(|entry| entry.path != "contracts/errors.md"),
+            "walk fallback should respect gitignored contract artifacts"
         );
 
         cleanup_workspace(&root);
@@ -2920,7 +2853,9 @@ mod tests {
         )?;
 
         assert!(
-            matches.iter().all(|entry| !entry.path.starts_with("target/")),
+            matches
+                .iter()
+                .all(|entry| !entry.path.starts_with("target/")),
             "walk fallback must not search target artifacts: {matches:?}"
         );
 
@@ -3845,17 +3780,8 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                "tools",
-                "core",
-                "versus",
-                "extended",
-                "tool",
-                "surface",
-                "gating",
-                "enforced",
-                "runtime",
-                "docs",
-                "tests",
+                "tools", "core", "versus", "extended", "tool", "surface", "gating", "enforced",
+                "runtime", "docs", "tests",
             ]
         );
     }
@@ -3863,8 +3789,7 @@ mod tests {
     #[test]
     fn hybrid_ranking_query_aware_lexical_hits_promote_tool_contract_docs_over_generic_readmes()
     -> FriggResult<()> {
-        let query =
-            "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests";
+        let query = "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests";
         let lexical = build_hybrid_lexical_hits_for_query(
             &[
                 text_match(
@@ -3931,8 +3856,7 @@ mod tests {
     #[test]
     fn hybrid_ranking_query_aware_lexical_hits_promote_benchmark_docs_for_replay_queries()
     -> FriggResult<()> {
-        let query =
-            "how does Frigg turn a multi-step suite playbook fixture into a deterministic trace artifact replay and citations";
+        let query = "how does Frigg turn a multi-step suite playbook fixture into a deterministic trace artifact replay and citations";
         let lexical = build_hybrid_lexical_hits_for_query(
             &[
                 text_match(

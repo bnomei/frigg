@@ -9,9 +9,7 @@ use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
-use frigg::indexer::{
-    ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config,
-};
+use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
 use frigg::mcp::FriggMcpServer;
 use frigg::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
@@ -90,12 +88,7 @@ struct Cli {
     )]
     semantic_runtime_strict_mode: Option<bool>,
 
-    #[arg(
-        long,
-        value_name = "MODE",
-        env = "FRIGG_WATCH_MODE",
-        global = true
-    )]
+    #[arg(long, value_name = "MODE", env = "FRIGG_WATCH_MODE", global = true)]
     watch_mode: Option<WatchMode>,
 
     #[arg(
@@ -1142,7 +1135,10 @@ mod tests {
         let remote_runtime = resolve_http_runtime_config(&remote_cli)
             .expect("remote http should resolve with override")
             .expect("remote runtime should be enabled");
-        assert_eq!(remote_runtime.transport_kind(), RuntimeTransportKind::RemoteHttp);
+        assert_eq!(
+            remote_runtime.transport_kind(),
+            RuntimeTransportKind::RemoteHttp
+        );
     }
 
     #[test]

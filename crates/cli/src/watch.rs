@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -28,6 +29,7 @@ struct WatchedRepository {
     repository_id: String,
     root: PathBuf,
     canonical_root: Option<PathBuf>,
+    root_ignore_matcher: Gitignore,
     db_path: PathBuf,
 }
 
@@ -179,14 +181,18 @@ impl WatchSchedulerState {
     }
 
     fn mark_succeeded(&mut self, root_idx: usize, now: Instant) {
-        self.active_root = self.active_root.filter(|active_root| *active_root != root_idx);
+        self.active_root = self
+            .active_root
+            .filter(|active_root| *active_root != root_idx);
         if let Some(state) = self.roots.get_mut(root_idx) {
             state.mark_succeeded(now);
         }
     }
 
     fn mark_failed(&mut self, root_idx: usize, now: Instant, retry: Duration) {
-        self.active_root = self.active_root.filter(|active_root| *active_root != root_idx);
+        self.active_root = self
+            .active_root
+            .filter(|active_root| *active_root != root_idx);
         if let Some(state) = self.roots.get_mut(root_idx) {
             state.mark_failed(now, retry);
         }
@@ -270,11 +276,8 @@ pub fn maybe_start_watch_runtime(
     ));
 
     for (root_idx, repository) in repositories.iter().enumerate() {
-        let startup_status = startup_refresh_status(
-            repository,
-            &semantic_runtime,
-            &semantic_credentials,
-        )?;
+        let startup_status =
+            startup_refresh_status(repository, &semantic_runtime, &semantic_credentials)?;
         if !startup_status.should_refresh {
             info!(
                 repository_id = %repository.repository_id,
@@ -368,7 +371,8 @@ async fn run_supervisor(
                     &semantic_credentials,
                 )
                 .map_err(|err| err.to_string());
-                let _ = completion_tx.send(SupervisorCommand::ReindexCompleted { root_idx, result });
+                let _ =
+                    completion_tx.send(SupervisorCommand::ReindexCompleted { root_idx, result });
             });
         }
     }
@@ -390,11 +394,6 @@ fn handle_notify_event(
             continue;
         };
         if should_ignore_watch_path(&repositories[root_idx], &path) {
-            info!(
-                repository_id = %repositories[root_idx].repository_id,
-                path = %path.display(),
-                "built-in watch mode ignored internal path change"
-            );
             continue;
         }
 
@@ -416,7 +415,10 @@ fn handle_reindex_completed(
     retry: Duration,
 ) {
     let Some(repository) = repositories.get(root_idx) else {
-        warn!(root_idx, "built-in watch mode completed for unknown root index");
+        warn!(
+            root_idx,
+            "built-in watch mode completed for unknown root index"
+        );
         return;
     };
 
@@ -457,11 +459,37 @@ fn build_watched_repositories(config: &FriggConfig) -> FriggResult<Vec<WatchedRe
             Ok(WatchedRepository {
                 repository_id: repository.repository_id.0,
                 canonical_root: root.canonicalize().ok(),
+                root_ignore_matcher: build_root_ignore_matcher(&root),
                 root,
                 db_path,
             })
         })
         .collect()
+}
+
+fn build_root_ignore_matcher(root: &Path) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(root);
+    for ignore_path in [root.join(".gitignore"), root.join(".ignore")] {
+        if !ignore_path.is_file() {
+            continue;
+        }
+        if let Some(error) = builder.add(&ignore_path) {
+            warn!(
+                path = %ignore_path.display(),
+                error = %error,
+                "built-in watch mode could not load ignore rules"
+            );
+        }
+    }
+
+    builder.build().unwrap_or_else(|error| {
+        warn!(
+            root = %root.display(),
+            error = %error,
+            "built-in watch mode could not compile ignore matcher"
+        );
+        Gitignore::empty()
+    })
 }
 
 #[cfg(test)]
@@ -618,7 +646,14 @@ fn should_ignore_watch_path(repository: &WatchedRepository, path: &Path) -> bool
         return false;
     };
     let component = component.as_os_str().to_string_lossy();
-    matches!(component.as_ref(), ".frigg" | ".git" | "target")
+    if matches!(component.as_ref(), ".frigg" | ".git" | "target") {
+        return true;
+    }
+
+    repository
+        .root_ignore_matcher
+        .matched_path_or_any_parents(&relative, path.is_dir())
+        .is_ignore()
 }
 
 #[cfg(test)]
@@ -710,14 +745,26 @@ mod tests {
 
         scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
         scheduler.record_path_change(1, PathBuf::from("two.rs"), now, debounce);
-        assert_eq!(scheduler.next_ready_root(now + Duration::from_millis(749)), None);
-        assert_eq!(scheduler.next_ready_root(now + Duration::from_millis(750)), Some(0));
+        assert_eq!(
+            scheduler.next_ready_root(now + Duration::from_millis(749)),
+            None
+        );
+        assert_eq!(
+            scheduler.next_ready_root(now + Duration::from_millis(750)),
+            Some(0)
+        );
 
         scheduler.mark_started(0);
-        assert_eq!(scheduler.next_ready_root(now + Duration::from_millis(750)), None);
+        assert_eq!(
+            scheduler.next_ready_root(now + Duration::from_millis(750)),
+            None
+        );
 
         scheduler.mark_succeeded(0, now + Duration::from_millis(760));
-        assert_eq!(scheduler.next_ready_root(now + Duration::from_millis(760)), Some(1));
+        assert_eq!(
+            scheduler.next_ready_root(now + Duration::from_millis(760)),
+            Some(1)
+        );
     }
 
     #[test]
@@ -780,6 +827,7 @@ mod tests {
         let repository = WatchedRepository {
             repository_id: "repo-001".to_owned(),
             canonical_root: Some(root.clone()),
+            root_ignore_matcher: build_root_ignore_matcher(&root),
             root: root.clone(),
             db_path: root.join(".frigg/storage.sqlite3"),
         };
@@ -787,7 +835,10 @@ mod tests {
             &repository,
             &root.join(".frigg/storage.sqlite3")
         ));
-        assert!(should_ignore_watch_path(&repository, &root.join(".git/index")));
+        assert!(should_ignore_watch_path(
+            &repository,
+            &root.join(".git/index")
+        ));
         assert!(should_ignore_watch_path(
             &repository,
             &root.join("target/debug/app")
@@ -803,11 +854,45 @@ mod tests {
     }
 
     #[test]
+    fn watch_path_filter_respects_root_gitignore_rules() {
+        let root = temp_workspace_root("watch-gitignore-filter");
+        fs::create_dir_all(root.join("contracts")).expect("contracts directory should exist");
+        fs::create_dir_all(root.join("src")).expect("src directory should exist");
+        fs::write(root.join(".gitignore"), "contracts/\n").expect("gitignore should be writable");
+        fs::write(root.join("contracts/errors.md"), "# Errors\n")
+            .expect("contract file should be writable");
+        fs::write(root.join("src/lib.rs"), "pub fn alpha() {}\n")
+            .expect("source file should be writable");
+
+        let repository = WatchedRepository {
+            repository_id: "repo-001".to_owned(),
+            canonical_root: root.canonicalize().ok(),
+            root_ignore_matcher: build_root_ignore_matcher(&root),
+            root: root.clone(),
+            db_path: root.join(".frigg/storage.sqlite3"),
+        };
+
+        assert!(should_ignore_watch_path(
+            &repository,
+            &root.join("contracts/errors.md")
+        ));
+        assert!(!should_ignore_watch_path(
+            &repository,
+            &root.join("src/lib.rs")
+        ));
+
+        cleanup_workspace(&root);
+    }
+
+    #[test]
     fn repository_relative_watch_path_accepts_canonical_root_prefix() {
         let repository = WatchedRepository {
             repository_id: "repo-001".to_owned(),
             root: PathBuf::from("/var/folders/example/frigg-root"),
             canonical_root: Some(PathBuf::from("/private/var/folders/example/frigg-root")),
+            root_ignore_matcher: build_root_ignore_matcher(Path::new(
+                "/var/folders/example/frigg-root",
+            )),
             db_path: PathBuf::from("/var/folders/example/frigg-root/.frigg/storage.sqlite3"),
         };
 
@@ -829,7 +914,9 @@ mod tests {
         let db_path = crate::storage::ensure_provenance_db_parent_dir(&workspace_root)
             .expect("db path should be creatable");
         let store = ManifestStore::new(&db_path);
-        store.initialize().expect("manifest store should initialize");
+        store
+            .initialize()
+            .expect("manifest store should initialize");
 
         let entries = vec![crate::indexer::FileDigest {
             path: source_path.clone(),
@@ -850,6 +937,7 @@ mod tests {
         let repository = WatchedRepository {
             repository_id: "repo-001".to_owned(),
             canonical_root: workspace_root.canonicalize().ok(),
+            root_ignore_matcher: build_root_ignore_matcher(&workspace_root),
             root: workspace_root.clone(),
             db_path: db_path.clone(),
         };
@@ -857,7 +945,8 @@ mod tests {
 
         fs::write(&source_path, "fn beta() {}\n").expect("source file should be writable");
         assert!(
-            !latest_manifest_is_valid(&repository).expect("modified file should invalidate snapshot")
+            !latest_manifest_is_valid(&repository)
+                .expect("modified file should invalidate snapshot")
         );
 
         cleanup_workspace(&workspace_root);
@@ -884,6 +973,7 @@ mod tests {
         let repository = WatchedRepository {
             repository_id: "repo-001".to_owned(),
             canonical_root: workspace_root.canonicalize().ok(),
+            root_ignore_matcher: build_root_ignore_matcher(&workspace_root),
             root: workspace_root.clone(),
             db_path,
         };
@@ -928,6 +1018,7 @@ mod tests {
         let repository = WatchedRepository {
             repository_id: "repo-001".to_owned(),
             canonical_root: workspace_root.canonicalize().ok(),
+            root_ignore_matcher: build_root_ignore_matcher(&workspace_root),
             root: workspace_root.clone(),
             db_path,
         };
@@ -981,7 +1072,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn watch_runtime_initial_sync_preserves_contract_visibility_and_target_exclusion() {
+    async fn watch_runtime_initial_sync_respects_gitignored_contracts_and_excludes_target() {
         let workspace_root = temp_workspace_root("contracts-visible");
         fs::create_dir_all(workspace_root.join("contracts"))
             .expect("contracts directory should be creatable");
@@ -989,11 +1080,8 @@ mod tests {
             .expect("target directory should be creatable");
         fs::write(workspace_root.join(".gitignore"), "contracts/\n")
             .expect("gitignore should be writable");
-        fs::write(
-            workspace_root.join("contracts/errors.md"),
-            "# Errors\n",
-        )
-        .expect("contract file should be writable");
+        fs::write(workspace_root.join("contracts/errors.md"), "# Errors\n")
+            .expect("contract file should be writable");
         fs::write(workspace_root.join("target/debug/app"), "binary")
             .expect("target artifact should be writable");
 
@@ -1023,8 +1111,10 @@ mod tests {
             .map(|entry| entry.path)
             .collect::<Vec<_>>();
         assert!(
-            paths.iter().any(|path| path.ends_with("contracts/errors.md")),
-            "contract path should remain indexed: {paths:?}"
+            paths
+                .iter()
+                .all(|path| !path.ends_with("contracts/errors.md")),
+            "gitignored contract path should stay excluded: {paths:?}"
         );
         assert!(
             paths.iter().all(|path| !path.starts_with("target/")),
@@ -1106,8 +1196,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(250)).await;
 
         let created_path = workspace_root.join("added.rs");
-        fs::write(&created_path, "pub fn watch_notify_beta() {}\n// watch-notify-beta\n")
-            .expect("creating a new source file should trigger notify backend");
+        fs::write(
+            &created_path,
+            "pub fn watch_notify_beta() {}\n// watch-notify-beta\n",
+        )
+        .expect("creating a new source file should trigger notify backend");
 
         let next_snapshot_id = wait_for_snapshot_id_change(
             &db_path,
@@ -1134,11 +1227,9 @@ mod tests {
             )
             .expect("literal search should succeed after watch-triggered reindex");
         assert!(
-            matches
-                .iter()
-                .any(|entry| {
-                    entry.path == "added.rs" && entry.excerpt.contains("watch-notify-beta")
-                }),
+            matches.iter().any(|entry| {
+                entry.path == "added.rs" && entry.excerpt.contains("watch-notify-beta")
+            }),
             "query path should observe the post-reindex file contents: {:?}",
             matches
                 .iter()

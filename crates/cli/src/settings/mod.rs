@@ -438,9 +438,18 @@ mod tests {
 
     #[test]
     fn watch_mode_parsing_and_transport_override_behave_as_expected() {
-        assert_eq!("auto".parse::<WatchMode>().unwrap_or(WatchMode::Off), WatchMode::Auto);
-        assert_eq!("on".parse::<WatchMode>().unwrap_or(WatchMode::Off), WatchMode::On);
-        assert_eq!("off".parse::<WatchMode>().unwrap_or(WatchMode::On), WatchMode::Off);
+        assert_eq!(
+            "auto".parse::<WatchMode>().unwrap_or(WatchMode::Off),
+            WatchMode::Auto
+        );
+        assert_eq!(
+            "on".parse::<WatchMode>().unwrap_or(WatchMode::Off),
+            WatchMode::On
+        );
+        assert_eq!(
+            "off".parse::<WatchMode>().unwrap_or(WatchMode::On),
+            WatchMode::Off
+        );
         assert!("wat".parse::<WatchMode>().is_err());
 
         let on = WatchConfig {

@@ -2447,18 +2447,22 @@ mod tests {
         assert_eq!(projections[0].path, "src/a.rs");
         assert_eq!(projections[0].embedding, vec![0.1, 0.2]);
         assert_eq!(projections[1].chunk_id, "chunk-b");
-        assert!(storage.has_semantic_embeddings_for_repository_snapshot_model(
-            "repo-1",
-            "snapshot-001",
-            "openai",
-            "text-embedding-3-small",
-        )?);
-        assert!(!storage.has_semantic_embeddings_for_repository_snapshot_model(
-            "repo-1",
-            "snapshot-001",
-            "google",
-            "gemini-embedding-001",
-        )?);
+        assert!(
+            storage.has_semantic_embeddings_for_repository_snapshot_model(
+                "repo-1",
+                "snapshot-001",
+                "openai",
+                "text-embedding-3-small",
+            )?
+        );
+        assert!(
+            !storage.has_semantic_embeddings_for_repository_snapshot_model(
+                "repo-1",
+                "snapshot-001",
+                "google",
+                "gemini-embedding-001",
+            )?
+        );
 
         let filtered = storage.load_semantic_embedding_projections_for_repository_snapshot_model(
             "repo-1",
@@ -2467,12 +2471,13 @@ mod tests {
             Some("text-embedding-3-small"),
         )?;
         assert_eq!(filtered.len(), 2);
-        let empty_filtered = storage.load_semantic_embedding_projections_for_repository_snapshot_model(
-            "repo-1",
-            "snapshot-001",
-            Some("google"),
-            Some("gemini-embedding-001"),
-        )?;
+        let empty_filtered = storage
+            .load_semantic_embedding_projections_for_repository_snapshot_model(
+                "repo-1",
+                "snapshot-001",
+                Some("google"),
+                Some("gemini-embedding-001"),
+            )?;
         assert!(empty_filtered.is_empty());
 
         let texts = storage.load_semantic_chunk_texts_for_repository_snapshot(

@@ -1685,13 +1685,6 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
-        extend_with_force_visible_digests(
-            &mut out,
-            root,
-            self.follow_symlinks,
-            &internal_storage_dir,
-        )?;
-
         out.sort_by(file_digest_order);
         out.dedup_by(|left, right| left.path == right.path);
 
@@ -1754,13 +1747,6 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
-        extend_with_force_visible_digests(
-            &mut entries,
-            root,
-            self.follow_symlinks,
-            &internal_storage_dir,
-        )?;
-
         entries.sort_by(file_digest_order);
         entries.dedup_by(|left, right| left.path == right.path);
         diagnostics.sort_by(manifest_build_diagnostic_order);
@@ -1825,13 +1811,6 @@ impl ManifestBuilder {
                 mtime_ns,
             });
         }
-        extend_with_force_visible_metadata(
-            &mut entries,
-            root,
-            self.follow_symlinks,
-            &internal_storage_dir,
-        )?;
-
         entries.sort_by(file_metadata_digest_order);
         entries.dedup_by(|left, right| left.path == right.path);
         diagnostics.sort_by(manifest_build_diagnostic_order);
@@ -1845,24 +1824,9 @@ impl ManifestBuilder {
 
 fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
-    builder.standard_filters(true).follow_links(follow_symlinks);
-    builder
-}
-
-const FORCE_VISIBLE_ROOTS: &[&str] = &["contracts", "benchmarks"];
-
-fn frigg_force_visible_walk_builder(
-    root: &Path,
-    relative_root: &str,
-    follow_symlinks: bool,
-) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root.join(relative_root));
     builder
         .standard_filters(true)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .ignore(false)
+        .require_git(false)
         .follow_links(follow_symlinks);
     builder
 }
@@ -1883,89 +1847,6 @@ fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
         component.as_os_str().to_string_lossy().as_ref(),
         ".frigg" | ".git" | "target"
     )
-}
-
-fn extend_with_force_visible_digests(
-    entries: &mut Vec<FileDigest>,
-    root: &Path,
-    follow_symlinks: bool,
-    internal_storage_dir: &Path,
-) -> FriggResult<()> {
-    for relative_root in FORCE_VISIBLE_ROOTS {
-        let force_visible_root = root.join(relative_root);
-        if !force_visible_root.exists() {
-            continue;
-        }
-
-        for dent in frigg_force_visible_walk_builder(root, relative_root, follow_symlinks).build() {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-                continue;
-            }
-            let mtime_ns = dent
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(system_time_to_unix_nanos);
-            let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
-            entries.push(FileDigest {
-                path,
-                size_bytes,
-                mtime_ns,
-                hash_blake3_hex: digest,
-            });
-        }
-    }
-
-    Ok(())
-}
-
-fn extend_with_force_visible_metadata(
-    entries: &mut Vec<FileMetadataDigest>,
-    root: &Path,
-    follow_symlinks: bool,
-    internal_storage_dir: &Path,
-) -> FriggResult<()> {
-    for relative_root in FORCE_VISIBLE_ROOTS {
-        let force_visible_root = root.join(relative_root);
-        if !force_visible_root.exists() {
-            continue;
-        }
-
-        for dent in frigg_force_visible_walk_builder(root, relative_root, follow_symlinks).build() {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-                continue;
-            }
-            let metadata = dent
-                .metadata()
-                .map_err(|err| FriggError::Internal(err.to_string()))?;
-            let mtime_ns = metadata.modified().ok().and_then(system_time_to_unix_nanos);
-            entries.push(FileMetadataDigest {
-                path,
-                size_bytes: metadata.len(),
-                mtime_ns,
-            });
-        }
-    }
-
-    Ok(())
 }
 
 fn stream_file_blake3_digest(path: &Path) -> std::io::Result<(u64, String)> {
@@ -2350,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_builder_includes_gitignored_contract_artifacts() -> FriggResult<()> {
+    fn manifest_builder_respects_gitignored_contract_artifacts() -> FriggResult<()> {
         let workspace_root = temp_workspace_root("manifest-builder-gitignored-contracts");
         prepare_workspace(
             &workspace_root,
@@ -2365,8 +2246,8 @@ mod tests {
         let relative_paths = manifest_relative_paths(&manifest, &workspace_root)?;
 
         assert!(
-            relative_paths.contains(&PathBuf::from("contracts/errors.md")),
-            "contract artifacts must stay visible to Frigg even when the repo gitignores contracts/"
+            !relative_paths.contains(&PathBuf::from("contracts/errors.md")),
+            "manifest discovery should respect gitignored contract artifacts"
         );
 
         Ok(())
