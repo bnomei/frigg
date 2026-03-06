@@ -1,0 +1,26 @@
+{
+  "suite_schema": "frigg.deep_search.playbook_suite.v1",
+  "playbook_id": "deep-search-suite-partial-channel-v1",
+  "steps": [
+    {
+      "step_id": "s01-search-text-regex-not-ready",
+      "tool_name": "search_text",
+      "status": "ok",
+      "min_matches": 1
+    },
+    {
+      "step_id": "s02-search-symbol-after-error",
+      "tool_name": "search_symbol",
+      "status": "ok",
+      "min_matches": 1,
+      "require_note": true
+    },
+    {
+      "step_id": "s03-find-references-after-error",
+      "tool_name": "find_references",
+      "status": "ok",
+      "min_matches": 0,
+      "require_note": true
+    }
+  ]
+}

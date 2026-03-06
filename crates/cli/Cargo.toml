@@ -1,0 +1,99 @@
+[package]
+name = "frigg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aho-corasick.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+clap.workspace = true
+ignore.workspace = true
+petgraph.workspace = true
+protobuf.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+rusqlite.workspace = true
+schemars.workspace = true
+scip.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlite-vec.workspace = true
+tantivy.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tree-sitter.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
+url.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+criterion = "0.5.1"
+rusqlite.workspace = true
+
+[[test]]
+name = "citation_payloads"
+path = "tests/citation_payloads.rs"
+
+[[test]]
+name = "deep_search_replay"
+path = "tests/deep_search_replay.rs"
+
+[[test]]
+name = "playbook_suite"
+path = "tests/playbook_suite.rs"
+
+[[test]]
+name = "provenance"
+path = "tests/provenance.rs"
+
+[[test]]
+name = "security"
+path = "tests/security.rs"
+
+[[test]]
+name = "tool_handlers"
+path = "tests/tool_handlers.rs"
+
+[[test]]
+name = "tool_surface_parity"
+path = "tests/tool_surface_parity.rs"
+
+[[bench]]
+name = "graph_hot_paths"
+path = "benches/graph_hot_paths.rs"
+harness = false
+
+[[bench]]
+name = "reindex_latency"
+path = "benches/reindex_latency.rs"
+harness = false
+
+[[bench]]
+name = "search_latency"
+path = "benches/search_latency.rs"
+harness = false
+
+[[bench]]
+name = "storage_hot_paths"
+path = "benches/storage_hot_paths.rs"
+harness = false
+
+[[bench]]
+name = "tool_latency"
+path = "benches/tool_latency.rs"
+harness = false

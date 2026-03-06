@@ -1,0 +1,57 @@
+{
+  "trace_schema": "frigg.deep_search.trace.v1",
+  "playbook_id": "citation-payload-fixture-v1",
+  "step_count": 5,
+  "steps": [
+    {
+      "step_index": 0,
+      "step_id": "tool-001",
+      "tool_name": "list_repositories",
+      "params_json": "{}",
+      "outcome": {
+        "status": "ok",
+        "response_json": "{\"repositories\":[{\"display_name\":\"repo-001\",\"repository_id\":\"repo-001\",\"root_path\":\"/workspace/repo-001\"}]}"
+      }
+    },
+    {
+      "step_index": 1,
+      "step_id": "tool-002",
+      "tool_name": "search_text",
+      "params_json": "{\"limit\":20,\"query\":\"greeting\",\"repository_id\":\"repo-001\"}",
+      "outcome": {
+        "status": "ok",
+        "response_json": "{\"matches\":[{\"column\":17,\"line\":3,\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\",\"excerpt\":\"let _ = greeting();\"}]}"
+      }
+    },
+    {
+      "step_index": 2,
+      "step_id": "tool-003",
+      "tool_name": "read_file",
+      "params_json": "{\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\"}",
+      "outcome": {
+        "status": "ok",
+        "response_json": "{\"bytes\":18,\"content\":\"line 1\\nline 2\\n\",\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\"}"
+      }
+    },
+    {
+      "step_index": 3,
+      "step_id": "tool-004",
+      "tool_name": "search_symbol",
+      "params_json": "{\"query\":\"greeting\",\"repository_id\":\"repo-001\"}",
+      "outcome": {
+        "status": "ok",
+        "response_json": "{\"matches\":[{\"kind\":\"function\",\"line\":1,\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\",\"symbol\":\"greeting\"}],\"note\":\"{\\\"source\\\":\\\"tree_sitter\\\"}\"}"
+      }
+    },
+    {
+      "step_index": 4,
+      "step_id": "tool-005",
+      "tool_name": "find_references",
+      "params_json": "{\"symbol\":\"greeting\",\"repository_id\":\"repo-001\"}",
+      "outcome": {
+        "status": "ok",
+        "response_json": "{\"matches\":[{\"column\":17,\"line\":3,\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\",\"symbol\":\"greeting\"}],\"note\":\"{\\\"precision\\\":\\\"heuristic\\\"}\"}"
+      }
+    }
+  ]
+}

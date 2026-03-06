@@ -1,0 +1,47 @@
+{
+  "playbook_id": "deep-search-replay-basic-v1",
+  "steps": [
+    {
+      "step_id": "s01-list-repositories",
+      "tool_name": "list_repositories",
+      "params": {}
+    },
+    {
+      "step_id": "s02-search-text",
+      "tool_name": "search_text",
+      "params": {
+        "query": "hello replay",
+        "pattern_type": "literal",
+        "repository_id": "repo-001",
+        "path_regex": "^src/lib\\.rs$",
+        "limit": 20
+      }
+    },
+    {
+      "step_id": "s03-read-file",
+      "tool_name": "read_file",
+      "params": {
+        "path": "src/lib.rs",
+        "repository_id": "repo-001"
+      }
+    },
+    {
+      "step_id": "s04-search-symbol",
+      "tool_name": "search_symbol",
+      "params": {
+        "query": "greeting",
+        "repository_id": "repo-001",
+        "limit": 20
+      }
+    },
+    {
+      "step_id": "s05-find-references",
+      "tool_name": "find_references",
+      "params": {
+        "symbol": "greeting",
+        "repository_id": "repo-001",
+        "limit": 20
+      }
+    }
+  ]
+}

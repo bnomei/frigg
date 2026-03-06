@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frigg Local Sourcegraph MCP"
+  short_description: "Use Frigg tools for auditable deep code search"
+  default_prompt: "Use $frigg-local-sourcegraph-mcp to investigate this repository with Frigg MCP tools and cite tool-backed sources."
