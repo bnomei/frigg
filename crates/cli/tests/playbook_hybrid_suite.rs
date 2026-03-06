@@ -1,37 +1,19 @@
 #![allow(clippy::panic)]
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::env;
+use std::path::PathBuf;
 
+use frigg::playbooks::{
+    HybridWitnessRequirement, LoadedHybridPlaybookRegression, load_hybrid_playbook_regressions,
+};
 use frigg::searcher::{SearchFilters, SearchHybridQuery, TextSearcher};
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
-use serde::Deserialize;
 
 const FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_ENABLED";
 const FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_PROVIDER";
 const FRIGG_SEMANTIC_RUNTIME_MODEL_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_MODEL";
 const FRIGG_SEMANTIC_RUNTIME_STRICT_MODE_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_STRICT_MODE";
 const FRIGG_PLAYBOOK_ENFORCE_TARGETS_ENV: &str = "FRIGG_PLAYBOOK_ENFORCE_TARGETS";
-const PLAYBOOK_CONTRACT_MARKER: &str = "<!-- frigg-playbook";
-const PLAYBOOK_CONTRACT_END: &str = "-->";
-
-#[derive(Debug, Deserialize)]
-struct HybridMarkdownPlaybookContract {
-    schema: String,
-    playbook_id: String,
-    query: String,
-    top_k: usize,
-    allowed_semantic_statuses: Vec<String>,
-    required_witness_groups: Vec<PlaybookWitnessGroup>,
-    #[serde(default)]
-    target_witness_groups: Vec<PlaybookWitnessGroup>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PlaybookWitnessGroup {
-    name: String,
-    paths: Vec<String>,
-}
 
 #[derive(Debug)]
 struct PlaybookProbeOutcome {
@@ -54,59 +36,9 @@ fn playbooks_root() -> PathBuf {
     repo_root().join("playbooks")
 }
 
-fn markdown_playbook_paths() -> Vec<PathBuf> {
-    let mut paths = [
-        "http-auth-entrypoint-trace.md",
-        "tool-surface-gating.md",
-        "hybrid-search-context-retrieval.md",
-        "implementation-fallback-navigation.md",
-        "error-contract-alignment.md",
-        "deep-search-replay-and-citations.md",
-    ]
-    .into_iter()
-    .map(|name| playbooks_root().join(name))
-    .collect::<Vec<_>>();
-    paths.sort();
-    paths
-}
-
-fn load_contract(path: &Path) -> HybridMarkdownPlaybookContract {
-    let raw = fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("failed to read playbook markdown {}: {err}", path.display()));
-    let mut scan_offset = 0usize;
-    while let Some(start) = raw[scan_offset..].find(PLAYBOOK_CONTRACT_MARKER) {
-        let marker_start = scan_offset + start;
-        let after_marker = &raw[marker_start + PLAYBOOK_CONTRACT_MARKER.len()..];
-        let end = after_marker.find(PLAYBOOK_CONTRACT_END).unwrap_or_else(|| {
-            panic!(
-                "playbook markdown {} is missing the contract terminator",
-                path.display()
-            )
-        });
-        let contract_json = after_marker[..end].trim();
-        if let Ok(contract) = serde_json::from_str::<HybridMarkdownPlaybookContract>(contract_json)
-        {
-            assert_eq!(
-                contract.schema,
-                "frigg.playbook.hybrid.v1",
-                "unexpected playbook contract schema in {}",
-                path.display()
-            );
-            return contract;
-        }
-        scan_offset =
-            marker_start + PLAYBOOK_CONTRACT_MARKER.len() + end + PLAYBOOK_CONTRACT_END.len();
-    }
-
-    panic!(
-        "failed to find a compatible hybrid playbook contract in {}",
-        path.display()
-    );
-}
-
 fn parse_bool_env(name: &str) -> bool {
     matches!(
-        std::env::var(name)
+        env::var(name)
             .ok()
             .map(|value| value.trim().to_ascii_lowercase()),
         Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on")
@@ -116,10 +48,10 @@ fn parse_bool_env(name: &str) -> bool {
 fn semantic_runtime_from_env() -> SemanticRuntimeConfig {
     SemanticRuntimeConfig {
         enabled: parse_bool_env(FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV),
-        provider: std::env::var(FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV)
+        provider: env::var(FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV)
             .ok()
             .and_then(|value| value.parse::<SemanticRuntimeProvider>().ok()),
-        model: std::env::var(FRIGG_SEMANTIC_RUNTIME_MODEL_ENV).ok(),
+        model: env::var(FRIGG_SEMANTIC_RUNTIME_MODEL_ENV).ok(),
         strict_mode: parse_bool_env(FRIGG_SEMANTIC_RUNTIME_STRICT_MODE_ENV),
     }
 }
@@ -131,32 +63,58 @@ fn build_searcher() -> TextSearcher {
     TextSearcher::new(config)
 }
 
-fn missing_witness_groups(
-    groups: &[PlaybookWitnessGroup],
+fn missing_required_witness_groups(
+    regression: &LoadedHybridPlaybookRegression,
+    matched_paths: &[String],
+    semantic_status_ok: bool,
+) -> Vec<String> {
+    regression
+        .spec
+        .witness_groups
+        .iter()
+        .filter(|group| {
+            let required = match group.required_when {
+                HybridWitnessRequirement::Always => true,
+                HybridWitnessRequirement::SemanticOk => semantic_status_ok,
+            };
+            required
+                && !group
+                    .match_any
+                    .iter()
+                    .any(|path| matched_paths.iter().any(|candidate| candidate == path))
+        })
+        .map(|group| format!("{} -> {:?}", group.group_id, group.match_any))
+        .collect::<Vec<_>>()
+}
+
+fn missing_target_witness_groups(
+    regression: &LoadedHybridPlaybookRegression,
     matched_paths: &[String],
 ) -> Vec<String> {
-    groups
+    regression
+        .spec
+        .target_witness_groups
         .iter()
         .filter(|group| {
             !group
-                .paths
+                .match_any
                 .iter()
                 .any(|path| matched_paths.iter().any(|candidate| candidate == path))
         })
-        .map(|group| format!("{} -> {:?}", group.name, group.paths))
+        .map(|group| format!("{} -> {:?}", group.group_id, group.match_any))
         .collect::<Vec<_>>()
 }
 
 fn run_playbook_probe(
     searcher: &TextSearcher,
-    path: &Path,
-    contract: &HybridMarkdownPlaybookContract,
+    regression: &LoadedHybridPlaybookRegression,
+    enforce_targets: bool,
 ) -> PlaybookProbeOutcome {
     let output = searcher
         .search_hybrid_with_filters(
             SearchHybridQuery {
-                query: contract.query.clone(),
-                limit: contract.top_k,
+                query: regression.spec.query.clone(),
+                limit: regression.spec.top_k,
                 weights: Default::default(),
                 semantic: Some(true),
             },
@@ -165,12 +123,13 @@ fn run_playbook_probe(
         .unwrap_or_else(|err| {
             panic!(
                 "hybrid playbook probe failed for {} ({}): {err}",
-                contract.playbook_id,
-                path.display()
+                regression.metadata.playbook_id,
+                regression.path.display()
             )
         });
     let semantic_status = output.note.semantic_status.as_str().to_owned();
-    let allowed_statuses = contract
+    let allowed_statuses = regression
+        .spec
         .allowed_semantic_statuses
         .iter()
         .map(|status| status.trim().to_ascii_lowercase())
@@ -180,7 +139,7 @@ fn run_playbook_probe(
             .iter()
             .any(|status| status == &semantic_status),
         "playbook {} returned unsupported semantic status '{}'; allowed={allowed_statuses:?}",
-        contract.playbook_id,
+        regression.metadata.playbook_id,
         semantic_status
     );
 
@@ -189,29 +148,37 @@ fn run_playbook_probe(
         .iter()
         .map(|entry| entry.document.path.clone())
         .collect::<Vec<_>>();
+    let semantic_status_ok = output.note.semantic_status.as_str() == "ok";
 
     PlaybookProbeOutcome {
-        file_name: path
+        file_name: regression
+            .path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_owned(),
-        playbook_id: contract.playbook_id.clone(),
+        playbook_id: regression.metadata.playbook_id.clone(),
         semantic_status,
-        required_missing: missing_witness_groups(&contract.required_witness_groups, &matched_paths),
-        target_missing: missing_witness_groups(&contract.target_witness_groups, &matched_paths),
+        required_missing: missing_required_witness_groups(
+            regression,
+            &matched_paths,
+            semantic_status_ok,
+        ),
+        target_missing: if enforce_targets && semantic_status_ok {
+            missing_target_witness_groups(regression, &matched_paths)
+        } else {
+            Vec::new()
+        },
         matched_paths,
     }
 }
 
-fn run_all_playbook_probes() -> Vec<PlaybookProbeOutcome> {
+fn run_all_playbook_probes(enforce_targets: bool) -> Vec<PlaybookProbeOutcome> {
     let searcher = build_searcher();
-    markdown_playbook_paths()
+    load_hybrid_playbook_regressions(&playbooks_root())
+        .expect("playbook metadata should load")
         .into_iter()
-        .map(|path| {
-            let contract = load_contract(&path);
-            run_playbook_probe(&searcher, &path, &contract)
-        })
+        .map(|regression| run_playbook_probe(&searcher, &regression, enforce_targets))
         .collect::<Vec<_>>()
 }
 
@@ -229,24 +196,12 @@ fn format_outcome(outcome: &PlaybookProbeOutcome) -> String {
 
 #[test]
 fn playbook_markdown_required_witnesses_hold() {
-    let outcomes = run_all_playbook_probes();
+    let outcomes = run_all_playbook_probes(false);
     let required_failures = outcomes
         .iter()
         .filter(|outcome| !outcome.required_missing.is_empty())
         .map(format_outcome)
         .collect::<Vec<_>>();
-    let target_gaps = outcomes
-        .iter()
-        .filter(|outcome| !outcome.target_missing.is_empty())
-        .map(format_outcome)
-        .collect::<Vec<_>>();
-
-    if !target_gaps.is_empty() {
-        println!(
-            "playbook hybrid target gaps (non-failing unless {FRIGG_PLAYBOOK_ENFORCE_TARGETS_ENV}=1):\n{}",
-            target_gaps.join("\n")
-        );
-    }
 
     assert!(
         required_failures.is_empty(),
@@ -261,7 +216,7 @@ fn playbook_markdown_target_witnesses_hold_when_requested() {
         return;
     }
 
-    let outcomes = run_all_playbook_probes();
+    let outcomes = run_all_playbook_probes(true);
     let target_failures = outcomes
         .iter()
         .filter(|outcome| !outcome.target_missing.is_empty())

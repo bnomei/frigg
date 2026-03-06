@@ -3183,9 +3183,7 @@ impl FriggMcpServer {
         let _params = params.0;
         let current_workspace = self.current_workspace();
         let response = WorkspaceCurrentResponse {
-            repository: current_workspace
-                .as_ref()
-                .map(Self::repository_summary),
+            repository: current_workspace.as_ref().map(Self::repository_summary),
             session_default: current_workspace.is_some(),
         };
         let source_refs = json!({
@@ -3462,8 +3460,9 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_workspaces = server
-                    .attached_workspaces_for_repository(params_for_blocking.repository_id.as_deref())?;
+                let scoped_workspaces = server.attached_workspaces_for_repository(
+                    params_for_blocking.repository_id.as_deref(),
+                )?;
                 scoped_repository_ids = scoped_workspaces
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
@@ -3500,7 +3499,8 @@ impl FriggMcpServer {
                     .count_by_kind(SearchDiagnosticKind::Read);
                 let mut matches = search_output.matches;
                 for found in &mut matches {
-                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id) {
+                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id)
+                    {
                         found.repository_id = actual_repository_id.clone();
                     }
                 }
@@ -3588,8 +3588,9 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_workspaces = server
-                    .attached_workspaces_for_repository(params_for_blocking.repository_id.as_deref())?;
+                let scoped_workspaces = server.attached_workspaces_for_repository(
+                    params_for_blocking.repository_id.as_deref(),
+                )?;
                 scoped_repository_ids = scoped_workspaces
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
@@ -3665,7 +3666,8 @@ impl FriggMcpServer {
                     })
                     .collect::<Vec<_>>();
                 for found in &mut matches {
-                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id) {
+                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id)
+                    {
                         found.repository_id = actual_repository_id.clone();
                     }
                 }

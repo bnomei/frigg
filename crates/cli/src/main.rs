@@ -313,9 +313,12 @@ fn resolve_stdio_default_workspace_root() -> io::Result<PathBuf> {
 }
 
 fn find_enclosing_git_root(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find_map(|ancestor| ancestor.join(".git").exists().then(|| ancestor.to_path_buf()))
+    start.ancestors().find_map(|ancestor| {
+        ancestor
+            .join(".git")
+            .exists()
+            .then(|| ancestor.to_path_buf())
+    })
 }
 
 fn run_storage_bootstrap_command(
@@ -1394,8 +1397,9 @@ mod tests {
     fn http_watch_runtime_config_keeps_empty_startup_roots() {
         let config = FriggConfig::from_optional_workspace_roots(Vec::new())
             .expect("empty serving config should be valid");
-        let watch_config = resolve_watch_runtime_config(&config, RuntimeTransportKind::LoopbackHttp)
-            .expect("http watch runtime config should preserve empty startup roots");
+        let watch_config =
+            resolve_watch_runtime_config(&config, RuntimeTransportKind::LoopbackHttp)
+                .expect("http watch runtime config should preserve empty startup roots");
         assert!(watch_config.workspace_roots.is_empty());
     }
 

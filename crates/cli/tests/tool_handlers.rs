@@ -257,7 +257,10 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         .await
         .expect("workspace_attach should reuse existing root")
         .0;
-    assert_eq!(second.repository.repository_id, first.repository.repository_id);
+    assert_eq!(
+        second.repository.repository_id,
+        first.repository.repository_id
+    );
 
     let current = server
         .workspace_current(Parameters(WorkspaceCurrentParams {}))
@@ -280,10 +283,16 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
     let root_b = temp_workspace_root("workspace-default-b");
     fs::create_dir_all(root_a.join("src")).expect("workspace a src dir should be creatable");
     fs::create_dir_all(root_b.join("src")).expect("workspace b src dir should be creatable");
-    fs::write(root_a.join("src/lib.rs"), "pub fn shared_marker() { /* repo_a */ }\n")
-        .expect("workspace a source should write");
-    fs::write(root_b.join("src/lib.rs"), "pub fn shared_marker() { /* repo_b */ }\n")
-        .expect("workspace b source should write");
+    fs::write(
+        root_a.join("src/lib.rs"),
+        "pub fn shared_marker() { /* repo_a */ }\n",
+    )
+    .expect("workspace a source should write");
+    fs::write(
+        root_b.join("src/lib.rs"),
+        "pub fn shared_marker() { /* repo_b */ }\n",
+    )
+    .expect("workspace b source should write");
 
     let server = server_for_config(
         FriggConfig::from_optional_workspace_roots(Vec::new())
@@ -322,7 +331,10 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
         .0;
 
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, attached_b.repository.repository_id);
+    assert_eq!(
+        response.matches[0].repository_id,
+        attached_b.repository.repository_id
+    );
     assert_ne!(
         response.matches[0].repository_id,
         attached_a.repository.repository_id

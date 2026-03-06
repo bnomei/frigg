@@ -1,7 +1,8 @@
 #![allow(clippy::panic)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::{
     DeepSearchHarness, DeepSearchTraceArtifact, DeepSearchTraceOutcome, FriggMcpServer,
@@ -33,12 +34,58 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repos/manifest-determinism")
 }
 
+fn temp_workspace_root(test_name: &str) -> PathBuf {
+    let nanos_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "frigg-playbook-suite-{test_name}-{}-{nanos_since_epoch}",
+        std::process::id()
+    ))
+}
+
 fn playbooks_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/playbooks")
 }
 
-fn build_server() -> FriggMcpServer {
-    let config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+fn copy_workspace_fixture(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination)
+        .unwrap_or_else(|err| panic!("failed to create fixture workspace copy root: {err}"));
+    for entry in fs::read_dir(source)
+        .unwrap_or_else(|err| panic!("failed to read fixture workspace root: {err}"))
+    {
+        let entry =
+            entry.unwrap_or_else(|err| panic!("failed to read fixture workspace entry: {err}"));
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|err| panic!("failed to stat fixture workspace entry: {err}"));
+        if file_type.is_dir() {
+            copy_workspace_fixture(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path).unwrap_or_else(|err| {
+                panic!(
+                    "failed to copy fixture workspace file {} -> {}: {err}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+}
+
+fn prepare_workspace(root: &Path) {
+    copy_workspace_fixture(&fixture_root(), root);
+}
+
+fn cleanup_workspace(root: &Path) {
+    let _ = fs::remove_dir_all(root);
+}
+
+fn build_server(workspace_root: &Path) -> FriggMcpServer {
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("playbook suite fixture root must produce valid config");
     FriggMcpServer::new(config)
 }
@@ -226,7 +273,9 @@ fn assert_step_expectations(
 
 #[tokio::test]
 async fn playbook_suite_executes_against_expected_outputs() {
-    let harness = DeepSearchHarness::new(build_server());
+    let workspace_root = temp_workspace_root("expected-outputs");
+    prepare_workspace(&workspace_root);
+    let harness = DeepSearchHarness::new(build_server(&workspace_root));
     for (playbook_file, expected_file) in suite_cases() {
         let playbook = DeepSearchHarness::load_playbook(&playbooks_root().join(playbook_file))
             .unwrap_or_else(|err| panic!("failed to load playbook fixture {playbook_file}: {err}"));
@@ -237,11 +286,14 @@ async fn playbook_suite_executes_against_expected_outputs() {
         let expected = load_expected(expected_file);
         assert_step_expectations(&artifact, &expected);
     }
+    cleanup_workspace(&workspace_root);
 }
 
 #[tokio::test]
 async fn playbook_suite_execution_is_deterministic() {
-    let harness = DeepSearchHarness::new(build_server());
+    let workspace_root = temp_workspace_root("deterministic");
+    prepare_workspace(&workspace_root);
+    let harness = DeepSearchHarness::new(build_server(&workspace_root));
     for (playbook_file, _) in suite_cases() {
         let playbook = DeepSearchHarness::load_playbook(&playbooks_root().join(playbook_file))
             .unwrap_or_else(|err| panic!("failed to load playbook fixture {playbook_file}: {err}"));
@@ -257,4 +309,5 @@ async fn playbook_suite_execution_is_deterministic() {
             "playbook suite output must be deterministic for {playbook_file}"
         );
     }
+    cleanup_workspace(&workspace_root);
 }

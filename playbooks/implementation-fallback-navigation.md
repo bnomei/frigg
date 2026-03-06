@@ -9,8 +9,16 @@
   "allowed_semantic_statuses": ["ok", "disabled", "degraded"],
   "required_witness_groups": [
     {
-      "name": "runtime",
-      "paths": ["crates/cli/src/embeddings/mod.rs"]
+      "name": "fallback-runtime",
+      "paths": [
+        "crates/cli/src/mcp/server.rs",
+        "crates/cli/src/mcp/types.rs"
+      ]
+    },
+    {
+      "name": "implementation-runtime",
+      "paths": ["crates/cli/src/embeddings/mod.rs"],
+      "required_when": "semantic_ok"
     }
   ],
   "target_witness_groups": [

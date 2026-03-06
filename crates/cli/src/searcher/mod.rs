@@ -3659,7 +3659,7 @@ mod tests {
                 .expect("multi-token query should emit lexical recall regex");
         assert_eq!(
             pattern,
-            r"(?i)\b(?:failure|metadata|note|runtime|semantic|strict)\b"
+            r"(?i)\b(?:semantic|runtime|strict|failure|note|metadata)\b"
         );
 
         assert!(
@@ -3673,11 +3673,11 @@ mod tests {
         assert_eq!(
             hybrid_lexical_recall_tokens("strict semantic failure unavailable semantic_status"),
             vec![
-                "failure".to_owned(),
-                "semantic".to_owned(),
-                "semantic_status".to_owned(),
                 "strict".to_owned(),
+                "semantic".to_owned(),
+                "failure".to_owned(),
                 "unavailable".to_owned(),
+                "semantic_status".to_owned(),
             ]
         );
     }
