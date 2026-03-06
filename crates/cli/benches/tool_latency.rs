@@ -107,6 +107,8 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                 path: "src/file_001.rs".to_owned(),
                 repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
                 max_bytes: None,
+                line_start: None,
+                line_end: None,
             });
             let response = runtime
                 .block_on(server.read_file(params))
@@ -404,6 +406,8 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                         path: "src/file_001.rs".to_owned(),
                         repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
                         max_bytes: None,
+                        line_start: None,
+                        line_end: None,
                     });
                     let response = runtime
                         .block_on(server.read_file(params))
