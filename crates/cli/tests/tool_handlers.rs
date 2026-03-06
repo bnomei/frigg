@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
@@ -12,6 +12,9 @@ use frigg::mcp::types::{
     SearchSymbolParams, SearchTextParams,
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
+use frigg::storage::{
+    ManifestEntry, Storage, ensure_provenance_db_parent_dir, resolve_provenance_db_path,
+};
 use protobuf::{EnumOrUnknown, Message};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorCode;
@@ -78,6 +81,51 @@ fn server_for_workspace_root_with_max_file_bytes(
     FriggMcpServer::new(config)
 }
 
+fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
+    system_time
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+}
+
+fn seed_manifest_snapshot(
+    workspace_root: &Path,
+    repository_id: &str,
+    snapshot_id: &str,
+    paths: &[&str],
+) {
+    let db_path =
+        ensure_provenance_db_parent_dir(workspace_root).expect("manifest storage path should work");
+    let resolved_db_path =
+        resolve_provenance_db_path(workspace_root).expect("manifest db path should resolve");
+    assert_eq!(db_path, resolved_db_path);
+
+    let storage = Storage::new(db_path);
+    storage
+        .initialize()
+        .expect("manifest storage should initialize");
+
+    let mut manifest_entries = paths
+        .iter()
+        .map(|path| {
+            let metadata = fs::metadata(workspace_root.join(path))
+                .expect("manifest snapshot path should exist for test");
+            ManifestEntry {
+                path: (*path).to_owned(),
+                sha256: format!("hash-{path}"),
+                size_bytes: metadata.len(),
+                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+            }
+        })
+        .collect::<Vec<_>>();
+    manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
+    manifest_entries.dedup_by(|left, right| left.path == right.path);
+
+    storage
+        .upsert_manifest(repository_id, snapshot_id, &manifest_entries)
+        .expect("manifest snapshot should persist");
+}
+
 fn write_scip_fixture(workspace_root: &Path, file_name: &str, payload: &str) {
     let fixture_dir = workspace_root.join(".frigg/scip");
     fs::create_dir_all(&fixture_dir).expect("failed to create scip fixture directory");
@@ -120,6 +168,27 @@ fn write_scip_protobuf_fixture(workspace_root: &Path, file_name: &str) {
 
 fn cleanup_workspace_root(workspace_root: &Path) {
     let _ = fs::remove_dir_all(workspace_root);
+}
+
+fn rewrite_file_with_new_mtime(path: &Path, contents: &str) {
+    let before = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(system_time_to_unix_nanos);
+
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(path, contents).expect("rewritten fixture file should persist");
+        let after = fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(system_time_to_unix_nanos);
+        if after != before {
+            return;
+        }
+    }
+
+    panic!("fixture file mtime did not advance after rewrite");
 }
 
 #[tokio::test]
@@ -622,6 +691,145 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
 }
 
 #[tokio::test]
+async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
+    let workspace_root = temp_workspace_root("search-symbol-rank-order");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn target() {}\n\
+         pub fn Target() {}\n\
+         pub fn target_prefix() {}\n\
+         pub fn other_target() {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "target".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should succeed")
+        .0;
+
+    let symbols = response
+        .matches
+        .iter()
+        .map(|matched| matched.symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        symbols,
+        vec!["target", "Target", "target_prefix", "other_target"]
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_corpus() {
+    let workspace_root = temp_workspace_root("search-symbol-stale-manifest");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let source_path = src_root.join("lib.rs");
+    fs::write(&source_path, "pub fn old_name() {}\n")
+        .expect("failed to seed temporary fixture source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "old_name".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should succeed for warm snapshot")
+        .0;
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].symbol, "old_name");
+
+    rewrite_file_with_new_mtime(&source_path, "pub fn new_name() {}\n");
+
+    let second = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "new_name".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should rebuild stale snapshot")
+        .0;
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].symbol, "new_name");
+
+    let stale = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "old_name".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should not keep stale symbol results")
+        .0;
+    assert!(stale.matches.is_empty());
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
+    let workspace_root = temp_workspace_root("search-symbol-stale-manifest");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let lib_path = src_root.join("lib.rs");
+    fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(10),
+        }))
+        .await
+        .expect("initial search_symbol call should succeed")
+        .0;
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].symbol, "alpha");
+
+    fs::write(&lib_path, "pub fn beta_beta() {}\n").expect("failed to edit source in place");
+
+    let second = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "beta_beta".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(10),
+        }))
+        .await
+        .expect("search_symbol should rebuild stale corpus after edit")
+        .0;
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].symbol, "beta_beta");
+
+    let stale = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(10),
+        }))
+        .await
+        .expect("search_symbol should not reuse stale corpus matches")
+        .0;
+    assert!(stale.matches.is_empty());
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_find_references_returns_heuristic_metadata_and_matches() {
     let workspace_root = temp_workspace_root("find-references");
     let src_root = workspace_root.join("src");
@@ -988,7 +1196,7 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
 }
 
 #[tokio::test]
-async fn find_references_degrades_to_heuristic_when_scip_artifact_exceeds_budget() {
+async fn find_references_retains_precise_matches_when_other_scip_artifact_exceeds_budget() {
     let workspace_root = temp_workspace_root("find-references-scip-budget");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -1039,25 +1247,21 @@ async fn find_references_degrades_to_heuristic_when_scip_artifact_exceeds_budget
             limit: Some(20),
         }))
         .await
-        .expect("oversized SCIP artifact should degrade to heuristic fallback")
+        .expect("oversized SCIP artifact should retain partial precise references")
         .0;
 
-    assert!(
-        !response.matches.is_empty(),
-        "heuristic fallback should still return references"
-    );
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].line, 2);
     let note = response
         .note
         .as_ref()
-        .expect("find_references should emit fallback metadata");
+        .expect("find_references should emit partial precision metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("find_references note should be valid JSON");
-    assert_eq!(note_json["precision"], "heuristic");
-    assert_eq!(note_json["fallback_reason"], "precise_absent");
-    assert_eq!(
-        note_json["precise_absence_reason"],
-        "scip_artifact_ingest_failed"
-    );
+    assert_eq!(note_json["precision"], "precise_partial");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["precise"]["coverage"], "partial");
     assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
     assert_eq!(note_json["precise"]["artifacts_failed"], 1);
     assert_eq!(
@@ -1071,6 +1275,62 @@ async fn find_references_degrades_to_heuristic_when_scip_artifact_exceeds_budget
             .ends_with(".frigg/scip/oversized.json"),
         true
     );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_falls_back_when_partial_precise_absence_is_non_authoritative() {
+    let workspace_root = temp_workspace_root("find-references-partial-absence");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub struct User;\n\
+         pub fn create_user() -> User { User }\n",
+    )
+    .expect("failed to seed source fixture");
+    write_scip_fixture(&workspace_root, "empty.json", r#"{ "documents": [] }"#);
+
+    let oversized_payload = format!(
+        r#"{{
+          "documents": [],
+          "padding": "{}"
+        }}"#,
+        "x".repeat(4096)
+    );
+    write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
+
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: "User".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("partial precise absence should fall back heuristically")
+        .0;
+
+    assert!(
+        !response.matches.is_empty(),
+        "heuristic fallback should still return lexical references"
+    );
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit fallback metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["precision"], "heuristic");
+    assert_eq!(note_json["fallback_reason"], "precise_absent");
+    assert_eq!(
+        note_json["precise_absence_reason"],
+        "precise_partial_non_authoritative_absence"
+    );
+    assert_eq!(note_json["precise"]["coverage"], "partial");
+    assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
+    assert_eq!(note_json["precise"]["artifacts_failed"], 1);
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -1196,6 +1456,46 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
 }
 
 #[tokio::test]
+async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_column() {
+    let workspace_root = temp_workspace_root("go-to-definition-location-same-line");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.php"),
+        "<?php function alpha() {} function beta() {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/lib.php".to_owned()),
+            line: Some(1),
+            column: Some(35),
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should resolve by location")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "beta");
+    assert_eq!(response.matches[0].path, "src/lib.php");
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit fallback metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_budget() {
     let workspace_root = temp_workspace_root("go-to-definition-scip-budget");
     let src_root = workspace_root.join("src");
@@ -1249,10 +1549,92 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
             limit: Some(20),
         }))
         .await
-        .expect("go_to_definition should degrade to heuristic fallback")
+        .expect("go_to_definition should retain partial precise definitions")
         .0;
 
     assert_eq!(response.matches.len(), 1);
+    assert_eq!(
+        response.matches[0].precision.as_deref(),
+        Some("precise_partial")
+    );
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit partial precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise_partial");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["precise"]["coverage"], "partial");
+    assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
+    assert_eq!(note_json["precise"]["artifacts_failed"], 1);
+    assert_eq!(
+        note_json["precise"]["failed_artifacts"][0]["stage"],
+        "artifact_budget_bytes"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_target_match() {
+    let workspace_root = temp_workspace_root("go-to-definition-partial-precise-absence");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub struct User;\n\
+         pub fn caller() { let _ = User; }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "other_symbol.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#Admin", "range": [0, 0, 5], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#Admin",
+                  "display_name": "Admin",
+                  "kind": "struct",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let oversized_payload = format!(
+        r#"{{
+          "documents": [],
+          "padding": "{}"
+        }}"#,
+        "x".repeat(4096)
+    );
+    write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
+
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("User".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should fall back when partial precise data lacks the target")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
 
     let note = response
@@ -1263,11 +1645,10 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
     assert_eq!(note_json["precision"], "heuristic");
     assert_eq!(note_json["fallback_reason"], "precise_absent");
-    assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
-    assert_eq!(note_json["precise"]["artifacts_failed"], 1);
+    assert_eq!(note_json["precise"]["coverage"], "partial");
     assert_eq!(
-        note_json["precise"]["failed_artifacts"][0]["stage"],
-        "artifact_budget_bytes"
+        note_json["precise_absence_reason"],
+        "precise_partial_non_authoritative_absence"
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -1425,31 +1806,28 @@ async fn navigation_find_implementations_degrades_when_scip_artifact_exceeds_bud
             limit: Some(20),
         }))
         .await
-        .expect("find_implementations should degrade to heuristic fallback")
+        .expect("find_implementations should retain partial precise implementations")
         .0;
 
     assert!(
         !response.matches.is_empty(),
-        "heuristic fallback should still return implementation matches"
+        "partial precise mode should still return implementation matches"
     );
-    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
     assert_eq!(
-        response.matches[0].fallback_reason.as_deref(),
-        Some("precise_absent")
+        response.matches[0].precision.as_deref(),
+        Some("precise_partial")
     );
+    assert_eq!(response.matches[0].fallback_reason, None);
 
     let note = response
         .note
         .as_ref()
-        .expect("find_implementations should emit fallback metadata");
+        .expect("find_implementations should emit partial precision metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("find_implementations note should be valid JSON");
-    assert_eq!(note_json["precision"], "heuristic");
-    assert_eq!(note_json["fallback_reason"], "precise_absent");
-    assert_eq!(
-        note_json["precise_absence_reason"],
-        "scip_artifact_ingest_failed"
-    );
+    assert_eq!(note_json["precision"], "precise_partial");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["precise"]["coverage"], "partial");
     assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
     assert_eq!(note_json["precise"]["artifacts_failed"], 1);
     assert_eq!(
@@ -1852,6 +2230,46 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
+}
+
+#[tokio::test]
+async fn document_symbols_rejects_over_budget_source_with_typed_error() {
+    let workspace_root = temp_workspace_root("document-symbols-max-bytes");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(src_root.join("lib.rs"), "pub fn oversized_symbol() {}\n")
+        .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8);
+
+    let error = match server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+    {
+        Ok(_) => panic!("over-budget document_symbols request should be rejected"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(retryable_tag(&error), Some(false));
+
+    let data = error
+        .data
+        .as_ref()
+        .expect("document_symbols over-budget error should carry structured data");
+    assert_eq!(data["path"], "src/lib.rs");
+    assert_eq!(data["max_bytes"], 8);
+    assert!(
+        data["bytes"]
+            .as_u64()
+            .expect("document_symbols bytes should be numeric")
+            > 8
+    );
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]

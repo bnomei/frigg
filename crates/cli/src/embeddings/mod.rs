@@ -478,11 +478,16 @@ impl ReqwestHttpExecutor {
 #[async_trait]
 impl HttpExecutor for ReqwestHttpExecutor {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpTransportError> {
+        let body = serde_json::to_vec(&request.body).map_err(|error| {
+            HttpTransportError::non_retryable(format!(
+                "failed to serialize HTTP request body: {error}"
+            ))
+        })?;
         let mut builder = self
             .client
             .request(request.method, request.url)
             .timeout(request.timeout)
-            .json(&request.body);
+            .body(body);
 
         for (name, value) in request.headers {
             builder = builder.header(name, value);

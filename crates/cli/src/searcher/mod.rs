@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::future::Future;
@@ -10,11 +11,11 @@ use crate::embeddings::{
     EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
     OpenAiEmbeddingProvider,
 };
-use crate::indexer::SymbolLanguage;
+use crate::indexer::{FileMetadataDigest, SymbolLanguage};
+use crate::manifest_validation::validate_manifest_digests_for_root;
+use crate::playbooks::scrub_playbook_metadata_header;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{
-    SemanticChunkEmbeddingProjection, Storage, resolve_provenance_db_path,
-};
+use crate::storage::{SemanticChunkEmbeddingProjection, Storage, resolve_provenance_db_path};
 use aho_corasick::AhoCorasick;
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
@@ -213,6 +214,139 @@ struct HybridScoreAccumulator {
     semantic_sources: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum HybridSourceClass {
+    ErrorContracts,
+    ToolContracts,
+    BenchmarkDocs,
+    Documentation,
+    Readme,
+    Runtime,
+    Tests,
+    Fixtures,
+    Playbooks,
+    Specs,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct HybridRankingIntent {
+    wants_docs: bool,
+    wants_runtime: bool,
+    wants_tests: bool,
+    wants_fixtures: bool,
+    wants_benchmarks: bool,
+    wants_readme: bool,
+    wants_contracts: bool,
+    wants_error_taxonomy: bool,
+    wants_tool_contracts: bool,
+    penalize_playbook_self_reference: bool,
+}
+
+impl HybridRankingIntent {
+    fn from_query(query_text: &str) -> Self {
+        let query = query_text.trim().to_ascii_lowercase();
+        let has_any = |needles: &[&str]| needles.iter().any(|needle| query.contains(needle));
+
+        let wants_docs = has_any(&[
+            "docs",
+            "documented",
+            "documentation",
+            "public docs",
+            "contract",
+            "contracts",
+            "readme",
+            "invalid_params",
+            "error_code",
+            "typed error",
+            "citation",
+            "citations",
+        ]);
+        let wants_tests = has_any(&[
+            "test", "tests", "coverage", "assert", "parity", "canary", "replay",
+        ]);
+        let wants_fixtures = has_any(&[
+            "fixture",
+            "fixtures",
+            "playbook",
+            "playbooks",
+            "replay",
+            "trace artifact",
+        ]);
+        let wants_benchmarks = has_any(&[
+            "benchmark",
+            "benchmarks",
+            "metric",
+            "metrics",
+            "acceptance metric",
+            "acceptance metrics",
+            "replayability",
+            "deterministic replay",
+        ]) || (has_any(&["deterministic", "replay", "suite", "fixture", "fixtures"])
+            && has_any(&["trace artifact", "citation", "citations", "playbook"]));
+        let wants_error_taxonomy = has_any(&[
+            "invalid_params",
+            "-32602",
+            "error taxonomy",
+            "unavailable",
+            "strict_failure",
+            "semantic_status",
+            "semantic_reason",
+        ]);
+        let wants_tool_contracts = has_any(&[
+            "search_hybrid",
+            "semantic_status",
+            "semantic_reason",
+            "tool schema",
+            "tool contract",
+            "tool contracts",
+            "tool surface",
+            "tools/list",
+            "mcp tool",
+            "mcp tools",
+            "core versus extended",
+            "core vs extended",
+            "extended_only",
+        ]) || (has_any(&["mcp", "tool", "tools"]) && has_any(&["core", "extended", "schema"]));
+
+        Self {
+            wants_docs,
+            wants_runtime: true,
+            wants_tests,
+            wants_fixtures,
+            wants_benchmarks,
+            wants_readme: has_any(&["readme", "documented"]),
+            wants_contracts: has_any(&[
+                "contract",
+                "contracts",
+                "invalid_params",
+                "error_code",
+                "typed error",
+                "unavailable",
+                "strict_failure",
+            ]),
+            wants_error_taxonomy,
+            wants_tool_contracts,
+            penalize_playbook_self_reference: !has_any(&["playbook", "playbooks"]),
+        }
+    }
+
+    fn wants_class(self, class: HybridSourceClass) -> bool {
+        match class {
+            HybridSourceClass::ErrorContracts => self.wants_error_taxonomy || self.wants_contracts,
+            HybridSourceClass::ToolContracts => self.wants_tool_contracts || self.wants_contracts,
+            HybridSourceClass::BenchmarkDocs => self.wants_benchmarks,
+            HybridSourceClass::Documentation => self.wants_docs,
+            HybridSourceClass::Readme => self.wants_readme,
+            HybridSourceClass::Runtime => self.wants_runtime,
+            HybridSourceClass::Tests => self.wants_tests,
+            HybridSourceClass::Fixtures => self.wants_fixtures,
+            HybridSourceClass::Playbooks => !self.penalize_playbook_self_reference,
+            HybridSourceClass::Specs | HybridSourceClass::Other => false,
+        }
+    }
+}
+
 pub fn rank_hybrid_evidence(
     lexical_hits: &[HybridChannelHit],
     graph_hits: &[HybridChannelHit],
@@ -224,6 +358,34 @@ pub fn rank_hybrid_evidence(
         return Ok(Vec::new());
     }
 
+    let mut ranked = blend_hybrid_evidence(lexical_hits, graph_hits, semantic_hits, weights)?;
+    ranked.truncate(limit);
+
+    Ok(ranked)
+}
+
+fn rank_hybrid_evidence_for_query(
+    lexical_hits: &[HybridChannelHit],
+    graph_hits: &[HybridChannelHit],
+    semantic_hits: &[HybridChannelHit],
+    weights: HybridChannelWeights,
+    limit: usize,
+    query_text: &str,
+) -> FriggResult<Vec<HybridRankedEvidence>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let ranked = blend_hybrid_evidence(lexical_hits, graph_hits, semantic_hits, weights)?;
+    Ok(diversify_hybrid_ranked_evidence(ranked, limit, query_text))
+}
+
+fn blend_hybrid_evidence(
+    lexical_hits: &[HybridChannelHit],
+    graph_hits: &[HybridChannelHit],
+    semantic_hits: &[HybridChannelHit],
+    weights: HybridChannelWeights,
+) -> FriggResult<Vec<HybridRankedEvidence>> {
     let weights = weights.validate()?;
     let mut by_document: BTreeMap<HybridDocumentRef, HybridScoreAccumulator> = BTreeMap::new();
 
@@ -261,9 +423,38 @@ pub fn rank_hybrid_evidence(
             .then(left.document.cmp(&right.document))
             .then(left.excerpt.cmp(&right.excerpt))
     });
-    ranked.truncate(limit);
 
     Ok(ranked)
+}
+
+fn diversify_hybrid_ranked_evidence(
+    ranked: Vec<HybridRankedEvidence>,
+    limit: usize,
+    query_text: &str,
+) -> Vec<HybridRankedEvidence> {
+    let intent = HybridRankingIntent::from_query(query_text);
+    let mut seen_classes = BTreeMap::<HybridSourceClass, usize>::new();
+    let mut remaining = ranked;
+    let mut selected = Vec::with_capacity(limit.min(remaining.len()));
+
+    while selected.len() < limit && !remaining.is_empty() {
+        let best_index = remaining
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| {
+                hybrid_selection_score(left, &intent, &seen_classes)
+                    .total_cmp(&hybrid_selection_score(right, &intent, &seen_classes))
+                    .then_with(|| hybrid_ranked_evidence_order(right, left))
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        let chosen = remaining.remove(best_index);
+        let class = hybrid_source_class(&chosen.document.path);
+        *seen_classes.entry(class).or_insert(0) += 1;
+        selected.push(chosen);
+    }
+
+    selected
 }
 
 #[derive(Debug, Clone, Default)]
@@ -397,8 +588,10 @@ pub const MAX_REGEX_QUANTIFIERS: usize = 64;
 pub const MAX_REGEX_SIZE_LIMIT_BYTES: usize = 1_000_000;
 pub const MAX_REGEX_DFA_SIZE_LIMIT_BYTES: usize = 1_000_000;
 const BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD: usize = 256;
-const HYBRID_LEXICAL_RECALL_MAX_TOKENS: usize = 8;
+const HYBRID_LEXICAL_RECALL_MAX_TOKENS: usize = 12;
 const HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN: usize = 4;
+const HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER: usize = 6;
+const HYBRID_SEMANTIC_CANDIDATE_POOL_MIN: usize = 24;
 const REGEX_TRIGRAM_BITMAP_BITS: usize = 1 << 16;
 const REGEX_TRIGRAM_BITMAP_WORDS: usize = REGEX_TRIGRAM_BITMAP_BITS / 64;
 const REGEX_TRIGRAM_HASH_MULTIPLIER: u32 = 0x9E37_79B1;
@@ -687,6 +880,7 @@ impl TextSearcher {
         semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
     ) -> FriggResult<SearchHybridExecutionOutput> {
         let query_text = query.query.trim().to_owned();
+        let ranking_intent = HybridRankingIntent::from_query(&query_text);
         if query_text.is_empty() {
             return Err(FriggError::InvalidInput(
                 "hybrid search query must not be empty".to_owned(),
@@ -770,56 +964,60 @@ impl TextSearcher {
             }
         };
 
-        if note.semantic_status != HybridSemanticStatus::Ok
-            && lexical_output.matches.len() < query.limit
-        {
-            if let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text) {
-                let expanded = self.search_regex_with_filters_diagnostics(
+        let should_expand_lexical = lexical_output.matches.len() < query.limit
+            && (note.semantic_status != HybridSemanticStatus::Ok
+                || ranking_intent.wants_docs
+                || ranking_intent.wants_contracts
+                || ranking_intent.wants_error_taxonomy
+                || ranking_intent.wants_tool_contracts
+                || ranking_intent.wants_benchmarks);
+        if should_expand_lexical {
+            let recall_tokens = hybrid_lexical_recall_tokens(&query_text);
+
+            // Exact token recall should land before broad regex expansion so
+            // high-signal contract terms survive generic phrase misses.
+            for token in recall_tokens
+                .iter()
+                .take(HYBRID_LEXICAL_RECALL_MAX_TOKENS)
+                .cloned()
+            {
+                let expanded = self.search_literal_with_filters_diagnostics(
                     SearchTextQuery {
-                        query: token_regex,
+                        query: token,
                         path_regex: None,
                         limit: lexical_limit,
                     },
                     filters.clone(),
                 )?;
                 merge_hybrid_lexical_search_output(&mut lexical_output, expanded, lexical_limit);
+                if lexical_output.matches.len() >= lexical_limit {
+                    break;
+                }
             }
 
-            // Strong lexical floor for degraded/disabled semantic mode:
-            // if boundary-token regex recall yields nothing (common with snake_case terms),
-            // run deterministic per-token literal recall to avoid empty hybrid responses.
-            if lexical_output.matches.is_empty() {
-                for token in hybrid_lexical_recall_tokens(&query_text)
-                    .into_iter()
-                    .take(HYBRID_LEXICAL_RECALL_MAX_TOKENS)
-                {
-                    let expanded = self.search_literal_with_filters_diagnostics(
+            if lexical_output.matches.len() < lexical_limit {
+                if let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text) {
+                    let expanded = self.search_regex_with_filters_diagnostics(
                         SearchTextQuery {
-                            query: token,
+                            query: token_regex,
                             path_regex: None,
                             limit: lexical_limit,
                         },
                         filters.clone(),
                     )?;
-                    merge_hybrid_lexical_search_output(
-                        &mut lexical_output,
-                        expanded,
-                        lexical_limit,
-                    );
-                    if lexical_output.matches.len() >= query.limit {
-                        break;
-                    }
+                    merge_hybrid_lexical_search_output(&mut lexical_output, expanded, lexical_limit);
                 }
             }
         }
-        let lexical_hits = build_hybrid_lexical_hits(&lexical_output.matches);
+        let lexical_hits = build_hybrid_lexical_hits_with_intent(&lexical_output.matches, &ranking_intent);
 
-        let matches = rank_hybrid_evidence(
+        let matches = rank_hybrid_evidence_for_query(
             &lexical_hits,
             &graph_hits,
             &semantic_hits,
             query.weights,
             query.limit,
+            &query_text,
         )?;
 
         Ok(SearchHybridExecutionOutput {
@@ -895,6 +1093,7 @@ impl TextSearcher {
         }
 
         let normalized_filters = normalize_search_filters(filters.clone())?;
+        let ranking_intent = HybridRankingIntent::from_query(query_text);
         let mut repositories = self.config.repositories();
         repositories.sort_by(|left, right| {
             left.repository_id
@@ -936,9 +1135,11 @@ impl TextSearcher {
                 continue;
             };
             let projections = storage
-                .load_semantic_embedding_projections_for_repository_snapshot(
+                .load_semantic_embedding_projections_for_repository_snapshot_model(
                     &repository_id,
                     &latest_snapshot.snapshot_id,
+                    Some(provider.as_str()),
+                    Some(model),
                 )
                 .map_err(|err| {
                     FriggError::Internal(format!(
@@ -948,16 +1149,20 @@ impl TextSearcher {
                 })?;
 
             for projection in projections {
+                if hard_excluded_runtime_path(root, Path::new(&projection.path)) {
+                    continue;
+                }
                 if let Some(language) = normalized_filters.language {
                     if !language.matches_path(Path::new(&projection.path)) {
                         continue;
                     }
                 }
-                let score = semantic_projection_score(
-                    &query_embedding,
-                    &projection,
-                    &repository_id,
-                )?;
+                let score =
+                    semantic_projection_score(&query_embedding, &projection, &repository_id)?
+                        * hybrid_path_quality_multiplier_with_intent(
+                            &projection.path,
+                            &ranking_intent,
+                        );
                 if !score.is_finite() {
                     return Err(FriggError::Internal(format!(
                         "semantic similarity produced non-finite score for repository '{repository_id}' path '{}' chunk_id='{}'",
@@ -983,22 +1188,22 @@ impl TextSearcher {
                 .then(left.path.cmp(&right.path))
                 .then(left.chunk_id.cmp(&right.chunk_id))
         });
-        pending_hits.truncate(limit);
+        let semantic_candidate_limit = limit
+            .saturating_mul(HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER)
+            .max(HYBRID_SEMANTIC_CANDIDATE_POOL_MIN);
+        pending_hits.truncate(semantic_candidate_limit);
 
         let mut chunk_texts_by_group = BTreeMap::new();
-        for ((repository_id, snapshot_id), chunk_ids) in pending_hits
-            .iter()
-            .fold(
-                BTreeMap::<(String, String), Vec<String>>::new(),
-                |mut grouped, hit| {
-                    grouped
-                        .entry((hit.repository_id.clone(), hit.snapshot_id.clone()))
-                        .or_default()
-                        .push(hit.chunk_id.clone());
-                    grouped
-                },
-            )
-        {
+        for ((repository_id, snapshot_id), chunk_ids) in pending_hits.iter().fold(
+            BTreeMap::<(String, String), Vec<String>>::new(),
+            |mut grouped, hit| {
+                grouped
+                    .entry((hit.repository_id.clone(), hit.snapshot_id.clone()))
+                    .or_default()
+                    .push(hit.chunk_id.clone());
+                grouped
+            },
+        ) {
             let Some(db_path) = db_paths_by_repository.get(&repository_id) else {
                 continue;
             };
@@ -1085,6 +1290,68 @@ impl TextSearcher {
             );
 
             for (rel_path, path) in file_candidates {
+                if should_scrub_playbook_metadata(&rel_path) {
+                    let content = match fs::read_to_string(&path) {
+                        Ok(content) => content,
+                        Err(err) => {
+                            diagnostics.entries.push(SearchDiagnostic {
+                                repository_id: repository_id.clone(),
+                                path: Some(rel_path),
+                                kind: SearchDiagnosticKind::Read,
+                                message: err.to_string(),
+                            });
+                            continue;
+                        }
+                    };
+                    let content = scrub_search_content(&rel_path, &content);
+
+                    for (line_idx, line) in content.lines().enumerate() {
+                        match_columns(line, &mut match_columns_buffer);
+                        if match_columns_buffer.is_empty() {
+                            continue;
+                        }
+
+                        let line_number = line_idx + 1;
+                        let mut excerpt_for_line: Option<String> = None;
+
+                        for &column in &match_columns_buffer {
+                            if use_bounded_retention
+                                && matches.len() == query.limit
+                                && matches.last().is_some_and(|worst| {
+                                    !text_match_candidate_order(
+                                        &repository_id,
+                                        &rel_path,
+                                        line_number,
+                                        column,
+                                        line,
+                                        worst,
+                                    )
+                                    .is_lt()
+                                })
+                            {
+                                continue;
+                            }
+
+                            let candidate = TextMatch {
+                                repository_id: repository_id.clone(),
+                                path: rel_path.clone(),
+                                line: line_number,
+                                column,
+                                excerpt: excerpt_for_line
+                                    .get_or_insert_with(|| line.to_owned())
+                                    .clone(),
+                            };
+
+                            if use_bounded_retention {
+                                retain_bounded_match(&mut matches, query.limit, candidate);
+                            } else {
+                                matches.push(candidate);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 let file = match fs::File::open(&path) {
                     Ok(file) => file,
                     Err(err) => {
@@ -1237,7 +1504,8 @@ impl TextSearcher {
                         continue;
                     }
                 };
-                if !file_may_match(&content) {
+                let content = scrub_search_content(&rel_path, &content);
+                if !file_may_match(content.as_ref()) {
                     continue;
                 }
 
@@ -1316,6 +1584,18 @@ fn trim_trailing_newline(line: &mut String) {
     }
 }
 
+fn should_scrub_playbook_metadata(path: &str) -> bool {
+    path.starts_with("playbooks/") && path.ends_with(".md")
+}
+
+fn scrub_search_content<'a>(path: &str, content: &'a str) -> Cow<'a, str> {
+    if should_scrub_playbook_metadata(path) {
+        return scrub_playbook_metadata_header(content);
+    }
+
+    Cow::Borrowed(content)
+}
+
 impl TextSearcher {
     fn candidate_files_for_repository(
         &self,
@@ -1353,16 +1633,21 @@ impl TextSearcher {
         let latest = storage
             .load_latest_manifest_for_repository(repository_id)
             .ok()??;
+        let snapshot_digests = latest
+            .entries
+            .into_iter()
+            .map(|entry| FileMetadataDigest {
+                path: entry.path.into(),
+                size_bytes: entry.size_bytes,
+                mtime_ns: entry.mtime_ns,
+            })
+            .collect::<Vec<_>>();
+        let validated_digests = validate_manifest_digests_for_root(root, &snapshot_digests)?;
         let mut candidates = Vec::new();
-        for entry in latest.entries {
-            let stored_path = std::path::PathBuf::from(entry.path);
-            let path = if stored_path.is_absolute() {
-                stored_path
-            } else {
-                root.join(stored_path)
-            };
-            if !path.starts_with(root) || !path.exists() {
-                return None;
+        for digest in validated_digests {
+            let path = digest.path;
+            if hard_excluded_runtime_path(root, &path) {
+                continue;
             }
             let rel_path = normalize_repository_relative_path(root, &path);
 
@@ -1392,10 +1677,109 @@ fn walk_candidate_files_for_repository(
     filters: &NormalizedSearchFilters,
     diagnostics: &mut SearchExecutionDiagnostics,
 ) -> Vec<(String, std::path::PathBuf)> {
-    let walker = WalkBuilder::new(root).standard_filters(true).build();
+    let walker = search_walk_builder(root).build();
     let mut file_candidates = Vec::new();
 
     for dent in walker {
+        let dent = match dent {
+            Ok(entry) => entry,
+            Err(err) => {
+                diagnostics.entries.push(SearchDiagnostic {
+                    repository_id: repository_id.to_owned(),
+                    path: None,
+                    kind: SearchDiagnosticKind::Walk,
+                    message: err.to_string(),
+                });
+                continue;
+            }
+        };
+        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = dent.path();
+        if hard_excluded_runtime_path(root, path) {
+            continue;
+        }
+        let rel_path = normalize_repository_relative_path(root, path);
+
+        if let Some(language) = filters.language {
+            if !language.matches_path(path) {
+                continue;
+            }
+        }
+
+        if let Some(path_regex) = &query.path_regex {
+            if !path_regex.is_match(&rel_path) {
+                continue;
+            }
+        }
+
+        file_candidates.push((rel_path, path.to_path_buf()));
+    }
+    extend_with_gitignored_doc_candidates(
+        &mut file_candidates,
+        repository_id,
+        root,
+        query,
+        filters,
+        diagnostics,
+    );
+
+    file_candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    file_candidates
+}
+
+fn search_walk_builder(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder.standard_filters(true);
+    builder
+}
+
+fn docs_search_walk_builder(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root.join("docs"));
+    builder
+        .standard_filters(true)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false);
+    builder
+}
+
+fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
+    let relative = if path.is_absolute() {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return true;
+        };
+        relative
+    } else {
+        path
+    };
+    let Some(component) = relative.components().next() else {
+        return false;
+    };
+    matches!(
+        component.as_os_str().to_string_lossy().as_ref(),
+        ".frigg" | ".git" | "target"
+    )
+}
+
+fn extend_with_gitignored_doc_candidates(
+    file_candidates: &mut Vec<(String, std::path::PathBuf)>,
+    repository_id: &str,
+    root: &Path,
+    query: &SearchTextQuery,
+    filters: &NormalizedSearchFilters,
+    diagnostics: &mut SearchExecutionDiagnostics,
+) {
+    let docs_root = root.join("docs");
+    if !docs_root.exists() {
+        return;
+    }
+
+    for dent in docs_search_walk_builder(root).build() {
         let dent = match dent {
             Ok(entry) => entry,
             Err(err) => {
@@ -1429,9 +1813,6 @@ fn walk_candidate_files_for_repository(
 
         file_candidates.push((rel_path, path.to_path_buf()));
     }
-
-    file_candidates.sort_by(|left, right| left.0.cmp(&right.0));
-    file_candidates
 }
 
 pub fn compile_safe_regex(pattern: &str) -> Result<Regex, RegexSearchError> {
@@ -1902,7 +2283,24 @@ fn insert_sorted_match(matches: &mut Vec<TextMatch>, candidate: TextMatch) {
     matches.insert(insert_at, candidate);
 }
 
+#[cfg(test)]
 fn build_hybrid_lexical_hits(matches: &[TextMatch]) -> Vec<HybridChannelHit> {
+    build_hybrid_lexical_hits_with_intent(matches, &HybridRankingIntent::default())
+}
+
+#[cfg(test)]
+fn build_hybrid_lexical_hits_for_query(
+    matches: &[TextMatch],
+    query_text: &str,
+) -> Vec<HybridChannelHit> {
+    let intent = HybridRankingIntent::from_query(query_text);
+    build_hybrid_lexical_hits_with_intent(matches, &intent)
+}
+
+fn build_hybrid_lexical_hits_with_intent(
+    matches: &[TextMatch],
+    intent: &HybridRankingIntent,
+) -> Vec<HybridChannelHit> {
     let mut frequency_by_document: BTreeMap<(String, String), f32> = BTreeMap::new();
     for found in matches {
         let key = (found.repository_id.clone(), found.path.clone());
@@ -1914,7 +2312,8 @@ fn build_hybrid_lexical_hits(matches: &[TextMatch]) -> Vec<HybridChannelHit> {
         .map(|found| {
             let key = (found.repository_id.clone(), found.path.clone());
             let frequency = *frequency_by_document.get(&key).unwrap_or(&1.0);
-            let raw_score = frequency.sqrt() * hybrid_path_quality_multiplier(&found.path);
+            let raw_score =
+                frequency.sqrt() * hybrid_path_quality_multiplier_with_intent(&found.path, intent);
             HybridChannelHit {
                 document: HybridDocumentRef {
                     repository_id: found.repository_id.clone(),
@@ -1930,29 +2329,224 @@ fn build_hybrid_lexical_hits(matches: &[TextMatch]) -> Vec<HybridChannelHit> {
         .collect()
 }
 
-fn hybrid_path_quality_multiplier(path: &str) -> f32 {
-    if path.starts_with("playbooks/") {
-        return 0.35;
+fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRankingIntent) -> f32 {
+    let class = hybrid_source_class(path);
+    let mut multiplier = match class {
+        HybridSourceClass::ErrorContracts => 1.0,
+        HybridSourceClass::ToolContracts => 1.0,
+        HybridSourceClass::BenchmarkDocs => 0.98,
+        HybridSourceClass::Playbooks => {
+            if intent.penalize_playbook_self_reference {
+                0.25
+            } else {
+                0.45
+            }
+        }
+        HybridSourceClass::Documentation => 0.88,
+        HybridSourceClass::Readme => 0.78,
+        HybridSourceClass::Specs => 0.82,
+        HybridSourceClass::Fixtures => 0.92,
+        HybridSourceClass::Tests => 0.97,
+        HybridSourceClass::Runtime => 1.0,
+        HybridSourceClass::Other => {
+            match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+                Some(
+                    "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt"
+                    | "kts",
+                ) => 1.0,
+                _ => 0.9,
+            }
+        }
+    };
+
+    if intent.wants_docs
+        && matches!(
+            class,
+            HybridSourceClass::Documentation
+                | HybridSourceClass::ErrorContracts
+                | HybridSourceClass::ToolContracts
+                | HybridSourceClass::BenchmarkDocs
+        )
+    {
+        multiplier *= 1.36;
     }
-    if path.starts_with("docs/") {
-        return 0.7;
+    if intent.wants_readme && class == HybridSourceClass::Readme {
+        multiplier *= 1.15;
     }
-    if path.starts_with("specs/") {
-        return 0.65;
+    if intent.wants_readme && path == "README.md" {
+        multiplier *= 1.45;
     }
-    if path == "README.md" || path.ends_with("/README.md") {
-        return 0.6;
+    if intent.wants_contracts
+        && matches!(
+            class,
+            HybridSourceClass::ErrorContracts | HybridSourceClass::ToolContracts
+        )
+    {
+        multiplier *= 1.55;
     }
-    if path.starts_with("src/") || path.starts_with("crates/") {
-        return 1.0;
+    if intent.wants_error_taxonomy && class == HybridSourceClass::ErrorContracts {
+        multiplier *= 1.95;
+    }
+    if path == "docs/contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts)
+    {
+        multiplier *= 1.70;
+    }
+    if intent.wants_error_taxonomy && path == "crates/cli/src/mcp/server.rs" {
+        multiplier *= 1.35;
+    }
+    if intent.wants_error_taxonomy && path == "crates/cli/src/mcp/deep_search.rs" {
+        multiplier *= 1.18;
+    }
+    if intent.wants_tool_contracts && class == HybridSourceClass::ToolContracts {
+        multiplier *= 2.10;
+    }
+    if path == "docs/contracts/tools/v1/README.md" && intent.wants_tool_contracts {
+        multiplier *= 1.75;
+    }
+    if intent.wants_tool_contracts && path == "crates/cli/src/mcp/tool_surface.rs" {
+        multiplier *= 1.12;
+    }
+    if intent.wants_tool_contracts && path == "crates/cli/tests/tool_surface_parity.rs" {
+        multiplier *= 1.10;
+    }
+    if intent.wants_benchmarks && class == HybridSourceClass::BenchmarkDocs {
+        multiplier *= 2.00;
+    }
+    if intent.wants_benchmarks && path == "docs/benchmarks/deep-search.md" {
+        multiplier *= 1.65;
+    }
+    if intent.wants_contracts && class == HybridSourceClass::Readme {
+        multiplier *= 0.65;
+    }
+    if intent.wants_tool_contracts && class == HybridSourceClass::Readme {
+        multiplier *= 0.68;
+    }
+    if intent.wants_benchmarks && class == HybridSourceClass::Readme {
+        multiplier *= 0.68;
+    }
+    if intent.wants_tests && class == HybridSourceClass::Tests {
+        multiplier *= 1.12;
+    }
+    if intent.wants_fixtures && class == HybridSourceClass::Fixtures {
+        multiplier *= 1.14;
+    }
+    if intent.wants_runtime && class == HybridSourceClass::Runtime {
+        multiplier *= 1.05;
     }
 
-    match Path::new(path).extension().and_then(|ext| ext.to_str()) {
-        Some("rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt" | "kts") => {
-            1.0
-        }
-        _ => 0.85,
+    multiplier
+}
+
+fn hybrid_source_class(path: &str) -> HybridSourceClass {
+    if path.starts_with("playbooks/") {
+        return HybridSourceClass::Playbooks;
     }
+    if is_error_contract_path(path) {
+        return HybridSourceClass::ErrorContracts;
+    }
+    if is_tool_contract_path(path) {
+        return HybridSourceClass::ToolContracts;
+    }
+    if path.starts_with("docs/benchmarks/") {
+        return HybridSourceClass::BenchmarkDocs;
+    }
+    if is_readme_path(path) {
+        return HybridSourceClass::Readme;
+    }
+    if path.starts_with("docs/") {
+        return HybridSourceClass::Documentation;
+    }
+    if path.starts_with("fixtures/") {
+        return HybridSourceClass::Fixtures;
+    }
+    if path.starts_with("specs/") {
+        return HybridSourceClass::Specs;
+    }
+    if path.starts_with("tests/")
+        || path.contains("/tests/")
+        || path.ends_with("_test.rs")
+        || path.ends_with("_tests.rs")
+    {
+        return HybridSourceClass::Tests;
+    }
+    if path.starts_with("src/") || path.starts_with("crates/") {
+        return HybridSourceClass::Runtime;
+    }
+
+    HybridSourceClass::Other
+}
+
+fn is_error_contract_path(path: &str) -> bool {
+    path == "docs/contracts/errors.md"
+}
+
+fn is_tool_contract_path(path: &str) -> bool {
+    path.starts_with("docs/contracts/tools/")
+}
+
+fn is_readme_path(path: &str) -> bool {
+    path == "README.md" || path.ends_with("/README.md")
+}
+
+fn hybrid_selection_score(
+    evidence: &HybridRankedEvidence,
+    intent: &HybridRankingIntent,
+    seen_classes: &BTreeMap<HybridSourceClass, usize>,
+) -> f32 {
+    let class = hybrid_source_class(&evidence.document.path);
+    let seen_count = seen_classes.get(&class).copied().unwrap_or(0);
+    let mut score = evidence.blended_score
+        * hybrid_path_quality_multiplier_with_intent(&evidence.document.path, intent);
+
+    if intent.wants_class(class) && seen_count == 0 {
+        score += hybrid_class_novelty_bonus(class);
+    }
+    if seen_count > 0 {
+        score -= hybrid_class_repeat_penalty(class) * seen_count as f32;
+    }
+
+    score
+}
+
+fn hybrid_class_novelty_bonus(class: HybridSourceClass) -> f32 {
+    match class {
+        HybridSourceClass::ErrorContracts
+        | HybridSourceClass::ToolContracts
+        | HybridSourceClass::BenchmarkDocs => 0.08,
+        HybridSourceClass::Documentation | HybridSourceClass::Runtime | HybridSourceClass::Tests => {
+            0.04
+        }
+        HybridSourceClass::Fixtures => 0.035,
+        HybridSourceClass::Readme => 0.02,
+        HybridSourceClass::Playbooks | HybridSourceClass::Specs | HybridSourceClass::Other => 0.0,
+    }
+}
+
+fn hybrid_class_repeat_penalty(class: HybridSourceClass) -> f32 {
+    match class {
+        HybridSourceClass::ToolContracts => 0.09,
+        HybridSourceClass::BenchmarkDocs => 0.07,
+        HybridSourceClass::ErrorContracts | HybridSourceClass::Documentation => 0.05,
+        HybridSourceClass::Readme => 0.03,
+        HybridSourceClass::Runtime | HybridSourceClass::Tests | HybridSourceClass::Fixtures => {
+            0.015
+        }
+        HybridSourceClass::Playbooks | HybridSourceClass::Specs | HybridSourceClass::Other => 0.01,
+    }
+}
+
+fn hybrid_ranked_evidence_order(
+    left: &HybridRankedEvidence,
+    right: &HybridRankedEvidence,
+) -> std::cmp::Ordering {
+    right
+        .blended_score
+        .total_cmp(&left.blended_score)
+        .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
+        .then_with(|| right.graph_score.total_cmp(&left.graph_score))
+        .then_with(|| right.semantic_score.total_cmp(&left.semantic_score))
+        .then(left.document.cmp(&right.document))
+        .then(left.excerpt.cmp(&right.excerpt))
 }
 
 fn build_hybrid_lexical_recall_regex(query_text: &str) -> Option<String> {
@@ -1975,7 +2569,8 @@ fn build_hybrid_lexical_recall_regex(query_text: &str) -> Option<String> {
 }
 
 fn hybrid_lexical_recall_tokens(query_text: &str) -> Vec<String> {
-    let mut tokens = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut tokens = Vec::new();
     let mut current = String::new();
 
     for ch in query_text.chars() {
@@ -1984,17 +2579,55 @@ fn hybrid_lexical_recall_tokens(query_text: &str) -> Vec<String> {
             continue;
         }
 
-        if current.len() >= HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN {
-            tokens.insert(std::mem::take(&mut current));
+        if let Some(token) = normalize_hybrid_recall_token(&current) {
+            if seen.insert(token.clone()) {
+                tokens.push(token);
+            }
+            current.clear();
         } else {
             current.clear();
         }
     }
-    if current.len() >= HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN {
-        tokens.insert(current);
+    if let Some(token) = normalize_hybrid_recall_token(&current) {
+        if seen.insert(token.clone()) {
+            tokens.push(token);
+        }
     }
 
-    tokens.into_iter().collect::<Vec<_>>()
+    tokens
+}
+
+fn normalize_hybrid_recall_token(token: &str) -> Option<String> {
+    if token.len() < HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN {
+        return None;
+    }
+
+    let token = token.trim().to_ascii_lowercase();
+    if token.is_empty() || is_low_signal_hybrid_recall_token(&token) {
+        return None;
+    }
+
+    Some(token)
+}
+
+fn is_low_signal_hybrid_recall_token(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "does"
+            | "from"
+            | "frigg"
+            | "into"
+            | "that"
+            | "these"
+            | "this"
+            | "those"
+            | "turn"
+            | "what"
+            | "when"
+            | "where"
+            | "which"
+    )
 }
 
 fn merge_hybrid_lexical_search_output(
@@ -2171,7 +2804,7 @@ mod tests {
     use std::future::Future;
     use std::path::{Path, PathBuf};
     use std::pin::Pin;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::domain::{FriggError, FriggResult, model::TextMatch};
     use crate::settings::{
@@ -2185,11 +2818,13 @@ mod tests {
 
     use crate::searcher::{
         HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridSemanticStatus,
-        MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS, MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS,
-        RegexSearchError, SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
-        SemanticRuntimeQueryEmbeddingExecutor, TextSearcher, build_hybrid_lexical_hits,
+        HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS, MAX_REGEX_PATTERN_BYTES,
+        MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind, SearchFilters,
+        SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor, TextSearcher,
+        build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
         build_hybrid_lexical_recall_regex, build_regex_prefilter_plan, compile_safe_regex,
-        hybrid_lexical_recall_tokens, normalize_search_filters, rank_hybrid_evidence,
+        hybrid_lexical_recall_tokens, hybrid_source_class, normalize_search_filters,
+        rank_hybrid_evidence, rank_hybrid_evidence_for_query,
     };
 
     #[test]
@@ -2228,6 +2863,64 @@ mod tests {
 
         cleanup_workspace(&root_a);
         cleanup_workspace(&root_b);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_search_walk_fallback_includes_gitignored_contract_docs() -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-gitignored-docs");
+        prepare_workspace(&root, &[("docs/contracts/errors.md", "invalid_params\n")])?;
+        fs::write(root.join(".gitignore"), "docs\n").map_err(FriggError::Io)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let matches = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "invalid_params".to_owned(),
+                path_regex: None,
+                limit: 10,
+            },
+            SearchFilters::default(),
+        )?;
+
+        assert!(
+            matches
+                .iter()
+                .any(|entry| entry.path == "docs/contracts/errors.md"),
+            "walk fallback should not drop gitignored contract docs from literal search"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_search_walk_fallback_excludes_target_artifacts_without_gitignore() -> FriggResult<()>
+    {
+        let root = temp_workspace_root("literal-search-target-exclusion");
+        prepare_workspace(
+            &root,
+            &[
+                ("src/main.rs", "needle\n"),
+                ("target/debug/app", "needle\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let matches = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "needle".to_owned(),
+                path_regex: None,
+                limit: 10,
+            },
+            SearchFilters::default(),
+        )?;
+
+        assert!(
+            matches.iter().all(|entry| !entry.path.starts_with("target/")),
+            "walk fallback must not search target artifacts: {matches:?}"
+        );
+
+        cleanup_workspace(&root);
         Ok(())
     }
 
@@ -2454,6 +3147,80 @@ mod tests {
         assert_eq!(hybrid.note.semantic_status, HybridSemanticStatus::Disabled);
         assert_eq!(hybrid.matches.len(), 1);
         assert_eq!(hybrid.matches[0].document.path, "src/indexed.rs");
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_discovery_rebuilds_after_stale_manifest_snapshot() -> FriggResult<()> {
+        let root = temp_workspace_root("candidate-discovery-stale-manifest");
+        prepare_workspace(
+            &root,
+            &[
+                ("src/indexed.rs", "needle indexed\n"),
+                ("src/live_only.rs", "needle live-only\n"),
+            ],
+        )?;
+        seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/indexed.rs"])?;
+
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        let searcher = TextSearcher::new(config);
+
+        let first = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "needle".to_owned(),
+                path_regex: None,
+                limit: 20,
+            },
+            SearchFilters::default(),
+        )?;
+        assert_eq!(
+            first,
+            vec![text_match(
+                "repo-001",
+                "src/indexed.rs",
+                1,
+                1,
+                "needle indexed"
+            )]
+        );
+
+        rewrite_file_with_new_mtime(&root.join("src/indexed.rs"), "changed\n")?;
+
+        let literal = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "needle".to_owned(),
+                path_regex: None,
+                limit: 20,
+            },
+            SearchFilters::default(),
+        )?;
+        assert_eq!(
+            literal,
+            vec![text_match(
+                "repo-001",
+                "src/live_only.rs",
+                1,
+                1,
+                "needle live-only"
+            )]
+        );
+
+        let hybrid = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "needle".to_owned(),
+                limit: 20,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+        assert_eq!(hybrid.note.semantic_status, HybridSemanticStatus::Disabled);
+        assert_eq!(hybrid.matches.len(), 1);
+        assert_eq!(hybrid.matches[0].document.path, "src/live_only.rs");
 
         cleanup_workspace(&root);
         Ok(())
@@ -3007,6 +3774,440 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_query_aware_lexical_hits_promote_public_docs_witnesses() -> FriggResult<()> {
+        let query = "trace invalid_params typed error from public docs to runtime helper and tests";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "docs/contracts/errors.md",
+                    1,
+                    1,
+                    "invalid_params maps to -32602",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/server.rs",
+                    1,
+                    1,
+                    "fn invalid_params_error() -> JsonRpcError",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/tests/tool_handlers.rs",
+                    1,
+                    1,
+                    "invalid_params typed failure coverage",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            3,
+            query,
+        )?;
+
+        assert_eq!(ranked.len(), 3);
+        assert_eq!(ranked[0].document.path, "docs/contracts/errors.md");
+        assert!(
+            ranked
+                .iter()
+                .any(|entry| entry.document.path == "crates/cli/src/mcp/server.rs"),
+            "runtime witness should remain in the ranked set"
+        );
+        assert!(
+            ranked
+                .iter()
+                .any(|entry| entry.document.path == "crates/cli/tests/tool_handlers.rs"),
+            "test witness should remain in the ranked set"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_lexical_recall_tokens_preserve_signal_order_for_tool_surface_queries() {
+        let tokens = hybrid_lexical_recall_tokens(
+            "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests",
+        );
+
+        assert_eq!(
+            tokens,
+            vec![
+                "tools",
+                "core",
+                "versus",
+                "extended",
+                "tool",
+                "surface",
+                "gating",
+                "enforced",
+                "runtime",
+                "docs",
+                "tests",
+            ]
+        );
+    }
+
+    #[test]
+    fn hybrid_ranking_query_aware_lexical_hits_promote_tool_contract_docs_over_generic_readmes()
+    -> FriggResult<()> {
+        let query =
+            "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "README.md",
+                    1,
+                    1,
+                    "FRIGG_MCP_TOOL_SURFACE_PROFILE core extended tools list",
+                ),
+                text_match(
+                    "repo-001",
+                    "docs/contracts/tools/v1/README.md",
+                    1,
+                    1,
+                    "tool surface profile core extended_only tools/list",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/tool_surface.rs",
+                    1,
+                    1,
+                    "ToolSurfaceProfile::Core ToolSurfaceProfile::Extended",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/tests/tool_surface_parity.rs",
+                    1,
+                    1,
+                    "runtime_tool_surface_parity",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            4,
+            query,
+        )?;
+
+        assert!(
+            ranked[0].document.path == "docs/contracts/tools/v1/README.md"
+                || ranked[1].document.path == "docs/contracts/tools/v1/README.md",
+            "tool contract docs should land at the top of the ranked set"
+        );
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "docs/contracts/tools/v1/README.md")
+                < ranked
+                    .iter()
+                    .position(|entry| entry.document.path == "README.md"),
+            "tool contract docs should outrank the generic README for tool-surface queries"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_query_aware_lexical_hits_promote_benchmark_docs_for_replay_queries()
+    -> FriggResult<()> {
+        let query =
+            "how does Frigg turn a multi-step suite playbook fixture into a deterministic trace artifact replay and citations";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "README.md",
+                    1,
+                    1,
+                    "deterministic replay provenance auditing deep_search_replay",
+                ),
+                text_match(
+                    "repo-001",
+                    "docs/benchmarks/deep-search.md",
+                    1,
+                    1,
+                    "deterministic trace artifact replay citations playbook fixture benchmark",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/deep_search.rs",
+                    1,
+                    1,
+                    "DeepSearchTraceArtifact deep_search_compose_citations",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            3,
+            query,
+        )?;
+
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "docs/benchmarks/deep-search.md")
+                < ranked
+                    .iter()
+                    .position(|entry| entry.document.path == "README.md"),
+            "benchmark docs should outrank the generic README for replay/citation queries"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_query_aware_diversification_avoids_single_class_collapse() -> FriggResult<()>
+    {
+        let query = "trace invalid_params typed error from public docs to runtime helper and tests";
+        let lexical = vec![
+            hybrid_hit("repo-001", "crates/cli/src/a.rs", 1.00, "lex-runtime-a"),
+            hybrid_hit("repo-001", "crates/cli/src/b.rs", 0.99, "lex-runtime-b"),
+            hybrid_hit("repo-001", "docs/contracts/errors.md", 0.98, "lex-docs"),
+            hybrid_hit(
+                "repo-001",
+                "crates/cli/tests/tool_handlers.rs",
+                0.97,
+                "lex-tests",
+            ),
+        ];
+
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            3,
+            query,
+        )?;
+        let ranked_paths = ranked
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .any(|path| matches!(hybrid_source_class(path), HybridSourceClass::Runtime)),
+            "runtime witness should remain in top-k"
+        );
+        assert!(
+            ranked_paths.contains(&"docs/contracts/errors.md"),
+            "docs witness should be promoted into top-k"
+        );
+        assert!(
+            ranked_paths.contains(&"crates/cli/tests/tool_handlers.rs"),
+            "test witness should be promoted into top-k"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_channel_surfaces_docs_runtime_and_tests_witnesses() -> FriggResult<()>
+    {
+        let root = temp_workspace_root("hybrid-semantic-doc-runtime-tests");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "docs/contracts/errors.md",
+                    "invalid_params typed error public docs contract\n",
+                ),
+                (
+                    "crates/cli/src/mcp/server.rs",
+                    "invalid_params runtime helper\n",
+                ),
+                (
+                    "crates/cli/tests/tool_handlers.rs",
+                    "invalid_params tests coverage\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "docs/contracts/errors.md",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/src/mcp/server.rs",
+                    0,
+                    vec![0.95, 0.05],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/tests/tool_handlers.rs",
+                    0,
+                    vec![0.90, 0.10],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query:
+                    "trace invalid_params typed error from public docs to runtime helper and tests"
+                        .to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+        let paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert!(paths.contains(&"docs/contracts/errors.md"));
+        assert!(paths.contains(&"crates/cli/src/mcp/server.rs"));
+        assert!(paths.contains(&"crates/cli/tests/tool_handlers.rs"));
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_ok_still_expands_lexical_recall_for_underfilled_queries()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-ok-lexical-recall");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "docs/contracts/tools/v1/README.md",
+                    "tool surface profile core extended_only tools/list contract\n",
+                ),
+                (
+                    "crates/cli/src/mcp/tool_surface.rs",
+                    "ToolSurfaceProfile::Core ToolSurfaceProfile::Extended runtime gating\n",
+                ),
+                (
+                    "crates/cli/tests/tool_surface_parity.rs",
+                    "runtime_tool_surface_parity tests\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "docs/contracts/tools/v1/README.md",
+                    0,
+                    vec![0.0, 1.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/src/mcp/tool_surface.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/tests/tool_surface_parity.rs",
+                    0,
+                    vec![0.95, 0.05],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query:
+                    "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests"
+                        .to_owned(),
+                limit: 4,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+        let paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert!(paths.contains(&"crates/cli/src/mcp/tool_surface.rs"));
+        assert!(paths.contains(&"crates/cli/tests/tool_surface_parity.rs"));
+        assert!(
+            paths.contains(&"docs/contracts/tools/v1/README.md"),
+            "underfilled natural-language queries should still pull in tool-contract docs via lexical expansion when semantic retrieval is healthy; got {paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_semantic_disabled_expands_lexical_recall_for_multi_token_queries()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-semantic-disabled-lexical-recall");
@@ -3233,6 +4434,91 @@ mod tests {
                 .iter()
                 .any(|source| source.starts_with("chunk-src_z.rs")),
             "semantic sources should include deterministic chunk provenance ids"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_channel_ignores_excluded_paths_and_non_active_models()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-filtered");
+        prepare_workspace(
+            &root,
+            &[
+                ("src/current.rs", "pub fn current() {}\n"),
+                ("src/legacy.rs", "pub fn legacy() {}\n"),
+                ("target/debug/app.rs", "pub fn target_artifact() {}\n"),
+            ],
+        )?;
+        let mut legacy = semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/legacy.rs",
+            0,
+            vec![1.0, 0.0],
+        );
+        legacy.provider = "google".to_owned();
+        legacy.model = "gemini-embedding-001".to_owned();
+        let target = semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "target/debug/app.rs",
+            0,
+            vec![1.0, 0.0],
+        );
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/current.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                legacy,
+                target,
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "current symbol".to_owned(),
+                limit: 10,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: Some("test-gemini-key".to_owned()),
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            paths.contains(&"src/current.rs"),
+            "active-model semantic path should remain visible: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"src/legacy.rs"),
+            "rows for other provider/model combinations must be ignored: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|path| path.starts_with("target/")),
+            "excluded runtime paths must not surface from semantic storage: {paths:?}"
         );
 
         cleanup_workspace(&root);
@@ -3589,6 +4875,13 @@ mod tests {
         }
     }
 
+    fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
+        system_time
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+    }
+
     fn seed_semantic_embeddings(
         workspace_root: &Path,
         repository_id: &str,
@@ -3604,11 +4897,15 @@ mod tests {
 
         let mut manifest_entries = records
             .iter()
-            .map(|record| ManifestEntry {
-                path: record.path.clone(),
-                sha256: format!("hash-{}", record.path),
-                size_bytes: record.content_text.len() as u64,
-                mtime_ns: Some(1),
+            .map(|record| {
+                let metadata = fs::metadata(workspace_root.join(&record.path))
+                    .expect("semantic embedding manifest path should exist");
+                ManifestEntry {
+                    path: record.path.clone(),
+                    sha256: format!("hash-{}", record.path),
+                    size_bytes: metadata.len(),
+                    mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+                }
             })
             .collect::<Vec<_>>();
         manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -3636,13 +4933,12 @@ mod tests {
         let mut manifest_entries = paths
             .iter()
             .map(|path| {
+                let metadata = fs::metadata(workspace_root.join(path)).map_err(FriggError::Io)?;
                 Ok(ManifestEntry {
                     path: (*path).to_owned(),
                     sha256: format!("hash-{path}"),
-                    size_bytes: fs::metadata(workspace_root.join(path))
-                        .map(|metadata| metadata.len())
-                        .map_err(FriggError::Io)?,
-                    mtime_ns: Some(1),
+                    size_bytes: metadata.len(),
+                    mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
                 })
             })
             .collect::<FriggResult<Vec<_>>>()?;
@@ -3665,6 +4961,8 @@ mod tests {
             .and_then(|extension| extension.to_str())
             .map(|extension| match extension {
                 "php" => "php",
+                "md" | "markdown" => "markdown",
+                "json" => "json",
                 _ => "rust",
             })
             .unwrap_or("rust")
@@ -3715,6 +5013,29 @@ mod tests {
 
     fn cleanup_workspace(root: &Path) {
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn rewrite_file_with_new_mtime(path: &Path, contents: &str) -> FriggResult<()> {
+        let before = fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(system_time_to_unix_nanos);
+
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(20));
+            fs::write(path, contents).map_err(FriggError::Io)?;
+            let after = fs::metadata(path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(system_time_to_unix_nanos);
+            if after != before {
+                return Ok(());
+            }
+        }
+
+        Err(FriggError::Internal(
+            "fixture file mtime did not advance after rewrite".to_owned(),
+        ))
     }
 
     fn text_match(

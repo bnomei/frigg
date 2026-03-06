@@ -17,6 +17,7 @@ blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
 ignore.workspace = true
+notify.workspace = true
 petgraph.workspace = true
 protobuf.workspace = true
 regex.workspace = true
@@ -54,8 +55,16 @@ name = "deep_search_replay"
 path = "tests/deep_search_replay.rs"
 
 [[test]]
+name = "hybrid_playbook_suite"
+path = "tests/hybrid_playbook_suite.rs"
+
+[[test]]
 name = "playbook_suite"
 path = "tests/playbook_suite.rs"
+
+[[test]]
+name = "playbook_hybrid_suite"
+path = "tests/playbook_hybrid_suite.rs"
 
 [[test]]
 name = "provenance"

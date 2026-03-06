@@ -71,12 +71,25 @@ Notes:
 - `--changed` rebuilds the current manifest, diffs it against the latest persisted snapshot, and treats `added + modified` files as changed.
 - Deleted files are tracked separately.
 - If nothing changed and a prior manifest exists, Frigg reuses the previous `snapshot_id` instead of writing a new one.
-- There is no built-in watch mode yet. For local auto-reindex, use an external watcher such as `watchexec`.
+- Built-in watch mode now exists for local MCP runs. With `--watch-mode auto` (the default), Frigg starts a background changed-only watcher for stdio and loopback HTTP, but keeps it disabled for non-loopback HTTP.
+- If the latest manifest is missing or stale at startup, built-in watch mode queues one immediate changed-only refresh before waiting for new filesystem events.
+- External watchers are still useful for multi-repo fan-out, editor-owned lifecycle, or when you want reindex scheduling outside the Frigg process.
 
-Example watcher:
+Built-in watch options:
+```bash
+# defaults shown explicitly:
+cargo run -p frigg -- --watch-mode auto --watch-debounce-ms 750 --watch-retry-ms 5000
+
+# disable built-in watch mode for the current run:
+cargo run -p frigg -- --watch-mode off
+```
+
+External watcher example:
 ```bash
 watchexec -w crates -w docs -w README.md -e rs,toml,md -- just reindex-changed .
 ```
+
+If you pair an external watcher with a running Frigg server, disable the built-in watcher with `--watch-mode off` to avoid double scheduling.
 
 `watchexec` is usually not the bottleneck here; `reindex --changed` still scans the workspace to rebuild the manifest, and semantic indexing can dominate runtime when enabled.
 
@@ -114,6 +127,54 @@ Remote bind requires explicit opt-in and auth token:
 - add `--allow-remote-http`
 - keep `--mcp-http-auth-token` set (or `FRIGG_MCP_HTTP_AUTH_TOKEN` env var).
 
+### 4) Optional: enable semantic retrieval
+
+Semantic runtime is disabled by default.
+
+Why:
+- enabling it without a configured provider, model, and API key would make startup fail,
+- semantic indexing/search can issue external provider calls and add latency/cost,
+- Frigg should still start and work in lexical/graph-only mode with zero provider setup.
+
+OpenAI example:
+```bash
+export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+export FRIGG_SEMANTIC_RUNTIME_PROVIDER=openai
+export OPENAI_API_KEY=...
+```
+
+Google example:
+```bash
+export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+export FRIGG_SEMANTIC_RUNTIME_PROVIDER=google
+export GEMINI_API_KEY=...
+```
+
+Default provider models:
+- `openai` defaults to `text-embedding-3-small`
+- `google` defaults to `gemini-embedding-001`
+- set `FRIGG_SEMANTIC_RUNTIME_MODEL` if you want to override either default explicitly
+
+Enable and populate embeddings for an existing workspace:
+```bash
+just reindex .
+just run
+```
+
+Equivalent direct commands:
+```bash
+frigg reindex --workspace-root .
+frigg --workspace-root .
+```
+
+Important:
+- run a full `reindex` once when turning semantic runtime on for an already indexed workspace,
+- do not use `reindex --changed` for the first semantic backfill if nothing changed on disk,
+- after the first semantic population, `reindex --changed` is fine for incremental updates.
+
+If semantic runtime is enabled correctly and embeddings exist, `search_hybrid` can return non-zero semantic scores.
+If startup succeeds but `search_hybrid` still reports `semantic_status=disabled`, the running Frigg process is not seeing the semantic runtime env/config you expect.
+
 ## CLI Public Surface
 
 ```text
@@ -132,6 +193,13 @@ Global options:
 - `--mcp-http-host <HOST>`
 - `--allow-remote-http`
 - `--mcp-http-auth-token <TOKEN>` (or env `FRIGG_MCP_HTTP_AUTH_TOKEN`)
+- `--watch-mode <MODE>` (default `auto`; or env `FRIGG_WATCH_MODE`; `auto|on|off`)
+- `--watch-debounce-ms <MILLISECONDS>` (default `750`; or env `FRIGG_WATCH_DEBOUNCE_MS`)
+- `--watch-retry-ms <MILLISECONDS>` (default `5000`; or env `FRIGG_WATCH_RETRY_MS`)
+- `--semantic-runtime-enabled <BOOL>` (or env `FRIGG_SEMANTIC_RUNTIME_ENABLED`)
+- `--semantic-runtime-provider <PROVIDER>` (or env `FRIGG_SEMANTIC_RUNTIME_PROVIDER`; `openai|google`)
+- `--semantic-runtime-model <MODEL>` (or env `FRIGG_SEMANTIC_RUNTIME_MODEL`; optional override of the provider default)
+- `--semantic-runtime-strict-mode <BOOL>` (or env `FRIGG_SEMANTIC_RUNTIME_STRICT_MODE`)
 - env `FRIGG_MCP_TOOL_SURFACE_PROFILE` (`core` default, `extended` enables deep-search runtime tools)
 
 ## MCP Tool Surface (v1)

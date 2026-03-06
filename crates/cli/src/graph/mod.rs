@@ -480,8 +480,7 @@ pub struct SymbolGraph {
     precise_symbol_ref_counts: BTreeMap<(String, String), usize>,
     precise_occurrences: BTreeMap<PreciseOccurrenceKey, PreciseOccurrenceRecord>,
     precise_occurrence_keys_by_file: BTreeMap<(String, String), BTreeSet<PreciseOccurrenceKey>>,
-    precise_occurrence_keys_by_symbol:
-        BTreeMap<(String, String), BTreeSet<PreciseOccurrenceKey>>,
+    precise_occurrence_keys_by_symbol: BTreeMap<(String, String), BTreeSet<PreciseOccurrenceKey>>,
     precise_relationships: BTreeMap<PreciseRelationshipKey, PreciseRelationshipRecord>,
     precise_relationship_keys_by_from_symbol:
         BTreeMap<(String, String), BTreeSet<PreciseRelationshipKey>>,
@@ -1598,7 +1597,9 @@ fn upsert_precise_occurrence(graph: &mut SymbolGraph, occurrence: &PreciseOccurr
     if let Some(previous) = graph.precise_occurrences.get(&key).cloned() {
         remove_precise_occurrence_indexes(graph, &key, &previous);
     }
-    graph.precise_occurrences.insert(key.clone(), occurrence.clone());
+    graph
+        .precise_occurrences
+        .insert(key.clone(), occurrence.clone());
     insert_precise_occurrence_indexes(graph, &key, occurrence);
 }
 
@@ -1615,12 +1616,18 @@ fn insert_precise_occurrence_indexes(
 ) {
     graph
         .precise_occurrence_keys_by_file
-        .entry(precise_file_key(&occurrence.repository_id, &occurrence.path))
+        .entry(precise_file_key(
+            &occurrence.repository_id,
+            &occurrence.path,
+        ))
         .or_default()
         .insert(key.clone());
     graph
         .precise_occurrence_keys_by_symbol
-        .entry(precise_symbol_key(&occurrence.repository_id, &occurrence.symbol))
+        .entry(precise_symbol_key(
+            &occurrence.repository_id,
+            &occurrence.symbol,
+        ))
         .or_default()
         .insert(key.clone());
 }
@@ -1631,12 +1638,13 @@ fn remove_precise_occurrence_indexes(
     occurrence: &PreciseOccurrenceRecord,
 ) {
     let file_key = precise_file_key(&occurrence.repository_id, &occurrence.path);
-    let remove_file_entry = if let Some(keys) = graph.precise_occurrence_keys_by_file.get_mut(&file_key) {
-        keys.remove(key);
-        keys.is_empty()
-    } else {
-        false
-    };
+    let remove_file_entry =
+        if let Some(keys) = graph.precise_occurrence_keys_by_file.get_mut(&file_key) {
+            keys.remove(key);
+            keys.is_empty()
+        } else {
+            false
+        };
     if remove_file_entry {
         graph.precise_occurrence_keys_by_file.remove(&file_key);
     }
@@ -1644,7 +1652,7 @@ fn remove_precise_occurrence_indexes(
     let symbol_key = precise_symbol_key(&occurrence.repository_id, &occurrence.symbol);
     let remove_symbol_entry =
         if let Some(keys) = graph.precise_occurrence_keys_by_symbol.get_mut(&symbol_key) {
-        keys.remove(key);
+            keys.remove(key);
             keys.is_empty()
         } else {
             false
@@ -1654,10 +1662,7 @@ fn remove_precise_occurrence_indexes(
     }
 }
 
-fn upsert_precise_relationship(
-    graph: &mut SymbolGraph,
-    relationship: &PreciseRelationshipRecord,
-) {
+fn upsert_precise_relationship(graph: &mut SymbolGraph, relationship: &PreciseRelationshipRecord) {
     let key = PreciseRelationshipKey::from(relationship);
     if let Some(previous) = graph.precise_relationships.get(&key).cloned() {
         remove_precise_relationship_indexes(graph, &key, &previous);
@@ -1763,7 +1768,9 @@ fn decrement_precise_symbol_ref_count(graph: &mut SymbolGraph, repository_id: &s
                 false
             };
             if remove_repository_entry {
-                graph.precise_symbol_keys_by_repository.remove(repository_id);
+                graph
+                    .precise_symbol_keys_by_repository
+                    .remove(repository_id);
             }
         }
         count => {

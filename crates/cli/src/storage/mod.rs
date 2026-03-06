@@ -872,6 +872,21 @@ impl Storage {
         repository_id: &str,
         snapshot_id: &str,
     ) -> FriggResult<Vec<SemanticChunkEmbeddingProjection>> {
+        self.load_semantic_embedding_projections_for_repository_snapshot_model(
+            repository_id,
+            snapshot_id,
+            None,
+            None,
+        )
+    }
+
+    pub fn load_semantic_embedding_projections_for_repository_snapshot_model(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> FriggResult<Vec<SemanticChunkEmbeddingProjection>> {
         let repository_id = repository_id.trim();
         if repository_id.is_empty() {
             return Err(FriggError::InvalidInput(
@@ -898,7 +913,10 @@ impl Storage {
                     embedding_blob,
                     dimensions
                 FROM semantic_chunk_embedding
-                WHERE repository_id = ?1 AND snapshot_id = ?2
+                WHERE repository_id = ?1
+                  AND snapshot_id = ?2
+                  AND (?3 IS NULL OR provider = ?3)
+                  AND (?4 IS NULL OR model = ?4)
                 ORDER BY path ASC, chunk_index ASC, chunk_id ASC
                 "#,
             )
@@ -909,7 +927,7 @@ impl Storage {
             })?;
 
         let rows = statement
-            .query_map((repository_id, snapshot_id), |row| {
+            .query_map((repository_id, snapshot_id, provider, model), |row| {
                 let embedding_blob: Vec<u8> = row.get(5)?;
                 let dimensions_raw: i64 = row.get(6)?;
                 let embedding = decode_f32_vector(&embedding_blob).map_err(|err| {
@@ -953,6 +971,63 @@ impl Storage {
                 "failed to decode semantic embedding projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
             ))
         })
+    }
+
+    pub fn has_semantic_embeddings_for_repository_snapshot_model(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        provider: &str,
+        model: &str,
+    ) -> FriggResult<bool> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id must not be empty".to_owned(),
+            ));
+        }
+        let snapshot_id = snapshot_id.trim();
+        if snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "snapshot_id must not be empty".to_owned(),
+            ));
+        }
+        let provider = provider.trim();
+        if provider.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "provider must not be empty".to_owned(),
+            ));
+        }
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "model must not be empty".to_owned(),
+            ));
+        }
+
+        let conn = open_connection(&self.db_path)?;
+        let exists: i64 = conn
+            .query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM semantic_chunk_embedding
+                    WHERE repository_id = ?1
+                      AND snapshot_id = ?2
+                      AND provider = ?3
+                      AND model = ?4
+                )
+                "#,
+                (repository_id, snapshot_id, provider, model),
+                |row| row.get(0),
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query semantic embedding presence for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
+                ))
+            })?;
+
+        Ok(exists == 1)
     }
 
     pub fn load_semantic_chunk_texts_for_repository_snapshot(
@@ -2363,21 +2438,51 @@ mod tests {
             ],
         )?;
 
-        let projections =
-            storage.load_semantic_embedding_projections_for_repository_snapshot(
-                "repo-1",
-                "snapshot-001",
-            )?;
+        let projections = storage.load_semantic_embedding_projections_for_repository_snapshot(
+            "repo-1",
+            "snapshot-001",
+        )?;
         assert_eq!(projections.len(), 2);
         assert_eq!(projections[0].chunk_id, "chunk-a");
         assert_eq!(projections[0].path, "src/a.rs");
         assert_eq!(projections[0].embedding, vec![0.1, 0.2]);
         assert_eq!(projections[1].chunk_id, "chunk-b");
+        assert!(storage.has_semantic_embeddings_for_repository_snapshot_model(
+            "repo-1",
+            "snapshot-001",
+            "openai",
+            "text-embedding-3-small",
+        )?);
+        assert!(!storage.has_semantic_embeddings_for_repository_snapshot_model(
+            "repo-1",
+            "snapshot-001",
+            "google",
+            "gemini-embedding-001",
+        )?);
+
+        let filtered = storage.load_semantic_embedding_projections_for_repository_snapshot_model(
+            "repo-1",
+            "snapshot-001",
+            Some("openai"),
+            Some("text-embedding-3-small"),
+        )?;
+        assert_eq!(filtered.len(), 2);
+        let empty_filtered = storage.load_semantic_embedding_projections_for_repository_snapshot_model(
+            "repo-1",
+            "snapshot-001",
+            Some("google"),
+            Some("gemini-embedding-001"),
+        )?;
+        assert!(empty_filtered.is_empty());
 
         let texts = storage.load_semantic_chunk_texts_for_repository_snapshot(
             "repo-1",
             "snapshot-001",
-            &["chunk-b".to_owned(), "chunk-a".to_owned(), "chunk-b".to_owned()],
+            &[
+                "chunk-b".to_owned(),
+                "chunk-a".to_owned(),
+                "chunk-b".to_owned(),
+            ],
         )?;
         assert_eq!(texts.len(), 2);
         assert_eq!(texts.get("chunk-a").map(String::as_str), Some("fn a() {}"));

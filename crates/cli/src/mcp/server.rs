@@ -16,6 +16,7 @@ use crate::indexer::{
     SymbolExtractionOutput, SymbolLanguage, extract_symbols_for_paths, extract_symbols_from_source,
     navigation_symbol_target_rank, register_symbol_definitions, search_structural_in_source,
 };
+use crate::manifest_validation::validate_manifest_digests_for_root;
 use crate::searcher::{
     HybridChannelWeights, SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
     TextSearcher, compile_safe_regex,
@@ -76,6 +77,9 @@ struct RepositorySymbolCorpus {
     source_paths: Vec<PathBuf>,
     symbols: Vec<SymbolDefinition>,
     symbols_by_relative_path: BTreeMap<String, Vec<usize>>,
+    symbol_index_by_stable_id: BTreeMap<String, usize>,
+    symbol_indices_by_name: BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_name: BTreeMap<String, Vec<usize>>,
     diagnostics: RepositoryDiagnosticsSummary,
 }
 
@@ -242,6 +246,24 @@ struct CachedPreciseGraph {
     ingest_stats: PreciseIngestStats,
     corpus_signature: String,
     discovery: ScipArtifactDiscovery,
+    coverage_mode: PreciseCoverageMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreciseCoverageMode {
+    Full,
+    Partial,
+    None,
+}
+
+impl PreciseCoverageMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Partial => "partial",
+            Self::None => "none",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -724,6 +746,68 @@ impl FriggMcpServer {
         None
     }
 
+    fn push_symbol_candidate(
+        candidates: &mut Vec<SymbolCandidate>,
+        corpus: &RepositorySymbolCorpus,
+        symbol_index: usize,
+        rank: u8,
+    ) {
+        let symbol = corpus.symbols[symbol_index].clone();
+        candidates.push(SymbolCandidate {
+            rank,
+            repository_id: corpus.repository_id.clone(),
+            root: corpus.root.clone(),
+            symbol,
+        });
+    }
+
+    fn push_ranked_symbol_match(
+        ranked_matches: &mut Vec<(u8, SymbolMatch)>,
+        corpus: &RepositorySymbolCorpus,
+        symbol_index: usize,
+        rank: u8,
+    ) {
+        let symbol = &corpus.symbols[symbol_index];
+        ranked_matches.push((
+            rank,
+            SymbolMatch {
+                repository_id: corpus.repository_id.clone(),
+                symbol: symbol.name.clone(),
+                kind: symbol.kind.as_str().to_owned(),
+                path: Self::relative_display_path(&corpus.root, &symbol.path),
+                line: symbol.line,
+            },
+        ));
+    }
+
+    fn sort_ranked_symbol_matches(ranked_matches: &mut [(u8, SymbolMatch)]) {
+        ranked_matches.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(left.1.repository_id.cmp(&right.1.repository_id))
+                .then(left.1.path.cmp(&right.1.path))
+                .then(left.1.line.cmp(&right.1.line))
+                .then(left.1.kind.cmp(&right.1.kind))
+                .then(left.1.symbol.cmp(&right.1.symbol))
+        });
+    }
+
+    fn retain_bounded_ranked_symbol_match(
+        ranked_matches: &mut Vec<(u8, SymbolMatch)>,
+        limit: usize,
+        candidate: (u8, SymbolMatch),
+    ) {
+        if limit == 0 {
+            return;
+        }
+
+        ranked_matches.push(candidate);
+        Self::sort_ranked_symbol_matches(ranked_matches);
+        if ranked_matches.len() > limit {
+            ranked_matches.pop();
+        }
+    }
+
     fn resolve_navigation_symbol_target(
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol_query: &str,
@@ -732,17 +816,26 @@ impl FriggMcpServer {
         // Deterministic precedence: stable-id exact > name exact > case-insensitive name, then
         // repository/path/line/stable-id tie-breakers.
         let mut candidates = Vec::new();
+        let query_lower = symbol_query.to_ascii_lowercase();
         for corpus in corpora {
-            for symbol in &corpus.symbols {
-                let Some(rank) = navigation_symbol_target_rank(symbol, symbol_query) else {
-                    continue;
-                };
-                candidates.push(SymbolCandidate {
-                    rank,
-                    repository_id: corpus.repository_id.clone(),
-                    root: corpus.root.clone(),
-                    symbol: symbol.clone(),
-                });
+            if let Some(symbol_index) = corpus.symbol_index_by_stable_id.get(symbol_query) {
+                Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 0);
+            }
+            if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(symbol_query) {
+                for symbol_index in symbol_indices {
+                    let symbol = &corpus.symbols[*symbol_index];
+                    if navigation_symbol_target_rank(symbol, symbol_query) == Some(1) {
+                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 1);
+                    }
+                }
+            }
+            if let Some(symbol_indices) = corpus.symbol_indices_by_lower_name.get(&query_lower) {
+                for symbol_index in symbol_indices {
+                    let symbol = &corpus.symbols[*symbol_index];
+                    if navigation_symbol_target_rank(symbol, symbol_query) == Some(2) {
+                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 2);
+                    }
+                }
             }
         }
 
@@ -833,24 +926,39 @@ impl FriggMcpServer {
             ));
         }
 
-        let mut candidates: Vec<(usize, String, String, usize, String)> = Vec::new();
+        let mut candidates: Vec<(usize, usize, String, String, usize, usize, String)> = Vec::new();
         for corpus in corpora {
             let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
-            for symbol in &corpus.symbols {
+            let Some(symbol_indices) = corpus.symbols_by_relative_path.get(&requested_path) else {
+                continue;
+            };
+            for symbol_index in symbol_indices {
+                let symbol = &corpus.symbols[*symbol_index];
                 let symbol_path = Self::relative_display_path(&corpus.root, &symbol.path);
-                if symbol_path != requested_path {
-                    continue;
-                }
                 if symbol.line > line {
-                    continue;
+                    break;
+                }
+                if let Some(column) = column {
+                    if symbol.line == line && symbol.span.start_column > column {
+                        break;
+                    }
                 }
 
-                let distance = line.saturating_sub(symbol.line);
+                let line_distance = line.saturating_sub(symbol.line);
+                let column_distance = if line_distance == 0 {
+                    column
+                        .map(|value| value.saturating_sub(symbol.span.start_column))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
                 candidates.push((
-                    distance,
+                    line_distance,
+                    column_distance,
                     corpus.repository_id.clone(),
                     symbol_path,
                     symbol.line,
+                    symbol.span.start_column,
                     symbol.stable_id.clone(),
                 ));
             }
@@ -861,13 +969,15 @@ impl FriggMcpServer {
                 .cmp(&right.0)
                 .then(left.1.cmp(&right.1))
                 .then(left.2.cmp(&right.2))
-                .then(right.3.cmp(&left.3))
-                .then(left.4.cmp(&right.4))
+                .then(left.3.cmp(&right.3))
+                .then(right.4.cmp(&left.4))
+                .then(right.5.cmp(&left.5))
+                .then(left.6.cmp(&right.6))
         });
 
         candidates
             .first()
-            .map(|candidate| candidate.4.clone())
+            .map(|candidate| candidate.6.clone())
             .ok_or_else(|| {
                 Self::resource_not_found(
                     "symbol not found at location",
@@ -1076,8 +1186,10 @@ impl FriggMcpServer {
         graph: &SymbolGraph,
         repository_id: &str,
         root: &Path,
+        coverage_mode: PreciseCoverageMode,
         precise_target: &crate::graph::PreciseSymbolRecord,
     ) -> Vec<ImplementationMatch> {
+        let precision = Self::precise_match_precision(coverage_mode).to_owned();
         let mut matches = Self::precise_relationships_to_symbol_by_kind(
             graph,
             repository_id,
@@ -1108,7 +1220,7 @@ impl FriggMcpServer {
                 line: definition.range.start_line,
                 column: definition.range.start_column,
                 relation: Some(relationship.kind.as_str().to_owned()),
-                precision: Some("precise".to_owned()),
+                precision: Some(precision.clone()),
                 fallback_reason: None,
             })
         })
@@ -1122,8 +1234,10 @@ impl FriggMcpServer {
         repository_id: &str,
         root: &Path,
         target_symbol_name: &str,
+        coverage_mode: PreciseCoverageMode,
         precise_target: &crate::graph::PreciseSymbolRecord,
     ) -> Vec<CallHierarchyMatch> {
+        let precision = Self::precise_match_precision(coverage_mode).to_owned();
         let mut matches = Self::precise_relationships_to_symbol_by_kind(
             graph,
             repository_id,
@@ -1156,7 +1270,7 @@ impl FriggMcpServer {
                 line: caller_definition.range.start_line,
                 column: caller_definition.range.start_column,
                 relation: "calls".to_owned(),
-                precision: Some("precise".to_owned()),
+                precision: Some(precision.clone()),
             })
         })
         .collect::<Vec<_>>();
@@ -1197,9 +1311,11 @@ impl FriggMcpServer {
         target_corpus: &RepositorySymbolCorpus,
         root: &Path,
         target_symbol_name: &str,
+        coverage_mode: PreciseCoverageMode,
         precise_target: &crate::graph::PreciseSymbolRecord,
         exclude_symbol_id: &str,
     ) -> Vec<CallHierarchyMatch> {
+        let precision = Self::precise_match_precision(coverage_mode).to_owned();
         let mut matches = graph
             .precise_references_for_symbol(&target_corpus.repository_id, &precise_target.symbol)
             .into_iter()
@@ -1222,7 +1338,7 @@ impl FriggMcpServer {
                     line: enclosing_symbol.line,
                     column: enclosing_symbol.span.start_column,
                     relation: "refers_to".to_owned(),
-                    precision: Some("precise".to_owned()),
+                    precision: Some(precision.clone()),
                 })
             })
             .collect::<Vec<_>>();
@@ -1279,20 +1395,88 @@ impl FriggMcpServer {
     }
 
     fn precise_absence_reason(
+        coverage_mode: PreciseCoverageMode,
         stats: &PreciseIngestStats,
         precise_match_count: usize,
     ) -> &'static str {
         if stats.artifacts_discovered == 0 {
             return "no_scip_artifacts_discovered";
         }
-        if stats.artifacts_failed > 0 {
-            return "scip_artifact_ingest_failed";
-        }
-        if stats.artifacts_ingested > 0 && precise_match_count == 0 {
-            return "target_not_present_in_precise_graph";
+
+        match coverage_mode {
+            PreciseCoverageMode::Partial if precise_match_count == 0 => {
+                return "precise_partial_non_authoritative_absence";
+            }
+            PreciseCoverageMode::None if stats.artifacts_failed > 0 => {
+                return "scip_artifact_ingest_failed";
+            }
+            PreciseCoverageMode::Full | PreciseCoverageMode::Partial
+                if stats.artifacts_ingested > 0 && precise_match_count == 0 =>
+            {
+                return "target_not_present_in_precise_graph";
+            }
+            PreciseCoverageMode::None => {
+                return "no_usable_precise_data";
+            }
+            _ => {}
         }
 
         "precise_unavailable"
+    }
+
+    fn precise_coverage_mode(stats: &PreciseIngestStats) -> PreciseCoverageMode {
+        if stats.artifacts_ingested == 0 {
+            return PreciseCoverageMode::None;
+        }
+        if stats.artifacts_failed > 0 {
+            return PreciseCoverageMode::Partial;
+        }
+        PreciseCoverageMode::Full
+    }
+
+    fn precise_resolution_precision(coverage_mode: PreciseCoverageMode) -> &'static str {
+        match coverage_mode {
+            PreciseCoverageMode::Full => "precise",
+            PreciseCoverageMode::Partial => "precise_partial",
+            PreciseCoverageMode::None => "heuristic",
+        }
+    }
+
+    fn precise_match_precision(coverage_mode: PreciseCoverageMode) -> &'static str {
+        match coverage_mode {
+            PreciseCoverageMode::Full => "precise",
+            PreciseCoverageMode::Partial => "precise_partial",
+            PreciseCoverageMode::None => "heuristic",
+        }
+    }
+
+    fn precise_note_metadata(
+        coverage_mode: PreciseCoverageMode,
+        stats: &PreciseIngestStats,
+    ) -> serde_json::Value {
+        json!({
+            "coverage": coverage_mode.as_str(),
+            "candidate_directories": Self::bounded_text_values(&stats.candidate_directories),
+            "discovered_artifacts": Self::bounded_text_values(&stats.discovered_artifacts),
+            "artifacts_discovered": stats.artifacts_discovered,
+            "artifacts_discovered_bytes": stats.artifacts_discovered_bytes,
+            "artifacts_ingested": stats.artifacts_ingested,
+            "artifacts_ingested_bytes": stats.artifacts_ingested_bytes,
+            "artifacts_failed": stats.artifacts_failed,
+            "artifacts_failed_bytes": stats.artifacts_failed_bytes,
+            "failed_artifacts": Self::precise_failure_note_entries(stats),
+        })
+    }
+
+    fn precise_note_with_count(
+        coverage_mode: PreciseCoverageMode,
+        stats: &PreciseIngestStats,
+        count_key: &str,
+        count: usize,
+    ) -> serde_json::Value {
+        let mut precise = Self::precise_note_metadata(coverage_mode, stats);
+        precise[count_key] = json!(count);
+        precise
     }
 
     fn push_precise_failure_sample(
@@ -1804,61 +1988,61 @@ impl FriggMcpServer {
         let mut diagnostics = RepositoryDiagnosticsSummary::default();
         let mut manifest_output = None;
         let mut source_paths = None;
-        let (file_digests, manifest_token) = match Self::load_latest_manifest_snapshot(
-            &root,
-            &repository_id,
-        ) {
-            Some(snapshot) => {
-                let snapshot_digests = snapshot
-                    .entries
-                    .into_iter()
-                    .map(|entry| FileMetadataDigest {
-                        path: PathBuf::from(entry.path),
-                        size_bytes: entry.size_bytes,
-                        mtime_ns: entry.mtime_ns,
-                    })
-                    .collect::<Vec<_>>();
-                match Self::manifest_source_paths_for_root(&root, &snapshot_digests) {
-                    Some(snapshot_source_paths) => {
-                        source_paths = Some(snapshot_source_paths);
-                        (
-                            snapshot_digests,
-                            format!("snapshot:{}", snapshot.snapshot_id),
-                        )
-                    }
-                    None => {
-                        let live_output = ManifestBuilder::default()
-                            .build_metadata_with_diagnostics(&root)
-                            .map_err(Self::map_frigg_error)?;
-                        let live_signature = Self::root_signature(&live_output.entries);
-                        manifest_output = Some(live_output);
-                        (
-                            manifest_output
-                                .as_ref()
-                                .expect("live manifest output just assigned")
-                                .entries
-                                .clone(),
-                            format!("live:{live_signature}"),
-                        )
+        let (file_digests, manifest_token) =
+            match Self::load_latest_manifest_snapshot(&root, &repository_id) {
+                Some(snapshot) => {
+                    let snapshot_digests = snapshot
+                        .entries
+                        .into_iter()
+                        .map(|entry| FileMetadataDigest {
+                            path: PathBuf::from(entry.path),
+                            size_bytes: entry.size_bytes,
+                            mtime_ns: entry.mtime_ns,
+                        })
+                        .collect::<Vec<_>>();
+                    match validate_manifest_digests_for_root(&root, &snapshot_digests) {
+                        Some(validated_digests) => {
+                            let snapshot_source_paths =
+                                Self::manifest_source_paths_for_digests(&validated_digests);
+                            source_paths = Some(snapshot_source_paths);
+                            (
+                                validated_digests,
+                                format!("snapshot:{}", snapshot.snapshot_id),
+                            )
+                        }
+                        None => {
+                            let live_output = ManifestBuilder::default()
+                                .build_metadata_with_diagnostics(&root)
+                                .map_err(Self::map_frigg_error)?;
+                            let live_signature = Self::root_signature(&live_output.entries);
+                            manifest_output = Some(live_output);
+                            (
+                                manifest_output
+                                    .as_ref()
+                                    .expect("live manifest output just assigned")
+                                    .entries
+                                    .clone(),
+                                format!("live:{live_signature}"),
+                            )
+                        }
                     }
                 }
-            }
-            None => {
-                let live_output = ManifestBuilder::default()
-                    .build_metadata_with_diagnostics(&root)
-                    .map_err(Self::map_frigg_error)?;
-                let live_signature = Self::root_signature(&live_output.entries);
-                manifest_output = Some(live_output);
-                (
-                    manifest_output
-                        .as_ref()
-                        .expect("live manifest output just assigned")
-                        .entries
-                        .clone(),
-                    format!("live:{live_signature}"),
-                )
-            }
-        };
+                None => {
+                    let live_output = ManifestBuilder::default()
+                        .build_metadata_with_diagnostics(&root)
+                        .map_err(Self::map_frigg_error)?;
+                    let live_signature = Self::root_signature(&live_output.entries);
+                    manifest_output = Some(live_output);
+                    (
+                        manifest_output
+                            .as_ref()
+                            .expect("live manifest output just assigned")
+                            .entries
+                            .clone(),
+                        format!("live:{live_signature}"),
+                    )
+                }
+            };
         if let Some(manifest_output) = &manifest_output {
             for manifest_diagnostic in &manifest_output.diagnostics {
                 match manifest_diagnostic.kind {
@@ -1898,6 +2082,9 @@ impl FriggMcpServer {
         } = extract_symbols_for_paths(&source_paths);
         diagnostics.symbol_extraction_count = symbol_diagnostics.len();
         let symbols_by_relative_path = Self::symbols_by_relative_path(&root, &symbols);
+        let symbol_index_by_stable_id = Self::symbol_index_by_stable_id(&symbols);
+        let symbol_indices_by_name = Self::symbol_indices_by_name(&symbols);
+        let symbol_indices_by_lower_name = Self::symbol_indices_by_lower_name(&symbols);
 
         let corpus = Arc::new(RepositorySymbolCorpus {
             repository_id: repository_id.clone(),
@@ -1906,6 +2093,9 @@ impl FriggMcpServer {
             source_paths,
             symbols,
             symbols_by_relative_path,
+            symbol_index_by_stable_id,
+            symbol_indices_by_name,
+            symbol_indices_by_lower_name,
             diagnostics,
         });
 
@@ -1935,25 +2125,14 @@ impl FriggMcpServer {
             .ok()?
     }
 
-    fn manifest_source_paths_for_root(
-        root: &Path,
-        file_digests: &[FileMetadataDigest],
-    ) -> Option<Vec<PathBuf>> {
+    fn manifest_source_paths_for_digests(file_digests: &[FileMetadataDigest]) -> Vec<PathBuf> {
         let mut source_paths = Vec::new();
         for digest in file_digests {
-            let path = if digest.path.is_absolute() {
-                digest.path.clone()
-            } else {
-                root.join(&digest.path)
-            };
-            if !path.exists() {
-                return None;
-            }
-            if SymbolLanguage::from_path(&path).is_some() {
-                source_paths.push(path);
+            if SymbolLanguage::from_path(&digest.path).is_some() {
+                source_paths.push(digest.path.clone());
             }
         }
-        Some(source_paths)
+        source_paths
     }
 
     fn symbols_by_relative_path(
@@ -1967,7 +2146,51 @@ impl FriggMcpServer {
                 .or_insert_with(Vec::new)
                 .push(index);
         }
+        for indices in symbols_by_relative_path.values_mut() {
+            indices.sort_by(|left, right| {
+                symbols[*left]
+                    .line
+                    .cmp(&symbols[*right].line)
+                    .then(
+                        symbols[*left]
+                            .span
+                            .start_column
+                            .cmp(&symbols[*right].span.start_column),
+                    )
+                    .then(symbols[*left].stable_id.cmp(&symbols[*right].stable_id))
+            });
+        }
         symbols_by_relative_path
+    }
+
+    fn symbol_index_by_stable_id(symbols: &[SymbolDefinition]) -> BTreeMap<String, usize> {
+        symbols
+            .iter()
+            .enumerate()
+            .map(|(index, symbol)| (symbol.stable_id.clone(), index))
+            .collect()
+    }
+
+    fn symbol_indices_by_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
+        let mut symbol_indices_by_name = BTreeMap::new();
+        for (index, symbol) in symbols.iter().enumerate() {
+            symbol_indices_by_name
+                .entry(symbol.name.clone())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        symbol_indices_by_name
+    }
+
+    fn symbol_indices_by_lower_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
+        let mut symbol_indices_by_lower_name = BTreeMap::new();
+        for (index, symbol) in symbols.iter().enumerate() {
+            symbol_indices_by_lower_name
+                .entry(symbol.name.to_ascii_lowercase())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        symbol_indices_by_lower_name
     }
 
     fn try_reuse_cached_precise_graph(
@@ -2067,20 +2290,29 @@ impl FriggMcpServer {
             &discovery,
             budgets,
         )?;
-        if ingest_stats.artifacts_failed > 0 {
+        let coverage_mode = Self::precise_coverage_mode(&ingest_stats);
+        if coverage_mode == PreciseCoverageMode::Partial {
             warn!(
                 repository_id = corpus.repository_id,
                 artifacts_ingested = ingest_stats.artifacts_ingested,
                 artifacts_failed = ingest_stats.artifacts_failed,
-                "disabling precise graph for corpus because at least one SCIP artifact failed ingest"
+                "retaining partial precise graph because some SCIP artifacts ingested successfully"
             );
-            graph.clear_precise_data();
+        }
+        if coverage_mode == PreciseCoverageMode::None && ingest_stats.artifacts_failed > 0 {
+            warn!(
+                repository_id = corpus.repository_id,
+                artifacts_ingested = ingest_stats.artifacts_ingested,
+                artifacts_failed = ingest_stats.artifacts_failed,
+                "precise graph has no usable artifact data after SCIP ingest failures"
+            );
         }
         let cached_graph = CachedPreciseGraph {
             graph: Arc::new(graph),
             ingest_stats,
             corpus_signature: corpus.root_signature.clone(),
             discovery: discovery.clone(),
+            coverage_mode,
         };
 
         let mut cache = self
@@ -3161,35 +3393,83 @@ impl FriggMcpServer {
 
                 let mut ranked_matches: Vec<(u8, SymbolMatch)> = Vec::new();
                 for corpus in &corpora {
-                    for symbol in &corpus.symbols {
-                        let Some(rank) =
-                            Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
-                        else {
+                    if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(&query) {
+                        for symbol_index in symbol_indices {
+                            Self::push_ranked_symbol_match(
+                                &mut ranked_matches,
+                                corpus,
+                                *symbol_index,
+                                0,
+                            );
+                        }
+                    }
+                    if let Some(symbol_indices) =
+                        corpus.symbol_indices_by_lower_name.get(&query_lower)
+                    {
+                        for symbol_index in symbol_indices {
+                            if corpus.symbols[*symbol_index].name != query {
+                                Self::push_ranked_symbol_match(
+                                    &mut ranked_matches,
+                                    corpus,
+                                    *symbol_index,
+                                    1,
+                                );
+                            }
+                        }
+                    }
+                    for (normalized_name, symbol_indices) in corpus
+                        .symbol_indices_by_lower_name
+                        .range(query_lower.clone()..)
+                    {
+                        if !normalized_name.starts_with(&query_lower) {
+                            break;
+                        }
+                        if normalized_name == &query_lower {
                             continue;
-                        };
-
-                        ranked_matches.push((
-                            rank,
-                            SymbolMatch {
-                                repository_id: corpus.repository_id.clone(),
-                                symbol: symbol.name.clone(),
-                                kind: symbol.kind.as_str().to_owned(),
-                                path: Self::relative_display_path(&corpus.root, &symbol.path),
-                                line: symbol.line,
-                            },
-                        ));
+                        }
+                        for symbol_index in symbol_indices {
+                            Self::push_ranked_symbol_match(
+                                &mut ranked_matches,
+                                corpus,
+                                *symbol_index,
+                                2,
+                            );
+                        }
                     }
                 }
+                if ranked_matches.len() < limit {
+                    let infix_limit = limit.saturating_sub(ranked_matches.len());
+                    let mut infix_matches = Vec::new();
+                    for corpus in &corpora {
+                        for symbol in &corpus.symbols {
+                            if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
+                                != Some(3)
+                            {
+                                continue;
+                            }
+                            Self::retain_bounded_ranked_symbol_match(
+                                &mut infix_matches,
+                                infix_limit,
+                                (
+                                    3,
+                                    SymbolMatch {
+                                        repository_id: corpus.repository_id.clone(),
+                                        symbol: symbol.name.clone(),
+                                        kind: symbol.kind.as_str().to_owned(),
+                                        path: Self::relative_display_path(
+                                            &corpus.root,
+                                            &symbol.path,
+                                        ),
+                                        line: symbol.line,
+                                    },
+                                ),
+                            );
+                        }
+                    }
+                    ranked_matches.extend(infix_matches);
+                }
 
-                ranked_matches.sort_by(|left, right| {
-                    left.0
-                        .cmp(&right.0)
-                        .then(left.1.repository_id.cmp(&right.1.repository_id))
-                        .then(left.1.path.cmp(&right.1.path))
-                        .then(left.1.line.cmp(&right.1.line))
-                        .then(left.1.kind.cmp(&right.1.kind))
-                        .then(left.1.symbol.cmp(&right.1.symbol))
-                });
+                Self::sort_ranked_symbol_matches(&mut ranked_matches);
                 let matches = ranked_matches
                     .into_iter()
                     .take(limit)
@@ -3345,6 +3625,7 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 let target_precise_stats = cached_precise_graph.ingest_stats;
                 precise_artifacts_discovered = target_precise_stats.artifacts_discovered;
@@ -3400,10 +3681,11 @@ impl FriggMcpServer {
                         })
                         .collect::<Vec<_>>();
 
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "target_symbol_id": target.symbol.stable_id,
                             "target_precise_symbol": precise_target
@@ -3424,18 +3706,12 @@ impl FriggMcpServer {
                                 "source_read": source_read_diagnostics_count,
                                 "total": diagnostics_count,
                             },
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&target_precise_stats.candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&target_precise_stats.discovered_artifacts),
-                                "artifacts_discovered": target_precise_stats.artifacts_discovered,
-                                "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
-                                "artifacts_ingested": target_precise_stats.artifacts_ingested,
-                                "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
-                                "artifacts_failed": target_precise_stats.artifacts_failed,
-                                "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
-                                "failed_artifacts": Self::precise_failure_note_entries(&target_precise_stats),
-                                "reference_count": precise_reference_count,
-                            },
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &target_precise_stats,
+                                "reference_count",
+                                precise_reference_count,
+                            ),
                             "resource_budgets": resource_budget_metadata_for_blocking.clone(),
                             "resource_usage": {
                                 "scip": {
@@ -3644,6 +3920,7 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &target_precise_stats,
                             precise_reference_count,
                         ),
@@ -3672,18 +3949,12 @@ impl FriggMcpServer {
                             "source_read": source_read_diagnostics_count,
                             "total": diagnostics_count,
                         },
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&target_precise_stats.candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&target_precise_stats.discovered_artifacts),
-                            "artifacts_discovered": target_precise_stats.artifacts_discovered,
-                            "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
-                            "artifacts_ingested": target_precise_stats.artifacts_ingested,
-                            "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
-                            "artifacts_failed": target_precise_stats.artifacts_failed,
-                            "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
-                            "failed_artifacts": Self::precise_failure_note_entries(&target_precise_stats),
-                            "reference_count": precise_reference_count,
-                        },
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &target_precise_stats,
+                            "reference_count",
+                            precise_reference_count,
+                        ),
                         "resource_budgets": resource_budget_metadata_for_blocking.clone(),
                         "resource_usage": {
                             "scip": {
@@ -3803,9 +4074,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let mut precise_candidate_directories: Vec<String> = Vec::new();
-            let mut precise_discovered_artifacts: Vec<String> = Vec::new();
-            let mut precise_failed_artifacts: Vec<Value> = Vec::new();
             let mut match_count = 0usize;
 
             let result = (|| -> Result<Json<GoToDefinitionResponse>, ErrorData> {
@@ -3839,16 +4107,10 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                precise_candidate_directories =
-                    cached_precise_graph.ingest_stats.candidate_directories.clone();
-                precise_discovered_artifacts =
-                    cached_precise_graph.ingest_stats.discovered_artifacts.clone();
-                precise_failed_artifacts =
-                    Self::precise_failure_note_entries(&cached_precise_graph.ingest_stats);
-
                 let precise_target = graph.select_precise_symbol_for_navigation(
                     &target_corpus.repository_id,
                     &symbol_query,
@@ -3886,7 +4148,9 @@ impl FriggMcpServer {
                                 } else {
                                     Some(precise_target.kind.clone())
                                 },
-                                precision: Some("precise".to_owned()),
+                                precision: Some(
+                                    Self::precise_match_precision(precise_coverage).to_owned(),
+                                ),
                             })
                             .collect::<Vec<_>>()
                     })
@@ -3897,23 +4161,22 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "target_symbol_id": target.symbol.stable_id.clone(),
                             "target_precise_symbol": selected_precise_symbol.clone(),
                             "resolution_source": resolution_source.clone(),
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                                "artifacts_ingested": precise_artifacts_ingested,
-                                "artifacts_failed": precise_artifacts_failed,
-                                "failed_artifacts": precise_failed_artifacts.clone(),
-                                "definition_count": precise_matches.len(),
-                            }
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "definition_count",
+                                precise_matches.len(),
+                            )
                         })
                         .to_string(),
                     );
@@ -3945,19 +4208,18 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &cached_precise_graph.ingest_stats,
                             0,
                         ),
                         "target_symbol_id": target.symbol.stable_id.clone(),
                         "resolution_source": resolution_source.clone(),
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                            "artifacts_ingested": precise_artifacts_ingested,
-                            "artifacts_failed": precise_artifacts_failed,
-                            "failed_artifacts": precise_failed_artifacts.clone(),
-                            "definition_count": 0,
-                        }
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "definition_count",
+                            0,
+                        )
                     })
                     .to_string(),
                 );
@@ -4036,9 +4298,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let mut precise_candidate_directories: Vec<String> = Vec::new();
-            let mut precise_discovered_artifacts: Vec<String> = Vec::new();
-            let mut precise_failed_artifacts: Vec<Value> = Vec::new();
             let mut match_count = 0usize;
 
             let result = (|| -> Result<Json<FindDeclarationsResponse>, ErrorData> {
@@ -4072,16 +4331,10 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                precise_candidate_directories =
-                    cached_precise_graph.ingest_stats.candidate_directories.clone();
-                precise_discovered_artifacts =
-                    cached_precise_graph.ingest_stats.discovered_artifacts.clone();
-                precise_failed_artifacts =
-                    Self::precise_failure_note_entries(&cached_precise_graph.ingest_stats);
-
                 let precise_target = graph.select_precise_symbol_for_navigation(
                     &target_corpus.repository_id,
                     &symbol_query,
@@ -4119,7 +4372,9 @@ impl FriggMcpServer {
                                 } else {
                                     Some(precise_target.kind.clone())
                                 },
-                                precision: Some("precise".to_owned()),
+                                precision: Some(
+                                    Self::precise_match_precision(precise_coverage).to_owned(),
+                                ),
                             })
                             .collect::<Vec<_>>()
                     })
@@ -4130,24 +4385,23 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "declaration_mode": "definition_anchor_v1",
                             "target_symbol_id": target.symbol.stable_id.clone(),
                             "target_precise_symbol": selected_precise_symbol.clone(),
                             "resolution_source": resolution_source.clone(),
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                                "artifacts_ingested": precise_artifacts_ingested,
-                                "artifacts_failed": precise_artifacts_failed,
-                                "failed_artifacts": precise_failed_artifacts.clone(),
-                                "declaration_count": precise_matches.len(),
-                            }
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "declaration_count",
+                                precise_matches.len(),
+                            )
                         })
                         .to_string(),
                     );
@@ -4179,20 +4433,19 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &cached_precise_graph.ingest_stats,
                             0,
                         ),
                         "declaration_mode": "definition_anchor_v1",
                         "target_symbol_id": target.symbol.stable_id.clone(),
                         "resolution_source": resolution_source.clone(),
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                            "artifacts_ingested": precise_artifacts_ingested,
-                            "artifacts_failed": precise_artifacts_failed,
-                            "failed_artifacts": precise_failed_artifacts.clone(),
-                            "declaration_count": 0,
-                        }
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "declaration_count",
+                            0,
+                        )
                     })
                     .to_string(),
                 );
@@ -4271,9 +4524,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let mut precise_candidate_directories: Vec<String> = Vec::new();
-            let mut precise_discovered_artifacts: Vec<String> = Vec::new();
-            let mut precise_failed_artifacts: Vec<Value> = Vec::new();
             let mut match_count = 0usize;
 
             let result = (|| -> Result<Json<FindImplementationsResponse>, ErrorData> {
@@ -4307,16 +4557,10 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                precise_candidate_directories =
-                    cached_precise_graph.ingest_stats.candidate_directories.clone();
-                precise_discovered_artifacts =
-                    cached_precise_graph.ingest_stats.discovered_artifacts.clone();
-                precise_failed_artifacts =
-                    Self::precise_failure_note_entries(&cached_precise_graph.ingest_stats);
-
                 let precise_targets = graph.matching_precise_symbols_for_navigation(
                     &target_corpus.repository_id,
                     &symbol_query,
@@ -4328,6 +4572,7 @@ impl FriggMcpServer {
                         graph.as_ref(),
                         &target_corpus.repository_id,
                         &target.root,
+                        precise_coverage,
                         precise_target,
                     );
                     if !matches.is_empty() {
@@ -4341,23 +4586,22 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "target_symbol_id": target.symbol.stable_id.clone(),
                             "target_precise_symbol": selected_precise_symbol.clone(),
                             "resolution_source": resolution_source.clone(),
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                                "artifacts_ingested": precise_artifacts_ingested,
-                                "artifacts_failed": precise_artifacts_failed,
-                                "failed_artifacts": precise_failed_artifacts.clone(),
-                                "implementation_count": precise_matches.len(),
-                            }
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "implementation_count",
+                                precise_matches.len(),
+                            )
                         })
                         .to_string(),
                     );
@@ -4418,19 +4662,18 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &cached_precise_graph.ingest_stats,
                             0,
                         ),
                         "target_symbol_id": target.symbol.stable_id.clone(),
                         "resolution_source": resolution_source.clone(),
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                            "artifacts_ingested": precise_artifacts_ingested,
-                            "artifacts_failed": precise_artifacts_failed,
-                            "failed_artifacts": precise_failed_artifacts.clone(),
-                            "implementation_count": matches.len(),
-                        }
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "implementation_count",
+                            matches.len(),
+                        )
                     })
                     .to_string(),
                 );
@@ -4509,9 +4752,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let mut precise_candidate_directories: Vec<String> = Vec::new();
-            let mut precise_discovered_artifacts: Vec<String> = Vec::new();
-            let mut precise_failed_artifacts: Vec<Value> = Vec::new();
             let mut match_count = 0usize;
 
             let result = (|| -> Result<Json<IncomingCallsResponse>, ErrorData> {
@@ -4545,16 +4785,10 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                precise_candidate_directories =
-                    cached_precise_graph.ingest_stats.candidate_directories.clone();
-                precise_discovered_artifacts =
-                    cached_precise_graph.ingest_stats.discovered_artifacts.clone();
-                precise_failed_artifacts =
-                    Self::precise_failure_note_entries(&cached_precise_graph.ingest_stats);
-
                 let precise_targets = graph.matching_precise_symbols_for_navigation(
                     &target_corpus.repository_id,
                     &symbol_query,
@@ -4567,6 +4801,7 @@ impl FriggMcpServer {
                         &target_corpus.repository_id,
                         &target.root,
                         &target.symbol.name,
+                        precise_coverage,
                         precise_target,
                     );
                     if !matches.is_empty() {
@@ -4582,6 +4817,7 @@ impl FriggMcpServer {
                             target_corpus.as_ref(),
                             &target.root,
                             &target.symbol.name,
+                            precise_coverage,
                             precise_target,
                             &target.symbol.stable_id,
                         );
@@ -4597,23 +4833,22 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "target_symbol_id": target.symbol.stable_id.clone(),
                             "target_precise_symbol": selected_precise_symbol.clone(),
                             "resolution_source": resolution_source.clone(),
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                                "artifacts_ingested": precise_artifacts_ingested,
-                                "artifacts_failed": precise_artifacts_failed,
-                                "failed_artifacts": precise_failed_artifacts.clone(),
-                                "incoming_count": precise_matches.len(),
-                            }
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "incoming_count",
+                                precise_matches.len(),
+                            )
                         })
                         .to_string(),
                     );
@@ -4654,19 +4889,18 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &cached_precise_graph.ingest_stats,
                             0,
                         ),
                         "target_symbol_id": target.symbol.stable_id.clone(),
                         "resolution_source": resolution_source.clone(),
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                            "artifacts_ingested": precise_artifacts_ingested,
-                            "artifacts_failed": precise_artifacts_failed,
-                            "failed_artifacts": precise_failed_artifacts.clone(),
-                            "incoming_count": 0,
-                        }
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "incoming_count",
+                            0,
+                        )
                     })
                     .to_string(),
                 );
@@ -4745,9 +4979,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let mut precise_candidate_directories: Vec<String> = Vec::new();
-            let mut precise_discovered_artifacts: Vec<String> = Vec::new();
-            let mut precise_failed_artifacts: Vec<Value> = Vec::new();
             let mut match_count = 0usize;
 
             let result = (|| -> Result<Json<OutgoingCallsResponse>, ErrorData> {
@@ -4781,16 +5012,10 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                precise_candidate_directories =
-                    cached_precise_graph.ingest_stats.candidate_directories.clone();
-                precise_discovered_artifacts =
-                    cached_precise_graph.ingest_stats.discovered_artifacts.clone();
-                precise_failed_artifacts =
-                    Self::precise_failure_note_entries(&cached_precise_graph.ingest_stats);
-
                 let precise_targets = graph.matching_precise_symbols_for_navigation(
                     &target_corpus.repository_id,
                     &symbol_query,
@@ -4804,7 +5029,9 @@ impl FriggMcpServer {
                             &precise_target.symbol,
                         )
                         .into_iter()
-                        .filter(|relationship| relationship.kind == PreciseRelationshipKind::Reference)
+                        .filter(|relationship| {
+                            relationship.kind == PreciseRelationshipKind::Reference
+                        })
                         .filter_map(|relationship| {
                             let callee_symbol = graph
                                 .precise_symbol(
@@ -4836,7 +5063,9 @@ impl FriggMcpServer {
                                 line: callee_definition.range.start_line,
                                 column: callee_definition.range.start_column,
                                 relation: "calls".to_owned(),
-                                precision: Some("precise".to_owned()),
+                                precision: Some(
+                                    Self::precise_match_precision(precise_coverage).to_owned(),
+                                ),
                             })
                         })
                         .collect::<Vec<_>>();
@@ -4852,23 +5081,22 @@ impl FriggMcpServer {
                 }
 
                 if !precise_matches.is_empty() {
-                    resolution_precision = Some("precise".to_owned());
+                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
                     let note = Some(
                         json!({
-                            "precision": "precise",
+                            "precision": precision,
                             "heuristic": false,
                             "target_symbol_id": target.symbol.stable_id.clone(),
                             "target_precise_symbol": selected_precise_symbol.clone(),
                             "resolution_source": resolution_source.clone(),
-                            "precise": {
-                                "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                                "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                                "artifacts_ingested": precise_artifacts_ingested,
-                                "artifacts_failed": precise_artifacts_failed,
-                                "failed_artifacts": precise_failed_artifacts.clone(),
-                                "outgoing_count": precise_matches.len(),
-                            }
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "outgoing_count",
+                                precise_matches.len(),
+                            )
                         })
                         .to_string(),
                     );
@@ -4909,19 +5137,18 @@ impl FriggMcpServer {
                         "heuristic": true,
                         "fallback_reason": "precise_absent",
                         "precise_absence_reason": Self::precise_absence_reason(
+                            precise_coverage,
                             &cached_precise_graph.ingest_stats,
                             0,
                         ),
                         "target_symbol_id": target.symbol.stable_id.clone(),
                         "resolution_source": resolution_source.clone(),
-                        "precise": {
-                            "candidate_directories": Self::bounded_text_values(&precise_candidate_directories),
-                            "discovered_artifacts": Self::bounded_text_values(&precise_discovered_artifacts),
-                            "artifacts_ingested": precise_artifacts_ingested,
-                            "artifacts_failed": precise_artifacts_failed,
-                            "failed_artifacts": precise_failed_artifacts.clone(),
-                            "outgoing_count": 0,
-                        }
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "outgoing_count",
+                            0,
+                        )
                     })
                     .to_string(),
                 );
@@ -5017,6 +5244,28 @@ impl FriggMcpServer {
                         })),
                     )
                 })?;
+                let metadata = fs::metadata(&absolute_path).map_err(|err| {
+                    Self::internal(
+                        format!(
+                            "failed to stat source file {}: {err}",
+                            absolute_path.display()
+                        ),
+                        None,
+                    )
+                })?;
+                let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+                if bytes > server.config.max_file_bytes {
+                    return Err(Self::invalid_params(
+                        format!("file exceeds max_bytes={}", server.config.max_file_bytes),
+                        Some(json!({
+                            "path": display_path.clone(),
+                            "bytes": bytes,
+                            "max_bytes": server.config.max_file_bytes,
+                            "config_max_file_bytes": server.config.max_file_bytes,
+                            "suggested_max_bytes": bytes.min(server.config.max_file_bytes),
+                        })),
+                    ));
+                }
                 let source = fs::read_to_string(&absolute_path).map_err(|err| {
                     Self::internal(
                         format!(

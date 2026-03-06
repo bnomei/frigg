@@ -11,9 +11,96 @@ use thiserror::Error;
 pub const DEFAULT_WORKSPACE_ROOT: &str = ".";
 pub const DEFAULT_MAX_SEARCH_RESULTS: usize = 200;
 pub const DEFAULT_MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 750;
+pub const DEFAULT_WATCH_RETRY_MS: u64 = 5_000;
+pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+pub const DEFAULT_GOOGLE_EMBEDDING_MODEL: &str = "gemini-embedding-001";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
 pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl WatchMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl Default for WatchMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl std::fmt::Display for WatchMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for WatchMode {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "auto" => Ok(Self::Auto),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            _ => Err(format!(
+                "watch mode must be one of: auto, on, off (received: {normalized})"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeTransportKind {
+    Stdio,
+    LoopbackHttp,
+    RemoteHttp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchConfig {
+    pub mode: WatchMode,
+    pub debounce_ms: u64,
+    pub retry_ms: u64,
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self {
+            mode: WatchMode::Auto,
+            debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
+            retry_ms: DEFAULT_WATCH_RETRY_MS,
+        }
+    }
+}
+
+impl WatchConfig {
+    pub fn enabled_for_transport(&self, transport: RuntimeTransportKind) -> bool {
+        match self.mode {
+            WatchMode::On => true,
+            WatchMode::Off => false,
+            WatchMode::Auto => matches!(
+                transport,
+                RuntimeTransportKind::Stdio | RuntimeTransportKind::LoopbackHttp
+            ),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +121,13 @@ impl SemanticRuntimeProvider {
         match self {
             Self::OpenAi => OPENAI_API_KEY_ENV_VAR,
             Self::Google => GEMINI_API_KEY_ENV_VAR,
+        }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        match self {
+            Self::OpenAi => DEFAULT_OPENAI_EMBEDDING_MODEL,
+            Self::Google => DEFAULT_GOOGLE_EMBEDDING_MODEL,
         }
     }
 }
@@ -104,8 +198,6 @@ impl SemanticRuntimeCredentials {
 pub enum SemanticRuntimeConfigError {
     #[error("semantic_runtime.provider is required when semantic_runtime.enabled=true")]
     MissingProvider,
-    #[error("semantic_runtime.model is required when semantic_runtime.enabled=true")]
-    MissingModel,
     #[error("semantic_runtime.model must not be blank when semantic_runtime.enabled=true")]
     BlankModel,
 }
@@ -156,14 +248,14 @@ impl SemanticRuntimeConfig {
             return Ok(());
         }
 
-        if self.provider.is_none() {
-            return Err(SemanticRuntimeConfigError::MissingProvider);
-        }
+        self.provider
+            .ok_or(SemanticRuntimeConfigError::MissingProvider)?;
 
-        let Some(model) = self.model.as_deref() else {
-            return Err(SemanticRuntimeConfigError::MissingModel);
-        };
-        if model.trim().is_empty() {
+        if self
+            .model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
             return Err(SemanticRuntimeConfigError::BlankModel);
         }
 
@@ -171,10 +263,17 @@ impl SemanticRuntimeConfig {
     }
 
     pub fn normalized_model(&self) -> Option<&str> {
-        self.model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
+        match self.model.as_deref() {
+            Some(model) => {
+                let normalized = model.trim();
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some(normalized)
+                }
+            }
+            None => self.provider.map(SemanticRuntimeProvider::default_model),
+        }
     }
 
     pub fn validate_startup(
@@ -206,6 +305,7 @@ pub struct FriggConfig {
     pub workspace_roots: Vec<PathBuf>,
     pub max_search_results: usize,
     pub max_file_bytes: usize,
+    pub watch: WatchConfig,
     pub semantic_runtime: SemanticRuntimeConfig,
 }
 
@@ -215,6 +315,7 @@ impl Default for FriggConfig {
             workspace_roots: vec![PathBuf::from(DEFAULT_WORKSPACE_ROOT)],
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            watch: WatchConfig::default(),
             semantic_runtime: SemanticRuntimeConfig::default(),
         }
     }
@@ -252,6 +353,18 @@ impl FriggConfig {
         if self.max_file_bytes == 0 {
             return Err(FriggError::InvalidInput(
                 "max_file_bytes must be greater than zero".to_owned(),
+            ));
+        }
+
+        if self.watch.debounce_ms == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.debounce_ms must be greater than zero".to_owned(),
+            ));
+        }
+
+        if self.watch.retry_ms == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.retry_ms must be greater than zero".to_owned(),
             ));
         }
 
@@ -313,7 +426,40 @@ mod tests {
     }
 
     #[test]
-    fn semantic_runtime_enabled_requires_provider_and_model() {
+    fn watch_config_defaults_enable_local_transports_only() {
+        let watch = WatchConfig::default();
+        assert_eq!(watch.mode, WatchMode::Auto);
+        assert_eq!(watch.debounce_ms, DEFAULT_WATCH_DEBOUNCE_MS);
+        assert_eq!(watch.retry_ms, DEFAULT_WATCH_RETRY_MS);
+        assert!(watch.enabled_for_transport(RuntimeTransportKind::Stdio));
+        assert!(watch.enabled_for_transport(RuntimeTransportKind::LoopbackHttp));
+        assert!(!watch.enabled_for_transport(RuntimeTransportKind::RemoteHttp));
+    }
+
+    #[test]
+    fn watch_mode_parsing_and_transport_override_behave_as_expected() {
+        assert_eq!("auto".parse::<WatchMode>().unwrap_or(WatchMode::Off), WatchMode::Auto);
+        assert_eq!("on".parse::<WatchMode>().unwrap_or(WatchMode::Off), WatchMode::On);
+        assert_eq!("off".parse::<WatchMode>().unwrap_or(WatchMode::On), WatchMode::Off);
+        assert!("wat".parse::<WatchMode>().is_err());
+
+        let on = WatchConfig {
+            mode: WatchMode::On,
+            debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
+            retry_ms: DEFAULT_WATCH_RETRY_MS,
+        };
+        assert!(on.enabled_for_transport(RuntimeTransportKind::RemoteHttp));
+
+        let off = WatchConfig {
+            mode: WatchMode::Off,
+            debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
+            retry_ms: DEFAULT_WATCH_RETRY_MS,
+        };
+        assert!(!off.enabled_for_transport(RuntimeTransportKind::Stdio));
+    }
+
+    #[test]
+    fn semantic_runtime_enabled_requires_provider_and_rejects_blank_model() {
         let missing_provider = SemanticRuntimeConfig {
             enabled: true,
             provider: None,
@@ -346,11 +492,42 @@ mod tests {
     }
 
     #[test]
+    fn semantic_runtime_enabled_defaults_model_from_provider() {
+        let openai = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAi),
+            model: None,
+            strict_mode: false,
+        };
+        openai
+            .validate()
+            .expect("enabled semantic runtime should allow provider default model");
+        assert_eq!(
+            openai.normalized_model(),
+            Some(DEFAULT_OPENAI_EMBEDDING_MODEL)
+        );
+
+        let google = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::Google),
+            model: None,
+            strict_mode: false,
+        };
+        google
+            .validate()
+            .expect("enabled semantic runtime should allow provider default model");
+        assert_eq!(
+            google.normalized_model(),
+            Some(DEFAULT_GOOGLE_EMBEDDING_MODEL)
+        );
+    }
+
+    #[test]
     fn semantic_runtime_startup_requires_provider_credentials() {
         let runtime = SemanticRuntimeConfig {
             enabled: true,
             provider: Some(SemanticRuntimeProvider::OpenAi),
-            model: Some("text-embedding-3-small".to_owned()),
+            model: None,
             strict_mode: false,
         };
 
@@ -389,6 +566,7 @@ mod tests {
             workspace_roots: vec![existing_workspace_root()],
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            watch: WatchConfig::default(),
             semantic_runtime: SemanticRuntimeConfig {
                 enabled: true,
                 provider: None,
@@ -414,5 +592,27 @@ mod tests {
     fn frigg_config_default_uses_aggressive_max_file_bytes_budget() {
         let config = FriggConfig::default();
         assert_eq!(config.max_file_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn frigg_config_rejects_zero_watch_timers() {
+        let mut config = FriggConfig::default();
+        config.workspace_roots = vec![existing_workspace_root()];
+        config.watch.debounce_ms = 0;
+        let debounce_err = config
+            .validate()
+            .expect_err("watch debounce must reject zero");
+        assert_eq!(
+            debounce_err.to_string(),
+            "invalid input: watch.debounce_ms must be greater than zero"
+        );
+
+        config.watch.debounce_ms = DEFAULT_WATCH_DEBOUNCE_MS;
+        config.watch.retry_ms = 0;
+        let retry_err = config.validate().expect_err("watch retry must reject zero");
+        assert_eq!(
+            retry_err.to_string(),
+            "invalid input: watch.retry_ms must be greater than zero"
+        );
     }
 }

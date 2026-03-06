@@ -14,6 +14,7 @@ use crate::embeddings::{
     OpenAiEmbeddingProvider,
 };
 use crate::graph::{HeuristicConfidence, SymbolGraph, SymbolNode};
+use crate::playbooks::scrub_playbook_metadata_header;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
 use blake3::Hasher;
@@ -995,7 +996,7 @@ struct SemanticChunkCandidate {
     content_text: String,
 }
 
-trait SemanticRuntimeEmbeddingExecutor {
+trait SemanticRuntimeEmbeddingExecutor: Sync {
     fn embed_documents<'a>(
         &'a self,
         provider: SemanticRuntimeProvider,
@@ -1003,6 +1004,45 @@ trait SemanticRuntimeEmbeddingExecutor {
         input: Vec<String>,
         trace_id: Option<String>,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>>;
+}
+
+fn build_semantic_embedding_runtime() -> FriggResult<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to build tokio runtime for semantic embedding requests: {err}"
+            ))
+        })
+}
+
+fn execute_semantic_embedding_batch(
+    executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    provider: SemanticRuntimeProvider,
+    model: &str,
+    input: Vec<String>,
+    trace_id: Option<String>,
+) -> FriggResult<Vec<Vec<f32>>> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let model = model.to_owned();
+        return std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let runtime = build_semantic_embedding_runtime()?;
+                runtime.block_on(executor.embed_documents(provider, &model, input, trace_id))
+            });
+            match handle.join() {
+                Ok(result) => result,
+                Err(_) => Err(FriggError::Internal(
+                    "semantic embedding provider thread panicked under an active tokio runtime"
+                        .to_owned(),
+                )),
+            }
+        });
+    }
+
+    let runtime = build_semantic_embedding_runtime()?;
+    runtime.block_on(executor.embed_documents(provider, model, input, trace_id))
 }
 
 #[derive(Debug, Default)]
@@ -1069,14 +1109,32 @@ pub fn reindex_repository(
 ) -> FriggResult<ReindexSummary> {
     let semantic_runtime = resolve_semantic_runtime_config_from_env()?;
     let credentials = SemanticRuntimeCredentials::from_process_env();
-    let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
-    reindex_repository_with_semantic_executor(
+    reindex_repository_with_runtime_config(
         repository_id,
         workspace_root,
         db_path,
         mode,
         &semantic_runtime,
         &credentials,
+    )
+}
+
+pub fn reindex_repository_with_runtime_config(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: ReindexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+) -> FriggResult<ReindexSummary> {
+    let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
+    reindex_repository_with_semantic_executor(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
         &executor,
     )
 }
@@ -1184,8 +1242,9 @@ fn reindex_repository_with_semantic_executor(
                             normalize_repository_relative_path(workspace_root, &digest.path)
                         })
                         .collect::<FriggResult<Vec<_>>>()?;
-                    let previous_snapshot_id =
-                        previous_manifest.as_ref().map(|manifest| manifest.snapshot_id.as_str());
+                    let previous_snapshot_id = previous_manifest
+                        .as_ref()
+                        .map(|manifest| manifest.snapshot_id.as_str());
                     storage.advance_semantic_embeddings_for_repository(
                         repository_id,
                         previous_snapshot_id,
@@ -1293,27 +1352,19 @@ fn build_semantic_embedding_records(
     }
 
     let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to build tokio runtime for semantic embedding requests: {err}"
-            ))
-        })?;
-
     let mut output = Vec::with_capacity(chunks.len());
     for batch in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE) {
         let batch_input = batch
             .iter()
             .map(|chunk| chunk.content_text.clone())
             .collect::<Vec<_>>();
-        let vectors = runtime.block_on(executor.embed_documents(
+        let vectors = execute_semantic_embedding_batch(
+            executor,
             provider,
             model,
             batch_input,
             Some(trace_id.clone()),
-        ))?;
+        )?;
         if vectors.len() != batch.len() {
             return Err(FriggError::Internal(format!(
                 "semantic embedding provider response length mismatch: expected {} vectors, received {}",
@@ -1373,7 +1424,7 @@ fn build_semantic_chunk_candidates(
     let mut output = Vec::new();
 
     for entry in current_manifest {
-        let Some(language) = SymbolLanguage::from_path(&entry.path) else {
+        let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
             continue;
         };
         let source = match fs::read_to_string(&entry.path) {
@@ -1382,12 +1433,16 @@ fn build_semantic_chunk_candidates(
         };
         let repository_relative_path =
             normalize_repository_relative_path(workspace_root, &entry.path)?;
+        if repository_relative_path.starts_with("playbooks/") {
+            continue;
+        }
+        let source = scrub_playbook_metadata_header(&source);
         output.extend(build_file_semantic_chunks(
             repository_id,
             snapshot_id,
             &repository_relative_path,
             language,
-            &source,
+            source.as_ref(),
         ));
     }
 
@@ -1404,7 +1459,7 @@ fn build_file_semantic_chunks(
     repository_id: &str,
     snapshot_id: &str,
     path: &str,
-    language: SymbolLanguage,
+    language: &str,
     source: &str,
 ) -> Vec<SemanticChunkCandidate> {
     let mut chunks = Vec::new();
@@ -1412,13 +1467,17 @@ fn build_file_semantic_chunks(
     let mut current_chars = 0usize;
     let mut start_line = 1usize;
     let mut chunk_index = 0usize;
+    let markdown_chunking = language == "markdown";
 
     for (line_idx, line) in source.lines().enumerate() {
         let line_number = line_idx + 1;
+        let markdown_heading_boundary =
+            markdown_chunking && !current_lines.is_empty() && is_markdown_heading(line);
         let projected_chars = current_chars + line.len() + usize::from(!current_lines.is_empty());
-        let should_flush = !current_lines.is_empty()
-            && (current_lines.len() >= SEMANTIC_CHUNK_MAX_LINES
-                || projected_chars > SEMANTIC_CHUNK_MAX_CHARS);
+        let should_flush = markdown_heading_boundary
+            || (!current_lines.is_empty()
+                && (current_lines.len() >= SEMANTIC_CHUNK_MAX_LINES
+                    || projected_chars > SEMANTIC_CHUNK_MAX_CHARS));
 
         if should_flush {
             if let Some(chunk) = create_semantic_chunk_candidate(
@@ -1463,7 +1522,7 @@ fn create_semantic_chunk_candidate(
     repository_id: &str,
     snapshot_id: &str,
     path: &str,
-    language: SymbolLanguage,
+    language: &str,
     chunk_index: usize,
     start_line: usize,
     end_line: usize,
@@ -1499,13 +1558,45 @@ fn create_semantic_chunk_candidate(
         repository_id: repository_id.to_owned(),
         snapshot_id: snapshot_id.to_owned(),
         path: path.to_owned(),
-        language: language.as_str().to_owned(),
+        language: language.to_owned(),
         chunk_index,
         start_line,
         end_line,
         content_hash_blake3,
         content_text,
     })
+}
+
+pub(crate) fn semantic_chunk_language_for_path(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("rs") => Some("rust"),
+        Some("php") => Some("php"),
+        Some("md" | "markdown") => Some("markdown"),
+        Some("json") => Some("json"),
+        Some("toml") => Some("toml"),
+        Some("txt") => Some("text"),
+        Some("yaml" | "yml") => Some("yaml"),
+        _ => None,
+    }
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let mut heading_hashes = 0usize;
+    for ch in trimmed.chars() {
+        if ch == '#' {
+            heading_hashes += 1;
+            continue;
+        }
+        return heading_hashes > 0 && heading_hashes <= 6 && ch.is_ascii_whitespace();
+    }
+
+    false
 }
 
 fn normalize_repository_relative_path(workspace_root: &Path, path: &Path) -> FriggResult<String> {
@@ -1565,10 +1656,7 @@ impl ManifestBuilder {
 
         let mut out = Vec::new();
         let internal_storage_dir = root.join(".frigg");
-        let walker = WalkBuilder::new(root)
-            .standard_filters(true)
-            .follow_links(self.follow_symlinks)
-            .build();
+        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
             let dent = match dent {
@@ -1580,7 +1668,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) {
+            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
                 continue;
             }
             let mtime_ns = dent
@@ -1597,8 +1685,15 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
+        extend_with_gitignored_docs_digests(
+            &mut out,
+            root,
+            self.follow_symlinks,
+            &internal_storage_dir,
+        )?;
 
         out.sort_by(file_digest_order);
+        out.dedup_by(|left, right| left.path == right.path);
 
         Ok(out)
     }
@@ -1614,10 +1709,7 @@ impl ManifestBuilder {
         let mut entries = Vec::new();
         let mut diagnostics = Vec::new();
         let internal_storage_dir = root.join(".frigg");
-        let walker = WalkBuilder::new(root)
-            .standard_filters(true)
-            .follow_links(self.follow_symlinks)
-            .build();
+        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
             let dent = match dent {
@@ -1636,7 +1728,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) {
+            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
                 continue;
             }
             let mtime_ns = dent
@@ -1662,8 +1754,15 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
+        extend_with_gitignored_docs_digests(
+            &mut entries,
+            root,
+            self.follow_symlinks,
+            &internal_storage_dir,
+        )?;
 
         entries.sort_by(file_digest_order);
+        entries.dedup_by(|left, right| left.path == right.path);
         diagnostics.sort_by(manifest_build_diagnostic_order);
 
         Ok(ManifestBuildOutput {
@@ -1686,10 +1785,7 @@ impl ManifestBuilder {
         let mut entries = Vec::new();
         let mut diagnostics = Vec::new();
         let internal_storage_dir = root.join(".frigg");
-        let walker = WalkBuilder::new(root)
-            .standard_filters(true)
-            .follow_links(self.follow_symlinks)
-            .build();
+        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
             let dent = match dent {
@@ -1708,7 +1804,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) {
+            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
                 continue;
             }
             let metadata = match dent.metadata() {
@@ -1729,8 +1825,15 @@ impl ManifestBuilder {
                 mtime_ns,
             });
         }
+        extend_with_gitignored_docs_metadata(
+            &mut entries,
+            root,
+            self.follow_symlinks,
+            &internal_storage_dir,
+        )?;
 
         entries.sort_by(file_metadata_digest_order);
+        entries.dedup_by(|left, right| left.path == right.path);
         diagnostics.sort_by(manifest_build_diagnostic_order);
 
         Ok(ManifestMetadataBuildOutput {
@@ -1738,6 +1841,121 @@ impl ManifestBuilder {
             diagnostics,
         })
     }
+}
+
+fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder.standard_filters(true).follow_links(follow_symlinks);
+    builder
+}
+
+fn frigg_docs_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root.join("docs"));
+    builder
+        .standard_filters(true)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .follow_links(follow_symlinks);
+    builder
+}
+
+fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
+    let relative = if path.is_absolute() {
+        let Ok(relative) = path.strip_prefix(root) else {
+            return true;
+        };
+        relative
+    } else {
+        path
+    };
+    let Some(component) = relative.components().next() else {
+        return false;
+    };
+    matches!(
+        component.as_os_str().to_string_lossy().as_ref(),
+        ".frigg" | ".git" | "target"
+    )
+}
+
+fn extend_with_gitignored_docs_digests(
+    entries: &mut Vec<FileDigest>,
+    root: &Path,
+    follow_symlinks: bool,
+    internal_storage_dir: &Path,
+) -> FriggResult<()> {
+    let docs_root = root.join("docs");
+    if !docs_root.exists() {
+        return Ok(());
+    }
+
+    for dent in frigg_docs_walk_builder(root, follow_symlinks).build() {
+        let dent = match dent {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = dent.path().to_path_buf();
+        if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+            continue;
+        }
+        let mtime_ns = dent
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(system_time_to_unix_nanos);
+        let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
+        entries.push(FileDigest {
+            path,
+            size_bytes,
+            mtime_ns,
+            hash_blake3_hex: digest,
+        });
+    }
+
+    Ok(())
+}
+
+fn extend_with_gitignored_docs_metadata(
+    entries: &mut Vec<FileMetadataDigest>,
+    root: &Path,
+    follow_symlinks: bool,
+    internal_storage_dir: &Path,
+) -> FriggResult<()> {
+    let docs_root = root.join("docs");
+    if !docs_root.exists() {
+        return Ok(());
+    }
+
+    for dent in frigg_docs_walk_builder(root, follow_symlinks).build() {
+        let dent = match dent {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = dent.path().to_path_buf();
+        if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+            continue;
+        }
+        let metadata = dent
+            .metadata()
+            .map_err(|err| FriggError::Internal(err.to_string()))?;
+        let mtime_ns = metadata.modified().ok().and_then(system_time_to_unix_nanos);
+        entries.push(FileMetadataDigest {
+            path,
+            size_bytes: metadata.len(),
+            mtime_ns,
+        });
+    }
+
+    Ok(())
 }
 
 fn stream_file_blake3_digest(path: &Path) -> std::io::Result<(u64, String)> {
@@ -1908,11 +2126,11 @@ mod tests {
     use super::{
         FileDigest, HeuristicReferenceConfidence, HeuristicReferenceEvidence, ManifestBuilder,
         ManifestDiagnosticKind, ManifestStore, ReindexMode, RuntimeSemanticEmbeddingExecutor,
-        SemanticRuntimeEmbeddingExecutor, SymbolKind, SymbolLanguage, diff,
-        extract_symbols_for_paths, extract_symbols_from_source, file_digest_order,
-        navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
-        reindex_repository_with_semantic_executor, resolve_heuristic_references,
-        search_structural_in_source,
+        SemanticRuntimeEmbeddingExecutor, SymbolKind, SymbolLanguage, build_file_semantic_chunks,
+        build_semantic_chunk_candidates, diff, extract_symbols_for_paths,
+        extract_symbols_from_source, file_digest_order, navigation_symbol_target_rank,
+        register_symbol_definitions, reindex_repository, reindex_repository_with_semantic_executor,
+        resolve_heuristic_references, search_structural_in_source,
     };
     use crate::domain::{FriggError, FriggResult};
     use crate::graph::{RelationKind, SymbolGraph};
@@ -2122,6 +2340,53 @@ mod tests {
     }
 
     #[test]
+    fn manifest_builder_includes_gitignored_contract_docs() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("manifest-builder-gitignored-docs");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("docs/contracts/errors.md", "invalid_params\n"),
+                ("src/main.rs", "fn main() {}\n"),
+            ],
+        )?;
+        fs::write(workspace_root.join(".gitignore"), "docs\n").map_err(FriggError::Io)?;
+
+        let manifest = ManifestBuilder::default().build(&workspace_root)?;
+        let relative_paths = manifest_relative_paths(&manifest, &workspace_root)?;
+
+        assert!(
+            relative_paths.contains(&PathBuf::from("docs/contracts/errors.md")),
+            "contract docs must stay visible to Frigg even when the repo gitignores docs/"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_builder_excludes_target_artifacts_without_gitignore() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("manifest-builder-target-exclusion");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("src/main.rs", "fn main() {}\n"),
+                ("target/debug/app", "binary\n"),
+            ],
+        )?;
+
+        let manifest = ManifestBuilder::default().build(&workspace_root)?;
+        let relative_paths = manifest_relative_paths(&manifest, &workspace_root)?;
+
+        assert!(
+            !relative_paths
+                .iter()
+                .any(|path| path.starts_with(Path::new("target"))),
+            "target artifacts must stay excluded from manifest discovery: {relative_paths:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn incremental_roundtrip_persist_load_and_diff() -> FriggResult<()> {
         let db_path = temp_db_path("incremental-roundtrip");
         let fixture_root = fixture_repo_root();
@@ -2260,7 +2525,7 @@ mod tests {
                     "src/lib.rs",
                     "pub struct User;\nimpl User { pub fn id(&self) -> u64 { 7 } }\n",
                 ),
-                ("README.md", "not semantic indexed\n"),
+                ("README.md", "# Frigg\nsemantic runtime indexed\n"),
             ],
         )?;
 
@@ -2284,13 +2549,19 @@ mod tests {
             .load_semantic_embeddings_for_repository_snapshot("repo-001", &first.snapshot_id)?;
         assert!(
             !first_semantic.is_empty(),
-            "expected semantic embeddings for supported source files"
+            "expected semantic embeddings for supported source and markdown files"
         );
         assert!(
             first_semantic
                 .iter()
-                .all(|record| record.path.starts_with("src/")),
+                .all(|record| record.path.starts_with("src/") || record.path == "README.md"),
             "semantic indexing should use repository-relative canonical source paths"
+        );
+        assert!(
+            first_semantic
+                .iter()
+                .any(|record| record.path == "README.md"),
+            "README.md should participate in semantic indexing"
         );
         assert!(
             first_semantic
@@ -2312,6 +2583,50 @@ mod tests {
             .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?;
         assert_eq!(first.snapshot_id, second.snapshot_id);
         assert_eq!(first_semantic, second_semantic);
+
+        cleanup_workspace(&workspace_root);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggResult<()> {
+        let db_path = temp_db_path("semantic-enabled-inside-runtime");
+        let workspace_root = temp_workspace_root("semantic-enabled-inside-runtime");
+        prepare_workspace(
+            &workspace_root,
+            &[("src/main.rs", "pub fn inside_runtime() {}\n")],
+        )?;
+
+        let semantic_runtime = semantic_runtime_enabled_openai();
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let executor = FixtureSemanticEmbeddingExecutor;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build");
+        let summary = runtime.block_on(async {
+            reindex_repository_with_semantic_executor(
+                "repo-001",
+                &workspace_root,
+                &db_path,
+                ReindexMode::Full,
+                &semantic_runtime,
+                &credentials,
+                &executor,
+            )
+        })?;
+
+        let storage = Storage::new(&db_path);
+        let semantic_rows = storage
+            .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+        assert!(
+            !semantic_rows.is_empty(),
+            "expected semantic embeddings when reindex runs inside a tokio runtime"
+        );
 
         cleanup_workspace(&workspace_root);
         cleanup_db(&db_path);
@@ -2512,6 +2827,139 @@ mod tests {
         cleanup_workspace(&workspace_root);
         cleanup_db(&db_path);
         Ok(())
+    }
+
+    #[test]
+    fn semantic_chunk_candidates_include_docs_and_fixture_text_sources() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("semantic-chunk-doc-sources");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("README.md", "# Frigg\nsemantic runtime docs\n"),
+                (
+                    "docs/contracts/errors.md",
+                    "# Errors\ninvalid_params maps to -32602\n",
+                ),
+                (
+                    "fixtures/playbooks/deep-search-suite-core.playbook.json",
+                    "{\n  \"playbook_id\": \"suite-core\"\n}\n",
+                ),
+                ("src/lib.rs", "pub fn semantic_runtime() {}\n"),
+            ],
+        )?;
+
+        let manifest = ManifestBuilder::default().build(&workspace_root)?;
+        let chunks = build_semantic_chunk_candidates(
+            "repo-001",
+            &workspace_root,
+            "snapshot-001",
+            &manifest,
+        )?;
+
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.path == "README.md" && chunk.language == "markdown"),
+            "README.md should participate in semantic chunking"
+        );
+        assert!(
+            chunks.iter().any(|chunk| {
+                chunk.path == "docs/contracts/errors.md" && chunk.language == "markdown"
+            }),
+            "contract markdown should participate in semantic chunking"
+        );
+        assert!(
+            chunks.iter().any(|chunk| {
+                chunk.path == "fixtures/playbooks/deep-search-suite-core.playbook.json"
+                    && chunk.language == "json"
+            }),
+            "fixture json should participate in semantic chunking"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.path == "src/lib.rs" && chunk.language == "rust"),
+            "source files should remain in semantic chunking"
+        );
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_chunk_candidates_skip_playbook_markdown_self_references() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("semantic-chunk-skip-playbooks");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                (
+                    "playbooks/hybrid-search-context-retrieval.md",
+                    "# Playbook\nquery echo\n",
+                ),
+                ("docs/contracts/errors.md", "# Errors\ninvalid_params\n"),
+            ],
+        )?;
+
+        let manifest = ManifestBuilder::default().build(&workspace_root)?;
+        let chunks = build_semantic_chunk_candidates(
+            "repo-001",
+            &workspace_root,
+            "snapshot-001",
+            &manifest,
+        )?;
+
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.path != "playbooks/hybrid-search-context-retrieval.md"),
+            "playbook markdown should be excluded from semantic chunking to avoid self-reference"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.path == "docs/contracts/errors.md"),
+            "docs markdown should still remain eligible for semantic chunking"
+        );
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_chunking_flushes_markdown_headings_into_separate_chunks() {
+        let source = [
+            "# Hybrid Search Context Retrieval",
+            "",
+            "semantic runtime strict failure note metadata",
+            "",
+            "## Expected Return Cues",
+            "",
+            "semantic_status",
+            "semantic_reason",
+        ]
+        .join("\n");
+
+        let chunks = build_file_semantic_chunks(
+            "repo-001",
+            "snapshot-001",
+            "docs/contracts/hybrid-search.md",
+            "markdown",
+            &source,
+        );
+
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks[0]
+                .content_text
+                .starts_with("# Hybrid Search Context Retrieval")
+        );
+        assert!(
+            chunks[1]
+                .content_text
+                .starts_with("## Expected Return Cues")
+        );
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[1].start_line, 5);
     }
 
     #[cfg(unix)]

@@ -9,16 +9,19 @@ use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
-use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository};
+use frigg::indexer::{
+    ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config,
+};
 use frigg::mcp::FriggMcpServer;
 use frigg::settings::{
-    FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider,
-    SemanticRuntimeStartupError,
+    FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
+    SemanticRuntimeProvider, SemanticRuntimeStartupError, WatchConfig, WatchMode,
 };
 use frigg::storage::{
     DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend, ensure_provenance_db_parent_dir,
     resolve_provenance_db_path,
 };
+use frigg::watch::maybe_start_watch_runtime;
 use rmcp::transport::StreamableHttpServerConfig;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -87,6 +90,30 @@ struct Cli {
     )]
     semantic_runtime_strict_mode: Option<bool>,
 
+    #[arg(
+        long,
+        value_name = "MODE",
+        env = "FRIGG_WATCH_MODE",
+        global = true
+    )]
+    watch_mode: Option<WatchMode>,
+
+    #[arg(
+        long,
+        value_name = "MILLISECONDS",
+        env = "FRIGG_WATCH_DEBOUNCE_MS",
+        global = true
+    )]
+    watch_debounce_ms: Option<u64>,
+
+    #[arg(
+        long,
+        value_name = "MILLISECONDS",
+        env = "FRIGG_WATCH_RETRY_MS",
+        global = true
+    )]
+    watch_retry_ms: Option<u64>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -137,6 +164,16 @@ impl SemanticStartupGateError {
     }
 }
 
+impl HttpRuntimeConfig {
+    fn transport_kind(&self) -> RuntimeTransportKind {
+        if self.bind_addr.ip().is_loopback() {
+            RuntimeTransportKind::LoopbackHttp
+        } else {
+            RuntimeTransportKind::RemoteHttp
+        }
+    }
+}
+
 impl std::fmt::Display for SemanticStartupGateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -151,13 +188,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let cli = Cli::parse();
     if let Some(command) = cli.command.as_ref().copied() {
-        let config = resolve_base_config(&cli)?;
         match command {
-            Command::Init => run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?,
+            Command::Init => {
+                let config = resolve_command_config(&cli, command)?;
+                run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?
+            }
             Command::Verify => {
+                let config = resolve_command_config(&cli, command)?;
                 run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)?
             }
-            Command::Reindex { changed } => run_reindex_command(&config, changed)?,
+            Command::Reindex { changed } => {
+                let config = resolve_command_config(&cli, command)?;
+                run_semantic_runtime_startup_gate(&config)?;
+                run_reindex_command(&config, changed)?
+            }
         }
         return Ok(());
     }
@@ -166,6 +210,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config = resolve_startup_config(&cli)?;
     run_strict_startup_vector_readiness_gate(&config)?;
     run_semantic_runtime_startup_gate(&config)?;
+    let transport_kind = http_runtime
+        .as_ref()
+        .map(HttpRuntimeConfig::transport_kind)
+        .unwrap_or(RuntimeTransportKind::Stdio);
+    let _watch_runtime = maybe_start_watch_runtime(&config, transport_kind)?;
 
     let server = FriggMcpServer::new(config);
     if let Some(runtime) = http_runtime {
@@ -182,8 +231,16 @@ fn resolve_base_config(cli: &Cli) -> Result<FriggConfig, Box<dyn Error>> {
     if let Some(max_file_bytes) = cli.max_file_bytes {
         config.max_file_bytes = max_file_bytes;
     }
+    config.watch = resolve_watch_config(cli);
     config.validate()?;
     Ok(config)
+}
+
+fn resolve_command_config(cli: &Cli, command: Command) -> Result<FriggConfig, Box<dyn Error>> {
+    match command {
+        Command::Init | Command::Verify => resolve_base_config(cli),
+        Command::Reindex { .. } => resolve_startup_config(cli),
+    }
 }
 
 fn resolve_startup_config(cli: &Cli) -> Result<FriggConfig, Box<dyn Error>> {
@@ -200,6 +257,20 @@ fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfig {
         model: cli.semantic_runtime_model.clone(),
         strict_mode: cli.semantic_runtime_strict_mode.unwrap_or(false),
     }
+}
+
+fn resolve_watch_config(cli: &Cli) -> WatchConfig {
+    let mut watch = WatchConfig::default();
+    if let Some(mode) = cli.watch_mode {
+        watch.mode = mode;
+    }
+    if let Some(debounce_ms) = cli.watch_debounce_ms {
+        watch.debounce_ms = debounce_ms;
+    }
+    if let Some(retry_ms) = cli.watch_retry_ms {
+        watch.retry_ms = retry_ms;
+    }
+    watch
 }
 
 fn run_storage_bootstrap_command(
@@ -287,7 +358,14 @@ fn run_reindex_command(config: &FriggConfig, changed: bool) -> Result<(), Box<dy
         })?;
         let db_path = ensure_storage_db_path_for_write(root, "reindex")?;
 
-        let summary = match reindex_repository(&repo.repository_id.0, root, &db_path, mode) {
+        let summary = match reindex_repository_with_runtime_config(
+            &repo.repository_id.0,
+            root,
+            &db_path,
+            mode,
+            &config.semantic_runtime,
+            &SemanticRuntimeCredentials::from_process_env(),
+        ) {
             Ok(summary) => summary,
             Err(err) => {
                 println!(
@@ -822,6 +900,9 @@ mod tests {
             semantic_runtime_provider: None,
             semantic_runtime_model: None,
             semantic_runtime_strict_mode: None,
+            watch_mode: None,
+            watch_debounce_ms: None,
+            watch_retry_ms: None,
             command: None,
         }
     }
@@ -1010,6 +1091,61 @@ mod tests {
     }
 
     #[test]
+    fn watch_runtime_defaults_to_auto_with_standard_timers() {
+        let cli = base_cli();
+        let watch = resolve_watch_config(&cli);
+        assert_eq!(watch.mode, WatchMode::Auto);
+        assert_eq!(watch.debounce_ms, 750);
+        assert_eq!(watch.retry_ms, 5_000);
+    }
+
+    #[test]
+    fn watch_runtime_cli_resolution_applies_explicit_values() {
+        let mut cli = base_cli();
+        cli.watch_mode = Some(WatchMode::On);
+        cli.watch_debounce_ms = Some(1_250);
+        cli.watch_retry_ms = Some(9_000);
+
+        let watch = resolve_watch_config(&cli);
+        assert_eq!(watch.mode, WatchMode::On);
+        assert_eq!(watch.debounce_ms, 1_250);
+        assert_eq!(watch.retry_ms, 9_000);
+    }
+
+    #[test]
+    fn watch_runtime_transport_kind_matches_http_runtime() {
+        let cli = base_cli();
+        assert_eq!(
+            resolve_http_runtime_config(&cli)
+                .expect("stdio should resolve")
+                .as_ref()
+                .map(HttpRuntimeConfig::transport_kind)
+                .unwrap_or(RuntimeTransportKind::Stdio),
+            RuntimeTransportKind::Stdio
+        );
+
+        let mut loopback_cli = base_cli();
+        loopback_cli.mcp_http_port = Some(4011);
+        let loopback_runtime = resolve_http_runtime_config(&loopback_cli)
+            .expect("loopback http should resolve")
+            .expect("loopback runtime should be enabled");
+        assert_eq!(
+            loopback_runtime.transport_kind(),
+            RuntimeTransportKind::LoopbackHttp
+        );
+
+        let mut remote_cli = base_cli();
+        remote_cli.mcp_http_port = Some(4012);
+        remote_cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        remote_cli.allow_remote_http = true;
+        remote_cli.mcp_http_auth_token = Some("test-token".to_owned());
+        let remote_runtime = resolve_http_runtime_config(&remote_cli)
+            .expect("remote http should resolve with override")
+            .expect("remote runtime should be enabled");
+        assert_eq!(remote_runtime.transport_kind(), RuntimeTransportKind::RemoteHttp);
+    }
+
+    #[test]
     fn startup_config_rejects_invalid_semantic_runtime_contract() {
         let mut cli = base_cli();
         cli.semantic_runtime_enabled = Some(true);
@@ -1023,6 +1159,76 @@ mod tests {
                 .contains("semantic_runtime.provider is required"),
             "unexpected startup config error: {error}"
         );
+    }
+
+    #[test]
+    fn startup_config_accepts_provider_default_semantic_model() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::OpenAi);
+
+        let config = resolve_startup_config(&cli)
+            .expect("startup config should accept provider default semantic model");
+        assert_eq!(
+            config.semantic_runtime.normalized_model(),
+            Some("text-embedding-3-small")
+        );
+    }
+
+    #[test]
+    fn startup_config_rejects_zero_watch_timers() {
+        let mut cli = base_cli();
+        cli.watch_debounce_ms = Some(0);
+        let debounce_error = resolve_startup_config(&cli)
+            .expect_err("startup config should reject watch-debounce-ms=0");
+        assert!(
+            debounce_error
+                .to_string()
+                .contains("watch.debounce_ms must be greater than zero"),
+            "unexpected startup config error: {debounce_error}"
+        );
+
+        let mut retry_cli = base_cli();
+        retry_cli.watch_retry_ms = Some(0);
+        let retry_error = resolve_startup_config(&retry_cli)
+            .expect_err("startup config should reject watch-retry-ms=0");
+        assert!(
+            retry_error
+                .to_string()
+                .contains("watch.retry_ms must be greater than zero"),
+            "unexpected startup config error: {retry_error}"
+        );
+    }
+
+    #[test]
+    fn reindex_command_resolution_uses_startup_semantic_config() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(&cli, Command::Reindex { changed: true })
+            .expect("reindex command should resolve startup config");
+        assert!(config.semantic_runtime.enabled);
+        assert_eq!(
+            config.semantic_runtime.provider,
+            Some(SemanticRuntimeProvider::Google)
+        );
+        assert_eq!(
+            config.semantic_runtime.normalized_model(),
+            Some("gemini-embedding-001")
+        );
+    }
+
+    #[test]
+    fn init_command_resolution_keeps_semantic_runtime_unset() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(&cli, Command::Init)
+            .expect("init command should resolve base config");
+        assert!(!config.semantic_runtime.enabled);
+        assert!(config.semantic_runtime.provider.is_none());
     }
 
     #[test]
@@ -1094,7 +1300,7 @@ mod tests {
         config.semantic_runtime = SemanticRuntimeConfig {
             enabled: true,
             provider: Some(SemanticRuntimeProvider::OpenAi),
-            model: Some("text-embedding-3-small".to_owned()),
+            model: None,
             strict_mode: true,
         };
 
