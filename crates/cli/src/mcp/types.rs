@@ -712,7 +712,7 @@ mod schema_tests {
     }
 
     fn docs_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/tools/v1")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts/tools/v1")
     }
 
     fn read_doc(file_name: &str) -> ToolSchemaDoc {
@@ -1027,7 +1027,7 @@ mod schema_tests {
         );
 
         let errors_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/errors.md");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts/errors.md");
         let errors_doc = fs::read_to_string(&errors_path).unwrap_or_else(|err| {
             panic!(
                 "failed to read errors contract {}: {err}",

@@ -1,0 +1,22 @@
+{
+  "schema_id": "frigg.tools.go_to_definition.v1",
+  "tool_name": "go_to_definition",
+  "input_wrapper": "GoToDefinitionParams",
+  "output_wrapper": "GoToDefinitionResponse",
+  "input_fields": [
+    "symbol",
+    "repository_id",
+    "path",
+    "line",
+    "column",
+    "limit"
+  ],
+  "input_required": [],
+  "output_fields": [
+    "matches",
+    "note"
+  ],
+  "output_required": [
+    "matches"
+  ]
+}

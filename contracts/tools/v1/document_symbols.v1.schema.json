@@ -1,0 +1,20 @@
+{
+  "schema_id": "frigg.tools.document_symbols.v1",
+  "tool_name": "document_symbols",
+  "input_wrapper": "DocumentSymbolsParams",
+  "output_wrapper": "DocumentSymbolsResponse",
+  "input_fields": [
+    "path",
+    "repository_id"
+  ],
+  "input_required": [
+    "path"
+  ],
+  "output_fields": [
+    "symbols",
+    "note"
+  ],
+  "output_required": [
+    "symbols"
+  ]
+}

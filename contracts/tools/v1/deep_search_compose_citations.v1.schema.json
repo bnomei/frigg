@@ -1,0 +1,19 @@
+{
+  "schema_id": "frigg.tools.deep_search_compose_citations.v1",
+  "tool_name": "deep_search_compose_citations",
+  "input_wrapper": "DeepSearchComposeCitationsParams",
+  "output_wrapper": "DeepSearchComposeCitationsResponse",
+  "input_fields": [
+    "trace_artifact",
+    "answer"
+  ],
+  "input_required": [
+    "trace_artifact"
+  ],
+  "output_fields": [
+    "citation_payload"
+  ],
+  "output_required": [
+    "citation_payload"
+  ]
+}

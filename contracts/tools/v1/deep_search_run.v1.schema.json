@@ -1,0 +1,18 @@
+{
+  "schema_id": "frigg.tools.deep_search_run.v1",
+  "tool_name": "deep_search_run",
+  "input_wrapper": "DeepSearchRunParams",
+  "output_wrapper": "DeepSearchRunResponse",
+  "input_fields": [
+    "playbook"
+  ],
+  "input_required": [
+    "playbook"
+  ],
+  "output_fields": [
+    "trace_artifact"
+  ],
+  "output_required": [
+    "trace_artifact"
+  ]
+}

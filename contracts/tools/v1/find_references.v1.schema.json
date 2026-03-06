@@ -1,0 +1,21 @@
+{
+  "schema_id": "frigg.tools.find_references.v1",
+  "tool_name": "find_references",
+  "input_wrapper": "FindReferencesParams",
+  "output_wrapper": "FindReferencesResponse",
+  "input_fields": [
+    "symbol",
+    "repository_id",
+    "limit"
+  ],
+  "input_required": [
+    "symbol"
+  ],
+  "output_fields": [
+    "matches",
+    "note"
+  ],
+  "output_required": [
+    "matches"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "documents": [
+    {
+      "relative_path": "src/invalid.rs",
+      "occurrences": [
+        {
+          "symbol": "scip-rust pkg matrix#Broken",
+          "range": [0, 11],
+          "symbol_roles": 8
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-rust pkg matrix#Broken",
+          "display_name": "Broken",
+          "kind": "struct",
+          "relationships": []
+        }
+      ]
+    }
+  ]
+}

@@ -55,4 +55,4 @@ Do not assume extra runtime tools (for example `apply_patch` or public `deep_sea
 ## References
 
 - Read [references/frigg-local-sourcegraph-playbook.md](references/frigg-local-sourcegraph-playbook.md) for investigation playbooks and Frigg-vs-`rg` decision guidance.
-- Read `docs/contracts/tools/v1/` and `docs/contracts/errors.md` for exact contract semantics.
+- Read `contracts/tools/v1/` and `contracts/errors.md` for exact contract semantics.

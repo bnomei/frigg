@@ -1,0 +1,42 @@
+{
+  "documents": [
+    {
+      "relative_path": "src/roles.rs",
+      "occurrences": [
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "range": [0, 7, 14],
+          "symbol_roles": 1
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "range": [1, 9, 16],
+          "symbol_roles": 9
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "range": [2, 9, 16],
+          "symbol_roles": 2
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "range": [3, 9, 16],
+          "symbol_roles": 4
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "range": [4, 9, 16],
+          "symbol_roles": 0
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-rust pkg matrix#Roleful",
+          "display_name": "Roleful",
+          "kind": "struct",
+          "relationships": []
+        }
+      ]
+    }
+  ]
+}

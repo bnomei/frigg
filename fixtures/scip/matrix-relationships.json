@@ -1,0 +1,48 @@
+{
+  "documents": [
+    {
+      "relative_path": "src/rel.rs",
+      "occurrences": [
+        {
+          "symbol": "scip-rust pkg matrix#Thing",
+          "range": [0, 11, 16],
+          "symbol_roles": 1
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Base",
+          "range": [1, 11, 15],
+          "symbol_roles": 1
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "scip-rust pkg matrix#Thing",
+          "display_name": "Thing",
+          "kind": "struct",
+          "relationships": [
+            {
+              "symbol": "scip-rust pkg matrix#Base",
+              "is_reference": true,
+              "is_implementation": true,
+              "is_type_definition": true
+            },
+            {
+              "symbol": "scip-rust pkg matrix#Base",
+              "is_reference": true
+            },
+            {
+              "symbol": "scip-rust pkg matrix#Base",
+              "is_definition": true
+            }
+          ]
+        },
+        {
+          "symbol": "scip-rust pkg matrix#Base",
+          "display_name": "Base",
+          "kind": "struct",
+          "relationships": []
+        }
+      ]
+    }
+  ]
+}

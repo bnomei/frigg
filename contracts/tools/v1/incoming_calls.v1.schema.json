@@ -1,0 +1,22 @@
+{
+  "schema_id": "frigg.tools.incoming_calls.v1",
+  "tool_name": "incoming_calls",
+  "input_wrapper": "IncomingCallsParams",
+  "output_wrapper": "IncomingCallsResponse",
+  "input_fields": [
+    "symbol",
+    "repository_id",
+    "path",
+    "line",
+    "column",
+    "limit"
+  ],
+  "input_required": [],
+  "output_fields": [
+    "matches",
+    "note"
+  ],
+  "output_required": [
+    "matches"
+  ]
+}

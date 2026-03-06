@@ -794,7 +794,7 @@ mod tests {
         ));
         assert!(!should_ignore_watch_path(
             &repository,
-            &root.join("docs/contracts/errors.md")
+            &root.join("contracts/errors.md")
         ));
         assert!(!should_ignore_watch_path(
             &repository,
@@ -981,19 +981,19 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn watch_runtime_initial_sync_preserves_docs_visibility_and_target_exclusion() {
-        let workspace_root = temp_workspace_root("docs-visible");
-        fs::create_dir_all(workspace_root.join("docs/contracts"))
-            .expect("docs directory should be creatable");
+    async fn watch_runtime_initial_sync_preserves_contract_visibility_and_target_exclusion() {
+        let workspace_root = temp_workspace_root("contracts-visible");
+        fs::create_dir_all(workspace_root.join("contracts"))
+            .expect("contracts directory should be creatable");
         fs::create_dir_all(workspace_root.join("target/debug"))
             .expect("target directory should be creatable");
-        fs::write(workspace_root.join(".gitignore"), "docs/\n")
+        fs::write(workspace_root.join(".gitignore"), "contracts/\n")
             .expect("gitignore should be writable");
         fs::write(
-            workspace_root.join("docs/contracts/errors.md"),
+            workspace_root.join("contracts/errors.md"),
             "# Errors\n",
         )
-        .expect("docs contract file should be writable");
+        .expect("contract file should be writable");
         fs::write(workspace_root.join("target/debug/app"), "binary")
             .expect("target artifact should be writable");
 
@@ -1023,8 +1023,8 @@ mod tests {
             .map(|entry| entry.path)
             .collect::<Vec<_>>();
         assert!(
-            paths.iter().any(|path| path.ends_with("docs/contracts/errors.md")),
-            "docs contract path should remain indexed: {paths:?}"
+            paths.iter().any(|path| path.ends_with("contracts/errors.md")),
+            "contract path should remain indexed: {paths:?}"
         );
         assert!(
             paths.iter().all(|path| !path.starts_with("target/")),

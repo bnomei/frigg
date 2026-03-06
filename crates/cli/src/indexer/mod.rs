@@ -1685,7 +1685,7 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
-        extend_with_gitignored_docs_digests(
+        extend_with_force_visible_digests(
             &mut out,
             root,
             self.follow_symlinks,
@@ -1754,7 +1754,7 @@ impl ManifestBuilder {
                 hash_blake3_hex: digest,
             });
         }
-        extend_with_gitignored_docs_digests(
+        extend_with_force_visible_digests(
             &mut entries,
             root,
             self.follow_symlinks,
@@ -1825,7 +1825,7 @@ impl ManifestBuilder {
                 mtime_ns,
             });
         }
-        extend_with_gitignored_docs_metadata(
+        extend_with_force_visible_metadata(
             &mut entries,
             root,
             self.follow_symlinks,
@@ -1849,8 +1849,14 @@ fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
     builder
 }
 
-fn frigg_docs_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root.join("docs"));
+const FORCE_VISIBLE_ROOTS: &[&str] = &["contracts", "benchmarks"];
+
+fn frigg_force_visible_walk_builder(
+    root: &Path,
+    relative_root: &str,
+    follow_symlinks: bool,
+) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root.join(relative_root));
     builder
         .standard_filters(true)
         .git_ignore(false)
@@ -1879,80 +1885,84 @@ fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
     )
 }
 
-fn extend_with_gitignored_docs_digests(
+fn extend_with_force_visible_digests(
     entries: &mut Vec<FileDigest>,
     root: &Path,
     follow_symlinks: bool,
     internal_storage_dir: &Path,
 ) -> FriggResult<()> {
-    let docs_root = root.join("docs");
-    if !docs_root.exists() {
-        return Ok(());
-    }
-
-    for dent in frigg_docs_walk_builder(root, follow_symlinks).build() {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+    for relative_root in FORCE_VISIBLE_ROOTS {
+        let force_visible_root = root.join(relative_root);
+        if !force_visible_root.exists() {
             continue;
         }
 
-        let path = dent.path().to_path_buf();
-        if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-            continue;
+        for dent in frigg_force_visible_walk_builder(root, relative_root, follow_symlinks).build() {
+            let dent = match dent {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+
+            let path = dent.path().to_path_buf();
+            if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+                continue;
+            }
+            let mtime_ns = dent
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(system_time_to_unix_nanos);
+            let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
+            entries.push(FileDigest {
+                path,
+                size_bytes,
+                mtime_ns,
+                hash_blake3_hex: digest,
+            });
         }
-        let mtime_ns = dent
-            .metadata()
-            .ok()
-            .and_then(|metadata| metadata.modified().ok())
-            .and_then(system_time_to_unix_nanos);
-        let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
-        entries.push(FileDigest {
-            path,
-            size_bytes,
-            mtime_ns,
-            hash_blake3_hex: digest,
-        });
     }
 
     Ok(())
 }
 
-fn extend_with_gitignored_docs_metadata(
+fn extend_with_force_visible_metadata(
     entries: &mut Vec<FileMetadataDigest>,
     root: &Path,
     follow_symlinks: bool,
     internal_storage_dir: &Path,
 ) -> FriggResult<()> {
-    let docs_root = root.join("docs");
-    if !docs_root.exists() {
-        return Ok(());
-    }
-
-    for dent in frigg_docs_walk_builder(root, follow_symlinks).build() {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+    for relative_root in FORCE_VISIBLE_ROOTS {
+        let force_visible_root = root.join(relative_root);
+        if !force_visible_root.exists() {
             continue;
         }
 
-        let path = dent.path().to_path_buf();
-        if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-            continue;
+        for dent in frigg_force_visible_walk_builder(root, relative_root, follow_symlinks).build() {
+            let dent = match dent {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+
+            let path = dent.path().to_path_buf();
+            if path.starts_with(internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+                continue;
+            }
+            let metadata = dent
+                .metadata()
+                .map_err(|err| FriggError::Internal(err.to_string()))?;
+            let mtime_ns = metadata.modified().ok().and_then(system_time_to_unix_nanos);
+            entries.push(FileMetadataDigest {
+                path,
+                size_bytes: metadata.len(),
+                mtime_ns,
+            });
         }
-        let metadata = dent
-            .metadata()
-            .map_err(|err| FriggError::Internal(err.to_string()))?;
-        let mtime_ns = metadata.modified().ok().and_then(system_time_to_unix_nanos);
-        entries.push(FileMetadataDigest {
-            path,
-            size_bytes: metadata.len(),
-            mtime_ns,
-        });
     }
 
     Ok(())
@@ -2340,23 +2350,23 @@ mod tests {
     }
 
     #[test]
-    fn manifest_builder_includes_gitignored_contract_docs() -> FriggResult<()> {
-        let workspace_root = temp_workspace_root("manifest-builder-gitignored-docs");
+    fn manifest_builder_includes_gitignored_contract_artifacts() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("manifest-builder-gitignored-contracts");
         prepare_workspace(
             &workspace_root,
             &[
-                ("docs/contracts/errors.md", "invalid_params\n"),
+                ("contracts/errors.md", "invalid_params\n"),
                 ("src/main.rs", "fn main() {}\n"),
             ],
         )?;
-        fs::write(workspace_root.join(".gitignore"), "docs\n").map_err(FriggError::Io)?;
+        fs::write(workspace_root.join(".gitignore"), "contracts\n").map_err(FriggError::Io)?;
 
         let manifest = ManifestBuilder::default().build(&workspace_root)?;
         let relative_paths = manifest_relative_paths(&manifest, &workspace_root)?;
 
         assert!(
-            relative_paths.contains(&PathBuf::from("docs/contracts/errors.md")),
-            "contract docs must stay visible to Frigg even when the repo gitignores docs/"
+            relative_paths.contains(&PathBuf::from("contracts/errors.md")),
+            "contract artifacts must stay visible to Frigg even when the repo gitignores contracts/"
         );
 
         Ok(())
@@ -2837,7 +2847,7 @@ mod tests {
             &[
                 ("README.md", "# Frigg\nsemantic runtime docs\n"),
                 (
-                    "docs/contracts/errors.md",
+                    "contracts/errors.md",
                     "# Errors\ninvalid_params maps to -32602\n",
                 ),
                 (
@@ -2864,7 +2874,7 @@ mod tests {
         );
         assert!(
             chunks.iter().any(|chunk| {
-                chunk.path == "docs/contracts/errors.md" && chunk.language == "markdown"
+                chunk.path == "contracts/errors.md" && chunk.language == "markdown"
             }),
             "contract markdown should participate in semantic chunking"
         );
@@ -2896,7 +2906,7 @@ mod tests {
                     "playbooks/hybrid-search-context-retrieval.md",
                     "# Playbook\nquery echo\n",
                 ),
-                ("docs/contracts/errors.md", "# Errors\ninvalid_params\n"),
+                ("contracts/errors.md", "# Errors\ninvalid_params\n"),
             ],
         )?;
 
@@ -2917,7 +2927,7 @@ mod tests {
         assert!(
             chunks
                 .iter()
-                .any(|chunk| chunk.path == "docs/contracts/errors.md"),
+                .any(|chunk| chunk.path == "contracts/errors.md"),
             "docs markdown should still remain eligible for semantic chunking"
         );
 
@@ -2942,7 +2952,7 @@ mod tests {
         let chunks = build_file_semantic_chunks(
             "repo-001",
             "snapshot-001",
-            "docs/contracts/hybrid-search.md",
+            "contracts/hybrid-search.md",
             "markdown",
             &source,
         );

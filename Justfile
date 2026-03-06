@@ -81,8 +81,8 @@ bench-core-latency:
   just bench-search
   just bench-index
 
-bench-report output="docs/benchmarks/latest-report.md":
-  python3 docs/benchmarks/generate_latency_report.py --output {{output}}
+bench-report output="benchmarks/latest-report.md":
+  python3 benchmarks/generate_latency_report.py --output {{output}}
 
-bench-report-gate output="docs/benchmarks/latest-report.md":
-  python3 docs/benchmarks/generate_latency_report.py --fail-on-budget --output {{output}}
+bench-report-gate output="benchmarks/latest-report.md":
+  python3 benchmarks/generate_latency_report.py --fail-on-budget --output {{output}}

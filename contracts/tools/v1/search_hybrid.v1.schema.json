@@ -1,0 +1,24 @@
+{
+  "schema_id": "frigg.tools.search_hybrid.v1",
+  "tool_name": "search_hybrid",
+  "input_wrapper": "SearchHybridParams",
+  "output_wrapper": "SearchHybridResponse",
+  "input_fields": [
+    "query",
+    "repository_id",
+    "language",
+    "limit",
+    "weights",
+    "semantic"
+  ],
+  "input_required": [
+    "query"
+  ],
+  "output_fields": [
+    "matches",
+    "note"
+  ],
+  "output_required": [
+    "matches"
+  ]
+}

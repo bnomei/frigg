@@ -317,14 +317,14 @@ mod tests {
   "required_witness_groups": [
     {
       "name": "docs",
-      "paths": ["docs/contracts/errors.md"],
+      "paths": ["contracts/errors.md"],
       "required_when": "semantic_ok"
     }
   ],
   "target_witness_groups": [
     {
       "name": "docs",
-      "paths": ["docs/contracts/errors.md"]
+      "paths": ["contracts/errors.md"]
     }
   ]
 }
@@ -360,7 +360,7 @@ Body text.
         assert_eq!(spec.target_witness_groups.len(), 1);
         assert_eq!(
             spec.target_witness_groups[0].match_any,
-            vec!["docs/contracts/errors.md"]
+            vec!["contracts/errors.md"]
         );
         assert_eq!(
             parsed,

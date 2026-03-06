@@ -21,6 +21,7 @@ target
 #.idea/
 
 .frigg
-docs
+/docs/
+/index.scip
 .env
 .DS_Store

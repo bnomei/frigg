@@ -23,7 +23,7 @@ Frigg helps AI agents and developer tools answer code questions with reproducibl
 - `repository IDs`: runtime IDs (`repo-001`, `repo-002`, ...) derived from workspace-root order.
 - `snapshots + file manifests`: persisted index state used for deterministic reindex behavior.
 - `provenance events`: stored tool-call evidence for replay/debugging.
-- `deterministic contracts`: versioned tool schemas and error taxonomy in `docs/contracts/`.
+- `deterministic contracts`: versioned tool schemas and error taxonomy in `contracts/`.
 
 ## Install And Build
 
@@ -217,11 +217,11 @@ Optional deep-search tools (when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`):
 - `deep_search_compose_citations`
 
 Schema files:
-- `docs/contracts/tools/v1/list_repositories.v1.schema.json`
-- `docs/contracts/tools/v1/read_file.v1.schema.json`
-- `docs/contracts/tools/v1/search_text.v1.schema.json`
-- `docs/contracts/tools/v1/search_symbol.v1.schema.json`
-- `docs/contracts/tools/v1/find_references.v1.schema.json`
+- `contracts/tools/v1/list_repositories.v1.schema.json`
+- `contracts/tools/v1/read_file.v1.schema.json`
+- `contracts/tools/v1/search_text.v1.schema.json`
+- `contracts/tools/v1/search_symbol.v1.schema.json`
+- `contracts/tools/v1/find_references.v1.schema.json`
 
 Contract notes:
 - these are the canonical `v1` public tools,
@@ -230,12 +230,12 @@ Contract notes:
 
 ## Public Contracts
 
-- Tool schemas/versioning: `docs/contracts/tools/v1/README.md`
-- Config contract: `docs/contracts/config.md`
-- Error taxonomy: `docs/contracts/errors.md`
-- Storage contract: `docs/contracts/storage.md`
-- Semantic embeddings contract: `docs/contracts/semantic.md`
-- Contract changelog: `docs/contracts/changelog.md`
+- Tool schemas/versioning: `contracts/tools/v1/README.md`
+- Config contract: `contracts/config.md`
+- Error taxonomy: `contracts/errors.md`
+- Storage contract: `contracts/storage.md`
+- Semantic embeddings contract: `contracts/semantic.md`
+- Contract changelog: `contracts/changelog.md`
 
 ## Tooling With Just
 
@@ -262,7 +262,7 @@ just release-ready
 
 ## Performance Budgets
 
-Benchmark docs and targets live in `docs/benchmarks/`.
+Benchmark docs and targets live in `benchmarks/`.
 
 Generate report:
 ```bash

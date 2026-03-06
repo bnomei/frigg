@@ -1,0 +1,23 @@
+{
+  "schema_id": "frigg.tools.deep_search_replay.v1",
+  "tool_name": "deep_search_replay",
+  "input_wrapper": "DeepSearchReplayParams",
+  "output_wrapper": "DeepSearchReplayResponse",
+  "input_fields": [
+    "playbook",
+    "expected_trace_artifact"
+  ],
+  "input_required": [
+    "playbook",
+    "expected_trace_artifact"
+  ],
+  "output_fields": [
+    "matches",
+    "diff",
+    "replayed_trace_artifact"
+  ],
+  "output_required": [
+    "matches",
+    "replayed_trace_artifact"
+  ]
+}

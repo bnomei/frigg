@@ -130,7 +130,7 @@ def load_sources(repo_root: Path) -> tuple[
 ]:
     types_rs = repo_root / "crates/cli/src/mcp/types.rs"
     tool_surface_rs = repo_root / "crates/cli/src/mcp/tool_surface.rs"
-    schema_dir = repo_root / "docs/contracts/tools/v1"
+    schema_dir = repo_root / "contracts/tools/v1"
     tools_readme = schema_dir / "README.md"
     overview = repo_root / "docs/overview.md"
 

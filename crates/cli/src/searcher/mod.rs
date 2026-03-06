@@ -1717,7 +1717,7 @@ fn walk_candidate_files_for_repository(
 
         file_candidates.push((rel_path, path.to_path_buf()));
     }
-    extend_with_gitignored_doc_candidates(
+    extend_with_force_visible_candidates(
         &mut file_candidates,
         repository_id,
         root,
@@ -1737,8 +1737,10 @@ fn search_walk_builder(root: &Path) -> WalkBuilder {
     builder
 }
 
-fn docs_search_walk_builder(root: &Path) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root.join("docs"));
+const FORCE_VISIBLE_SEARCH_ROOTS: &[&str] = &["contracts", "benchmarks"];
+
+fn force_visible_search_walk_builder(root: &Path, relative_root: &str) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root.join(relative_root));
     builder
         .standard_filters(true)
         .git_ignore(false)
@@ -1766,7 +1768,7 @@ fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
     )
 }
 
-fn extend_with_gitignored_doc_candidates(
+fn extend_with_force_visible_candidates(
     file_candidates: &mut Vec<(String, std::path::PathBuf)>,
     repository_id: &str,
     root: &Path,
@@ -1774,44 +1776,46 @@ fn extend_with_gitignored_doc_candidates(
     filters: &NormalizedSearchFilters,
     diagnostics: &mut SearchExecutionDiagnostics,
 ) {
-    let docs_root = root.join("docs");
-    if !docs_root.exists() {
-        return;
-    }
-
-    for dent in docs_search_walk_builder(root).build() {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(err) => {
-                diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.to_owned(),
-                    path: None,
-                    kind: SearchDiagnosticKind::Walk,
-                    message: err.to_string(),
-                });
-                continue;
-            }
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+    for relative_root in FORCE_VISIBLE_SEARCH_ROOTS {
+        let force_visible_root = root.join(relative_root);
+        if !force_visible_root.exists() {
             continue;
         }
 
-        let path = dent.path();
-        let rel_path = normalize_repository_relative_path(root, path);
-
-        if let Some(language) = filters.language {
-            if !language.matches_path(path) {
+        for dent in force_visible_search_walk_builder(root, relative_root).build() {
+            let dent = match dent {
+                Ok(entry) => entry,
+                Err(err) => {
+                    diagnostics.entries.push(SearchDiagnostic {
+                        repository_id: repository_id.to_owned(),
+                        path: None,
+                        kind: SearchDiagnosticKind::Walk,
+                        message: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
-        }
 
-        if let Some(path_regex) = &query.path_regex {
-            if !path_regex.is_match(&rel_path) {
-                continue;
+            let path = dent.path();
+            let rel_path = normalize_repository_relative_path(root, path);
+
+            if let Some(language) = filters.language {
+                if !language.matches_path(path) {
+                    continue;
+                }
             }
-        }
 
-        file_candidates.push((rel_path, path.to_path_buf()));
+            if let Some(path_regex) = &query.path_regex {
+                if !path_regex.is_match(&rel_path) {
+                    continue;
+                }
+            }
+
+            file_candidates.push((rel_path, path.to_path_buf()));
+        }
     }
 }
 
@@ -2387,7 +2391,7 @@ fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRanking
     if intent.wants_error_taxonomy && class == HybridSourceClass::ErrorContracts {
         multiplier *= 1.95;
     }
-    if path == "docs/contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts)
+    if path == "contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts)
     {
         multiplier *= 1.70;
     }
@@ -2400,7 +2404,7 @@ fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRanking
     if intent.wants_tool_contracts && class == HybridSourceClass::ToolContracts {
         multiplier *= 2.10;
     }
-    if path == "docs/contracts/tools/v1/README.md" && intent.wants_tool_contracts {
+    if path == "contracts/tools/v1/README.md" && intent.wants_tool_contracts {
         multiplier *= 1.75;
     }
     if intent.wants_tool_contracts && path == "crates/cli/src/mcp/tool_surface.rs" {
@@ -2412,7 +2416,7 @@ fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRanking
     if intent.wants_benchmarks && class == HybridSourceClass::BenchmarkDocs {
         multiplier *= 2.00;
     }
-    if intent.wants_benchmarks && path == "docs/benchmarks/deep-search.md" {
+    if intent.wants_benchmarks && path == "benchmarks/deep-search.md" {
         multiplier *= 1.65;
     }
     if intent.wants_contracts && class == HybridSourceClass::Readme {
@@ -2447,7 +2451,7 @@ fn hybrid_source_class(path: &str) -> HybridSourceClass {
     if is_tool_contract_path(path) {
         return HybridSourceClass::ToolContracts;
     }
-    if path.starts_with("docs/benchmarks/") {
+    if path.starts_with("benchmarks/") {
         return HybridSourceClass::BenchmarkDocs;
     }
     if is_readme_path(path) {
@@ -2477,11 +2481,11 @@ fn hybrid_source_class(path: &str) -> HybridSourceClass {
 }
 
 fn is_error_contract_path(path: &str) -> bool {
-    path == "docs/contracts/errors.md"
+    path == "contracts/errors.md"
 }
 
 fn is_tool_contract_path(path: &str) -> bool {
-    path.starts_with("docs/contracts/tools/")
+    path.starts_with("contracts/tools/")
 }
 
 fn is_readme_path(path: &str) -> bool {
@@ -2867,10 +2871,10 @@ mod tests {
     }
 
     #[test]
-    fn literal_search_walk_fallback_includes_gitignored_contract_docs() -> FriggResult<()> {
-        let root = temp_workspace_root("literal-search-gitignored-docs");
-        prepare_workspace(&root, &[("docs/contracts/errors.md", "invalid_params\n")])?;
-        fs::write(root.join(".gitignore"), "docs\n").map_err(FriggError::Io)?;
+    fn literal_search_walk_fallback_includes_gitignored_contract_artifacts() -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-gitignored-contracts");
+        prepare_workspace(&root, &[("contracts/errors.md", "invalid_params\n")])?;
+        fs::write(root.join(".gitignore"), "contracts\n").map_err(FriggError::Io)?;
 
         let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
         let matches = searcher.search_literal_with_filters(
@@ -2885,8 +2889,8 @@ mod tests {
         assert!(
             matches
                 .iter()
-                .any(|entry| entry.path == "docs/contracts/errors.md"),
-            "walk fallback should not drop gitignored contract docs from literal search"
+                .any(|entry| entry.path == "contracts/errors.md"),
+            "walk fallback should not drop gitignored contract artifacts from literal search"
         );
 
         cleanup_workspace(&root);
@@ -3780,7 +3784,7 @@ mod tests {
             &[
                 text_match(
                     "repo-001",
-                    "docs/contracts/errors.md",
+                    "contracts/errors.md",
                     1,
                     1,
                     "invalid_params maps to -32602",
@@ -3816,7 +3820,7 @@ mod tests {
         )?;
 
         assert_eq!(ranked.len(), 3);
-        assert_eq!(ranked[0].document.path, "docs/contracts/errors.md");
+        assert_eq!(ranked[0].document.path, "contracts/errors.md");
         assert!(
             ranked
                 .iter()
@@ -3872,7 +3876,7 @@ mod tests {
                 ),
                 text_match(
                     "repo-001",
-                    "docs/contracts/tools/v1/README.md",
+                    "contracts/tools/v1/README.md",
                     1,
                     1,
                     "tool surface profile core extended_only tools/list",
@@ -3908,14 +3912,14 @@ mod tests {
         )?;
 
         assert!(
-            ranked[0].document.path == "docs/contracts/tools/v1/README.md"
-                || ranked[1].document.path == "docs/contracts/tools/v1/README.md",
+            ranked[0].document.path == "contracts/tools/v1/README.md"
+                || ranked[1].document.path == "contracts/tools/v1/README.md",
             "tool contract docs should land at the top of the ranked set"
         );
         assert!(
             ranked
                 .iter()
-                .position(|entry| entry.document.path == "docs/contracts/tools/v1/README.md")
+                .position(|entry| entry.document.path == "contracts/tools/v1/README.md")
                 < ranked
                     .iter()
                     .position(|entry| entry.document.path == "README.md"),
@@ -3940,7 +3944,7 @@ mod tests {
                 ),
                 text_match(
                     "repo-001",
-                    "docs/benchmarks/deep-search.md",
+                    "benchmarks/deep-search.md",
                     1,
                     1,
                     "deterministic trace artifact replay citations playbook fixture benchmark",
@@ -3971,7 +3975,7 @@ mod tests {
         assert!(
             ranked
                 .iter()
-                .position(|entry| entry.document.path == "docs/benchmarks/deep-search.md")
+                .position(|entry| entry.document.path == "benchmarks/deep-search.md")
                 < ranked
                     .iter()
                     .position(|entry| entry.document.path == "README.md"),
@@ -3987,7 +3991,7 @@ mod tests {
         let lexical = vec![
             hybrid_hit("repo-001", "crates/cli/src/a.rs", 1.00, "lex-runtime-a"),
             hybrid_hit("repo-001", "crates/cli/src/b.rs", 0.99, "lex-runtime-b"),
-            hybrid_hit("repo-001", "docs/contracts/errors.md", 0.98, "lex-docs"),
+            hybrid_hit("repo-001", "contracts/errors.md", 0.98, "lex-docs"),
             hybrid_hit(
                 "repo-001",
                 "crates/cli/tests/tool_handlers.rs",
@@ -4020,7 +4024,7 @@ mod tests {
             "runtime witness should remain in top-k"
         );
         assert!(
-            ranked_paths.contains(&"docs/contracts/errors.md"),
+            ranked_paths.contains(&"contracts/errors.md"),
             "docs witness should be promoted into top-k"
         );
         assert!(
@@ -4038,7 +4042,7 @@ mod tests {
             &root,
             &[
                 (
-                    "docs/contracts/errors.md",
+                    "contracts/errors.md",
                     "invalid_params typed error public docs contract\n",
                 ),
                 (
@@ -4059,7 +4063,7 @@ mod tests {
                 semantic_record(
                     "repo-001",
                     "snapshot-001",
-                    "docs/contracts/errors.md",
+                    "contracts/errors.md",
                     0,
                     vec![1.0, 0.0],
                 ),
@@ -4109,7 +4113,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
-        assert!(paths.contains(&"docs/contracts/errors.md"));
+        assert!(paths.contains(&"contracts/errors.md"));
         assert!(paths.contains(&"crates/cli/src/mcp/server.rs"));
         assert!(paths.contains(&"crates/cli/tests/tool_handlers.rs"));
 
@@ -4125,7 +4129,7 @@ mod tests {
             &root,
             &[
                 (
-                    "docs/contracts/tools/v1/README.md",
+                    "contracts/tools/v1/README.md",
                     "tool surface profile core extended_only tools/list contract\n",
                 ),
                 (
@@ -4146,7 +4150,7 @@ mod tests {
                 semantic_record(
                     "repo-001",
                     "snapshot-001",
-                    "docs/contracts/tools/v1/README.md",
+                    "contracts/tools/v1/README.md",
                     0,
                     vec![0.0, 1.0],
                 ),
@@ -4199,7 +4203,7 @@ mod tests {
         assert!(paths.contains(&"crates/cli/src/mcp/tool_surface.rs"));
         assert!(paths.contains(&"crates/cli/tests/tool_surface_parity.rs"));
         assert!(
-            paths.contains(&"docs/contracts/tools/v1/README.md"),
+            paths.contains(&"contracts/tools/v1/README.md"),
             "underfilled natural-language queries should still pull in tool-contract docs via lexical expansion when semantic retrieval is healthy; got {paths:?}"
         );
 
