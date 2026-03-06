@@ -270,6 +270,18 @@ A root `Justfile` provides the common workflow commands:
 - focused tests: `just test-security`, `just test-mcp-tool-handlers`, `just test-mcp-provenance`
 - benchmarks/reporting: `just bench-core-latency`, `just bench-report`, `just bench-report-gate`
 
+## Local Pre-commit
+
+This repo ships a native `prek.toml` for fast local commit gates.
+
+```bash
+prek validate-config
+prek run --all-files
+prek install
+```
+
+The hooks intentionally stay lightweight: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+
 ## Security And Release Gates
 
 - Threat baseline: `docs/security/threat-model.md`
