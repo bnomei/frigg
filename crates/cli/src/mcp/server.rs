@@ -2988,7 +2988,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Search text across configured repositories (literal plus optional path regex filter).",
+        description = "Search text across configured repository files (literal or regex). Use path_regex to narrow code, docs, or runtime slices when broad repo searches are noisy.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3136,7 +3136,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Search with deterministic hybrid ranking across lexical, graph, and semantic channels.",
+        description = "Search with deterministic hybrid ranking across lexical, graph, and semantic channels. Use it for broad natural-language doc/runtime questions, then follow with search_symbol or scoped search_text when you need concrete runtime anchors.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3263,12 +3263,17 @@ impl FriggMcpServer {
                     }
                 }
 
+                let response_semantic_requested = semantic_requested;
+                let response_semantic_enabled = semantic_enabled;
+                let response_semantic_status = semantic_status.clone();
+                let response_semantic_reason = semantic_reason.clone();
+
                 let note = Some(
                     json!({
-                        "semantic_requested": semantic_requested,
-                        "semantic_enabled": semantic_enabled,
-                        "semantic_status": semantic_status,
-                        "semantic_reason": semantic_reason,
+                        "semantic_requested": response_semantic_requested,
+                        "semantic_enabled": response_semantic_enabled,
+                        "semantic_status": response_semantic_status,
+                        "semantic_reason": response_semantic_reason,
                         "diagnostics_count": diagnostics_count,
                         "diagnostics": {
                             "walk": walk_diagnostics_count,
@@ -3279,7 +3284,14 @@ impl FriggMcpServer {
                     .to_string(),
                 );
 
-                Ok(Json(SearchHybridResponse { matches, note }))
+                Ok(Json(SearchHybridResponse {
+                    matches,
+                    semantic_requested: response_semantic_requested,
+                    semantic_enabled: response_semantic_enabled,
+                    semantic_status: response_semantic_status,
+                    semantic_reason: response_semantic_reason,
+                    note,
+                }))
             })();
 
             SearchHybridExecution {
@@ -3333,7 +3345,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Search symbols extracted from Rust/PHP sources.",
+        description = "Search symbols extracted from Rust/PHP sources. Use it after broad search_text/search_hybrid results when you know the API, type, or function name you want to inspect.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5720,7 +5732,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Use list_repositories -> search_text/search_hybrid/read_file first. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include deep-search tools). For focused traces, provide search_text.path_regex to constrain noise. read_file returns full content when max_bytes is omitted; when capped, invalid_params includes suggested_max_bytes; use line_start/line_end for targeted slices. search_symbol returns tree-sitter symbol matches and find_references prefers precise SCIP references with deterministic heuristic fallback metadata in note."
+                    "Use list_repositories -> search_text/search_hybrid/read_file first. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include deep-search tools). search_hybrid is the broad natural-language entrypoint and may intentionally mix contracts, README, runtime, and tests for doc/runtime questions; when you need concrete implementation anchors, pivot to search_symbol for API/type/function names or provide search_text.path_regex to constrain noise, for example `^(README\\.md|crates/cli/src/.*)$` when broad doc/runtime regexes would also match helper files. read_file returns full content when max_bytes is omitted; when capped, invalid_params includes suggested_max_bytes; use line_start/line_end for targeted slices. search_symbol returns tree-sitter symbol matches and find_references prefers precise SCIP references with deterministic heuristic fallback metadata in note."
                 ),
             )
     }

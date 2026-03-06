@@ -77,10 +77,16 @@ pub enum SearchPatternType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
+    /// Text or regex pattern to search for. Leading and trailing whitespace is trimmed.
     pub query: String,
+    /// Match mode for `query`. Omit for exact literal search or set `regex` for safe-regex search.
     pub pattern_type: Option<SearchPatternType>,
+    /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
     pub repository_id: Option<String>,
+    /// Optional safe regex applied to canonical repository-relative paths before files are searched.
+    /// Use this to narrow broad queries to code, docs, or runtime slices.
     pub path_regex: Option<String>,
+    /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
 }
 
@@ -98,11 +104,20 @@ pub struct SearchHybridChannelWeightsParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
+    /// Natural-language or exact phrase query for broad doc/runtime retrieval.
+    /// Expect mixed contracts, README, runtime, or tests for broad questions;
+    /// when you need concrete implementation anchors, follow with `search_symbol`
+    /// or `search_text` plus scoped `path_regex`.
     pub query: String,
+    /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
     pub repository_id: Option<String>,
+    /// Optional language filter for source-backed follow-up, for example `rust` when runtime files should outrank docs-only evidence.
     pub language: Option<String>,
+    /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
+    /// Optional channel-weight overrides when a client needs deterministic lexical/graph/semantic tradeoffs.
     pub weights: Option<SearchHybridChannelWeightsParams>,
+    /// Optional semantic-channel toggle. Omit to use the active runtime configuration.
     pub semantic: Option<bool>,
 }
 
@@ -125,13 +140,27 @@ pub struct SearchHybridMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
+    /// Whether semantic retrieval was requested after config defaults were applied.
+    pub semantic_requested: Option<bool>,
+    /// Whether semantic retrieval actually contributed to the successful response.
+    pub semantic_enabled: Option<bool>,
+    /// Semantic channel outcome (`ok`, `disabled`, or `degraded`) for this response.
+    pub semantic_status: Option<String>,
+    /// Deterministic explanation when the semantic channel is disabled or degraded.
+    pub semantic_reason: Option<String>,
+    /// JSON-encoded compatibility metadata mirroring the semantic fields plus diagnostics.
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolParams {
+    /// API/type/function name to search in indexed Rust/PHP symbols.
+    /// Use this after broad `search_text` or `search_hybrid` results when you
+    /// know the runtime anchor you want to inspect.
     pub query: String,
+    /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
     pub repository_id: Option<String>,
+    /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
 }
 
@@ -709,6 +738,24 @@ mod schema_tests {
         input_required: Vec<String>,
         output_fields: Vec<String>,
         output_required: Vec<String>,
+        #[serde(default)]
+        contract_notes: Vec<String>,
+        #[serde(default)]
+        nested_contracts: Option<Value>,
+        #[serde(default)]
+        step_tool_schema_refs: Vec<StepToolSchemaRefDoc>,
+        #[serde(default)]
+        input_example: Option<Value>,
+        #[serde(default)]
+        output_example: Option<Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct StepToolSchemaRefDoc {
+        tool_name: String,
+        schema_file: String,
+        params_wrapper: String,
+        response_wrapper: String,
     }
 
     fn docs_dir() -> PathBuf {
@@ -752,6 +799,64 @@ mod schema_tests {
         values.iter().cloned().collect()
     }
 
+    fn property_description<T: JsonSchema>(field: &str) -> Option<String> {
+        let schema_json =
+            serde_json::to_value(schema_for!(T)).expect("failed to serialize generated schema");
+        schema_json
+            .get("properties")
+            .and_then(|value| value.get(field))
+            .and_then(|value| value.get("description"))
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+    }
+
+    fn property_schema<T: JsonSchema>(field: &str) -> Value {
+        let schema_json =
+            serde_json::to_value(schema_for!(T)).expect("failed to serialize generated schema");
+        schema_json
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|props| props.get(field))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing schema property `{field}`"))
+    }
+
+    fn schema_allows_type(schema: &Value, expected: &str) -> bool {
+        schema.get("type").and_then(Value::as_str) == Some(expected)
+            || schema
+                .get("type")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
+            || schema
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|variants| {
+                    variants
+                        .iter()
+                        .any(|variant| schema_allows_type(variant, expected))
+                })
+            || schema
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .is_some_and(|variants| {
+                    variants
+                        .iter()
+                        .any(|variant| schema_allows_type(variant, expected))
+                })
+    }
+
+    fn assert_optional_string_property<T: JsonSchema>(field: &str) {
+        let property = property_schema::<T>(field);
+        assert!(
+            schema_allows_type(&property, "string"),
+            "expected `{field}` to allow string transport, got schema: {property}"
+        );
+        assert!(
+            !schema_allows_type(&property, "object"),
+            "expected `{field}` to avoid object transport, got schema: {property}"
+        );
+    }
+
     fn assert_contract<TInput: JsonSchema, TOutput: JsonSchema>(
         file_name: &str,
         tool_name: &str,
@@ -767,6 +872,205 @@ mod schema_tests {
         assert_eq!(to_set(&doc.input_required), required_set::<TInput>());
         assert_eq!(to_set(&doc.output_fields), field_set::<TOutput>());
         assert_eq!(to_set(&doc.output_required), required_set::<TOutput>());
+    }
+
+    fn assert_examples_parse<TInput, TOutput>(file_name: &str)
+    where
+        TInput: for<'de> Deserialize<'de>,
+        TOutput: for<'de> Deserialize<'de>,
+    {
+        let doc = read_doc(file_name);
+        assert!(
+            !doc.contract_notes.is_empty(),
+            "{file_name} should publish contract_notes for nested deep-search payload guidance"
+        );
+        assert!(
+            doc.nested_contracts.is_some(),
+            "{file_name} should publish nested_contracts guidance"
+        );
+
+        let input_example = doc
+            .input_example
+            .unwrap_or_else(|| panic!("{file_name} should publish an input_example"));
+        serde_json::from_value::<TInput>(input_example)
+            .unwrap_or_else(|err| panic!("failed to parse input_example in {file_name}: {err}"));
+
+        let output_example = doc
+            .output_example
+            .unwrap_or_else(|| panic!("{file_name} should publish an output_example"));
+        serde_json::from_value::<TOutput>(output_example)
+            .unwrap_or_else(|err| panic!("failed to parse output_example in {file_name}: {err}"));
+    }
+
+    fn nested_strings(doc: &ToolSchemaDoc, pointer: &str) -> BTreeSet<String> {
+        doc.nested_contracts
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing nested_contracts for {pointer}"))
+            .pointer(pointer)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("missing string array at nested_contracts{pointer}"))
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("expected string at nested_contracts{pointer}"))
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn assert_step_tool_schema_refs(file_name: &str) {
+        let doc = read_doc(file_name);
+        let actual = doc
+            .step_tool_schema_refs
+            .iter()
+            .map(|entry| {
+                (
+                    entry.tool_name.as_str(),
+                    entry.schema_file.as_str(),
+                    entry.params_wrapper.as_str(),
+                    entry.response_wrapper.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = vec![
+            (
+                "list_repositories",
+                "list_repositories.v1.schema.json",
+                "ListRepositoriesParams",
+                "ListRepositoriesResponse",
+            ),
+            (
+                "read_file",
+                "read_file.v1.schema.json",
+                "ReadFileParams",
+                "ReadFileResponse",
+            ),
+            (
+                "search_text",
+                "search_text.v1.schema.json",
+                "SearchTextParams",
+                "SearchTextResponse",
+            ),
+            (
+                "search_symbol",
+                "search_symbol.v1.schema.json",
+                "SearchSymbolParams",
+                "SearchSymbolResponse",
+            ),
+            (
+                "find_references",
+                "find_references.v1.schema.json",
+                "FindReferencesParams",
+                "FindReferencesResponse",
+            ),
+        ];
+        assert_eq!(
+            actual, expected,
+            "{file_name} step_tool_schema_refs drifted from the allowed deep-search step surface"
+        );
+
+        for entry in &doc.step_tool_schema_refs {
+            let schema_path = docs_dir().join(&entry.schema_file);
+            assert!(
+                schema_path.exists(),
+                "referenced schema file {} does not exist",
+                schema_path.display()
+            );
+        }
+    }
+
+    fn assert_deep_search_stdio_setup_notes(file_name: &str) {
+        let doc = read_doc(file_name);
+        let notes = doc.contract_notes.join(" ");
+        for required in [
+            "FRIGG_MCP_TOOL_SURFACE_PROFILE=extended",
+            "RUST_LOG=error",
+            "--watch-mode off",
+            "list_repositories",
+        ] {
+            assert!(
+                notes.contains(required),
+                "{file_name} contract_notes should mention `{required}`: {notes}"
+            );
+        }
+    }
+
+    fn assert_run_nested_contracts(file_name: &str) {
+        let doc = read_doc(file_name);
+        assert_eq!(
+            nested_strings(&doc, "/playbook/required"),
+            required_set::<DeepSearchPlaybookContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/playbook/step_required"),
+            required_set::<DeepSearchPlaybookStepContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/playbook/allowed_step_tools"),
+            [
+                "find_references",
+                "list_repositories",
+                "read_file",
+                "search_symbol",
+                "search_text",
+            ]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/trace_artifact/required"),
+            required_set::<DeepSearchTraceArtifactContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/trace_artifact/step_required"),
+            required_set::<DeepSearchTraceStepContract>()
+        );
+    }
+
+    fn assert_replay_nested_contracts(file_name: &str) {
+        let doc = read_doc(file_name);
+        assert_eq!(
+            nested_strings(&doc, "/playbook/required"),
+            required_set::<DeepSearchPlaybookContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/playbook/step_required"),
+            required_set::<DeepSearchPlaybookStepContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/expected_trace_artifact/required"),
+            required_set::<DeepSearchTraceArtifactContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/replay_response/required"),
+            required_set::<DeepSearchReplayResponse>()
+        );
+    }
+
+    fn assert_citation_nested_contracts(file_name: &str) {
+        let doc = read_doc(file_name);
+        assert_eq!(
+            nested_strings(&doc, "/trace_artifact/required"),
+            required_set::<DeepSearchTraceArtifactContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/citation_payload/required"),
+            required_set::<DeepSearchCitationPayloadContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/citation_payload/claim_required"),
+            required_set::<DeepSearchClaimContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/citation_payload/citation_required"),
+            required_set::<DeepSearchCitationContract>()
+        );
+        assert_eq!(
+            nested_strings(&doc, "/citation_payload/span_required"),
+            required_set::<DeepSearchFileSpanContract>()
+        );
     }
 
     #[test]
@@ -800,6 +1104,27 @@ mod schema_tests {
     }
 
     #[test]
+    fn schema_search_text_includes_scoping_guidance() {
+        let repository_id = property_description::<SearchTextParams>("repository_id")
+            .expect("repository_id should expose a schema description");
+        assert!(
+            repository_id.contains("list_repositories"),
+            "repository_id description should mention list_repositories guidance: {repository_id}"
+        );
+
+        let path_regex = property_description::<SearchTextParams>("path_regex")
+            .expect("path_regex should expose a schema description");
+        assert!(
+            path_regex.contains("canonical repository-relative paths"),
+            "path_regex description should mention canonical repository-relative paths: {path_regex}"
+        );
+        assert!(
+            path_regex.contains("code, docs, or runtime slices"),
+            "path_regex description should explain scoping guidance: {path_regex}"
+        );
+    }
+
+    #[test]
     fn schema_search_hybrid_contract_matches_wrappers() {
         assert_contract::<SearchHybridParams, SearchHybridResponse>(
             "search_hybrid.v1.schema.json",
@@ -810,12 +1135,56 @@ mod schema_tests {
     }
 
     #[test]
+    fn schema_search_hybrid_includes_follow_up_guidance() {
+        let query = property_description::<SearchHybridParams>("query")
+            .expect("query should expose a schema description");
+        assert!(
+            query.contains("search_symbol"),
+            "search_hybrid.query description should mention search_symbol follow-up guidance: {query}"
+        );
+        assert!(
+            query.contains("path_regex"),
+            "search_hybrid.query description should mention scoped search_text path_regex guidance: {query}"
+        );
+
+        let note = property_description::<SearchHybridResponse>("note")
+            .expect("note should expose a schema description");
+        assert!(
+            note.contains("JSON-encoded"),
+            "search_hybrid.note description should mention JSON-encoded compatibility metadata: {note}"
+        );
+        assert!(
+            note.contains("diagnostics"),
+            "search_hybrid.note description should mention diagnostics metadata: {note}"
+        );
+    }
+
+    #[test]
+    fn schema_search_hybrid_note_remains_string_encoded() {
+        assert_optional_string_property::<SearchHybridResponse>("note");
+    }
+
+    #[test]
     fn schema_search_symbol_contract_matches_wrappers() {
         assert_contract::<SearchSymbolParams, SearchSymbolResponse>(
             "search_symbol.v1.schema.json",
             "search_symbol",
             "SearchSymbolParams",
             "SearchSymbolResponse",
+        );
+    }
+
+    #[test]
+    fn schema_search_symbol_includes_runtime_pivot_guidance() {
+        let query = property_description::<SearchSymbolParams>("query")
+            .expect("query should expose a schema description");
+        assert!(
+            query.contains("search_hybrid"),
+            "search_symbol.query description should mention search_hybrid follow-up guidance: {query}"
+        );
+        assert!(
+            query.contains("runtime anchor"),
+            "search_symbol.query description should explain runtime-anchor usage: {query}"
         );
     }
 
@@ -927,6 +1296,48 @@ mod schema_tests {
             "DeepSearchComposeCitationsParams",
             "DeepSearchComposeCitationsResponse",
         );
+    }
+
+    #[test]
+    fn schema_deep_search_run_examples_parse_against_wrappers() {
+        assert_examples_parse::<DeepSearchRunParams, DeepSearchRunResponse>(
+            "deep_search_run.v1.schema.json",
+        );
+    }
+
+    #[test]
+    fn schema_deep_search_run_contract_notes_and_step_refs_stay_in_sync() {
+        assert_deep_search_stdio_setup_notes("deep_search_run.v1.schema.json");
+        assert_step_tool_schema_refs("deep_search_run.v1.schema.json");
+        assert_run_nested_contracts("deep_search_run.v1.schema.json");
+    }
+
+    #[test]
+    fn schema_deep_search_replay_examples_parse_against_wrappers() {
+        assert_examples_parse::<DeepSearchReplayParams, DeepSearchReplayResponse>(
+            "deep_search_replay.v1.schema.json",
+        );
+    }
+
+    #[test]
+    fn schema_deep_search_replay_contract_notes_and_step_refs_stay_in_sync() {
+        assert_deep_search_stdio_setup_notes("deep_search_replay.v1.schema.json");
+        assert_step_tool_schema_refs("deep_search_replay.v1.schema.json");
+        assert_replay_nested_contracts("deep_search_replay.v1.schema.json");
+    }
+
+    #[test]
+    fn schema_deep_search_compose_citations_examples_parse_against_wrappers() {
+        assert_examples_parse::<DeepSearchComposeCitationsParams, DeepSearchComposeCitationsResponse>(
+            "deep_search_compose_citations.v1.schema.json",
+        );
+    }
+
+    #[test]
+    fn schema_deep_search_compose_citations_contract_notes_and_step_refs_stay_in_sync() {
+        assert_deep_search_stdio_setup_notes("deep_search_compose_citations.v1.schema.json");
+        assert_step_tool_schema_refs("deep_search_compose_citations.v1.schema.json");
+        assert_citation_nested_contracts("deep_search_compose_citations.v1.schema.json");
     }
 
     #[test]

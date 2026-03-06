@@ -16,6 +16,10 @@
   ],
   "output_fields": [
     "matches",
+    "semantic_requested",
+    "semantic_enabled",
+    "semantic_status",
+    "semantic_reason",
     "note"
   ],
   "output_required": [

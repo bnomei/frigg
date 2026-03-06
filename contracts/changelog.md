@@ -4,6 +4,26 @@ Deterministic reverse-chronological log for public contract and behavior changes
 
 ## 2026-03-06
 
+- spec: `35-semantic-runtime-mcp-surface`
+- change_set: `semantic-runtime-mcp-surface.t010`
+- summary: clarified `search_hybrid` and `search_symbol` runtime guidance across `tools/list`, server instructions, schema field descriptions, and public contract docs so first-time clients know to use `search_hybrid` for broad doc/runtime questions and pivot to `search_symbol` or scoped `search_text.path_regex` for concrete runtime anchors.
+
+- spec: `36-deep-search-runtime-tools`
+- change_set: `deep-search-runtime-tools.t002`
+- summary: expanded the deep-search `v1` contract docs with machine-readable step tool schema references so first-time clients can resolve nested playbook step params and serialized trace evidence without inspecting Rust source.
+- summary: documented the recommended raw-stdio startup profile for deep-search sessions (`FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`, `RUST_LOG=error`, `--watch-mode off`) and repo-specific `list_repositories`-first authoring guidance in the public contract docs.
+
+- spec: `35-semantic-runtime-mcp-surface`
+- change_set: `semantic-runtime-mcp-surface.t009`
+- summary: `search_hybrid` success responses now mirror semantic probe fields (`semantic_requested`, `semantic_enabled`, `semantic_status`, `semantic_reason`) at the top level while retaining the existing JSON-encoded `note` metadata for backward compatibility.
+- summary: clarified the `v1` tool contract that wrapper `note` metadata remains JSON-encoded string payloads, and added schema/test coverage so `search_hybrid.note` cannot silently drift to object transport.
+
+- spec: `46-stdio-startup-quiet-defaults`
+- change_set: `stdio-startup-quiet-defaults.t001`
+- summary: MCP stdio launches now default to tracing filter `error` when `RUST_LOG` is unset, keeping stderr quiet for raw clients while preserving explicit `RUST_LOG` overrides.
+- summary: preserved existing `info` defaults for utility commands and HTTP serving so operator-facing startup diagnostics remain available outside the raw stdio MCP path.
+- summary: documented the stdio quiet-default behavior and the `RUST_LOG=info|debug` override in the README.
+
 - spec: `44-integrated-local-watch-mode`
 - change_set: `integrated-local-watch-mode.t001`
 - summary: added built-in watch config (`watch.mode`, `watch.debounce_ms`, `watch.retry_ms`) with deterministic CLI/env wiring and local-first activation defaults (`auto` enables stdio and loopback HTTP only).

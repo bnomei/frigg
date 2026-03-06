@@ -19,5 +19,169 @@
   "output_required": [
     "matches",
     "replayed_trace_artifact"
-  ]
+  ],
+  "contract_notes": [
+    "Expose this tool by starting the runtime with FRIGG_MCP_TOOL_SURFACE_PROFILE=extended.",
+    "Pass the exact trace_artifact returned by deep_search_run as expected_trace_artifact for deterministic replay checks.",
+    "Replay re-executes the playbook against the current workspace snapshot; matches=true means diff is null and replayed_trace_artifact is semantically identical.",
+    "Repository IDs inside playbook params remain config-snapshot identifiers from list_repositories, so refresh them for live workspaces before replaying.",
+    "For raw stdio MCP clients, prefer RUST_LOG=error and --watch-mode off so protocol reads are not mixed with stderr output or background watch activity.",
+    "Use step_tool_schema_refs to resolve each playbook step's params contract and the response wrapper serialized into expected_trace_artifact/replayed_trace_artifact outcomes."
+  ],
+  "nested_contracts": {
+    "playbook": {
+      "required": [
+        "playbook_id",
+        "steps"
+      ],
+      "step_required": [
+        "step_id",
+        "tool_name"
+      ]
+    },
+    "expected_trace_artifact": {
+      "required": [
+        "trace_schema",
+        "playbook_id",
+        "step_count",
+        "steps"
+      ],
+      "outcome_variants": [
+        {
+          "status": "ok",
+          "fields": [
+            "response_json"
+          ]
+        },
+        {
+          "status": "err",
+          "fields": [
+            "code",
+            "message",
+            "error_code"
+          ]
+        }
+      ]
+    },
+    "replay_response": {
+      "required": [
+        "matches",
+        "replayed_trace_artifact"
+      ],
+      "optional": [
+        "diff"
+      ]
+    }
+  },
+  "step_tool_schema_refs": [
+    {
+      "tool_name": "list_repositories",
+      "schema_file": "list_repositories.v1.schema.json",
+      "params_wrapper": "ListRepositoriesParams",
+      "response_wrapper": "ListRepositoriesResponse"
+    },
+    {
+      "tool_name": "read_file",
+      "schema_file": "read_file.v1.schema.json",
+      "params_wrapper": "ReadFileParams",
+      "response_wrapper": "ReadFileResponse"
+    },
+    {
+      "tool_name": "search_text",
+      "schema_file": "search_text.v1.schema.json",
+      "params_wrapper": "SearchTextParams",
+      "response_wrapper": "SearchTextResponse"
+    },
+    {
+      "tool_name": "search_symbol",
+      "schema_file": "search_symbol.v1.schema.json",
+      "params_wrapper": "SearchSymbolParams",
+      "response_wrapper": "SearchSymbolResponse"
+    },
+    {
+      "tool_name": "find_references",
+      "schema_file": "find_references.v1.schema.json",
+      "params_wrapper": "FindReferencesParams",
+      "response_wrapper": "FindReferencesResponse"
+    }
+  ],
+  "input_example": {
+    "playbook": {
+      "playbook_id": "repo-shape-check-v1",
+      "steps": [
+        {
+          "step_id": "ds-001-list-repositories",
+          "tool_name": "list_repositories",
+          "params": {}
+        },
+        {
+          "step_id": "ds-002-search-symbol",
+          "tool_name": "search_symbol",
+          "params": {
+            "query": "DeepSearchHarness",
+            "repository_id": "repo-001",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    "expected_trace_artifact": {
+      "trace_schema": "frigg.deep_search.trace.v1",
+      "playbook_id": "repo-shape-check-v1",
+      "step_count": 2,
+      "steps": [
+        {
+          "step_index": 0,
+          "step_id": "ds-001-list-repositories",
+          "tool_name": "list_repositories",
+          "params_json": "{}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"repositories\":[{\"display_name\":\"frigg\",\"repository_id\":\"repo-001\",\"root_path\":\"/workspace/frigg\"}]}"
+          }
+        },
+        {
+          "step_index": 1,
+          "step_id": "ds-002-search-symbol",
+          "tool_name": "search_symbol",
+          "params_json": "{\"limit\":5,\"query\":\"DeepSearchHarness\",\"repository_id\":\"repo-001\"}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"matches\":[{\"kind\":\"struct\",\"line\":110,\"path\":\"crates/cli/src/mcp/deep_search.rs\",\"repository_id\":\"repo-001\",\"symbol\":\"DeepSearchHarness\"}],\"note\":\"{\\\"source\\\":\\\"tree_sitter\\\"}\"}"
+          }
+        }
+      ]
+    }
+  },
+  "output_example": {
+    "matches": true,
+    "diff": null,
+    "replayed_trace_artifact": {
+      "trace_schema": "frigg.deep_search.trace.v1",
+      "playbook_id": "repo-shape-check-v1",
+      "step_count": 2,
+      "steps": [
+        {
+          "step_index": 0,
+          "step_id": "ds-001-list-repositories",
+          "tool_name": "list_repositories",
+          "params_json": "{}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"repositories\":[{\"display_name\":\"frigg\",\"repository_id\":\"repo-001\",\"root_path\":\"/workspace/frigg\"}]}"
+          }
+        },
+        {
+          "step_index": 1,
+          "step_id": "ds-002-search-symbol",
+          "tool_name": "search_symbol",
+          "params_json": "{\"limit\":5,\"query\":\"DeepSearchHarness\",\"repository_id\":\"repo-001\"}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"matches\":[{\"kind\":\"struct\",\"line\":110,\"path\":\"crates/cli/src/mcp/deep_search.rs\",\"repository_id\":\"repo-001\",\"symbol\":\"DeepSearchHarness\"}],\"note\":\"{\\\"source\\\":\\\"tree_sitter\\\"}\"}"
+          }
+        }
+      ]
+    }
+  }
 }

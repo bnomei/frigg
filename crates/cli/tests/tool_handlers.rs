@@ -499,9 +499,26 @@ async fn core_search_hybrid_returns_deterministic_matches_and_note_metadata() {
     assert_eq!(first.matches.len(), 1);
     assert_eq!(first.matches[0].repository_id, "repo-001");
     assert_eq!(first.matches[0].path, "src/lib.rs");
+    assert_eq!(first.semantic_requested, Some(false));
+    assert_eq!(first.semantic_enabled, Some(false));
+    assert_eq!(first.semantic_status.as_deref(), Some("disabled"));
+    assert_eq!(
+        first.semantic_reason.as_deref(),
+        Some("semantic channel disabled by request toggle")
+    );
     assert!(
         first.matches[0].blended_score >= 0.0,
         "hybrid blended score should be non-negative"
+    );
+
+    let structured: serde_json::Value =
+        serde_json::to_value(&first).expect("search_hybrid response should serialize");
+    assert_eq!(structured["semantic_status"], "disabled");
+    assert_eq!(structured["semantic_enabled"], false);
+    assert_eq!(structured["semantic_requested"], false);
+    assert_eq!(
+        structured["semantic_reason"],
+        "semantic channel disabled by request toggle"
     );
 
     let note = first
@@ -513,6 +530,14 @@ async fn core_search_hybrid_returns_deterministic_matches_and_note_metadata() {
     assert_eq!(note_json["semantic_status"], "disabled");
     assert_eq!(note_json["semantic_enabled"], false);
     assert_eq!(note_json["semantic_requested"], false);
+    assert_eq!(
+        structured["semantic_status"], note_json["semantic_status"],
+        "top-level semantic status should stay aligned with note metadata"
+    );
+    assert_eq!(
+        structured["semantic_reason"], note_json["semantic_reason"],
+        "top-level semantic reason should stay aligned with note metadata"
+    );
 }
 
 #[tokio::test]

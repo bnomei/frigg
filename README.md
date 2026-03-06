@@ -74,6 +74,7 @@ Notes:
 - Built-in watch mode now exists for local MCP runs. With `--watch-mode auto` (the default), Frigg starts a background changed-only watcher for stdio and loopback HTTP, but keeps it disabled for non-loopback HTTP.
 - If the latest manifest is missing or stale at startup, built-in watch mode queues one immediate changed-only refresh before waiting for new filesystem events.
 - External watchers are still useful for multi-repo fan-out, editor-owned lifecycle, or when you want reindex scheduling outside the Frigg process.
+- When Frigg serves MCP over stdio and `RUST_LOG` is unset, it defaults tracing to `error` so raw clients do not need special stderr-drain handling. Set `RUST_LOG=info` if you want startup/watch logs.
 
 Built-in watch options:
 ```bash
@@ -100,6 +101,11 @@ Stdio transport (default):
 just run
 # or: cargo run -p frigg --
 ```
+
+Notes:
+- When `RUST_LOG` is unset, stdio MCP launches default to an `error` tracing filter so raw clients do not need to drain routine startup/watch logs from stderr.
+- Set `RUST_LOG=info` or `RUST_LOG=debug` if you want startup and watch diagnostics over stdio.
+- Pass `--watch-mode off` if you want a stdio session with no built-in changed-only reindex scheduling.
 
 HTTP transport (loopback token optional; non-loopback requires auth token):
 ```bash
@@ -208,8 +214,13 @@ Public MCP tools:
 - `list_repositories`
 - `read_file`
 - `search_text`
+- `search_hybrid`
 - `search_symbol`
 - `find_references`
+
+Noise-control tip:
+- `search_text` searches normal repository files broadly. When you only want docs/runtime evidence, add `path_regex`, for example `^(README\.md|crates/cli/src/.*)$`.
+- `search_hybrid` is the broad natural-language entrypoint for mixed doc/runtime questions. Expect contracts, README, runtime, and tests to coexist in top hits; when you need concrete runtime anchors, follow with `search_symbol` or scoped `search_text`.
 
 Optional deep-search tools (when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`):
 - `deep_search_run`

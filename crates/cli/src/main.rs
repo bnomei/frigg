@@ -177,9 +177,14 @@ impl std::fmt::Display for SemanticStartupGateError {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    init_tracing();
-
     let cli = Cli::parse();
+    let http_runtime = resolve_http_runtime_config(&cli)?;
+    let transport_kind = http_runtime
+        .as_ref()
+        .map(HttpRuntimeConfig::transport_kind)
+        .unwrap_or(RuntimeTransportKind::Stdio);
+    init_tracing(default_tracing_filter(&cli, transport_kind));
+
     if let Some(command) = cli.command.as_ref().copied() {
         match command {
             Command::Init => {
@@ -199,14 +204,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let http_runtime = resolve_http_runtime_config(&cli)?;
     let config = resolve_startup_config(&cli)?;
     run_strict_startup_vector_readiness_gate(&config)?;
     run_semantic_runtime_startup_gate(&config)?;
-    let transport_kind = http_runtime
-        .as_ref()
-        .map(HttpRuntimeConfig::transport_kind)
-        .unwrap_or(RuntimeTransportKind::Stdio);
     let _watch_runtime = maybe_start_watch_runtime(&config, transport_kind)?;
 
     let server = FriggMcpServer::new(config);
@@ -702,8 +702,17 @@ async fn serve_http(
     Ok(())
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'static str {
+    if cli.command.is_none() && transport == RuntimeTransportKind::Stdio {
+        "error"
+    } else {
+        "info"
+    }
+}
+
+fn init_tracing(default_filter: &str) {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     // MCP stdio transport requires stdout to carry protocol frames only.
     // Force tracing output to stderr so logs never corrupt stdio framing.
     let _ = fmt()
@@ -1138,6 +1147,35 @@ mod tests {
         assert_eq!(
             remote_runtime.transport_kind(),
             RuntimeTransportKind::RemoteHttp
+        );
+    }
+
+    #[test]
+    fn stdio_server_defaults_to_error_log_filter() {
+        let cli = base_cli();
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
+            "error"
+        );
+    }
+
+    #[test]
+    fn http_server_defaults_to_info_log_filter() {
+        let mut cli = base_cli();
+        cli.mcp_http_port = Some(4013);
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::LoopbackHttp),
+            "info"
+        );
+    }
+
+    #[test]
+    fn utility_commands_keep_info_log_filter() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Reindex { changed: false });
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
+            "info"
         );
     }
 

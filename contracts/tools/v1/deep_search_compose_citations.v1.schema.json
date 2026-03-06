@@ -15,5 +15,161 @@
   ],
   "output_required": [
     "citation_payload"
-  ]
+  ],
+  "contract_notes": [
+    "Expose this tool by starting the runtime with FRIGG_MCP_TOOL_SURFACE_PROFILE=extended.",
+    "Pass the trace_artifact returned by deep_search_run or deep_search_replay; this tool extracts evidence only from steps whose outcome.status is ok.",
+    "If answer is omitted or blank, Frigg synthesizes an answer string by joining the generated claim texts.",
+    "Citation spans point back to repository-relative paths and one-based line and column coordinates inside the originating tool response.",
+    "For raw stdio MCP clients, prefer RUST_LOG=error and --watch-mode off so protocol reads are not mixed with stderr output or background watch activity.",
+    "Trace artifacts should come from playbooks authored against live list_repositories output, not bundled synthetic fixtures copied unchanged.",
+    "Use step_tool_schema_refs to resolve the original playbook step contracts that produced trace_artifact.steps[].outcome.response_json evidence."
+  ],
+  "nested_contracts": {
+    "trace_artifact": {
+      "required": [
+        "trace_schema",
+        "playbook_id",
+        "step_count",
+        "steps"
+      ],
+      "outcome_variants": [
+        {
+          "status": "ok",
+          "fields": [
+            "response_json"
+          ]
+        },
+        {
+          "status": "err",
+          "fields": [
+            "code",
+            "message",
+            "error_code"
+          ]
+        }
+      ]
+    },
+    "citation_payload": {
+      "required": [
+        "answer_schema",
+        "playbook_id",
+        "answer",
+        "claims",
+        "citations"
+      ],
+      "claim_required": [
+        "claim_id",
+        "text",
+        "citation_ids"
+      ],
+      "citation_required": [
+        "citation_id",
+        "tool_call_id",
+        "tool_name",
+        "repository_id",
+        "path",
+        "span"
+      ],
+      "span_required": [
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column"
+      ]
+    }
+  },
+  "step_tool_schema_refs": [
+    {
+      "tool_name": "list_repositories",
+      "schema_file": "list_repositories.v1.schema.json",
+      "params_wrapper": "ListRepositoriesParams",
+      "response_wrapper": "ListRepositoriesResponse"
+    },
+    {
+      "tool_name": "read_file",
+      "schema_file": "read_file.v1.schema.json",
+      "params_wrapper": "ReadFileParams",
+      "response_wrapper": "ReadFileResponse"
+    },
+    {
+      "tool_name": "search_text",
+      "schema_file": "search_text.v1.schema.json",
+      "params_wrapper": "SearchTextParams",
+      "response_wrapper": "SearchTextResponse"
+    },
+    {
+      "tool_name": "search_symbol",
+      "schema_file": "search_symbol.v1.schema.json",
+      "params_wrapper": "SearchSymbolParams",
+      "response_wrapper": "SearchSymbolResponse"
+    },
+    {
+      "tool_name": "find_references",
+      "schema_file": "find_references.v1.schema.json",
+      "params_wrapper": "FindReferencesParams",
+      "response_wrapper": "FindReferencesResponse"
+    }
+  ],
+  "input_example": {
+    "trace_artifact": {
+      "trace_schema": "frigg.deep_search.trace.v1",
+      "playbook_id": "citation-shape-check-v1",
+      "step_count": 2,
+      "steps": [
+        {
+          "step_index": 0,
+          "step_id": "tool-001-search-text",
+          "tool_name": "search_text",
+          "params_json": "{\"limit\":5,\"pattern_type\":\"literal\",\"query\":\"DeepSearchHarness\",\"repository_id\":\"repo-001\"}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"matches\":[{\"column\":17,\"excerpt\":\"pub struct DeepSearchHarness {\",\"line\":110,\"path\":\"crates/cli/src/mcp/deep_search.rs\",\"repository_id\":\"repo-001\"}]}"
+          }
+        },
+        {
+          "step_index": 1,
+          "step_id": "tool-002-read-file",
+          "tool_name": "read_file",
+          "params_json": "{\"path\":\"crates/cli/src/mcp/deep_search.rs\",\"repository_id\":\"repo-001\"}",
+          "outcome": {
+            "status": "ok",
+            "response_json": "{\"bytes\":128,\"content\":\"pub struct DeepSearchHarness {\\n    server: FriggMcpServer,\\n}\\n\",\"path\":\"crates/cli/src/mcp/deep_search.rs\",\"repository_id\":\"repo-001\"}"
+          }
+        }
+      ]
+    },
+    "answer": "Frigg persists deterministic trace steps and can turn successful evidence-bearing steps into citation payloads."
+  },
+  "output_example": {
+    "citation_payload": {
+      "answer_schema": "frigg.deep_search.answer.v1",
+      "playbook_id": "citation-shape-check-v1",
+      "answer": "Frigg persists deterministic trace steps and can turn successful evidence-bearing steps into citation payloads.",
+      "claims": [
+        {
+          "claim_id": "claim-001",
+          "text": "Text evidence from tool call tool-001-search-text at repo-001:crates/cli/src/mcp/deep_search.rs:110:17 (pub struct DeepSearchHarness {).",
+          "citation_ids": [
+            "cit-001"
+          ]
+        }
+      ],
+      "citations": [
+        {
+          "citation_id": "cit-001",
+          "tool_call_id": "tool-001-search-text",
+          "tool_name": "search_text",
+          "repository_id": "repo-001",
+          "path": "crates/cli/src/mcp/deep_search.rs",
+          "span": {
+            "start_line": 110,
+            "start_column": 17,
+            "end_line": 110,
+            "end_column": 17
+          }
+        }
+      ]
+    }
+  }
 }

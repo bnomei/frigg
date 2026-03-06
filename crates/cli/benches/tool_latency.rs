@@ -15,7 +15,7 @@ use frigg::mcp::types::{
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
 use rmcp::handler::server::wrapper::Parameters;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::runtime::Runtime;
 
 const BENCH_FILES: usize = 80;
@@ -569,17 +569,17 @@ fn assert_search_hybrid_semantic_toggle_off_workload(runtime: &Runtime, server: 
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.note, second.note);
     assert_eq!(
-        semantic_note_string_field(&first.note, "semantic_status").as_deref(),
+        first.semantic_status.as_deref(),
         Some("disabled"),
         "search_hybrid semantic-toggle-off benchmark probe must emit disabled semantic_status"
     );
     assert_eq!(
-        semantic_note_bool_field(&first.note, "semantic_enabled"),
+        first.semantic_enabled,
         Some(false),
         "search_hybrid semantic-toggle-off benchmark probe must mark semantic_enabled=false"
     );
     assert_eq!(
-        semantic_note_string_field(&first.note, "semantic_reason").as_deref(),
+        first.semantic_reason.as_deref(),
         Some("semantic channel disabled by request toggle"),
         "search_hybrid semantic-toggle-off benchmark probe must emit explicit semantic_reason"
     );
@@ -612,35 +612,22 @@ fn assert_search_hybrid_semantic_degraded_workload(runtime: &Runtime, server: &F
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.note, second.note);
     assert_eq!(
-        semantic_note_string_field(&first.note, "semantic_status").as_deref(),
+        first.semantic_status.as_deref(),
         Some("degraded"),
         "search_hybrid semantic-degraded benchmark probe must emit degraded semantic_status"
     );
     assert_eq!(
-        semantic_note_bool_field(&first.note, "semantic_enabled"),
+        first.semantic_enabled,
         Some(false),
         "search_hybrid semantic-degraded benchmark probe must mark semantic_enabled=false"
     );
     assert!(
-        semantic_note_string_field(&first.note, "semantic_reason")
+        first
+            .semantic_reason
+            .as_deref()
             .is_some_and(|reason| reason.contains("semantic_runtime.model must not be blank")),
         "search_hybrid semantic-degraded benchmark probe should surface deterministic semantic startup-validation reason"
     );
-}
-
-fn semantic_note_string_field(note: &Option<String>, field: &str) -> Option<String> {
-    let raw = note.as_deref()?;
-    let payload: Value = serde_json::from_str(raw).ok()?;
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
-fn semantic_note_bool_field(note: &Option<String>, field: &str) -> Option<bool> {
-    let raw = note.as_deref()?;
-    let payload: Value = serde_json::from_str(raw).ok()?;
-    payload.get(field).and_then(Value::as_bool)
 }
 
 fn semantic_runtime_enabled_non_strict() -> SemanticRuntimeConfig {

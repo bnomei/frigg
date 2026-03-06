@@ -77,15 +77,20 @@ Non-breaking (allowed within `v1`):
 - `deep_search_compose_citations` -> `deep_search_compose_citations.v1.schema.json` (`DeepSearchComposeCitationsParams` / `DeepSearchComposeCitationsResponse`)
 <!-- tool-surface-profile:extended_only:end -->
 - These schemas are part of the `v1` public contract and are excluded from default `core` runtime `tools/list`; they are exposed only when the `extended` deep-search runtime profile is explicitly enabled (`FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`).
+- The three deep-search schema docs also publish `contract_notes`, `nested_contracts`, `step_tool_schema_refs`, `input_example`, and `output_example` because their top-level wrapper fields (`playbook`, `trace_artifact`, `citation_payload`) contain the real first-call ergonomics burden.
+- First-time clients should discover live `repository_id` values via `list_repositories`, then author a repo-specific playbook instead of replaying the bundled synthetic fixtures unchanged.
+- For raw stdio MCP clients, Frigg now defaults to a quiet `error` tracing filter when `RUST_LOG` is unset; add `--watch-mode off` only when you want no built-in watch activity during protocol debugging or transcript capture.
 - This README is the canonical public contract for core versus extended MCP tool-surface gating, `tools/list` visibility, and semantic-response metadata across the read-only surface.
 
 ## v1 canonical path contract
 
 - `read_file`, `search_text`, `search_hybrid`, `search_symbol`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`, `document_symbols`, and `search_structural` responses expose repository-relative canonical `path` values.
 - Canonical `path` values are root-stripped (no workspace-root prefix), use `/` separators, and avoid `./` prefixes.
+- `search_text.path_regex` is matched against those canonical repository-relative paths before files are searched, so clients can narrow broad queries to code, docs, or runtime slices without changing search semantics.
 - `read_file.path` input remains backward-compatible: repository-relative paths are canonical and absolute paths are accepted when they resolve inside configured workspace roots.
 - `read_file` response `path` is still canonical repository-relative regardless of request form.
 - `read_file` supports optional one-based inclusive line slicing (`line_start`, `line_end`). For sliced reads, `max_bytes` is enforced against returned slice content (not full-file size), and invalid ranges fail as typed `invalid_params`.
+- Optional response `note` metadata is serialized as a JSON-encoded string inside the wrapper payload; dotted references such as `note.precise.*` refer to the parsed JSON payload, not a nested wrapper object.
 
 ## v1 deterministic behavior and limits (IDE navigation/read-only tools)
 
@@ -104,7 +109,9 @@ Non-breaking (allowed within `v1`):
 - `document_symbols` is deterministic and read-only for Rust/PHP files only; unsupported extensions fail as typed `invalid_params`.
 - `document_symbols` enforces the server `max_file_bytes` budget before reading file contents; over-budget requests fail as typed `invalid_params` with `path`, `bytes`, `max_bytes`, and `config_max_file_bytes`.
 - `search_structural` is deterministic tree-sitter query search for Rust/PHP only; `query` must be non-empty and at most `4096` characters, `language` (if provided) must be `rust` or `php`, and `path_regex` must satisfy safe-regex validation.
-- `search_hybrid` is deterministic hybrid retrieval over lexical + graph + semantic channels, supports optional channel-weight overrides and semantic toggle, and emits deterministic semantic channel metadata in `note` (`semantic_status`, `semantic_reason` when degraded).
+- `search_hybrid` is deterministic hybrid retrieval over lexical + graph + semantic channels, supports optional channel-weight overrides and semantic toggle, mirrors semantic probe fields at the top level (`semantic_requested`, `semantic_enabled`, `semantic_status`, `semantic_reason`), and retains the same metadata in `note` for backward compatibility.
+- `search_hybrid` is the broad natural-language entrypoint for mixed doc/runtime questions and may intentionally diversify top hits across contracts, README, runtime, and tests instead of collapsing to one file class.
+- When a client needs concrete implementation anchors after `search_hybrid`, follow with `search_symbol` for a known API/type/function name or use `search_text.path_regex` to constrain the witness set to doc/runtime slices explicitly.
 - `search_hybrid` strict semantic failures are part of the public contract too: `semantic_status=strict_failure` maps to canonical `unavailable` in [`contracts/errors.md`](../../errors.md).
 - When multi-token natural-language queries underfill exact lexical results, `search_hybrid` deterministically expands lexical recall via bounded exact-token and token-regex recall before ranking. This lexical evidence expansion remains active even when the semantic channel is enabled.
 - Failures for these tools map to canonical error taxonomy codes in `contracts/errors.md` (`invalid_params`, `resource_not_found`, `timeout`, `index_not_ready`, `unavailable`, `internal`) with typed metadata.
