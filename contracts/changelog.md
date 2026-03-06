@@ -4,6 +4,12 @@ Deterministic reverse-chronological log for public contract and behavior changes
 
 ## 2026-03-06
 
+- spec: `47-session-workspace-attach-and-stdio-defaults`
+- change_set: `session-workspace-attach-and-stdio-defaults.t001`
+- summary: added `workspace_attach` and `workspace_current` to the public MCP surface so HTTP sessions can start empty, attach repo-local workspaces on demand, and keep a session-default repository for omitted `repository_id` calls.
+- summary: changed MCP serving startup/config behavior so utility commands still require explicit `--workspace-root` values, while serving mode may start with zero roots and stdio auto-attaches cwd or Git root as a one-shot session default.
+- summary: changed stdio built-in watch defaults to `off`, kept HTTP defaults at `auto`, and synchronized config/tools/README contracts around the new attach-first workflow.
+
 - spec: `35-semantic-runtime-mcp-surface`
 - change_set: `semantic-runtime-mcp-surface.t010`
 - summary: clarified `search_hybrid` and `search_symbol` runtime guidance across `tools/list`, server instructions, schema field descriptions, and public contract docs so first-time clients know to use `search_hybrid` for broad doc/runtime questions and pivot to `search_symbol` or scoped `search_text.path_regex` for concrete runtime anchors.

@@ -1,0 +1,15 @@
+{
+  "schema_id": "frigg.tools.workspace_current.v1",
+  "tool_name": "workspace_current",
+  "input_wrapper": "WorkspaceCurrentParams",
+  "output_wrapper": "WorkspaceCurrentResponse",
+  "input_fields": [],
+  "input_required": [],
+  "output_fields": [
+    "repository",
+    "session_default"
+  ],
+  "output_required": [
+    "session_default"
+  ]
+}

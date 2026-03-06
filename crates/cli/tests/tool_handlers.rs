@@ -9,7 +9,8 @@ use frigg::mcp::types::{
     DocumentSymbolsParams, FindDeclarationsParams, FindImplementationsParams, FindReferencesParams,
     GoToDefinitionParams, IncomingCallsParams, ListRepositoriesParams, OutgoingCallsParams,
     ReadFileParams, SearchHybridParams, SearchPatternType, SearchStructuralParams,
-    SearchSymbolParams, SearchTextParams,
+    SearchSymbolParams, SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
 use frigg::storage::{
@@ -67,7 +68,9 @@ fn server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
 }
 
 fn server_for_config(config: FriggConfig) -> FriggMcpServer {
-    config.validate().expect("test config must validate");
+    config
+        .validate_for_serving()
+        .expect("test config must validate for serving");
     FriggMcpServer::new(config)
 }
 
@@ -220,6 +223,144 @@ async fn core_list_repositories_is_deterministic() {
     assert_eq!(
         first.repositories[0].root_path,
         second.repositories[0].root_path
+    );
+}
+
+#[tokio::test]
+async fn workspace_attach_reuses_git_root_and_sets_session_default() {
+    let server = server_for_config(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+    );
+    let nested_path = fixture_root().join("src/lib.rs");
+
+    let first = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: nested_path.display().to_string(),
+            set_default: None,
+            resolve_mode: None,
+        }))
+        .await
+        .expect("workspace_attach should succeed for fixture file path")
+        .0;
+    assert_eq!(first.repository.repository_id, "repo-001");
+    assert_eq!(first.resolution, WorkspaceResolveMode::GitRoot);
+    assert!(first.session_default);
+    assert_ne!(first.storage.index_state, WorkspaceStorageIndexState::Error);
+
+    let second = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: fixture_root().display().to_string(),
+            set_default: Some(false),
+            resolve_mode: None,
+        }))
+        .await
+        .expect("workspace_attach should reuse existing root")
+        .0;
+    assert_eq!(second.repository.repository_id, first.repository.repository_id);
+
+    let current = server
+        .workspace_current(Parameters(WorkspaceCurrentParams {}))
+        .await
+        .expect("workspace_current should succeed")
+        .0;
+    assert!(current.session_default);
+    assert_eq!(
+        current
+            .repository
+            .expect("workspace_current should return attached repository")
+            .repository_id,
+        "repo-001"
+    );
+}
+
+#[tokio::test]
+async fn workspace_session_default_scopes_search_text_without_repository_hint() {
+    let root_a = temp_workspace_root("workspace-default-a");
+    let root_b = temp_workspace_root("workspace-default-b");
+    fs::create_dir_all(root_a.join("src")).expect("workspace a src dir should be creatable");
+    fs::create_dir_all(root_b.join("src")).expect("workspace b src dir should be creatable");
+    fs::write(root_a.join("src/lib.rs"), "pub fn shared_marker() { /* repo_a */ }\n")
+        .expect("workspace a source should write");
+    fs::write(root_b.join("src/lib.rs"), "pub fn shared_marker() { /* repo_b */ }\n")
+        .expect("workspace b source should write");
+
+    let server = server_for_config(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+    );
+
+    let attached_a = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: root_a.display().to_string(),
+            set_default: Some(false),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+        }))
+        .await
+        .expect("workspace_attach should attach repo a")
+        .0;
+    let attached_b = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: root_b.display().to_string(),
+            set_default: Some(true),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+        }))
+        .await
+        .expect("workspace_attach should attach repo b and set default")
+        .0;
+
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "shared_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: None,
+            path_regex: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("search_text should honor session default")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].repository_id, attached_b.repository.repository_id);
+    assert_ne!(
+        response.matches[0].repository_id,
+        attached_a.repository.repository_id
+    );
+
+    cleanup_workspace_root(&root_a);
+    cleanup_workspace_root(&root_b);
+}
+
+#[tokio::test]
+async fn workspace_read_file_without_attached_repositories_returns_remediation() {
+    let server = server_for_config(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+    );
+
+    let error = match server
+        .read_file(Parameters(ReadFileParams {
+            path: "README.md".to_owned(),
+            repository_id: None,
+            max_bytes: None,
+            line_start: None,
+            line_end: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("read_file should fail without attached repositories"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    assert_eq!(error_code_tag(&error), Some("resource_not_found"));
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("action"))
+            .and_then(|value| value.as_str()),
+        Some("workspace_attach")
     );
 }
 

@@ -90,6 +90,14 @@ impl Default for WatchConfig {
 }
 
 impl WatchConfig {
+    pub fn default_for_transport(transport: RuntimeTransportKind) -> Self {
+        let mut watch = Self::default();
+        if transport == RuntimeTransportKind::Stdio {
+            watch.mode = WatchMode::Off;
+        }
+        watch
+    }
+
     pub fn enabled_for_transport(&self, transport: RuntimeTransportKind) -> bool {
         match self.mode {
             WatchMode::On => true,
@@ -323,8 +331,23 @@ impl Default for FriggConfig {
 
 impl FriggConfig {
     pub fn from_workspace_roots(workspace_roots: Vec<PathBuf>) -> FriggResult<Self> {
+        Self::from_workspace_roots_with_mode(workspace_roots, true)
+    }
+
+    pub fn from_optional_workspace_roots(workspace_roots: Vec<PathBuf>) -> FriggResult<Self> {
+        Self::from_workspace_roots_with_mode(workspace_roots, false)
+    }
+
+    fn from_workspace_roots_with_mode(
+        workspace_roots: Vec<PathBuf>,
+        default_when_empty: bool,
+    ) -> FriggResult<Self> {
         let roots = if workspace_roots.is_empty() {
-            vec![PathBuf::from(DEFAULT_WORKSPACE_ROOT)]
+            if default_when_empty {
+                vec![PathBuf::from(DEFAULT_WORKSPACE_ROOT)]
+            } else {
+                Vec::new()
+            }
         } else {
             workspace_roots
         };
@@ -333,15 +356,34 @@ impl FriggConfig {
             workspace_roots: roots,
             ..Self::default()
         };
-        cfg.validate()?;
+        if default_when_empty {
+            cfg.validate()?;
+        } else {
+            cfg.validate_for_serving()?;
+        }
         Ok(cfg)
     }
 
     pub fn validate(&self) -> FriggResult<()> {
+        self.validate_with_root_requirement(true)
+    }
+
+    pub fn validate_for_serving(&self) -> FriggResult<()> {
+        self.validate_with_root_requirement(false)
+    }
+
+    pub fn ensure_workspace_roots_configured(&self) -> FriggResult<()> {
         if self.workspace_roots.is_empty() {
             return Err(FriggError::InvalidInput(
                 "at least one workspace root is required".to_owned(),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_with_root_requirement(&self, require_workspace_roots: bool) -> FriggResult<()> {
+        if require_workspace_roots {
+            self.ensure_workspace_roots_configured()?;
         }
 
         if self.max_search_results == 0 {
@@ -465,6 +507,17 @@ mod tests {
             retry_ms: DEFAULT_WATCH_RETRY_MS,
         };
         assert!(!off.enabled_for_transport(RuntimeTransportKind::Stdio));
+    }
+
+    #[test]
+    fn watch_config_transport_defaults_disable_stdio_by_default() {
+        let stdio = WatchConfig::default_for_transport(RuntimeTransportKind::Stdio);
+        assert_eq!(stdio.mode, WatchMode::Off);
+        assert_eq!(stdio.debounce_ms, DEFAULT_WATCH_DEBOUNCE_MS);
+        assert_eq!(stdio.retry_ms, DEFAULT_WATCH_RETRY_MS);
+
+        let http = WatchConfig::default_for_transport(RuntimeTransportKind::LoopbackHttp);
+        assert_eq!(http.mode, WatchMode::Auto);
     }
 
     #[test]
@@ -601,6 +654,23 @@ mod tests {
     fn frigg_config_default_uses_aggressive_max_file_bytes_budget() {
         let config = FriggConfig::default();
         assert_eq!(config.max_file_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn frigg_config_serving_mode_allows_empty_workspace_roots() {
+        let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("serving config should allow empty workspace roots");
+        assert!(config.workspace_roots.is_empty());
+        config
+            .validate_for_serving()
+            .expect("serving validation should allow empty workspace roots");
+        let err = config
+            .validate()
+            .expect_err("command validation should still require workspace roots");
+        assert_eq!(
+            err.to_string(),
+            "invalid input: at least one workspace root is required"
+        );
     }
 
     #[test]

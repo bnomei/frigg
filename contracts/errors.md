@@ -46,6 +46,12 @@ Use this template to pin deterministic mappings for each public tool.
 
 | Tool name | Failure condition | Canonical `error_code` | Retryable (`true/false`) | MCP numeric code hint | Required `error.data.details` keys |
 | --- | --- | --- | --- | --- | --- |
+| `workspace_attach` | empty/invalid attach path payload | `invalid_params` | `false` | `-32602` | `path` |
+| `workspace_attach` | attach path escapes canonical ancestor/root validation | `access_denied` | `false` | `-32003` | `path` |
+| `read_file` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
+| `search_text` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
+| `search_hybrid` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
+| `search_symbol` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
 | `go_to_definition` | `symbol` empty OR missing both symbol and (`path`,`line`) | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
 | `go_to_definition` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
 | `find_declarations` | invalid symbol/location payload | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |

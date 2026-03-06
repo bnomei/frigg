@@ -15,8 +15,10 @@ use crate::mcp::deep_search::{
     DeepSearchTraceStep as InternalDeepSearchTraceStep,
 };
 
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 16] = [
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
     "list_repositories",
+    "workspace_attach",
+    "workspace_current",
     "read_file",
     "search_text",
     "search_hybrid",
@@ -50,6 +52,59 @@ pub struct ListRepositoriesResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ListRepositoriesParams {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceResolveMode {
+    GitRoot,
+    Direct,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceStorageIndexState {
+    MissingDb,
+    Uninitialized,
+    Ready,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceStorageSummary {
+    pub db_path: String,
+    pub exists: bool,
+    pub initialized: bool,
+    pub index_state: WorkspaceStorageIndexState,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceAttachParams {
+    /// File or directory path to attach. Relative paths resolve against the Frigg server process cwd.
+    pub path: String,
+    /// Whether to make the attached repository the session default. Omit to default to `true`.
+    pub set_default: Option<bool>,
+    /// Workspace resolution strategy. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    pub resolve_mode: Option<WorkspaceResolveMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceAttachResponse {
+    pub repository: RepositorySummary,
+    pub resolved_from: String,
+    pub resolution: WorkspaceResolveMode,
+    pub session_default: bool,
+    pub storage: WorkspaceStorageSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct WorkspaceCurrentParams {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceCurrentResponse {
+    pub repository: Option<RepositorySummary>,
+    pub session_default: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileParams {
@@ -1084,6 +1139,26 @@ mod schema_tests {
     }
 
     #[test]
+    fn schema_workspace_attach_contract_matches_wrappers() {
+        assert_contract::<WorkspaceAttachParams, WorkspaceAttachResponse>(
+            "workspace_attach.v1.schema.json",
+            "workspace_attach",
+            "WorkspaceAttachParams",
+            "WorkspaceAttachResponse",
+        );
+    }
+
+    #[test]
+    fn schema_workspace_current_contract_matches_wrappers() {
+        assert_contract::<WorkspaceCurrentParams, WorkspaceCurrentResponse>(
+            "workspace_current.v1.schema.json",
+            "workspace_current",
+            "WorkspaceCurrentParams",
+            "WorkspaceCurrentResponse",
+        );
+    }
+
+    #[test]
     fn schema_read_file_contract_matches_wrappers() {
         assert_contract::<ReadFileParams, ReadFileResponse>(
             "read_file.v1.schema.json",
@@ -1374,6 +1449,8 @@ mod schema_tests {
         let confirm = WRITE_CONFIRM_PARAM.to_owned();
         let input_field_sets = [
             field_set::<ListRepositoriesParams>(),
+            field_set::<WorkspaceAttachParams>(),
+            field_set::<WorkspaceCurrentParams>(),
             field_set::<ReadFileParams>(),
             field_set::<SearchTextParams>(),
             field_set::<SearchHybridParams>(),

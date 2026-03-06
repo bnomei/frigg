@@ -1,7 +1,7 @@
 # Frigg Program Index
 
 Updated: 2026-03-06
-Sync note with date: 2026-03-06 (added follow-on specs 40-45 for residual symbol-resolution, precise-degradation, manifest-freshness, document-symbols hardening, and integrated watch-driven reindexing after spec 39 closeout)
+Sync note with date: 2026-03-06 (added follow-on specs 48-51 for TypeScript/TSX parity plus Python runtime onboarding after the watch/integration and quiet-stdio follow-up wave)
 Execution mode target: adaptive (cap: 4, bundle depth: 2)
 
 ## Program objective
@@ -56,6 +56,11 @@ Deliver a local-first, privacy-conscious Deep Search + Code Search + Code Graph 
 | `43-document-symbols-byte-guards` | Add deterministic byte-budget guards to `document_symbols` before full-file reads | `34-readonly-ide-navigation-tools`, `39-performance-memory-hardening` | `crates/cli/src/mcp/`, `contracts/`, `benchmarks/` |
 | `44-integrated-local-watch-mode` | Add built-in local watch scheduling for stdio and loopback HTTP over the existing changed-only reindex path | `07-mcp-server-and-tool-contracts`, `20-reindex-resilience-diagnostics`, `42-manifest-freshness-validation` | `crates/cli/src/{main,settings,watch}.rs`, `README.md`, `specs/` |
 | `45-watch-driven-changed-reindex-correctness` | Preserve manifest, semantic, docs-visible, and ignored-path correctness under watcher-triggered changed-only refreshes | `02-ingestion-and-incremental-index`, `35-semantic-runtime-mcp-surface`, `42-manifest-freshness-validation`, `44-integrated-local-watch-mode` | `crates/cli/src/{indexer,searcher,storage,watch}/`, `crates/cli/tests/`, `README.md` |
+| `47-session-workspace-attach-and-stdio-defaults` | Replace static startup-root dependence for MCP serving with session-driven workspace attach, stdio cwd/git-root auto-selection, and stdio watch-off one-shot defaults | `07-mcp-server-and-tool-contracts`, `10-mcp-surface-hardening`, `22-tool-path-semantics-unification`, `44-integrated-local-watch-mode` | `crates/cli/src/{main,settings,mcp}/`, `contracts/`, `README.md`, `specs/` |
+| `48-typescript-tsx-runtime-symbol-surface` | Onboard `.ts` and `.tsx` into the symbol corpus and L1/L2 read-only runtime navigation/query surfaces | `34-readonly-ide-navigation-tools`, `40-symbol-resolution-indexes`, `42-manifest-freshness-validation` | `crates/cli/src/{indexer,mcp,searcher}/`, `crates/cli/tests/`, `contracts/`, `docs/`, `README.md` |
+| `49-typescript-tsx-precise-scip-parity` | Validate and harden precise TypeScript/TSX navigation/reference parity via SCIP artifacts | `05-scip-precision-ingest`, `41-partial-precise-degradation`, `48-typescript-tsx-runtime-symbol-surface` | `crates/cli/src/{graph,storage,mcp}/`, `crates/cli/tests/`, `fixtures/scip/`, `contracts/`, `docs/`, `README.md` |
+| `50-typescript-tsx-semantic-e2e-parity` | Close TypeScript/TSX semantic, watch/reindex, provenance, benchmark, and release-gate parity end-to-end | `35-semantic-runtime-mcp-surface`, `45-watch-driven-changed-reindex-correctness`, `48-typescript-tsx-runtime-symbol-surface`, `49-typescript-tsx-precise-scip-parity` | `crates/cli/src/{indexer,searcher,watch,storage,mcp}/`, `crates/cli/tests/`, `crates/cli/benches/`, `benchmarks/`, `contracts/`, `docs/`, `README.md`, `scripts/` |
+| `51-python-runtime-symbol-surface` | Add `.py` runtime L1/L2 symbol and navigation support without taking on Python precise SCIP or semantic parity yet | `34-readonly-ide-navigation-tools`, `40-symbol-resolution-indexes`, `42-manifest-freshness-validation` | `Cargo.toml`, `crates/cli/Cargo.toml`, `crates/cli/src/{indexer,mcp,searcher}/`, `crates/cli/tests/`, `contracts/`, `docs/`, `README.md` |
 
 ## Parallel dispatch guidance
 - Wave A (ready now): `00/T001`, `01/T001`, `06/T001`, `07/T001`
@@ -77,6 +82,9 @@ Deliver a local-first, privacy-conscious Deep Search + Code Search + Code Graph 
 - Wave Q (performance hardening): `39/T001-T003` in parallel by disjoint scope, then `39/T004-T006` after cache and candidate foundations land
 - Wave R (residual post-hardening closures): `40/T001`, `42/T001`, and `43/T001` in parallel by disjoint scope, then `40/T002`, `41/*`, `42/T002`, and `43/T002` after the new lookup and freshness foundations land
 - Wave S (local watch integration): `44/T001`, `45/T001`, and `45/T003` in parallel by disjoint scope, then `44/T002-T004`, `45/T002`, and `45/T004` after the config and correctness guardrails land
+- Wave T (workspace-selection UX): `47/T001` and `47/T002` first, then `47/T003-T005` once serving-mode empty-root startup and attach contracts are stable
+- Wave U (TypeScript/TSX parity): `48/*` first, then `49/*`, then `50/*` once runtime symbol and precise parity are stable
+- Wave V (Python runtime onboarding): `51/*` as a standalone L1/L2 experiment; defer any Python precise SCIP or semantic parity follow-ons until the runtime slice proves useful
 
 ## Non-negotiable acceptance
 - Every tool has versioned schema + typed public errors.

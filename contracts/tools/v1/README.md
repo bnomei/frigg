@@ -55,6 +55,8 @@ Non-breaking (allowed within `v1`):
 
 <!-- tool-surface-profile:core:start -->
 - `list_repositories` -> `list_repositories.v1.schema.json` (`ListRepositoriesParams` / `ListRepositoriesResponse`)
+- `workspace_attach` -> `workspace_attach.v1.schema.json` (`WorkspaceAttachParams` / `WorkspaceAttachResponse`)
+- `workspace_current` -> `workspace_current.v1.schema.json` (`WorkspaceCurrentParams` / `WorkspaceCurrentResponse`)
 - `read_file` -> `read_file.v1.schema.json` (`ReadFileParams` / `ReadFileResponse`)
 - `search_text` -> `search_text.v1.schema.json` (`SearchTextParams` / `SearchTextResponse`)
 - `search_hybrid` -> `search_hybrid.v1.schema.json` (`SearchHybridParams` / `SearchHybridResponse`)
@@ -78,8 +80,9 @@ Non-breaking (allowed within `v1`):
 <!-- tool-surface-profile:extended_only:end -->
 - These schemas are part of the `v1` public contract and are excluded from default `core` runtime `tools/list`; they are exposed only when the `extended` deep-search runtime profile is explicitly enabled (`FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`).
 - The three deep-search schema docs also publish `contract_notes`, `nested_contracts`, `step_tool_schema_refs`, `input_example`, and `output_example` because their top-level wrapper fields (`playbook`, `trace_artifact`, `citation_payload`) contain the real first-call ergonomics burden.
-- First-time clients should discover live `repository_id` values via `list_repositories`, then author a repo-specific playbook instead of replaying the bundled synthetic fixtures unchanged.
-- For raw stdio MCP clients, Frigg now defaults to a quiet `error` tracing filter when `RUST_LOG` is unset; add `--watch-mode off` only when you want no built-in watch activity during protocol debugging or transcript capture.
+- First-time clients should call `list_repositories`; if it returns an empty list or a session-local default repository is needed, call `workspace_attach` before read/search/navigation tools.
+- `workspace_current` returns the session default repository selected by `workspace_attach`; omitted `repository_id` values on read/search/navigation tools prefer that session default before falling back to all attached repositories.
+- For raw stdio MCP clients, Frigg now defaults to a quiet `error` tracing filter when `RUST_LOG` is unset and defaults built-in watch mode to `off`; opt back into built-in watch behavior with `--watch-mode auto` or `--watch-mode on`.
 - This README is the canonical public contract for core versus extended MCP tool-surface gating, `tools/list` visibility, and semantic-response metadata across the read-only surface.
 
 ## v1 canonical path contract
@@ -87,7 +90,7 @@ Non-breaking (allowed within `v1`):
 - `read_file`, `search_text`, `search_hybrid`, `search_symbol`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`, `document_symbols`, and `search_structural` responses expose repository-relative canonical `path` values.
 - Canonical `path` values are root-stripped (no workspace-root prefix), use `/` separators, and avoid `./` prefixes.
 - `search_text.path_regex` is matched against those canonical repository-relative paths before files are searched, so clients can narrow broad queries to code, docs, or runtime slices without changing search semantics.
-- `read_file.path` input remains backward-compatible: repository-relative paths are canonical and absolute paths are accepted when they resolve inside configured workspace roots.
+- `read_file.path` input remains backward-compatible: repository-relative paths are canonical and absolute paths are accepted when they resolve inside attached workspace roots.
 - `read_file` response `path` is still canonical repository-relative regardless of request form.
 - `read_file` supports optional one-based inclusive line slicing (`line_start`, `line_end`). For sliced reads, `max_bytes` is enforced against returned slice content (not full-file size), and invalid ranges fail as typed `invalid_params`.
 - Optional response `note` metadata is serialized as a JSON-encoded string inside the wrapper payload; dotted references such as `note.precise.*` refer to the parsed JSON payload, not a nested wrapper object.

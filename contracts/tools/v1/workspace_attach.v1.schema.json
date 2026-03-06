@@ -1,0 +1,28 @@
+{
+  "schema_id": "frigg.tools.workspace_attach.v1",
+  "tool_name": "workspace_attach",
+  "input_wrapper": "WorkspaceAttachParams",
+  "output_wrapper": "WorkspaceAttachResponse",
+  "input_fields": [
+    "path",
+    "set_default",
+    "resolve_mode"
+  ],
+  "input_required": [
+    "path"
+  ],
+  "output_fields": [
+    "repository",
+    "resolved_from",
+    "resolution",
+    "session_default",
+    "storage"
+  ],
+  "output_required": [
+    "repository",
+    "resolved_from",
+    "resolution",
+    "session_default",
+    "storage"
+  ]
+}

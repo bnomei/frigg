@@ -53,7 +53,9 @@ use crate::mcp::types::{
     ReadFileParams, ReadFileResponse, RepositorySummary, SearchHybridChannelWeightsParams,
     SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
     SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolResponse,
-    SearchTextParams, SearchTextResponse,
+    SearchTextParams, SearchTextResponse, WorkspaceAttachParams, WorkspaceAttachResponse,
+    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceResolveMode,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
@@ -62,11 +64,83 @@ pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionMan
 pub struct FriggMcpServer {
     config: Arc<FriggConfig>,
     tool_router: ToolRouter<Self>,
+    workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+    session_default_repository_id: Arc<RwLock<Option<String>>>,
     symbol_corpus_cache: Arc<RwLock<BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>>>,
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
     provenance_storage_cache: Arc<RwLock<BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>>>,
     provenance_best_effort: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AttachedWorkspace {
+    repository_id: String,
+    display_name: String,
+    root: PathBuf,
+    db_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkspaceRegistry {
+    workspaces: Vec<AttachedWorkspace>,
+    by_canonical_root: BTreeMap<PathBuf, usize>,
+}
+
+impl WorkspaceRegistry {
+    fn from_startup_config(config: &FriggConfig) -> Self {
+        let mut registry = Self::default();
+        for repository in config.repositories() {
+            let root = PathBuf::from(&repository.root_path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&repository.root_path));
+            registry.insert_with_repository_id(
+                root,
+                repository.repository_id.0,
+                repository.display_name,
+            );
+        }
+        registry
+    }
+
+    fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
+        self.workspaces.clone()
+    }
+
+    fn workspace_by_repository_id(&self, repository_id: &str) -> Option<AttachedWorkspace> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.repository_id == repository_id)
+            .cloned()
+    }
+
+    fn insert_with_repository_id(
+        &mut self,
+        canonical_root: PathBuf,
+        repository_id: String,
+        display_name: String,
+    ) -> AttachedWorkspace {
+        if let Some(index) = self.by_canonical_root.get(&canonical_root).copied() {
+            return self.workspaces[index].clone();
+        }
+
+        let workspace = AttachedWorkspace {
+            db_path: FriggMcpServer::storage_db_path_for_root(&canonical_root),
+            repository_id,
+            display_name,
+            root: canonical_root.clone(),
+        };
+        self.by_canonical_root
+            .insert(canonical_root, self.workspaces.len());
+        self.workspaces.push(workspace.clone());
+        workspace
+    }
+
+    fn get_or_insert(&mut self, canonical_root: PathBuf) -> AttachedWorkspace {
+        let display_name = FriggMcpServer::display_name_for_root(&canonical_root);
+        let repository_id = format!("repo-{:03}", self.workspaces.len().saturating_add(1));
+        self.insert_with_repository_id(canonical_root, repository_id, display_name)
+    }
 }
 
 #[derive(Clone)]
@@ -2361,10 +2435,10 @@ impl FriggMcpServer {
     }
 
     fn default_provenance_target(&self) -> Option<(String, PathBuf)> {
-        self.config
-            .repositories()
+        self.current_workspace()
             .into_iter()
-            .map(|repo| (repo.repository_id.0, PathBuf::from(repo.root_path)))
+            .chain(self.attached_workspaces())
+            .map(|workspace| (workspace.repository_id, workspace.root))
             .min_by(|left, right| left.0.cmp(&right.0))
     }
 
@@ -2374,9 +2448,10 @@ impl FriggMcpServer {
     ) -> Option<(String, PathBuf)> {
         match repository_id {
             Some(repository_id) => self
-                .config
-                .root_by_repository_id(repository_id)
-                .map(|root| (repository_id.to_owned(), root.to_path_buf())),
+                .attached_workspaces()
+                .into_iter()
+                .find(|workspace| workspace.repository_id == repository_id)
+                .map(|workspace| (workspace.repository_id, workspace.root)),
             None => self.default_provenance_target(),
         }
     }
@@ -2560,9 +2635,12 @@ impl FriggMcpServer {
         provenance_best_effort: bool,
         enable_deep_search_tools: bool,
     ) -> Self {
+        let workspace_registry = WorkspaceRegistry::from_startup_config(&config);
         Self {
             config: Arc::new(config),
             tool_router: Self::filtered_tool_router(enable_deep_search_tools),
+            workspace_registry: Arc::new(RwLock::new(workspace_registry)),
+            session_default_repository_id: Arc::new(RwLock::new(None)),
             symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
             precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
             latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -2596,6 +2674,20 @@ impl FriggMcpServer {
         diff_runtime_against_profile_manifest(profile, &runtime_names)
     }
 
+    fn clone_for_new_session(&self) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            tool_router: self.tool_router.clone(),
+            workspace_registry: Arc::clone(&self.workspace_registry),
+            session_default_repository_id: Arc::new(RwLock::new(None)),
+            symbol_corpus_cache: Arc::clone(&self.symbol_corpus_cache),
+            precise_graph_cache: Arc::clone(&self.precise_graph_cache),
+            latest_precise_graph_cache: Arc::clone(&self.latest_precise_graph_cache),
+            provenance_storage_cache: Arc::clone(&self.provenance_storage_cache),
+            provenance_best_effort: self.provenance_best_effort,
+        }
+    }
+
     pub async fn serve_stdio(self) -> Result<(), rmcp::RmcpError> {
         let service = self.serve(rmcp::transport::stdio()).await?;
         service.waiting().await?;
@@ -2604,32 +2696,284 @@ impl FriggMcpServer {
 
     pub fn streamable_http_service(self, config: StreamableHttpServerConfig) -> FriggMcpService {
         StreamableHttpService::new(
-            move || Ok(self.clone()),
+            move || Ok(self.clone_for_new_session()),
             Arc::new(LocalSessionManager::default()),
             config,
         )
+    }
+
+    pub fn auto_attach_stdio_default_workspace_from_current_dir(&self) -> std::io::Result<()> {
+        if !self.attached_workspaces().is_empty() {
+            return Ok(());
+        }
+
+        let current_dir = std::env::current_dir()?;
+        self.attach_workspace_internal(&current_dir, true, WorkspaceResolveMode::GitRoot)
+            .map(|_| ())
+            .map_err(|error| std::io::Error::other(error.message))
+    }
+
+    fn display_name_for_root(root: &Path) -> String {
+        root.file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| root.display().to_string())
+    }
+
+    fn storage_db_path_for_root(root: &Path) -> PathBuf {
+        resolve_provenance_db_path(root).unwrap_or_else(|_| {
+            root.join(crate::storage::PROVENANCE_STORAGE_DIR)
+                .join(crate::storage::PROVENANCE_STORAGE_DB_FILE)
+        })
+    }
+
+    fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
+        self.workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .attached_workspaces()
+    }
+
+    fn current_repository_id(&self) -> Option<String> {
+        self.session_default_repository_id
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_current_repository_id(&self, repository_id: Option<String>) {
+        let mut current = self
+            .session_default_repository_id
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *current = repository_id;
+    }
+
+    fn current_workspace(&self) -> Option<AttachedWorkspace> {
+        let repository_id = self.current_repository_id()?;
+        self.workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(&repository_id)
+    }
+
+    fn no_attached_workspaces_error(action: &str) -> ErrorData {
+        Self::resource_not_found(
+            "no repositories are attached for this session",
+            Some(json!({
+                "attached_repositories": [],
+                "action": action,
+                "hint": "call workspace_attach first or provide --workspace-root at startup",
+            })),
+        )
+    }
+
+    fn effective_repository_id(&self, repository_id: Option<&str>) -> Option<String> {
+        repository_id
+            .map(str::to_owned)
+            .or_else(|| self.current_repository_id())
+    }
+
+    fn attached_workspaces_for_repository(
+        &self,
+        repository_id: Option<&str>,
+    ) -> Result<Vec<AttachedWorkspace>, ErrorData> {
+        let registry = self
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(repository_id) = self.effective_repository_id(repository_id) {
+            if let Some(workspace) = registry.workspace_by_repository_id(&repository_id) {
+                return Ok(vec![workspace]);
+            }
+            return Err(Self::resource_not_found(
+                "repository_id not found",
+                Some(json!({ "repository_id": repository_id })),
+            ));
+        }
+
+        let workspaces = registry.attached_workspaces();
+        if workspaces.is_empty() {
+            return Err(Self::no_attached_workspaces_error("workspace_attach"));
+        }
+
+        Ok(workspaces)
     }
 
     fn roots_for_repository(
         &self,
         repository_id: Option<&str>,
     ) -> Result<Vec<(String, PathBuf)>, ErrorData> {
-        if let Some(repository_id) = repository_id {
-            if let Some(root) = self.config.root_by_repository_id(repository_id) {
-                return Ok(vec![(repository_id.to_owned(), root.to_path_buf())]);
-            }
-            return Err(Self::resource_not_found(
-                "repository_id not found",
-                Some(serde_json::json!({ "repository_id": repository_id })),
+        Ok(self
+            .attached_workspaces_for_repository(repository_id)?
+            .into_iter()
+            .map(|workspace| (workspace.repository_id, workspace.root))
+            .collect())
+    }
+
+    fn repository_summary(workspace: &AttachedWorkspace) -> RepositorySummary {
+        RepositorySummary {
+            repository_id: workspace.repository_id.clone(),
+            display_name: workspace.display_name.clone(),
+            root_path: workspace.root.display().to_string(),
+        }
+    }
+
+    fn effective_attach_directory(path: &Path) -> Result<PathBuf, ErrorData> {
+        if path.exists() {
+            let metadata = fs::metadata(path).map_err(|err| {
+                Self::invalid_params(
+                    format!("failed to inspect attach path {}: {err}", path.display()),
+                    Some(json!({ "path": path.display().to_string() })),
+                )
+            })?;
+            let directory = if metadata.is_dir() {
+                path.to_path_buf()
+            } else {
+                path.parent().map(Path::to_path_buf).ok_or_else(|| {
+                    Self::invalid_params(
+                        "workspace_attach path has no parent directory",
+                        Some(json!({ "path": path.display().to_string() })),
+                    )
+                })?
+            };
+            return directory.canonicalize().map_err(|err| {
+                Self::invalid_params(
+                    format!(
+                        "failed to canonicalize attach path {}: {err}",
+                        directory.display()
+                    ),
+                    Some(json!({ "path": path.display().to_string() })),
+                )
+            });
+        }
+
+        Self::canonicalize_existing_ancestor(path)?.ok_or_else(|| {
+            Self::invalid_params(
+                "workspace_attach path does not exist and has no existing ancestor",
+                Some(json!({ "path": path.display().to_string() })),
+            )
+        })
+    }
+
+    fn find_git_root(start: &Path) -> Option<PathBuf> {
+        start.ancestors().find_map(|ancestor| {
+            ancestor
+                .join(".git")
+                .exists()
+                .then(|| ancestor.to_path_buf())
+        })
+    }
+
+    fn workspace_storage_summary(workspace: &AttachedWorkspace) -> WorkspaceStorageSummary {
+        if !workspace.db_path.is_file() {
+            return WorkspaceStorageSummary {
+                db_path: workspace.db_path.display().to_string(),
+                exists: false,
+                initialized: false,
+                index_state: WorkspaceStorageIndexState::MissingDb,
+                error: None,
+            };
+        }
+
+        let storage = Storage::new(&workspace.db_path);
+        match storage.schema_version() {
+            Ok(0) => WorkspaceStorageSummary {
+                db_path: workspace.db_path.display().to_string(),
+                exists: true,
+                initialized: false,
+                index_state: WorkspaceStorageIndexState::Uninitialized,
+                error: None,
+            },
+            Ok(_) => match storage.verify() {
+                Ok(_) => WorkspaceStorageSummary {
+                    db_path: workspace.db_path.display().to_string(),
+                    exists: true,
+                    initialized: true,
+                    index_state: WorkspaceStorageIndexState::Ready,
+                    error: None,
+                },
+                Err(err) => WorkspaceStorageSummary {
+                    db_path: workspace.db_path.display().to_string(),
+                    exists: true,
+                    initialized: true,
+                    index_state: WorkspaceStorageIndexState::Error,
+                    error: Some(err.to_string()),
+                },
+            },
+            Err(err) => WorkspaceStorageSummary {
+                db_path: workspace.db_path.display().to_string(),
+                exists: true,
+                initialized: false,
+                index_state: WorkspaceStorageIndexState::Error,
+                error: Some(err.to_string()),
+            },
+        }
+    }
+
+    fn attach_workspace_internal(
+        &self,
+        path: &Path,
+        set_default: bool,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<WorkspaceAttachResponse, ErrorData> {
+        if path.as_os_str().is_empty() {
+            return Err(Self::invalid_params(
+                "workspace_attach.path must not be empty",
+                None,
             ));
         }
 
-        Ok(self
-            .config
+        let resolved_from = Self::effective_attach_directory(path)?;
+        let (root, resolution) = match resolve_mode {
+            WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
+                Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
+                None => (resolved_from.clone(), WorkspaceResolveMode::Direct),
+            },
+            WorkspaceResolveMode::Direct => (resolved_from.clone(), WorkspaceResolveMode::Direct),
+        };
+
+        let workspace = {
+            let mut registry = self
+                .workspace_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            registry.get_or_insert(root)
+        };
+
+        if set_default {
+            self.set_current_repository_id(Some(workspace.repository_id.clone()));
+        }
+
+        Ok(WorkspaceAttachResponse {
+            repository: Self::repository_summary(&workspace),
+            resolved_from: resolved_from.display().to_string(),
+            resolution,
+            session_default: self.current_repository_id().as_deref()
+                == Some(workspace.repository_id.as_str()),
+            storage: Self::workspace_storage_summary(&workspace),
+        })
+    }
+
+    fn scoped_search_config(
+        &self,
+        scoped_workspaces: &[AttachedWorkspace],
+    ) -> (FriggConfig, BTreeMap<String, String>) {
+        let scoped_config = FriggConfig {
+            workspace_roots: scoped_workspaces
+                .iter()
+                .map(|workspace| workspace.root.clone())
+                .collect(),
+            ..(*self.config).clone()
+        };
+        let repository_id_map = scoped_config
             .repositories()
             .into_iter()
-            .map(|repo| (repo.repository_id.0, PathBuf::from(repo.root_path)))
-            .collect())
+            .zip(scoped_workspaces.iter())
+            .map(|(temporary, actual)| (temporary.repository_id.0, actual.repository_id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        (scoped_config, repository_id_map)
     }
 
     fn canonicalize_existing_ancestor(path: &Path) -> Result<Option<PathBuf>, ErrorData> {
@@ -2742,7 +3086,7 @@ impl FriggMcpServer {
 impl FriggMcpServer {
     #[tool(
         name = "list_repositories",
-        description = "List configured local repositories/workspace roots.",
+        description = "List attached local repositories/workspace roots for this Frigg process.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2755,14 +3099,9 @@ impl FriggMcpServer {
     ) -> Result<Json<ListRepositoriesResponse>, ErrorData> {
         let _params = params.0;
         let repositories = self
-            .config
-            .repositories()
+            .attached_workspaces()
             .into_iter()
-            .map(|repo| RepositorySummary {
-                repository_id: repo.repository_id.0,
-                display_name: repo.display_name,
-                root_path: repo.root_path,
-            })
+            .map(|workspace| Self::repository_summary(&workspace))
             .collect::<Vec<_>>();
 
         let response = ListRepositoriesResponse { repositories };
@@ -2778,6 +3117,88 @@ impl FriggMcpServer {
             .record_provenance_blocking("list_repositories", None, json!({}), source_refs, &result)
             .await;
         self.finalize_with_provenance("list_repositories", result, provenance_result)
+    }
+
+    #[tool(
+        name = "workspace_attach",
+        description = "Attach or reuse a local workspace root, inspect its repo-local SQLite readiness, and optionally set it as the session default repository.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn workspace_attach(
+        &self,
+        params: Parameters<WorkspaceAttachParams>,
+    ) -> Result<Json<WorkspaceAttachResponse>, ErrorData> {
+        let params = params.0;
+        let set_default = params.set_default.unwrap_or(true);
+        let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let response =
+            self.attach_workspace_internal(Path::new(&params.path), set_default, resolve_mode)?;
+        let source_refs = json!({
+            "repository_id": response.repository.repository_id.clone(),
+            "root_path": response.repository.root_path.clone(),
+            "resolved_from": response.resolved_from.clone(),
+            "resolution": response.resolution,
+            "session_default": response.session_default,
+            "storage": {
+                "db_path": response.storage.db_path.clone(),
+                "exists": response.storage.exists,
+                "initialized": response.storage.initialized,
+                "index_state": response.storage.index_state,
+            },
+        });
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking(
+                "workspace_attach",
+                None,
+                json!({
+                    "path": Self::bounded_text(&params.path),
+                    "set_default": params.set_default,
+                    "resolve_mode": params.resolve_mode,
+                }),
+                source_refs,
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance("workspace_attach", result, provenance_result)
+    }
+
+    #[tool(
+        name = "workspace_current",
+        description = "Return the session default repository selected by workspace_attach, if any.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn workspace_current(
+        &self,
+        params: Parameters<WorkspaceCurrentParams>,
+    ) -> Result<Json<WorkspaceCurrentResponse>, ErrorData> {
+        let _params = params.0;
+        let current_workspace = self.current_workspace();
+        let response = WorkspaceCurrentResponse {
+            repository: current_workspace
+                .as_ref()
+                .map(Self::repository_summary),
+            session_default: current_workspace.is_some(),
+        };
+        let source_refs = json!({
+            "repository_id": response
+                .repository
+                .as_ref()
+                .map(|repository| repository.repository_id.clone()),
+        });
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking("workspace_current", None, json!({}), source_refs, &result)
+            .await;
+        self.finalize_with_provenance("workspace_current", result, provenance_result)
     }
 
     #[tool(
@@ -3041,20 +3462,14 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_roots_with_id =
-                    server.roots_for_repository(params_for_blocking.repository_id.as_deref())?;
-                scoped_repository_ids = scoped_roots_with_id
+                let scoped_workspaces = server
+                    .attached_workspaces_for_repository(params_for_blocking.repository_id.as_deref())?;
+                scoped_repository_ids = scoped_workspaces
                     .iter()
-                    .map(|(repository_id, _)| repository_id.clone())
+                    .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
-                let scoped_roots = scoped_roots_with_id
-                    .into_iter()
-                    .map(|(_, root)| root)
-                    .collect::<Vec<_>>();
-                let scoped_config = FriggConfig {
-                    workspace_roots: scoped_roots,
-                    ..(*server.config).clone()
-                };
+                let (scoped_config, repository_id_map) =
+                    server.scoped_search_config(&scoped_workspaces);
 
                 let searcher = TextSearcher::new(scoped_config);
                 let search_output = match pattern_type {
@@ -3084,10 +3499,9 @@ impl FriggMcpServer {
                     .diagnostics
                     .count_by_kind(SearchDiagnosticKind::Read);
                 let mut matches = search_output.matches;
-
-                if let Some(repository_id) = params_for_blocking.repository_id.clone() {
-                    for found in &mut matches {
-                        found.repository_id = repository_id.clone();
+                for found in &mut matches {
+                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id) {
+                        found.repository_id = actual_repository_id.clone();
                     }
                 }
 
@@ -3174,20 +3588,14 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_roots_with_id =
-                    server.roots_for_repository(params_for_blocking.repository_id.as_deref())?;
-                scoped_repository_ids = scoped_roots_with_id
+                let scoped_workspaces = server
+                    .attached_workspaces_for_repository(params_for_blocking.repository_id.as_deref())?;
+                scoped_repository_ids = scoped_workspaces
                     .iter()
-                    .map(|(repository_id, _)| repository_id.clone())
+                    .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
-                let scoped_roots = scoped_roots_with_id
-                    .into_iter()
-                    .map(|(_, root)| root)
-                    .collect::<Vec<_>>();
-                let scoped_config = FriggConfig {
-                    workspace_roots: scoped_roots,
-                    ..(*server.config).clone()
-                };
+                let (scoped_config, repository_id_map) =
+                    server.scoped_search_config(&scoped_workspaces);
 
                 let weights = {
                     let mut weights = HybridChannelWeights::default();
@@ -3256,10 +3664,9 @@ impl FriggMcpServer {
                         semantic_sources: evidence.semantic_sources,
                     })
                     .collect::<Vec<_>>();
-
-                if let Some(repository_id) = params_for_blocking.repository_id.clone() {
-                    for found in &mut matches {
-                        found.repository_id = repository_id.clone();
+                for found in &mut matches {
+                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id) {
+                        found.repository_id = actual_repository_id.clone();
                     }
                 }
 
@@ -5732,7 +6139,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Use list_repositories -> search_text/search_hybrid/read_file first. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include deep-search tools). search_hybrid is the broad natural-language entrypoint and may intentionally mix contracts, README, runtime, and tests for doc/runtime questions; when you need concrete implementation anchors, pivot to search_symbol for API/type/function names or provide search_text.path_regex to constrain noise, for example `^(README\\.md|crates/cli/src/.*)$` when broad doc/runtime regexes would also match helper files. read_file returns full content when max_bytes is omitted; when capped, invalid_params includes suggested_max_bytes; use line_start/line_end for targeted slices. search_symbol returns tree-sitter symbol matches and find_references prefers precise SCIP references with deterministic heuristic fallback metadata in note."
+                    "Use list_repositories first; if it returns no repositories or you want a session-local default repo, call workspace_attach. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include deep-search tools). search_hybrid is the broad natural-language entrypoint and may intentionally mix contracts, README, runtime, and tests for doc/runtime questions; when you need concrete implementation anchors, pivot to search_symbol for API/type/function names or provide search_text.path_regex to constrain noise, for example `^(README\\.md|crates/cli/src/.*)$` when broad doc/runtime regexes would also match helper files. read_file returns full content when max_bytes is omitted; when capped, invalid_params includes suggested_max_bytes; use line_start/line_end for targeted slices. search_symbol returns tree-sitter symbol matches and find_references prefers precise SCIP references with deterministic heuristic fallback metadata in note."
                 ),
             )
     }

@@ -11,7 +11,7 @@ Frigg is:
 
 Frigg helps AI agents and developer tools answer code questions with reproducible, source-backed results:
 
-1. discover repositories (`list_repositories`),
+1. discover or attach repositories (`list_repositories`, `workspace_attach`, `workspace_current`),
 2. read files safely inside allowed roots (`read_file`),
 3. search text and symbols (`search_text`, `search_symbol`),
 4. navigate references (`find_references`),
@@ -20,7 +20,7 @@ Frigg helps AI agents and developer tools answer code questions with reproducibl
 ## Core Concepts
 
 - `workspace roots`: local directories Frigg is allowed to index/read.
-- `repository IDs`: runtime IDs (`repo-001`, `repo-002`, ...) derived from workspace-root order.
+- `repository IDs`: runtime IDs (`repo-001`, `repo-002`, ...) derived from startup root order plus any later `workspace_attach` calls.
 - `snapshots + file manifests`: persisted index state used for deterministic reindex behavior.
 - `provenance events`: stored tool-call evidence for replay/debugging.
 - `deterministic contracts`: versioned tool schemas and error taxonomy in `contracts/`.
@@ -71,17 +71,18 @@ Notes:
 - `--changed` rebuilds the current manifest, diffs it against the latest persisted snapshot, and treats `added + modified` files as changed.
 - Deleted files are tracked separately.
 - If nothing changed and a prior manifest exists, Frigg reuses the previous `snapshot_id` instead of writing a new one.
-- Built-in watch mode now exists for local MCP runs. With `--watch-mode auto` (the default), Frigg starts a background changed-only watcher for stdio and loopback HTTP, but keeps it disabled for non-loopback HTTP.
+- Built-in watch mode now exists for local MCP runs. HTTP still defaults to `--watch-mode auto`; stdio now defaults to `--watch-mode off` so one-shot agent spawns do not each start their own watcher.
+- `--watch-mode auto` enables the background changed-only watcher for stdio and loopback HTTP, but keeps it disabled for non-loopback HTTP.
 - If the latest manifest is missing or stale at startup, built-in watch mode queues one immediate changed-only refresh before waiting for new filesystem events.
 - External watchers are still useful for multi-repo fan-out, editor-owned lifecycle, or when you want reindex scheduling outside the Frigg process.
 - When Frigg serves MCP over stdio and `RUST_LOG` is unset, it defaults tracing to `error` so raw clients do not need special stderr-drain handling. Set `RUST_LOG=info` if you want startup/watch logs.
 
 Built-in watch options:
 ```bash
-# defaults shown explicitly:
-cargo run -p frigg -- --watch-mode auto --watch-debounce-ms 750 --watch-retry-ms 5000
+# HTTP/daemon-style defaults shown explicitly:
+cargo run -p frigg -- --mcp-http-port 37444 --watch-mode auto --watch-debounce-ms 750 --watch-retry-ms 5000
 
-# disable built-in watch mode for the current run:
+# stdio already defaults to watch off; this is the explicit equivalent:
 cargo run -p frigg -- --watch-mode off
 ```
 
@@ -103,9 +104,10 @@ just run
 ```
 
 Notes:
+- If no `--workspace-root` values are passed, stdio auto-attaches the current working directory, preferring the enclosing Git root when present, and sets it as the session default repository.
 - When `RUST_LOG` is unset, stdio MCP launches default to an `error` tracing filter so raw clients do not need to drain routine startup/watch logs from stderr.
 - Set `RUST_LOG=info` or `RUST_LOG=debug` if you want startup and watch diagnostics over stdio.
-- Pass `--watch-mode off` if you want a stdio session with no built-in changed-only reindex scheduling.
+- Stdio defaults to `--watch-mode off`; pass `--watch-mode auto` or `--watch-mode on` if you want built-in changed-only reindex scheduling.
 
 HTTP transport (loopback token optional; non-loopback requires auth token):
 ```bash
@@ -132,6 +134,11 @@ HTTP MCP endpoint:
 Remote bind requires explicit opt-in and auth token:
 - add `--allow-remote-http`
 - keep `--mcp-http-auth-token` set (or `FRIGG_MCP_HTTP_AUTH_TOKEN` env var).
+
+HTTP attach-first flow:
+- HTTP can start with zero `--workspace-root` flags.
+- Call `list_repositories`; if it returns an empty list, call `workspace_attach`.
+- Call `workspace_current` to confirm the session default repository when needed.
 
 ### 4) Optional: enable semantic retrieval
 
@@ -194,6 +201,7 @@ Commands:
 
 Global options:
 - `--workspace-root <PATH>` (repeatable)
+- Serving mode may omit `--workspace-root`; utility commands still require it explicitly.
 - `--max-file-bytes <BYTES>` (default `2097152`; or env `FRIGG_MAX_FILE_BYTES`)
 - `--mcp-http-port <PORT>`
 - `--mcp-http-host <HOST>`
@@ -212,6 +220,8 @@ Global options:
 
 Public MCP tools:
 - `list_repositories`
+- `workspace_attach`
+- `workspace_current`
 - `read_file`
 - `search_text`
 - `search_hybrid`
@@ -229,6 +239,8 @@ Optional deep-search tools (when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`):
 
 Schema files:
 - `contracts/tools/v1/list_repositories.v1.schema.json`
+- `contracts/tools/v1/workspace_attach.v1.schema.json`
+- `contracts/tools/v1/workspace_current.v1.schema.json`
 - `contracts/tools/v1/read_file.v1.schema.json`
 - `contracts/tools/v1/search_text.v1.schema.json`
 - `contracts/tools/v1/search_symbol.v1.schema.json`

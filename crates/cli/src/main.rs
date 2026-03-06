@@ -204,42 +204,65 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let config = resolve_startup_config(&cli)?;
+    let config = resolve_startup_config(&cli, transport_kind)?;
     run_strict_startup_vector_readiness_gate(&config)?;
     run_semantic_runtime_startup_gate(&config)?;
-    let _watch_runtime = maybe_start_watch_runtime(&config, transport_kind)?;
+    let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
+    let _watch_runtime = maybe_start_watch_runtime(&watch_runtime_config, transport_kind)?;
 
     let server = FriggMcpServer::new(config);
     if let Some(runtime) = http_runtime {
         serve_http(runtime, server).await?;
     } else {
+        server.auto_attach_stdio_default_workspace_from_current_dir()?;
         server.serve_stdio().await?;
     }
 
     Ok(())
 }
 
-fn resolve_base_config(cli: &Cli) -> Result<FriggConfig, Box<dyn Error>> {
-    let mut config = FriggConfig::from_workspace_roots(cli.workspace_roots.clone())?;
+fn resolve_base_config(
+    cli: &Cli,
+    workspace_roots_required: bool,
+    watch_default_transport: Option<RuntimeTransportKind>,
+) -> Result<FriggConfig, Box<dyn Error>> {
+    if workspace_roots_required && cli.workspace_roots.is_empty() {
+        return Err(Box::new(io::Error::other(
+            "at least one workspace root is required",
+        )));
+    }
+
+    let mut config = if workspace_roots_required {
+        FriggConfig::from_workspace_roots(cli.workspace_roots.clone())?
+    } else {
+        FriggConfig::from_optional_workspace_roots(cli.workspace_roots.clone())?
+    };
     if let Some(max_file_bytes) = cli.max_file_bytes {
         config.max_file_bytes = max_file_bytes;
     }
-    config.watch = resolve_watch_config(cli);
-    config.validate()?;
+    config.watch = resolve_watch_config(cli, watch_default_transport);
+    if workspace_roots_required {
+        config.validate()?;
+    } else {
+        config.validate_for_serving()?;
+    }
     Ok(config)
 }
 
 fn resolve_command_config(cli: &Cli, command: Command) -> Result<FriggConfig, Box<dyn Error>> {
     match command {
-        Command::Init | Command::Verify => resolve_base_config(cli),
-        Command::Reindex { .. } => resolve_startup_config(cli),
+        Command::Init | Command::Verify => resolve_base_config(cli, true, None),
+        Command::Reindex { .. } => resolve_startup_config(cli, RuntimeTransportKind::Stdio),
     }
 }
 
-fn resolve_startup_config(cli: &Cli) -> Result<FriggConfig, Box<dyn Error>> {
-    let mut config = resolve_base_config(cli)?;
+fn resolve_startup_config(
+    cli: &Cli,
+    transport_kind: RuntimeTransportKind,
+) -> Result<FriggConfig, Box<dyn Error>> {
+    let mut config = resolve_base_config(cli, false, Some(transport_kind))?;
     config.semantic_runtime = resolve_semantic_runtime_config(cli);
-    config.validate()?;
+    config.validate_for_serving()?;
     Ok(config)
 }
 
@@ -252,8 +275,13 @@ fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfig {
     }
 }
 
-fn resolve_watch_config(cli: &Cli) -> WatchConfig {
-    let mut watch = WatchConfig::default();
+fn resolve_watch_config(
+    cli: &Cli,
+    watch_default_transport: Option<RuntimeTransportKind>,
+) -> WatchConfig {
+    let mut watch = watch_default_transport
+        .map(WatchConfig::default_for_transport)
+        .unwrap_or_default();
     if let Some(mode) = cli.watch_mode {
         watch.mode = mode;
     }
@@ -264,6 +292,30 @@ fn resolve_watch_config(cli: &Cli) -> WatchConfig {
         watch.retry_ms = retry_ms;
     }
     watch
+}
+
+fn resolve_watch_runtime_config(
+    config: &FriggConfig,
+    transport_kind: RuntimeTransportKind,
+) -> io::Result<FriggConfig> {
+    if transport_kind != RuntimeTransportKind::Stdio || !config.workspace_roots.is_empty() {
+        return Ok(config.clone());
+    }
+
+    let mut watch_config = config.clone();
+    watch_config.workspace_roots = vec![resolve_stdio_default_workspace_root()?];
+    Ok(watch_config)
+}
+
+fn resolve_stdio_default_workspace_root() -> io::Result<PathBuf> {
+    let current_dir = std::env::current_dir()?;
+    Ok(find_enclosing_git_root(&current_dir).unwrap_or(current_dir))
+}
+
+fn find_enclosing_git_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find_map(|ancestor| ancestor.join(".git").exists().then(|| ancestor.to_path_buf()))
 }
 
 fn run_storage_bootstrap_command(
@@ -1093,9 +1145,18 @@ mod tests {
     }
 
     #[test]
-    fn watch_runtime_defaults_to_auto_with_standard_timers() {
+    fn watch_runtime_defaults_to_off_for_stdio_with_standard_timers() {
         let cli = base_cli();
-        let watch = resolve_watch_config(&cli);
+        let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));
+        assert_eq!(watch.mode, WatchMode::Off);
+        assert_eq!(watch.debounce_ms, 750);
+        assert_eq!(watch.retry_ms, 5_000);
+    }
+
+    #[test]
+    fn watch_runtime_defaults_to_auto_for_http_with_standard_timers() {
+        let cli = base_cli();
+        let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::LoopbackHttp));
         assert_eq!(watch.mode, WatchMode::Auto);
         assert_eq!(watch.debounce_ms, 750);
         assert_eq!(watch.retry_ms, 5_000);
@@ -1108,7 +1169,7 @@ mod tests {
         cli.watch_debounce_ms = Some(1_250);
         cli.watch_retry_ms = Some(9_000);
 
-        let watch = resolve_watch_config(&cli);
+        let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));
         assert_eq!(watch.mode, WatchMode::On);
         assert_eq!(watch.debounce_ms, 1_250);
         assert_eq!(watch.retry_ms, 9_000);
@@ -1185,7 +1246,7 @@ mod tests {
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_model = Some("text-embedding-3-small".to_owned());
 
-        let error = resolve_startup_config(&cli)
+        let error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect_err("startup config should reject enabled semantic runtime without provider");
         assert!(
             error
@@ -1201,7 +1262,7 @@ mod tests {
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::OpenAi);
 
-        let config = resolve_startup_config(&cli)
+        let config = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect("startup config should accept provider default semantic model");
         assert_eq!(
             config.semantic_runtime.normalized_model(),
@@ -1213,7 +1274,7 @@ mod tests {
     fn startup_config_rejects_zero_watch_timers() {
         let mut cli = base_cli();
         cli.watch_debounce_ms = Some(0);
-        let debounce_error = resolve_startup_config(&cli)
+        let debounce_error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect_err("startup config should reject watch-debounce-ms=0");
         assert!(
             debounce_error
@@ -1224,7 +1285,7 @@ mod tests {
 
         let mut retry_cli = base_cli();
         retry_cli.watch_retry_ms = Some(0);
-        let retry_error = resolve_startup_config(&retry_cli)
+        let retry_error = resolve_startup_config(&retry_cli, RuntimeTransportKind::Stdio)
             .expect_err("startup config should reject watch-retry-ms=0");
         assert!(
             retry_error
@@ -1270,7 +1331,7 @@ mod tests {
         let mut cli = base_cli();
         cli.max_file_bytes = Some(2 * 1024 * 1024);
 
-        let config = resolve_startup_config(&cli)
+        let config = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect("startup config should accept explicit max-file-bytes override");
         assert_eq!(config.max_file_bytes, 2 * 1024 * 1024);
     }
@@ -1280,7 +1341,7 @@ mod tests {
         let mut cli = base_cli();
         cli.max_file_bytes = Some(0);
 
-        let error = resolve_startup_config(&cli)
+        let error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect_err("startup config should reject max-file-bytes=0");
         assert!(
             error
@@ -1288,6 +1349,54 @@ mod tests {
                 .contains("max_file_bytes must be greater than zero"),
             "unexpected startup config error: {error}"
         );
+    }
+
+    #[test]
+    fn startup_config_allows_empty_workspace_roots_for_http_serving() {
+        let mut cli = base_cli();
+        cli.workspace_roots.clear();
+
+        let config = resolve_startup_config(&cli, RuntimeTransportKind::LoopbackHttp)
+            .expect("startup config should allow empty workspace roots for serving");
+        assert!(config.workspace_roots.is_empty());
+        assert_eq!(config.watch.mode, WatchMode::Auto);
+    }
+
+    #[test]
+    fn command_config_rejects_empty_workspace_roots() {
+        let mut cli = base_cli();
+        cli.workspace_roots.clear();
+
+        let error = resolve_command_config(&cli, Command::Init)
+            .expect_err("utility commands should still require at least one workspace root");
+        assert!(
+            error
+                .to_string()
+                .contains("at least one workspace root is required"),
+            "unexpected command config error: {error}"
+        );
+    }
+
+    #[test]
+    fn stdio_watch_runtime_config_uses_current_workspace_when_startup_roots_are_empty() {
+        let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid");
+        let watch_config = resolve_watch_runtime_config(&config, RuntimeTransportKind::Stdio)
+            .expect("stdio watch runtime config should resolve current workspace");
+        assert_eq!(watch_config.workspace_roots.len(), 1);
+        assert!(
+            watch_config.workspace_roots[0].exists(),
+            "resolved stdio watch workspace root should exist"
+        );
+    }
+
+    #[test]
+    fn http_watch_runtime_config_keeps_empty_startup_roots() {
+        let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid");
+        let watch_config = resolve_watch_runtime_config(&config, RuntimeTransportKind::LoopbackHttp)
+            .expect("http watch runtime config should preserve empty startup roots");
+        assert!(watch_config.workspace_roots.is_empty());
     }
 
     #[test]
