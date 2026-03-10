@@ -825,8 +825,7 @@ impl SymbolGraph {
             .filter(|occurrence| occurrence.range.start_line <= line)
             .filter(|occurrence| {
                 column.is_none_or(|value| {
-                    occurrence.range.start_line < line
-                        || occurrence.range.start_column <= value
+                    occurrence.range.start_line < line || occurrence.range.start_column <= value
                 })
             })
             .filter_map(|occurrence| {
@@ -866,7 +865,10 @@ impl SymbolGraph {
                 .then(right.4.cmp(&left.4))
                 .then(left.5.cmp(&right.5))
         });
-        ranked.into_iter().next().map(|(_, _, _, _, _, _, symbol)| symbol)
+        ranked
+            .into_iter()
+            .next()
+            .map(|(_, _, _, _, _, _, symbol)| symbol)
     }
 
     pub fn precise_relationships_from_symbol(

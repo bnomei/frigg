@@ -844,8 +844,7 @@ impl FriggMcpServer {
         line: usize,
         column: Option<usize>,
         limit: usize,
-    ) -> Result<Option<(Json<GoToDefinitionResponse>, String, String, String)>, ErrorData>
-    {
+    ) -> Result<Option<(Json<GoToDefinitionResponse>, String, String, String)>, ErrorData> {
         let scoped_roots = self.roots_for_repository(repository_id_hint)?;
         if repository_id_hint.is_none() && scoped_roots.len() != 1 {
             return Ok(None);
@@ -2814,7 +2813,9 @@ impl FriggMcpServer {
                         mtime_ns: entry.mtime_ns,
                     })
                     .collect::<Vec<_>>();
-                if let Some(validated_digests) = validate_manifest_digests_for_root(root, &snapshot_digests) {
+                if let Some(validated_digests) =
+                    validate_manifest_digests_for_root(root, &snapshot_digests)
+                {
                     return Some(Self::root_signature(&validated_digests));
                 }
             }
@@ -4121,7 +4122,10 @@ impl FriggMcpServer {
             return;
         }
         if self
-            .try_reuse_latest_precise_graph_for_repository(&workspace.repository_id, &workspace.root)
+            .try_reuse_latest_precise_graph_for_repository(
+                &workspace.repository_id,
+                &workspace.root,
+            )
             .is_some()
         {
             return;
@@ -5564,12 +5568,8 @@ impl FriggMcpServer {
                         params_for_blocking.path.as_deref(),
                         params_for_blocking.line,
                     ) {
-                        if let Some((
-                            response,
-                            repository_id,
-                            precise_symbol,
-                            precision,
-                        )) = server.try_cached_precise_definition_fast_path(
+                        if let Some((response, repository_id, precise_symbol, precision)) = server
+                            .try_cached_precise_definition_fast_path(
                             params_for_blocking.repository_id.as_deref(),
                             path,
                             line,
@@ -8675,6 +8675,52 @@ mod runtime_gate_tests {
             cached.coverage_mode,
             crate::mcp::server_state::PreciseCoverageMode::Full
         );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn cached_precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild() {
+        let workspace_root = temp_workspace_root("precise-fast-path");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace src directory");
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub struct User;\n\npub fn current_user() -> User { User }\n",
+        )
+        .expect("failed to write source fixture");
+        write_scip_protobuf_fixture(&workspace_root, "fixture.scip");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config");
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let workspace = server
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .attached_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        server.prewarm_precise_graph_for_workspace(&workspace);
+
+        let response = server
+            .try_cached_precise_definition_fast_path(
+                Some(&workspace.repository_id),
+                "src/lib.rs",
+                1,
+                Some(13),
+                10,
+            )
+            .expect("cached precise fast path should not error")
+            .expect("cached precise fast path should resolve a definition");
+        assert_eq!(response.1, workspace.repository_id);
+        assert_eq!(response.2, "scip-rust pkg repo#User");
+        assert_eq!(response.3, "precise");
+        assert_eq!(response.0.0.matches.len(), 1);
+        assert_eq!(response.0.0.matches[0].path, "src/lib.rs");
+        assert_eq!(response.0.0.matches[0].line, 1);
 
         let _ = fs::remove_dir_all(workspace_root);
     }

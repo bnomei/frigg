@@ -10,8 +10,8 @@ use frigg::mcp::types::{
     FindImplementationsParams, FindReferencesParams, GoToDefinitionParams, IncomingCallsParams,
     ListRepositoriesParams, OutgoingCallsParams, ReadFileParams, SearchHybridParams,
     SearchPatternType, SearchStructuralParams, SearchSymbolParams, SearchSymbolPathClass,
-    SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
-    WorkspaceIndexComponentState, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceIndexComponentState,
+    WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
 use frigg::storage::{
@@ -1298,8 +1298,14 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
     assert_eq!(first.total_matches, 3);
     assert_eq!(first.matches.len(), 2);
     assert!(first.truncated);
-    assert_eq!(first.resume_from.as_ref().map(|cursor| cursor.line), Some(6));
-    assert_eq!(first.resume_from.as_ref().map(|cursor| cursor.column), Some(5));
+    assert_eq!(
+        first.resume_from.as_ref().map(|cursor| cursor.line),
+        Some(6)
+    );
+    assert_eq!(
+        first.resume_from.as_ref().map(|cursor| cursor.column),
+        Some(5)
+    );
     assert_eq!(first.matches[0].window.start_line, 1);
     assert_eq!(first.matches[0].window.end_line, 3);
     assert_eq!(first.matches[1].window.start_line, 3);
@@ -1344,7 +1350,10 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
     assert_eq!(zoom.total_matches, 0);
     assert!(zoom.matches.is_empty());
     assert!(!zoom.truncated);
-    assert_eq!(zoom.window.as_ref().map(|window| window.start_line), Some(3));
+    assert_eq!(
+        zoom.window.as_ref().map(|window| window.start_line),
+        Some(3)
+    );
     assert_eq!(zoom.window.as_ref().map(|window| window.end_line), Some(5));
 
     let refine = server

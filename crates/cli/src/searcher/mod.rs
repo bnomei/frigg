@@ -4544,6 +4544,164 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_tool_surface_queries_prefer_mcp_runtime_surface_over_searcher_noise()
+    -> FriggResult<()> {
+        let query = "which MCP tools are core versus extended and where are tool surface types and runtime gating defined";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "contracts/tools/v1/README.md",
+                    1,
+                    1,
+                    "tool surface profile core extended_only tools/list",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/tool_surface.rs",
+                    1,
+                    1,
+                    "ToolSurfaceProfile::Core ToolSurfaceProfile::Extended",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/types.rs",
+                    1,
+                    1,
+                    "tools/list tool metadata runtime response types",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/mcp/mod.rs",
+                    1,
+                    1,
+                    "pub mod server pub mod types pub mod tool_surface",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/searcher/mod.rs",
+                    1,
+                    1,
+                    "search_hybrid ranking intent tool surface docs",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/embeddings/mod.rs",
+                    1,
+                    1,
+                    "embedding runtime provider",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            6,
+            query,
+        )?;
+
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "crates/cli/src/mcp/tool_surface.rs")
+                < ranked
+                    .iter()
+                    .position(|entry| entry.document.path == "crates/cli/src/searcher/mod.rs"),
+            "tool-surface runtime file should outrank searcher noise for MCP tool-surface queries"
+        );
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "crates/cli/src/mcp/types.rs")
+                < ranked
+                    .iter()
+                    .position(|entry| entry.document.path == "crates/cli/src/embeddings/mod.rs"),
+            "MCP runtime types should outrank unrelated embedding runtime files"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_mcp_http_startup_queries_prefer_http_runtime_entrypoint() -> FriggResult<()> {
+        let query = "where does MCP HTTP startup happen and which runtime entrypoint wires the loopback HTTP server";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/main.rs",
+                    1,
+                    1,
+                    "mcp http startup cli command wires runtime",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/http_runtime.rs",
+                    1,
+                    1,
+                    "loopback http server startup runtime tool surface",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/embeddings/mod.rs",
+                    1,
+                    1,
+                    "http client embedding provider runtime",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/searcher/mod.rs",
+                    1,
+                    1,
+                    "runtime startup ranking path",
+                ),
+                text_match(
+                    "repo-001",
+                    "docs/overview.md",
+                    1,
+                    1,
+                    "mcp http runtime overview",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            5,
+            query,
+        )?;
+
+        assert!(
+            ranked[0].document.path == "crates/cli/src/http_runtime.rs"
+                || ranked[1].document.path == "crates/cli/src/http_runtime.rs",
+            "http_runtime.rs should land at the top for MCP HTTP startup queries"
+        );
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "crates/cli/src/http_runtime.rs")
+                < ranked
+                    .iter()
+                    .position(|entry| entry.document.path == "crates/cli/src/embeddings/mod.rs"),
+            "HTTP runtime entrypoint should outrank unrelated embedding runtime files"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_navigation_fallback_queries_promote_mcp_runtime_witnesses() -> FriggResult<()>
     {
         let query = "find EmbeddingProvider implementations and fallback when precise navigation data is missing";

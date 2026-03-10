@@ -532,14 +532,8 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
         payload["source_refs"]["scan_scope"]["start_line"].as_u64(),
         Some(1)
     );
-    assert_eq!(
-        payload["source_refs"]["total_matches"].as_u64(),
-        Some(1)
-    );
-    assert_eq!(
-        payload["source_refs"]["truncated"].as_bool(),
-        Some(false)
-    );
+    assert_eq!(payload["source_refs"]["total_matches"].as_u64(), Some(1));
+    assert_eq!(payload["source_refs"]["truncated"].as_bool(), Some(false));
 
     cleanup_workspace(&workspace_root);
 }

@@ -75,9 +75,11 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
     let explore_anchor = explore_probe.matches[0].anchor.clone();
     let deep_search_playbook = build_deep_search_playbook();
     let deep_search_trace_artifact = runtime
-        .block_on(extended_server.deep_search_run(Parameters(DeepSearchRunParams {
-            playbook: deep_search_playbook.clone(),
-        })))
+        .block_on(
+            extended_server.deep_search_run(Parameters(DeepSearchRunParams {
+                playbook: deep_search_playbook.clone(),
+            })),
+        )
         .expect("deep_search benchmark probe should succeed")
         .0
         .trace_artifact;

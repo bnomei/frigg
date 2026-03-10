@@ -302,16 +302,8 @@ impl HybridRankingIntent {
             "extended_only",
         ]) || (has_any(&["mcp"])
             && has_any(&[
-                "http",
-                "startup",
-                "runtime",
-                "tool",
-                "tools",
-                "surface",
-                "core",
-                "extended",
-                "attach",
-                "loopback",
+                "http", "startup", "runtime", "tool", "tools", "surface", "core", "extended",
+                "attach", "loopback",
             ]));
         let wants_runtime_config_artifacts = has_any(&[
             "runtime config",
