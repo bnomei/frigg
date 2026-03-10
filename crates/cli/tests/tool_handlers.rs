@@ -6,15 +6,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    DocumentSymbolsParams, FindDeclarationsParams, FindImplementationsParams, FindReferencesParams,
-    GoToDefinitionParams, IncomingCallsParams, ListRepositoriesParams, OutgoingCallsParams,
-    ReadFileParams, SearchHybridParams, SearchPatternType, SearchStructuralParams,
-    SearchSymbolParams, SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
-    WorkspaceResolveMode, WorkspaceStorageIndexState,
+    DocumentSymbolsParams, ExploreOperation, ExploreParams, FindDeclarationsParams,
+    FindImplementationsParams, FindReferencesParams, GoToDefinitionParams, IncomingCallsParams,
+    ListRepositoriesParams, OutgoingCallsParams, ReadFileParams, SearchHybridParams,
+    SearchPatternType, SearchStructuralParams, SearchSymbolParams, SearchSymbolPathClass,
+    SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceIndexComponentState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
 use frigg::storage::{
-    ManifestEntry, Storage, ensure_provenance_db_parent_dir, resolve_provenance_db_path,
+    ManifestEntry, SemanticChunkEmbeddingRecord, Storage, ensure_provenance_db_parent_dir,
+    resolve_provenance_db_path,
 };
 use protobuf::{EnumOrUnknown, Message};
 use rmcp::handler::server::wrapper::Parameters;
@@ -50,6 +52,14 @@ fn retryable_tag(error: &rmcp::ErrorData) -> Option<bool> {
         .and_then(|value| value.as_bool())
 }
 
+fn error_data_field<'a>(error: &'a rmcp::ErrorData, key: &str) -> &'a serde_json::Value {
+    error
+        .data
+        .as_ref()
+        .and_then(|value| value.get(key))
+        .unwrap_or_else(|| panic!("expected structured error data field `{key}`"))
+}
+
 fn temp_workspace_root(test_name: &str) -> PathBuf {
     let nanos_since_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -65,6 +75,12 @@ fn server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace root must produce valid config");
     FriggMcpServer::new(config)
+}
+
+fn extended_runtime_server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
+        .expect("workspace root must produce valid config");
+    FriggMcpServer::new_with_runtime_options(config, false, true)
 }
 
 fn server_for_config(config: FriggConfig) -> FriggMcpServer {
@@ -127,6 +143,52 @@ fn seed_manifest_snapshot(
     storage
         .upsert_manifest(repository_id, snapshot_id, &manifest_entries)
         .expect("manifest snapshot should persist");
+}
+
+fn seed_semantic_embeddings(
+    workspace_root: &Path,
+    repository_id: &str,
+    snapshot_id: &str,
+    records: &[SemanticChunkEmbeddingRecord],
+) {
+    let db_path =
+        ensure_provenance_db_parent_dir(workspace_root).expect("semantic storage path should work");
+    let resolved_db_path =
+        resolve_provenance_db_path(workspace_root).expect("semantic db path should resolve");
+    assert_eq!(db_path, resolved_db_path);
+
+    let storage = Storage::new(db_path);
+    storage
+        .initialize()
+        .expect("semantic storage should initialize");
+    storage
+        .replace_semantic_embeddings_for_repository(repository_id, snapshot_id, records)
+        .expect("semantic embeddings should persist");
+}
+
+fn semantic_record(
+    repository_id: &str,
+    snapshot_id: &str,
+    path: &str,
+    chunk_index: usize,
+    embedding: Vec<f32>,
+) -> SemanticChunkEmbeddingRecord {
+    SemanticChunkEmbeddingRecord {
+        chunk_id: format!("chunk-{}-{chunk_index}", path.replace('/', "_")),
+        repository_id: repository_id.to_owned(),
+        snapshot_id: snapshot_id.to_owned(),
+        path: path.to_owned(),
+        language: "rust".to_owned(),
+        chunk_index,
+        start_line: 1,
+        end_line: 1,
+        provider: "openai".to_owned(),
+        model: "text-embedding-3-small".to_owned(),
+        trace_id: Some("trace-001".to_owned()),
+        content_hash_blake3: format!("hash-{}-{chunk_index}", path.replace('/', "_")),
+        content_text: path.to_owned(),
+        embedding,
+    }
 }
 
 fn write_scip_fixture(workspace_root: &Path, file_name: &str, payload: &str) {
@@ -224,6 +286,18 @@ async fn core_list_repositories_is_deterministic() {
         first.repositories[0].root_path,
         second.repositories[0].root_path
     );
+    assert!(first.repositories[0].storage.is_some());
+    assert!(first.repositories[0].health.is_some());
+    assert_eq!(
+        first.repositories[0]
+            .health
+            .as_ref()
+            .map(|health| health.lexical.state),
+        second.repositories[0]
+            .health
+            .as_ref()
+            .map(|health| health.lexical.state)
+    );
 }
 
 #[tokio::test]
@@ -247,6 +321,18 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert_eq!(first.resolution, WorkspaceResolveMode::GitRoot);
     assert!(first.session_default);
     assert_ne!(first.storage.index_state, WorkspaceStorageIndexState::Error);
+    assert!(first.repository.storage.is_none());
+    assert!(first.repository.health.is_some());
+    let serialized: serde_json::Value =
+        serde_json::to_value(&first).expect("workspace_attach response should serialize");
+    assert!(serialized.get("storage").is_some());
+    assert!(
+        serialized
+            .get("repository")
+            .and_then(|value| value.get("storage"))
+            .is_none(),
+        "workspace_attach should keep storage only at the top level"
+    );
 
     let second = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
@@ -268,13 +354,183 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         .expect("workspace_current should succeed")
         .0;
     assert!(current.session_default);
+    let current_repository = current
+        .repository
+        .as_ref()
+        .expect("workspace_current should return attached repository");
+    assert_eq!(current_repository.repository_id, "repo-001");
+    assert!(current_repository.health.is_some());
+}
+
+#[tokio::test]
+async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
+    let workspace_root = temp_workspace_root("workspace-attach-schema-only-storage");
+    fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn attached_only() -> &'static str { \"fixture\" }\n",
+    )
+    .expect("workspace source file should be writable");
+
+    let db_path = ensure_provenance_db_parent_dir(&workspace_root)
+        .expect("workspace storage path should resolve");
+    let storage = Storage::new(db_path);
+    storage
+        .initialize()
+        .expect("schema-only workspace storage should initialize");
+
+    let mut config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    config.semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::OpenAi),
+        model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    };
+    let server = server_for_config(config);
+
+    let response = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: workspace_root.display().to_string(),
+            set_default: None,
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+        }))
+        .await
+        .expect("workspace_attach should succeed for schema-only storage")
+        .0;
+
     assert_eq!(
-        current
-            .repository
-            .expect("workspace_current should return attached repository")
-            .repository_id,
-        "repo-001"
+        response.storage.index_state,
+        WorkspaceStorageIndexState::Uninitialized
     );
+    assert!(response.storage.exists);
+    assert!(
+        response.storage.initialized,
+        "storage summary should still report that the schema exists even when no manifest snapshot has been indexed"
+    );
+    assert_eq!(
+        response
+            .repository
+            .health
+            .as_ref()
+            .map(|health| health.lexical.state),
+        Some(WorkspaceIndexComponentState::Missing)
+    );
+    assert_eq!(
+        response
+            .repository
+            .health
+            .as_ref()
+            .and_then(|health| health.lexical.reason.as_deref()),
+        Some("missing_manifest_snapshot")
+    );
+    assert_eq!(
+        response
+            .repository
+            .health
+            .as_ref()
+            .map(|health| health.semantic.state),
+        Some(WorkspaceIndexComponentState::Missing)
+    );
+    assert_eq!(
+        response
+            .repository
+            .health
+            .as_ref()
+            .and_then(|health| health.semantic.reason.as_deref()),
+        Some("missing_manifest_snapshot")
+    );
+    let serialized: serde_json::Value =
+        serde_json::to_value(&response).expect("workspace_attach response should serialize");
+    assert!(
+        serialized
+            .pointer("/repository/health/lexical/artifact_count")
+            .is_none(),
+        "unknown lexical artifact counts should be omitted instead of serialized as null"
+    );
+    assert!(
+        serialized
+            .pointer("/repository/health/semantic/artifact_count")
+            .is_none(),
+        "unknown semantic artifact counts should be omitted instead of serialized as null"
+    );
+
+    fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");
+}
+
+#[tokio::test]
+async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
+    let workspace_root = temp_workspace_root("workspace-attach-artifact-counts");
+    fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        "fn main() { println!(\"hello\"); }\n",
+    )
+    .expect("workspace source file should be writable");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn helper() -> &'static str { \"fixture\" }\n",
+    )
+    .expect("workspace source file should be writable");
+
+    seed_manifest_snapshot(
+        &workspace_root,
+        "repo-001",
+        "snapshot-001",
+        &["src/main.rs", "src/lib.rs"],
+    );
+    seed_semantic_embeddings(
+        &workspace_root,
+        "repo-001",
+        "snapshot-001",
+        &[
+            semantic_record("repo-001", "snapshot-001", "src/main.rs", 0, vec![1.0, 0.0]),
+            semantic_record("repo-001", "snapshot-001", "src/lib.rs", 0, vec![0.6, 0.0]),
+        ],
+    );
+
+    let mut config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    config.semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::OpenAi),
+        model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    };
+    let server = server_for_config(config);
+
+    let response = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: workspace_root.display().to_string(),
+            set_default: None,
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+        }))
+        .await
+        .expect("workspace_attach should succeed for indexed workspace")
+        .0;
+
+    let health = response
+        .repository
+        .health
+        .as_ref()
+        .expect("workspace_attach should include health");
+    assert_eq!(health.lexical.state, WorkspaceIndexComponentState::Ready);
+    assert_eq!(health.lexical.artifact_count, Some(2));
+    assert_eq!(health.semantic.state, WorkspaceIndexComponentState::Ready);
+    assert_eq!(health.semantic.artifact_count, Some(2));
+
+    let serialized: serde_json::Value =
+        serde_json::to_value(&response).expect("workspace_attach response should serialize");
+    assert_eq!(
+        serialized.pointer("/repository/health/lexical/artifact_count"),
+        Some(&serde_json::Value::from(2))
+    );
+    assert_eq!(
+        serialized.pointer("/repository/health/semantic/artifact_count"),
+        Some(&serde_json::Value::from(2))
+    );
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
@@ -578,6 +834,10 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error.message, "line_end must be greater than or equal to line_start",
+        "invalid read_file line ranges should preserve the typed invalid_params message"
+    );
 }
 
 #[tokio::test]
@@ -596,6 +856,7 @@ async fn core_search_text_literal_scoped_to_repository() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.total_matches, 1);
     assert_eq!(response.matches[0].repository_id, "repo-001");
     assert_eq!(response.matches[0].path, "src/lib.rs");
 }
@@ -621,7 +882,7 @@ async fn core_search_text_regex_mode_executes_regex_search() {
 }
 
 #[tokio::test]
-async fn core_search_hybrid_returns_deterministic_matches_and_note_metadata() {
+async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
     let server = server_for_fixture();
     let first = server
         .search_hybrid(Parameters(SearchHybridParams {
@@ -652,13 +913,14 @@ async fn core_search_hybrid_returns_deterministic_matches_and_note_metadata() {
     assert_eq!(first.matches.len(), 1);
     assert_eq!(first.matches[0].repository_id, "repo-001");
     assert_eq!(first.matches[0].path, "src/lib.rs");
-    assert_eq!(first.semantic_requested, Some(false));
-    assert_eq!(first.semantic_enabled, Some(false));
-    assert_eq!(first.semantic_status.as_deref(), Some("disabled"));
-    assert_eq!(
-        first.semantic_reason.as_deref(),
-        Some("semantic channel disabled by request toggle")
-    );
+    assert_eq!(first.semantic_requested, None);
+    assert_eq!(first.semantic_enabled, None);
+    assert_eq!(first.semantic_status, None);
+    assert_eq!(first.semantic_hit_count, None);
+    assert_eq!(first.semantic_match_count, None);
+    assert_eq!(first.semantic_reason, None);
+    assert_eq!(first.warning, None);
+    assert_eq!(first.note, None);
     assert!(
         first.matches[0].blended_score >= 0.0,
         "hybrid blended score should be non-negative"
@@ -666,30 +928,90 @@ async fn core_search_hybrid_returns_deterministic_matches_and_note_metadata() {
 
     let structured: serde_json::Value =
         serde_json::to_value(&first).expect("search_hybrid response should serialize");
-    assert_eq!(structured["semantic_status"], "disabled");
-    assert_eq!(structured["semantic_enabled"], false);
-    assert_eq!(structured["semantic_requested"], false);
     assert_eq!(
-        structured["semantic_reason"],
-        "semantic channel disabled by request toggle"
-    );
-
-    let note = first
-        .note
-        .as_ref()
-        .expect("search_hybrid should emit deterministic note metadata");
-    let note_json: serde_json::Value =
-        serde_json::from_str(note).expect("search_hybrid note should be valid JSON");
-    assert_eq!(note_json["semantic_status"], "disabled");
-    assert_eq!(note_json["semantic_enabled"], false);
-    assert_eq!(note_json["semantic_requested"], false);
-    assert_eq!(
-        structured["semantic_status"], note_json["semantic_status"],
-        "top-level semantic status should stay aligned with note metadata"
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_status"))
+            .and_then(|value| value.as_str()),
+        Some("disabled")
     );
     assert_eq!(
-        structured["semantic_reason"], note_json["semantic_reason"],
-        "top-level semantic reason should stay aligned with note metadata"
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_enabled"))
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_requested"))
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_candidate_count"))
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_hit_count"))
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_match_count"))
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_reason"))
+            .and_then(|value| value.as_str()),
+        Some("semantic channel disabled by request toggle")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("warning"))
+            .and_then(|value| value.as_str()),
+        Some(
+            "semantic retrieval is disabled; results are ranked from lexical and graph signals only (semantic channel disabled by request toggle)"
+        )
+    );
+    for field in [
+        "semantic_requested",
+        "semantic_enabled",
+        "semantic_status",
+        "semantic_reason",
+        "semantic_hit_count",
+        "semantic_match_count",
+        "warning",
+        "note",
+    ] {
+        assert!(
+            structured.get(field).is_none(),
+            "search_hybrid should omit duplicate top-level field `{field}` when metadata is present"
+        );
+    }
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_status"))
+            .and_then(|value| value.as_str()),
+        second
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("semantic_status"))
+            .and_then(|value| value.as_str()),
+        "metadata-only semantic status should remain deterministic"
     );
 }
 
@@ -714,6 +1036,99 @@ async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error.message, "query must not be empty",
+        "empty search_hybrid queries should return the typed invalid_params message"
+    );
+}
+
+#[tokio::test]
+async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fails_non_strict() {
+    let mut config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+        .expect("fixture root must produce valid config");
+    config.semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::OpenAi),
+        model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    };
+    let server = server_for_config(config);
+
+    let response = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: None,
+            limit: Some(10),
+            weights: None,
+            semantic: Some(true),
+        }))
+        .await
+        .expect("non-strict semantic startup failure should degrade, not hard-fail")
+        .0;
+
+    assert_eq!(response.semantic_requested, None);
+    assert_eq!(response.semantic_enabled, None);
+    assert_eq!(response.semantic_status, None);
+    assert_eq!(response.semantic_hit_count, None);
+    assert_eq!(response.semantic_match_count, None);
+    assert_eq!(response.note, None);
+    let metadata = response
+        .metadata
+        .as_ref()
+        .expect("search_hybrid should emit structured metadata");
+    assert_eq!(
+        metadata
+            .get("semantic_status")
+            .and_then(|value| value.as_str()),
+        Some("degraded")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_enabled")
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_requested")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_candidate_count")
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_hit_count")
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_match_count")
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert!(
+        metadata
+            .get("semantic_reason")
+            .and_then(|value| value.as_str())
+            .is_some_and(|reason| reason.contains("semantic runtime validation failed")),
+        "degraded semantic reason should explain the validation failure"
+    );
+    assert!(
+        metadata
+            .get("warning")
+            .and_then(|value| value.as_str())
+            .is_some_and(|warning| warning.starts_with(
+                "semantic retrieval is degraded; semantic contribution may be partial"
+            )),
+        "degraded search_hybrid response should emit a clear warning"
+    );
 }
 
 #[tokio::test]
@@ -839,12 +1254,183 @@ async fn core_read_file_enforces_effective_max_bytes_clamp() {
 }
 
 #[tokio::test]
+async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
+    let workspace_root = temp_workspace_root("explore-deterministic");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create explorer fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn demo() {\n\
+         \x20\x20\x20\x20let needle_alpha = 1;\n\
+         \x20\x20\x20\x20let helper_alpha = needle_alpha;\n\
+         \x20\x20\x20\x20let needle_beta = 2;\n\
+         \x20\x20\x20\x20let helper_beta = needle_beta;\n\
+         \x20\x20\x20\x20let needle_gamma = 3;\n\
+         }\n",
+    )
+    .expect("failed to seed explorer fixture");
+
+    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let probe_params = ExploreParams {
+        path: "src/lib.rs".to_owned(),
+        repository_id: Some("repo-001".to_owned()),
+        operation: ExploreOperation::Probe,
+        query: Some("let needle_".to_owned()),
+        pattern_type: Some(SearchPatternType::Literal),
+        anchor: None,
+        context_lines: Some(1),
+        max_matches: Some(2),
+        resume_from: None,
+    };
+
+    let first = server
+        .explore(Parameters(probe_params.clone()))
+        .await
+        .expect("explore probe should succeed")
+        .0;
+    let second = server
+        .explore(Parameters(probe_params))
+        .await
+        .expect("explore probe should be deterministic")
+        .0;
+    assert_eq!(first, second);
+    assert_eq!(first.total_lines, 7);
+    assert_eq!(first.total_matches, 3);
+    assert_eq!(first.matches.len(), 2);
+    assert!(first.truncated);
+    assert_eq!(first.resume_from.as_ref().map(|cursor| cursor.line), Some(6));
+    assert_eq!(first.resume_from.as_ref().map(|cursor| cursor.column), Some(5));
+    assert_eq!(first.matches[0].window.start_line, 1);
+    assert_eq!(first.matches[0].window.end_line, 3);
+    assert_eq!(first.matches[1].window.start_line, 3);
+    assert_eq!(first.matches[1].window.end_line, 5);
+
+    let resumed = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("let needle_".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: Some(1),
+            max_matches: Some(2),
+            resume_from: first.resume_from.clone(),
+        }))
+        .await
+        .expect("explore probe resume should succeed")
+        .0;
+    assert_eq!(resumed.total_matches, 1);
+    assert_eq!(resumed.matches.len(), 1);
+    assert!(!resumed.truncated);
+    assert_eq!(resumed.matches[0].start_line, 6);
+
+    let anchor = first.matches[1].anchor.clone();
+    let zoom = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Zoom,
+            query: None,
+            pattern_type: None,
+            anchor: Some(anchor.clone()),
+            context_lines: Some(1),
+            max_matches: None,
+            resume_from: None,
+        }))
+        .await
+        .expect("explore zoom should succeed")
+        .0;
+    assert_eq!(zoom.total_matches, 0);
+    assert!(zoom.matches.is_empty());
+    assert!(!zoom.truncated);
+    assert_eq!(zoom.window.as_ref().map(|window| window.start_line), Some(3));
+    assert_eq!(zoom.window.as_ref().map(|window| window.end_line), Some(5));
+
+    let refine = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Refine,
+            query: Some("helper_".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: Some(anchor),
+            context_lines: Some(1),
+            max_matches: Some(5),
+            resume_from: None,
+        }))
+        .await
+        .expect("explore refine should succeed")
+        .0;
+    assert_eq!(refine.scan_scope.start_line, 3);
+    assert_eq!(refine.scan_scope.end_line, 5);
+    assert_eq!(refine.total_matches, 2);
+    assert_eq!(refine.matches.len(), 2);
+    assert_eq!(refine.matches[0].start_line, 3);
+    assert_eq!(refine.matches[1].start_line, 5);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn extended_explore_rejects_invalid_mode_payloads() {
+    let workspace_root = temp_workspace_root("explore-invalid-payloads");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create explorer invalid fixture");
+    fs::write(src_root.join("lib.rs"), "pub fn demo() {}\n")
+        .expect("failed to seed explorer invalid fixture");
+
+    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let probe_error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: None,
+            pattern_type: None,
+            anchor: None,
+            context_lines: None,
+            max_matches: None,
+            resume_from: None,
+        }))
+        .await
+        .err()
+        .expect("probe without query should fail");
+    assert_eq!(probe_error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&probe_error), Some("invalid_params"));
+    assert_eq!(probe_error.message, "query must not be empty");
+
+    let zoom_error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Zoom,
+            query: Some("demo".to_owned()),
+            pattern_type: None,
+            anchor: None,
+            context_lines: None,
+            max_matches: None,
+            resume_from: None,
+        }))
+        .await
+        .err()
+        .expect("zoom with query should fail");
+    assert_eq!(zoom_error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&zoom_error), Some("invalid_params"));
+    assert_eq!(zoom_error.message, "query is not allowed for zoom");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_search_symbol_returns_tree_sitter_matches() {
     let server = server_for_fixture();
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(20),
         }))
         .await
@@ -887,6 +1473,8 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "target".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(20),
         }))
         .await
@@ -907,8 +1495,228 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
 }
 
 #[tokio::test]
+async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
+    let workspace_root = temp_workspace_root("search-symbol-blade");
+    let blade_root = workspace_root.join("resources/views/components/dashboard");
+    fs::create_dir_all(&blade_root).expect("failed to create temporary blade fixture");
+    fs::write(
+        blade_root.join("panel.blade.php"),
+        "@section('hero')\n\
+         @props(['title' => 'Dashboard'])\n\
+         <x-slot:icon />\n\
+         <livewire:orders.table />\n",
+    )
+    .expect("failed to seed temporary blade fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "dashboard.panel".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should return blade component matches")
+        .0;
+
+    assert!(
+        response
+            .matches
+            .iter()
+            .any(|matched| matched.symbol == "dashboard.panel" && matched.kind == "component")
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.path == "resources/views/components/dashboard/panel.blade.php")
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_resolves_php_canonical_queries() {
+    let workspace_root = temp_workspace_root("search-symbol-php-canonical");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("OrderHandler.php"),
+        "<?php\n\
+         namespace App\\Handlers;\n\
+         class OrderHandler {\n\
+             public function handle(): void {}\n\
+         }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let class_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "App\\Handlers\\OrderHandler".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should resolve canonical php class queries")
+        .0;
+    assert!(
+        class_response.matches.iter().any(|matched| {
+            matched.symbol == "OrderHandler"
+                && matched.kind == "class"
+                && matched.path == "src/OrderHandler.php"
+        }),
+        "expected canonical class query to resolve class symbol"
+    );
+
+    let method_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "App\\Handlers\\OrderHandler::handle".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should resolve canonical php member queries")
+        .0;
+    assert!(
+        method_response.matches.iter().any(|matched| {
+            matched.symbol == "handle"
+                && matched.kind == "method"
+                && matched.path == "src/OrderHandler.php"
+        }),
+        "expected canonical member query to resolve method symbol"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
+    let workspace_root = temp_workspace_root("search-symbol-runtime-first");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::create_dir_all(workspace_root.join("tests")).expect("failed to create tests fixture");
+    fs::create_dir_all(workspace_root.join("benches")).expect("failed to create benches fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn run() {}\n")
+        .expect("failed to write runtime symbol fixture");
+    fs::write(workspace_root.join("tests/support.rs"), "pub fn run() {}\n")
+        .expect("failed to write tests symbol fixture");
+    fs::write(workspace_root.join("benches/bench.rs"), "pub fn run() {}\n")
+        .expect("failed to write bench symbol fixture");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "run".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should succeed")
+        .0;
+
+    let paths = response
+        .matches
+        .iter()
+        .map(|matched| matched.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(paths[0], "src/lib.rs");
+    assert!(paths.contains(&"tests/support.rs"));
+    assert!(paths.contains(&"benches/bench.rs"));
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_filters_by_path_class_and_path_regex() {
+    let workspace_root = temp_workspace_root("search-symbol-filters");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::create_dir_all(workspace_root.join("tests")).expect("failed to create tests fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn run() {}\n\
+         pub fn helper() {}\n",
+    )
+    .expect("failed to write runtime source");
+    fs::write(workspace_root.join("tests/support.rs"), "pub fn run() {}\n")
+        .expect("failed to write support source");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let support_only = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "run".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: Some(SearchSymbolPathClass::Support),
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should respect path_class filter")
+        .0;
+    assert_eq!(support_only.matches.len(), 1);
+    assert_eq!(support_only.matches[0].path, "tests/support.rs");
+
+    let runtime_slice = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "run".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: Some(r"^src/.*\.rs$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should respect path_regex filter")
+        .0;
+    assert_eq!(runtime_slice.matches.len(), 1);
+    assert_eq!(runtime_slice.matches[0].path, "src/lib.rs");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn core_search_symbol_rejects_abusive_path_regex_with_typed_invalid_params() {
+    let server = server_for_fixture();
+    let abusive_path_regex = "a".repeat(600);
+
+    let error = match server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "greeting".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: Some(abusive_path_regex.clone()),
+            limit: Some(20),
+        }))
+        .await
+    {
+        Ok(_) => panic!("abusive search_symbol path_regex should be rejected"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert!(
+        error.message.contains("invalid path_regex"),
+        "path_regex validation should produce a typed invalid_params message"
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("path_regex"))
+            .and_then(|value| value.as_str()),
+        Some(abusive_path_regex.as_str())
+    );
+}
+
+#[tokio::test]
 async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_corpus() {
-    let workspace_root = temp_workspace_root("search-symbol-stale-manifest");
+    let workspace_root = temp_workspace_root("search-symbol-stale-manifest-snapshot");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
     let source_path = src_root.join("lib.rs");
@@ -921,6 +1729,8 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
         .search_symbol(Parameters(SearchSymbolParams {
             query: "old_name".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(20),
         }))
         .await
@@ -935,6 +1745,8 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
         .search_symbol(Parameters(SearchSymbolParams {
             query: "new_name".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(20),
         }))
         .await
@@ -947,6 +1759,8 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
         .search_symbol(Parameters(SearchSymbolParams {
             query: "old_name".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(20),
         }))
         .await
@@ -959,7 +1773,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
 
 #[tokio::test]
 async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
-    let workspace_root = temp_workspace_root("search-symbol-stale-manifest");
+    let workspace_root = temp_workspace_root("search-symbol-stale-manifest-edit");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
     let lib_path = src_root.join("lib.rs");
@@ -971,6 +1785,8 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "alpha".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(10),
         }))
         .await
@@ -985,6 +1801,8 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "beta_beta".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(10),
         }))
         .await
@@ -997,6 +1815,8 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "alpha".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(10),
         }))
         .await
@@ -1023,8 +1843,11 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1035,6 +1858,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
         response.matches.len() >= 2,
         "expected at least two deterministic heuristic references"
     );
+    assert_eq!(response.total_matches, response.matches.len());
     assert_eq!(response.matches[0].repository_id, "repo-001");
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
@@ -1047,6 +1871,13 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
         .expect("find_references should emit heuristic metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("find_references should emit typed metadata"),
+        &note_json
+    );
     assert_eq!(note_json["heuristic"], true);
     assert_eq!(note_json["confidence"]["low"], response.matches.len());
     assert_eq!(note_json["resolution_source"], "symbol");
@@ -1106,8 +1937,11 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1168,8 +2002,11 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1219,8 +2056,11 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1283,8 +2123,11 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1341,8 +2184,11 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "invalid_params".to_owned(),
+            symbol: Some("invalid_params".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1369,6 +2215,118 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
         note_json["precise_absence_reason"],
         "no_scip_artifacts_discovered"
     );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_precise_results_stay_pinned_to_runtime_target_selection() {
+    let workspace_root = temp_workspace_root("find-references-precise-target-pinning");
+    let src_root = workspace_root.join("src");
+    let benches_root = workspace_root.join("benches");
+    fs::create_dir_all(&src_root).expect("failed to create runtime fixture");
+    fs::create_dir_all(&benches_root).expect("failed to create bench fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn try_execute() {}\n\
+         pub fn runtime_caller() { try_execute(); }\n",
+    )
+    .expect("failed to seed runtime source file");
+    fs::write(
+        benches_root.join("runtime_bottlenecks.rs"),
+        "pub fn try_execute() {}\n\
+         pub fn bench_caller() { try_execute(); }\n",
+    )
+    .expect("failed to seed bench source file");
+    write_scip_fixture(
+        &workspace_root,
+        "target-pinning.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#z_runtime_try_execute", "range": [0, 7, 18], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#runtime_caller", "range": [1, 7, 21], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#z_runtime_try_execute", "range": [1, 26, 37], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#z_runtime_try_execute",
+                  "display_name": "try_execute",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#runtime_caller",
+                  "display_name": "runtime_caller",
+                  "kind": "function",
+                  "relationships": [
+                    { "symbol": "scip-rust pkg repo#z_runtime_try_execute", "is_reference": true }
+                  ]
+                }
+              ]
+            },
+            {
+              "relative_path": "benches/runtime_bottlenecks.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#a_bench_try_execute", "range": [0, 7, 18], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#bench_caller", "range": [1, 7, 19], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#a_bench_try_execute", "range": [1, 24, 35], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#a_bench_try_execute",
+                  "display_name": "try_execute",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#bench_caller",
+                  "display_name": "bench_caller",
+                  "kind": "function",
+                  "relationships": [
+                    { "symbol": "scip-rust pkg repo#a_bench_try_execute", "is_reference": true }
+                  ]
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("try_execute".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should pin precise results to the selected runtime target")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "try_execute");
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].line, 2);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit target selection metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "symbol");
+    assert_eq!(note_json["target_selection"]["selected_path"], "src/lib.rs");
+    assert_eq!(
+        note_json["target_selection"]["selected_path_class"],
+        "runtime"
+    );
+    assert_eq!(note_json["precise"]["reference_count"], 1);
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -1420,8 +2378,11 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1482,8 +2443,11 @@ async fn find_references_falls_back_when_partial_precise_absence_is_non_authorit
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1531,8 +2495,11 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8);
     let error = match server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "User".to_owned(),
+            symbol: Some("User".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(20),
         }))
         .await
@@ -1562,6 +2529,117 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
     );
 
     cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_prefers_location_resolution_when_symbol_and_location_are_both_supplied() {
+    let workspace_root = temp_workspace_root("find-references-location-precedence");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.php"),
+        "<?php\nfunction alpha() {}\nfunction beta() {}\nalpha();\nbeta();\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("alpha".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/lib.php".to_owned()),
+            line: Some(3),
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should prefer location resolution")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "beta");
+    assert_eq!(response.matches[0].path, "src/lib.php");
+    assert_eq!(response.matches[0].line, 5);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit selection metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location");
+    assert_eq!(note_json["target_selection"]["selected_symbol"], "beta");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_resolves_location_only_requests() {
+    let workspace_root = temp_workspace_root("find-references-location-only");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.php"),
+        "<?php\nfunction alpha() {}\nfunction beta() {}\nalpha();\nbeta();\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/lib.php".to_owned()),
+            line: Some(3),
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should resolve location-only requests")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "beta");
+    assert_eq!(response.matches[0].path, "src/lib.php");
+    assert_eq!(response.matches[0].line, 5);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit selection metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location");
+    assert_eq!(note_json["target_selection"]["selected_symbol"], "beta");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_rejects_requests_without_symbol_or_location() {
+    let server = server_for_fixture();
+    let error = match server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+    {
+        Ok(_) => panic!("find_references should reject requests without a symbol or location"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error.message, "either `symbol` or (`path` + `line`) is required",
+        "find_references should emit the typed invalid_params message when neither a symbol nor a location is provided"
+    );
 }
 
 #[tokio::test]
@@ -1619,6 +2697,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 1);
     assert_eq!(response.matches[0].column, 12);
+    assert_eq!(response.matches[0].kind.as_deref(), Some("struct"));
     assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
 
     let note = response
@@ -1627,6 +2706,13 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
         .expect("go_to_definition should emit precision metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("go_to_definition should emit typed metadata"),
+        &note_json
+    );
     assert_eq!(note_json["precision"], "precise");
     assert_eq!(note_json["heuristic"], false);
 
@@ -1669,6 +2755,147 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
     assert_eq!(note_json["resolution_source"], "location");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_prefers_runtime_paths_for_ambiguous_exact_name_queries() {
+    let workspace_root = temp_workspace_root("go-to-definition-runtime-first");
+    let src_root = workspace_root.join("src");
+    let benches_root = workspace_root.join("benches");
+    fs::create_dir_all(&src_root).expect("failed to create runtime fixture");
+    fs::create_dir_all(&benches_root).expect("failed to create bench fixture");
+    fs::write(src_root.join("lib.rs"), "pub fn try_execute() {}\n")
+        .expect("failed to seed runtime fixture source");
+    fs::write(
+        benches_root.join("runtime_bottlenecks.rs"),
+        "pub fn try_execute() {}\n",
+    )
+    .expect("failed to seed bench fixture source");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("try_execute".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should prefer runtime code for ambiguous exact-name queries")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "try_execute");
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit target selection metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["target_selection"]["selected_path"], "src/lib.rs");
+    assert_eq!(
+        note_json["target_selection"]["selected_path_class"],
+        "runtime"
+    );
+    assert_eq!(note_json["target_selection"]["ambiguous_query"], true);
+    assert_eq!(note_json["target_selection"]["candidate_count"], 2);
+    assert_eq!(
+        note_json["target_selection"]["same_rank_candidate_count"],
+        2
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_target_selection() {
+    let workspace_root = temp_workspace_root("go-to-definition-precise-target-pinning");
+    let src_root = workspace_root.join("src");
+    let benches_root = workspace_root.join("benches");
+    fs::create_dir_all(&src_root).expect("failed to create runtime fixture");
+    fs::create_dir_all(&benches_root).expect("failed to create bench fixture");
+    fs::write(src_root.join("lib.rs"), "pub fn try_execute() {}\n")
+        .expect("failed to seed runtime fixture source");
+    fs::write(
+        benches_root.join("runtime_bottlenecks.rs"),
+        "pub fn try_execute() {}\n",
+    )
+    .expect("failed to seed bench fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_target_pinning.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#z_runtime_try_execute", "range": [0, 7, 18], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#z_runtime_try_execute",
+                  "display_name": "try_execute",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            },
+            {
+              "relative_path": "benches/runtime_bottlenecks.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#a_bench_try_execute", "range": [0, 7, 18], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#a_bench_try_execute",
+                  "display_name": "try_execute",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("try_execute".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should keep precise definitions pinned to the selected runtime target")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "try_execute");
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit target selection metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["target_selection"]["selected_path"], "src/lib.rs");
+    assert_eq!(
+        note_json["target_selection"]["selected_path_class"],
+        "runtime"
+    );
+    assert_eq!(note_json["precision"], "precise");
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -2026,7 +3253,8 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
         "pub trait Service {}\n\
          pub struct Impl;\n\
          impl Service for Impl {}\n\
-         pub fn consumer() { let _ = ServiceMarker; }\n\
+         pub fn serve() {}\n\
+         pub fn consumer() { serve(); let _ = ServiceMarker; }\n\
          pub struct ServiceMarker;\n",
     )
     .expect("failed to seed temporary fixture source");
@@ -2040,7 +3268,8 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
               "occurrences": [
                 { "symbol": "scip-rust pkg repo#Service", "range": [0, 10, 17], "symbol_roles": 1 },
                 { "symbol": "scip-rust pkg repo#Impl", "range": [1, 11, 15], "symbol_roles": 1 },
-                { "symbol": "scip-rust pkg repo#consumer", "range": [3, 7, 15], "symbol_roles": 1 }
+                { "symbol": "scip-rust pkg repo#serve", "range": [3, 7, 12], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#consumer", "range": [4, 7, 15], "symbol_roles": 1 }
               ],
               "symbols": [
                 {
@@ -2062,8 +3291,15 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
                   "display_name": "consumer",
                   "kind": "function",
                   "relationships": [
-                    { "symbol": "scip-rust pkg repo#Service", "is_reference": true }
+                    { "symbol": "scip-rust pkg repo#Service", "is_reference": true },
+                    { "symbol": "scip-rust pkg repo#serve", "is_reference": true }
                   ]
+                },
+                {
+                  "symbol": "scip-rust pkg repo#serve",
+                  "display_name": "serve",
+                  "kind": "function",
+                  "relationships": []
                 }
               ]
             }
@@ -2127,7 +3363,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
         .0;
     assert_eq!(outgoing.matches.len(), 1);
     assert_eq!(outgoing.matches[0].source_symbol, "consumer");
-    assert_eq!(outgoing.matches[0].target_symbol, "Service");
+    assert_eq!(outgoing.matches[0].target_symbol, "serve");
     assert_eq!(outgoing.matches[0].relation, "calls");
     assert_eq!(outgoing.matches[0].precision.as_deref(), Some("precise"));
 
@@ -2264,6 +3500,89 @@ async fn navigation_find_implementations_prefers_relationship_bearing_precise_ca
 }
 
 #[tokio::test]
+async fn navigation_find_implementations_uses_precise_occurrences_when_relationships_are_absent() {
+    let workspace_root = temp_workspace_root("navigation-implementations-precise-occurrences");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub trait Service {}\n\
+         pub struct Impl;\n\
+         impl Service for Impl {}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "impl-occurrences.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#Service", "range": [0, 10, 17], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#Impl", "range": [1, 11, 15], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#Service", "range": [2, 5, 12], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#Service",
+                  "display_name": "Service",
+                  "kind": "trait",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#Impl",
+                  "display_name": "Impl",
+                  "kind": "struct",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .find_implementations(Parameters(FindImplementationsParams {
+            symbol: Some("Service".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_implementations should derive precise implementations from occurrences")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "Impl");
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].line, 2);
+    assert_eq!(response.matches[0].column, 12);
+    assert_eq!(
+        response.matches[0].relation.as_deref(),
+        Some("implementation")
+    );
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_implementations should emit precise metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_implementations note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(
+        note_json["target_selection"]["selected_path_class"],
+        "runtime"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_are_absent() {
     let workspace_root = temp_workspace_root("navigation-incoming-precise-occurrences");
     let src_root = workspace_root.join("src");
@@ -2357,6 +3676,252 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
 }
 
 #[tokio::test]
+async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls() {
+    let workspace_root = temp_workspace_root("navigation-incoming-precise-call-sites");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn callee() {}\n\
+         pub fn caller() {\n\
+             callee();\n\
+         }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "incoming-calls.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#callee", "range": [0, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#caller", "range": [1, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#callee", "range": [2, 4, 10], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#callee",
+                  "display_name": "callee",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#caller",
+                  "display_name": "caller",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .incoming_calls(Parameters(IncomingCallsParams {
+            symbol: Some("callee".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("incoming_calls should classify callable precise references as calls")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].source_symbol, "caller");
+    assert_eq!(response.matches[0].target_symbol, "callee");
+    assert_eq!(response.matches[0].relation, "calls");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+    assert_eq!(response.matches[0].call_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(response.matches[0].call_line, Some(3));
+    assert_eq!(response.matches[0].call_column, Some(5));
+    assert_eq!(response.matches[0].call_end_line, Some(3));
+    assert_eq!(response.matches[0].call_end_column, Some(11));
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_are_absent() {
+    let workspace_root = temp_workspace_root("navigation-outgoing-precise-occurrences");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn alpha() {}\n\
+         pub fn beta() {}\n\
+         pub const GAMMA: usize = 1;\n\
+         pub struct Marker;\n\
+         pub fn caller() {\n\
+             alpha();\n\
+             beta();\n\
+             let _ = GAMMA;\n\
+             let _ = Marker;\n\
+         }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "outgoing.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#alpha", "range": [0, 7, 12], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#beta", "range": [1, 7, 11], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#GAMMA", "range": [2, 10, 15], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#Marker", "range": [3, 11, 17], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#caller", "range": [4, 7, 13], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#alpha", "range": [5, 4, 9], "symbol_roles": 8 },
+                { "symbol": "scip-rust pkg repo#beta", "range": [6, 4, 8], "symbol_roles": 8 },
+                { "symbol": "scip-rust pkg repo#GAMMA", "range": [7, 11, 16], "symbol_roles": 8 },
+                { "symbol": "scip-rust pkg repo#Marker", "range": [8, 11, 17], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#alpha",
+                  "display_name": "alpha",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#beta",
+                  "display_name": "beta",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#GAMMA",
+                  "display_name": "GAMMA",
+                  "kind": "constant",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#Marker",
+                  "display_name": "Marker",
+                  "kind": "struct",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#caller",
+                  "display_name": "caller",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .outgoing_calls(Parameters(OutgoingCallsParams {
+            symbol: Some("caller".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("outgoing_calls should derive precise callees from precise references")
+        .0;
+
+    assert_eq!(response.matches.len(), 2);
+    assert_eq!(response.matches[0].source_symbol, "caller");
+    assert_eq!(response.matches[0].target_symbol, "alpha");
+    assert_eq!(response.matches[0].relation, "calls");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+    assert_eq!(response.matches[0].call_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(response.matches[0].call_line, Some(6));
+    assert_eq!(response.matches[0].call_column, Some(5));
+    assert_eq!(response.matches[0].call_end_line, Some(6));
+    assert_eq!(response.matches[0].call_end_column, Some(10));
+    assert_eq!(response.matches[1].source_symbol, "caller");
+    assert_eq!(response.matches[1].target_symbol, "beta");
+    assert_eq!(response.matches[1].relation, "calls");
+    assert_eq!(response.matches[1].precision.as_deref(), Some("precise"));
+    assert_eq!(response.matches[1].call_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(response.matches[1].call_line, Some(7));
+    assert_eq!(response.matches[1].call_column, Some(5));
+    assert_eq!(response.matches[1].call_end_line, Some(7));
+    assert_eq!(response.matches[1].call_end_column, Some(9));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("outgoing_calls should emit precise metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("outgoing_calls note should be valid JSON");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("outgoing_calls should emit typed metadata"),
+        &note_json
+    );
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(note_json["precise"]["outgoing_count"], 2);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of_widening_to_non_callable_refs()
+ {
+    let workspace_root = temp_workspace_root("navigation-outgoing-heuristic-callable-only");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn alpha() {}\n\
+         pub const GAMMA: usize = 1;\n\
+         pub struct Marker;\n\
+         pub fn caller() {\n\
+             alpha();\n\
+             let _ = GAMMA;\n\
+             let _ = Marker;\n\
+         }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .outgoing_calls(Parameters(OutgoingCallsParams {
+            symbol: Some("caller".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("outgoing_calls should keep an empty heuristic result instead of widening")
+        .0;
+
+    assert!(response.matches.is_empty());
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("outgoing_calls should emit heuristic metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("outgoing_calls note should be valid JSON");
+    assert_eq!(note_json["precision"], "heuristic");
+    assert_eq!(note_json["fallback_reason"], "precise_absent");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn document_symbols_returns_outline_for_supported_files() {
     let server = server_for_fixture();
     let response = server
@@ -2380,6 +3945,13 @@ async fn document_symbols_returns_outline_for_supported_files() {
             .iter()
             .all(|symbol| symbol.path == "src/lib.rs" && symbol.repository_id == "repo-001")
     );
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["source"],
+        "tree_sitter"
+    );
 
     let note = response
         .note
@@ -2387,8 +3959,211 @@ async fn document_symbols_returns_outline_for_supported_files() {
         .expect("document_symbols should emit metadata note");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("document_symbols note should be valid JSON");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata"),
+        &note_json
+    );
     assert_eq!(note_json["source"], "tree_sitter");
     assert_eq!(note_json["heuristic"], false);
+}
+
+#[tokio::test]
+async fn document_symbols_returns_php_metadata_evidence_counts() {
+    let workspace_root = temp_workspace_root("document-symbols-php-evidence");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary php fixture");
+    fs::write(
+        src_root.join("OrderListener.php"),
+        "<?php\n\
+         namespace App\\Listeners;\n\
+         \n\
+         use App\\Attributes\\AsListener;\n\
+         use App\\Contracts\\Dispatcher;\n\
+         use App\\Exceptions\\OrderException;\n\
+         use App\\Handlers\\OrderHandler;\n\
+         \n\
+         #[AsListener]\n\
+         final class OrderListener\n\
+         {\n\
+             public function __construct(\n\
+                 private Dispatcher $dispatcher,\n\
+                 private OrderHandler $handler,\n\
+             ) {}\n\
+         \n\
+             #[AsListener]\n\
+             public function boot(Dispatcher $dispatcher): void\n\
+             {\n\
+                 $listener = new OrderHandler();\n\
+                 $class = OrderHandler::class;\n\
+                 $callable = [OrderHandler::class, 'handle'];\n\
+                 dispatch(handler: $listener, options: ['queue' => 'orders']);\n\
+         \n\
+                 try {\n\
+                     $dispatcher->dispatch($listener);\n\
+                 } catch (OrderException $exception) {\n\
+                     report($exception);\n\
+                 }\n\
+             }\n\
+         }\n",
+    )
+    .expect("failed to seed temporary php fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/OrderListener.php".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return php outline metadata")
+        .0;
+
+    let php_metadata = response
+        .metadata
+        .as_ref()
+        .expect("document_symbols should emit typed metadata")
+        .get("php")
+        .expect("php metadata summary should be present");
+    assert!(
+        php_metadata["canonical_name_count"]
+            .as_u64()
+            .expect("canonical name count should be numeric")
+            >= 3
+    );
+    assert!(
+        php_metadata["type_evidence_count"]
+            .as_u64()
+            .expect("type evidence count should be numeric")
+            >= 3
+    );
+    assert!(
+        php_metadata["target_evidence_count"]
+            .as_u64()
+            .expect("target evidence count should be numeric")
+            >= 4
+    );
+    assert!(
+        php_metadata["literal_evidence_count"]
+            .as_u64()
+            .expect("literal evidence count should be numeric")
+            >= 2
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_returns_hierarchy_for_nested_symbols() {
+    let workspace_root = temp_workspace_root("document-symbols-hierarchy");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "mod inner {\n    pub fn nested() {}\n}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return nested outline")
+        .0;
+
+    assert_eq!(response.symbols.len(), 1);
+    assert_eq!(response.symbols[0].symbol, "inner");
+    assert_eq!(response.symbols[0].children.len(), 1);
+    assert_eq!(response.symbols[0].children[0].symbol, "nested");
+    assert_eq!(
+        response.symbols[0].children[0].container.as_deref(),
+        Some("inner")
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_returns_blade_outline() {
+    let workspace_root = temp_workspace_root("document-symbols-blade");
+    let blade_root = workspace_root.join("resources/views/components/dashboard");
+    fs::create_dir_all(&blade_root).expect("failed to create temporary blade fixture");
+    fs::write(
+        blade_root.join("panel.blade.php"),
+        "@section('hero')\n\
+         @props(['title' => 'Dashboard'])\n\
+         @aware(['tone'])\n\
+         <x-slot:icon />\n\
+         <x-alert.banner />\n\
+         <livewire:orders.table />\n\
+         <flux:button wire:click=\"save\" wire:model.live=\"state\" />\n",
+    )
+    .expect("failed to seed temporary blade fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "resources/views/components/dashboard/panel.blade.php".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return blade outline")
+        .0;
+
+    assert!(
+        response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "components.dashboard.panel" && symbol.kind == "module")
+    );
+    assert!(
+        response
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.children.iter())
+            .any(|symbol| symbol.symbol == "dashboard.panel" && symbol.kind == "component")
+    );
+    assert!(
+        response
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.children.iter())
+            .any(|symbol| symbol.symbol == "hero" && symbol.kind == "section")
+    );
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["source"],
+        "tree_sitter"
+    );
+    let blade_metadata = response
+        .metadata
+        .as_ref()
+        .expect("document_symbols should emit typed metadata")
+        .get("blade")
+        .expect("blade metadata summary should be present");
+    assert_eq!(blade_metadata["relations_detected"], 1);
+    assert_eq!(
+        blade_metadata["livewire_components"],
+        serde_json::json!(["orders.table"])
+    );
+    assert_eq!(
+        blade_metadata["wire_directives"],
+        serde_json::json!(["wire:click", "wire:model.live"])
+    );
+    assert_eq!(
+        blade_metadata["flux_components"],
+        serde_json::json!(["flux:button"])
+    );
+    assert_eq!(blade_metadata["flux_registry_version"], "2026-03-08-mvp");
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
@@ -2408,6 +4183,10 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error_data_field(&error, "supported_extensions"),
+        &serde_json::json!([".rs", ".php", ".blade.php"])
+    );
 }
 
 #[tokio::test]
@@ -2519,8 +4298,86 @@ async fn search_structural_returns_deterministic_rust_matches() {
         .expect("search_structural should emit metadata note");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("search_structural note should be valid JSON");
+    assert_eq!(
+        first
+            .metadata
+            .as_ref()
+            .expect("search_structural should emit typed metadata"),
+        &note_json
+    );
     assert_eq!(note_json["source"], "tree_sitter_query");
     assert_eq!(note_json["heuristic"], false);
+}
+
+#[tokio::test]
+async fn search_structural_returns_deterministic_blade_matches() {
+    let workspace_root = temp_workspace_root("search-structural-blade");
+    let blade_root = workspace_root.join("resources/views/components/dashboard");
+    fs::create_dir_all(&blade_root).expect("failed to create temporary blade fixture");
+    fs::write(
+        blade_root.join("panel.blade.php"),
+        "<x-slot:icon />\n\
+         <x-alert.banner />\n\
+         <livewire:orders.table />\n\
+         <flux:button wire:click=\"save\" wire:model.live=\"state\" />\n",
+    )
+    .expect("failed to seed temporary blade fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let first = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(self_closing_tag (tag_name) @tag)".to_owned(),
+            language: Some("blade".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"panel\.blade\.php$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return blade matches")
+        .0;
+    let second = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(self_closing_tag (tag_name) @tag)".to_owned(),
+            language: Some("blade".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"panel\.blade\.php$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should deterministically return blade matches")
+        .0;
+
+    assert_eq!(first.matches.len(), second.matches.len());
+    assert!(!first.matches.is_empty());
+    assert!(
+        first
+            .matches
+            .iter()
+            .any(|matched| matched.excerpt == "x-slot:icon"),
+        "expected blade structural match for x-slot tag"
+    );
+    let blade_metadata = first
+        .metadata
+        .as_ref()
+        .expect("search_structural should emit typed metadata")
+        .get("blade")
+        .expect("blade aggregate metadata should be present");
+    assert_eq!(
+        blade_metadata["livewire_components"],
+        serde_json::json!(["orders.table"])
+    );
+    assert_eq!(
+        blade_metadata["wire_directives"],
+        serde_json::json!(["wire:click", "wire:model.live"])
+    );
+    assert_eq!(
+        blade_metadata["flux_components"],
+        serde_json::json!(["flux:button"])
+    );
+    assert_eq!(blade_metadata["flux_registry_version"], "2026-03-08-mvp");
+    assert_eq!(blade_metadata["relations_detected"], 1);
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
@@ -2543,6 +4400,10 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error_data_field(&error, "supported_languages"),
+        &serde_json::json!(["rust", "php", "blade"])
+    );
 }
 
 #[tokio::test]

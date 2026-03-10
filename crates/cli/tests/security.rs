@@ -8,8 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    FindReferencesParams, ListRepositoriesParams, PUBLIC_READ_ONLY_TOOL_NAMES, ReadFileParams,
-    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
+    ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
+    PUBLIC_READ_ONLY_TOOL_NAMES, ReadFileParams, SearchPatternType, SearchSymbolParams,
+    SearchTextParams, WRITE_CONFIRM_PARAM,
 };
 use frigg::settings::FriggConfig;
 use rmcp::handler::server::wrapper::Parameters;
@@ -34,6 +35,12 @@ fn build_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
     let config =
         FriggConfig::from_workspace_roots(roots).expect("workspace root must produce valid config");
     FriggMcpServer::new(config)
+}
+
+fn build_extended_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
+    let config =
+        FriggConfig::from_workspace_roots(roots).expect("workspace root must produce valid config");
+    FriggMcpServer::new_with_runtime_options(config, false, true)
 }
 
 fn cleanup_workspace(root: &Path) {
@@ -262,6 +269,8 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(5),
         }))
         .await;
@@ -277,8 +286,11 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
 
     let find_references_result = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "greeting".to_owned(),
+            symbol: Some("greeting".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(5),
         }))
         .await;
@@ -291,6 +303,71 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         );
     }
     find_references_result.expect("find_references should succeed");
+
+    let extended_server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let explore_result = extended_server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("hello".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: Some(1),
+            max_matches: Some(5),
+            resume_from: None,
+        }))
+        .await;
+    if let Err(error) = &explore_result {
+        assert_ne!(
+            error_code_tag(error),
+            Some("confirmation_required"),
+            "explore must not require `{}` on read-only tool surface",
+            WRITE_CONFIRM_PARAM
+        );
+    }
+    explore_result.expect("explore should succeed");
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn security_extended_explore_enforces_workspace_boundary() {
+    let workspace = temp_workspace_root("explore-workspace-boundary");
+    let repo_root = workspace.join("repo");
+    let outside_root = workspace.join("outside");
+    fs::create_dir_all(repo_root.join("src")).expect("failed to create repo root");
+    fs::create_dir_all(&outside_root).expect("failed to create outside root");
+    fs::write(repo_root.join("src/lib.rs"), "pub fn inside() {}\n")
+        .expect("failed to seed repo file");
+    fs::write(outside_root.join("escape.rs"), "pub fn outside() {}\n")
+        .expect("failed to seed outside file");
+
+    let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let escaped_path = outside_root.join("escape.rs");
+    let error = server
+        .explore(Parameters(ExploreParams {
+            path: escaped_path.display().to_string(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("outside".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: Some(1),
+            max_matches: Some(5),
+            resume_from: None,
+        }))
+        .await
+        .err()
+        .expect("explore should reject paths outside workspace roots");
+
+    assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
+    assert_eq!(error_code_tag(&error), Some("access_denied"));
+    assert_eq!(retryable_tag(&error), Some(false));
+    assert!(
+        error.message.contains("outside workspace roots"),
+        "explore should preserve the workspace-boundary denial message"
+    );
 
     cleanup_workspace(&workspace);
 }

@@ -15,11 +15,12 @@ use crate::mcp::deep_search::{
     DeepSearchTraceStep as InternalDeepSearchTraceStep,
 };
 
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 19] = [
     "list_repositories",
     "workspace_attach",
     "workspace_current",
     "read_file",
+    "explore",
     "search_text",
     "search_hybrid",
     "search_symbol",
@@ -43,6 +44,10 @@ pub struct RepositorySummary {
     pub repository_id: String,
     pub display_name: String,
     pub root_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<WorkspaceStorageSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<WorkspaceIndexHealthSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -75,7 +80,42 @@ pub struct WorkspaceStorageSummary {
     pub exists: bool,
     pub initialized: bool,
     pub index_state: WorkspaceStorageIndexState,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceIndexComponentState {
+    Missing,
+    Ready,
+    Stale,
+    Disabled,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceIndexComponentSummary {
+    pub state: WorkspaceIndexComponentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compatible_snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceIndexHealthSummary {
+    pub lexical: WorkspaceIndexComponentSummary,
+    pub semantic: WorkspaceIndexComponentSummary,
+    pub scip: WorkspaceIndexComponentSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -123,11 +163,109 @@ pub struct ReadFileResponse {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchPatternType {
     Literal,
     Regex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExploreOperation {
+    Probe,
+    Zoom,
+    Refine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreAnchor {
+    pub start_line: usize,
+    pub start_column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreCursor {
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreLineWindow {
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreWindow {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub bytes: usize,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreMatch {
+    pub match_id: String,
+    pub start_line: usize,
+    pub start_column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+    pub excerpt: String,
+    pub window: ExploreWindow,
+    pub anchor: ExploreAnchor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreMetadata {
+    pub lossy_utf8: bool,
+    pub effective_context_lines: usize,
+    pub effective_max_matches: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreParams {
+    /// Artifact path using the same canonical repository-relative semantics as `read_file`.
+    pub path: String,
+    /// Optional repository scope from `list_repositories`.
+    pub repository_id: Option<String>,
+    /// Explorer mode: `probe` scans an artifact, `zoom` returns a bounded window, and `refine` searches only inside an anchor-derived window.
+    pub operation: ExploreOperation,
+    /// Search query for `probe` or `refine`. Leading and trailing whitespace is trimmed.
+    pub query: Option<String>,
+    /// Match mode for `query`. Omit for exact literal search or set `regex` for safe-regex search.
+    pub pattern_type: Option<SearchPatternType>,
+    /// Explicit anchor used by `zoom` and `refine`.
+    pub anchor: Option<ExploreAnchor>,
+    /// Context lines to include around anchors and match windows. Omit to use the explorer default.
+    pub context_lines: Option<usize>,
+    /// Max match rows to return. Omit to use the explorer default.
+    pub max_matches: Option<usize>,
+    /// Explicit continuation cursor for `probe` or `refine`.
+    pub resume_from: Option<ExploreCursor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreResponse {
+    pub repository_id: String,
+    pub path: String,
+    pub operation: ExploreOperation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern_type: Option<SearchPatternType>,
+    pub total_lines: usize,
+    pub scan_scope: ExploreLineWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<ExploreWindow>,
+    pub total_matches: usize,
+    pub matches: Vec<ExploreMatch>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<ExploreCursor>,
+    pub metadata: ExploreMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -136,10 +274,10 @@ pub struct SearchTextParams {
     pub query: String,
     /// Match mode for `query`. Omit for exact literal search or set `regex` for safe-regex search.
     pub pattern_type: Option<SearchPatternType>,
-    /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
+    /// Optional repository scope from `list_repositories`.
     pub repository_id: Option<String>,
-    /// Optional safe regex applied to canonical repository-relative paths before files are searched.
-    /// Use this to narrow broad queries to code, docs, or runtime slices.
+    /// Optional safe regex over canonical repository-relative paths.
+    /// Use this to narrow code, docs, or runtime slices.
     pub path_regex: Option<String>,
     /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
@@ -147,6 +285,7 @@ pub struct SearchTextParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
+    pub total_matches: usize,
     pub matches: Vec<TextMatch>,
 }
 
@@ -159,10 +298,8 @@ pub struct SearchHybridChannelWeightsParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
-    /// Natural-language or exact phrase query for broad doc/runtime retrieval.
-    /// Expect mixed contracts, README, runtime, or tests for broad questions;
-    /// when you need concrete implementation anchors, follow with `search_symbol`
-    /// or `search_text` plus scoped `path_regex`.
+    /// Broad natural-language or exact-phrase query for doc/runtime retrieval.
+    /// Pivot to `search_symbol` or scoped `search_text.path_regex` for concrete anchors.
     pub query: String,
     /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
     pub repository_id: Option<String>,
@@ -195,26 +332,48 @@ pub struct SearchHybridMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
-    /// Whether semantic retrieval was requested after config defaults were applied.
+    /// Legacy top-level compatibility mirror of `metadata.semantic_requested`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_requested: Option<bool>,
-    /// Whether semantic retrieval actually contributed to the successful response.
+    /// Legacy top-level compatibility mirror of `metadata.semantic_enabled`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_enabled: Option<bool>,
-    /// Semantic channel outcome (`ok`, `disabled`, or `degraded`) for this response.
+    /// Legacy top-level compatibility mirror of `metadata.semantic_status`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_status: Option<String>,
-    /// Deterministic explanation when the semantic channel is disabled or degraded.
+    /// Legacy top-level compatibility mirror of `metadata.semantic_reason`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_reason: Option<String>,
-    /// JSON-encoded compatibility metadata mirroring the semantic fields plus diagnostics.
+    /// Legacy top-level compatibility mirror of `metadata.semantic_hit_count`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_hit_count: Option<usize>,
+    /// Legacy top-level compatibility mirror of `metadata.semantic_match_count`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_match_count: Option<usize>,
+    /// Legacy top-level compatibility mirror of `metadata.warning`; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    /// Canonical structured semantic diagnostics payload for live responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    /// Legacy JSON-encoded compatibility metadata; live responses may omit this when structured metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolParams {
-    /// API/type/function name to search in indexed Rust/PHP symbols.
-    /// Use this after broad `search_text` or `search_hybrid` results when you
-    /// know the runtime anchor you want to inspect.
+    /// API/type/function name to search in indexed symbols.
+    /// Use this after `search_hybrid` or `search_text` when you know the runtime anchor.
     pub query: String,
     /// Optional repository scope from `list_repositories`. Omit to search every configured repository.
     pub repository_id: Option<String>,
+    /// Optional path class filter. Use `runtime` for `src/`, `support`
+    /// for `tests/`, `benches/`, or `examples/`, or `project` for everything else.
+    pub path_class: Option<SearchSymbolPathClass>,
+    /// Optional safe regex over canonical repository-relative symbol paths.
+    /// Use this to constrain overloaded names to a file or slice.
+    pub path_regex: Option<String>,
     /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
 }
@@ -222,19 +381,47 @@ pub struct SearchSymbolParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchSymbolPathClass {
+    Runtime,
+    Project,
+    Support,
+}
+
+impl SearchSymbolPathClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Project => "project",
+            Self::Support => "support",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesParams {
-    pub symbol: String,
+    /// Optional symbol query. Omit when resolving the target by source location.
+    pub symbol: Option<String>,
     pub repository_id: Option<String>,
+    /// Optional source path used for deterministic location-aware target resolution.
+    pub path: Option<String>,
+    /// Optional 1-based line used for deterministic location-aware target resolution.
+    pub line: Option<usize>,
+    /// Optional 1-based column used for deterministic location-aware target resolution.
+    pub column: Option<usize>,
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesResponse {
+    pub total_matches: usize,
     pub matches: Vec<ReferenceMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -262,6 +449,7 @@ pub struct NavigationLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -278,6 +466,7 @@ pub struct FindDeclarationsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsResponse {
     pub matches: Vec<NavigationLocation>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -294,6 +483,7 @@ pub struct FindImplementationsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImplementationMatch {
     pub symbol: String,
+    pub kind: Option<String>,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -306,6 +496,7 @@ pub struct ImplementationMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsResponse {
     pub matches: Vec<ImplementationMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -339,17 +530,24 @@ pub struct CallHierarchyMatch {
     pub column: usize,
     pub relation: String,
     pub precision: Option<String>,
+    pub call_path: Option<String>,
+    pub call_line: Option<usize>,
+    pub call_column: Option<usize>,
+    pub call_end_line: Option<usize>,
+    pub call_end_column: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -370,11 +568,13 @@ pub struct DocumentSymbolItem {
     pub end_line: Option<usize>,
     pub end_column: Option<usize>,
     pub container: Option<String>,
+    pub children: Vec<DocumentSymbolItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsResponse {
     pub symbols: Vec<DocumentSymbolItem>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -401,6 +601,7 @@ pub struct StructuralMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchStructuralResponse {
     pub matches: Vec<StructuralMatch>,
+    pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
@@ -1169,6 +1370,21 @@ mod schema_tests {
     }
 
     #[test]
+    fn schema_explore_contract_matches_wrappers() {
+        assert_contract::<ExploreParams, ExploreResponse>(
+            "explore.v1.schema.json",
+            "explore",
+            "ExploreParams",
+            "ExploreResponse",
+        );
+    }
+
+    #[test]
+    fn schema_explore_examples_parse_against_wrappers() {
+        assert_examples_parse::<ExploreParams, ExploreResponse>("explore.v1.schema.json");
+    }
+
+    #[test]
     fn schema_search_text_contract_matches_wrappers() {
         assert_contract::<SearchTextParams, SearchTextResponse>(
             "search_text.v1.schema.json",
@@ -1222,15 +1438,21 @@ mod schema_tests {
             "search_hybrid.query description should mention scoped search_text path_regex guidance: {query}"
         );
 
+        let metadata = property_description::<SearchHybridResponse>("metadata")
+            .expect("metadata should expose a schema description");
+        assert!(
+            metadata.contains("Canonical structured"),
+            "search_hybrid.metadata description should mention canonical structured diagnostics: {metadata}"
+        );
         let note = property_description::<SearchHybridResponse>("note")
             .expect("note should expose a schema description");
         assert!(
-            note.contains("JSON-encoded"),
-            "search_hybrid.note description should mention JSON-encoded compatibility metadata: {note}"
+            note.contains("Legacy"),
+            "search_hybrid.note description should mention legacy compatibility transport: {note}"
         );
         assert!(
-            note.contains("diagnostics"),
-            "search_hybrid.note description should mention diagnostics metadata: {note}"
+            note.contains("JSON-encoded"),
+            "search_hybrid.note description should mention JSON-encoded compatibility metadata: {note}"
         );
     }
 
@@ -1260,6 +1482,24 @@ mod schema_tests {
         assert!(
             query.contains("runtime anchor"),
             "search_symbol.query description should explain runtime-anchor usage: {query}"
+        );
+
+        let path_class = property_description::<SearchSymbolParams>("path_class")
+            .expect("path_class should expose a schema description");
+        assert!(
+            path_class.contains("runtime") && path_class.contains("support"),
+            "search_symbol.path_class description should explain path classes: {path_class}"
+        );
+
+        let path_regex = property_description::<SearchSymbolParams>("path_regex")
+            .expect("path_regex should expose a schema description");
+        assert!(
+            path_regex.contains("canonical repository-relative symbol paths"),
+            "search_symbol.path_regex description should mention canonical repository-relative symbol paths: {path_regex}"
+        );
+        assert!(
+            path_regex.contains("constrain overloaded names"),
+            "search_symbol.path_regex description should explain overloaded-name scoping: {path_regex}"
         );
     }
 
@@ -1452,6 +1692,7 @@ mod schema_tests {
             field_set::<WorkspaceAttachParams>(),
             field_set::<WorkspaceCurrentParams>(),
             field_set::<ReadFileParams>(),
+            field_set::<ExploreParams>(),
             field_set::<SearchTextParams>(),
             field_set::<SearchHybridParams>(),
             field_set::<SearchSymbolParams>(),

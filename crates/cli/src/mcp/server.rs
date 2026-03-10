@@ -1,6 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -11,18 +10,31 @@ use crate::graph::{
     PreciseRelationshipKind, RelationKind, ScipIngestError, ScipResourceBudgets, SymbolGraph,
 };
 use crate::indexer::{
-    FileMetadataDigest, HeuristicReferenceConfidence, HeuristicReferenceEvidence,
-    HeuristicReferenceResolver, ManifestBuilder, ManifestDiagnosticKind, SymbolDefinition,
-    SymbolExtractionOutput, SymbolLanguage, extract_symbols_for_paths, extract_symbols_from_source,
-    navigation_symbol_target_rank, register_symbol_definitions, search_structural_in_source,
+    FLUX_REGISTRY_VERSION, FileMetadataDigest, HeuristicReferenceConfidence,
+    HeuristicReferenceEvidence, HeuristicReferenceResolver, ManifestBuilder,
+    ManifestDiagnosticKind, ReindexMode, SourceSpan, SymbolDefinition, SymbolExtractionOutput,
+    extract_blade_source_evidence_from_source, extract_php_source_evidence_from_source,
+    extract_symbols_for_paths, extract_symbols_from_source, mark_local_flux_overlays,
+    navigation_symbol_target_rank, php_declaration_relation_edges_for_file,
+    php_heuristic_implementation_candidates_for_target, register_symbol_definitions,
+    reindex_repository_with_runtime_config, resolve_blade_relation_evidence_edges,
+    resolve_php_target_evidence_edges, search_structural_in_source,
+    semantic_chunk_language_for_path,
+};
+use crate::language_support::{
+    HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
+    heuristic_implementation_strategy, parse_supported_language, supported_language_for_path,
 };
 use crate::manifest_validation::validate_manifest_digests_for_root;
+use crate::path_class::{repository_path_class, repository_path_class_rank};
 use crate::searcher::{
     HybridChannelWeights, SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
     TextSearcher, compile_safe_regex,
 };
 use crate::settings::FriggConfig;
+use crate::settings::SemanticRuntimeCredentials;
 use crate::storage::{Storage, ensure_provenance_db_parent_dir, resolve_provenance_db_path};
+use protobuf::Enum;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
@@ -31,12 +43,28 @@ use rmcp::transport::{
     streamable_http_server::session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use scip::types::symbol_information::Kind as ScipSymbolKind;
 use serde_json::{Value, json};
 use tokio::task;
 use tracing::warn;
 
 use crate::mcp::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
+};
+use crate::mcp::explorer::{
+    DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES, ExploreMatcher, ExploreScopeRequest,
+    LossyLineSliceError, MAX_CONTEXT_LINES, line_window_around_anchor, read_line_slice_lossy,
+    scan_file_scope_lossy, validate_anchor, validate_cursor,
+};
+use crate::mcp::provenance_cache::{ProvenancePersistenceStage, ProvenanceStorageCacheKey};
+use crate::mcp::server_state::{
+    CachedPreciseGraph, DeterministicSignatureHasher, ExploreExecution, FindReferencesExecution,
+    FindReferencesResourceBudgets, NavigationToolExecution, PreciseArtifactFailureSample,
+    PreciseCoverageMode, PreciseGraphCacheKey, PreciseIngestStats, RankedSymbolMatch,
+    ReadFileExecution, RepositoryDiagnosticsSummary, RepositorySymbolCorpus,
+    ResolvedNavigationTarget, ResolvedSymbolTarget, ScipArtifactDigest, ScipArtifactDiscovery,
+    ScipArtifactFormat, ScipCandidateDirectoryDigest, SearchHybridExecution, SearchSymbolExecution,
+    SearchTextExecution, SymbolCandidate, SymbolCorpusCacheKey,
 };
 use crate::mcp::tool_surface::{
     TOOL_SURFACE_PROFILE_ENV, ToolSurfaceParityDiff, ToolSurfaceProfile,
@@ -45,18 +73,21 @@ use crate::mcp::tool_surface::{
 use crate::mcp::types::{
     CallHierarchyMatch, DeepSearchComposeCitationsParams, DeepSearchComposeCitationsResponse,
     DeepSearchReplayParams, DeepSearchReplayResponse, DeepSearchRunParams, DeepSearchRunResponse,
-    DocumentSymbolsParams, DocumentSymbolsResponse, FindDeclarationsParams,
+    DocumentSymbolsParams, DocumentSymbolsResponse, ExploreMatch, ExploreMetadata,
+    ExploreOperation, ExploreParams, ExploreResponse, ExploreWindow, FindDeclarationsParams,
     FindDeclarationsResponse, FindImplementationsParams, FindImplementationsResponse,
     FindReferencesParams, FindReferencesResponse, GoToDefinitionParams, GoToDefinitionResponse,
     ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, ListRepositoriesParams,
     ListRepositoriesResponse, NavigationLocation, OutgoingCallsParams, OutgoingCallsResponse,
     ReadFileParams, ReadFileResponse, RepositorySummary, SearchHybridChannelWeightsParams,
     SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolResponse,
-    SearchTextParams, SearchTextResponse, WorkspaceAttachParams, WorkspaceAttachResponse,
-    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceResolveMode,
-    WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, SearchTextResponse, WorkspaceAttachParams,
+    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
+    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
+    WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
+use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
@@ -73,401 +104,16 @@ pub struct FriggMcpServer {
     provenance_best_effort: bool,
 }
 
-#[derive(Debug, Clone)]
-struct AttachedWorkspace {
-    repository_id: String,
-    display_name: String,
-    root: PathBuf,
-    db_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Default)]
-struct WorkspaceRegistry {
-    workspaces: Vec<AttachedWorkspace>,
-    by_canonical_root: BTreeMap<PathBuf, usize>,
-}
-
-impl WorkspaceRegistry {
-    fn from_startup_config(config: &FriggConfig) -> Self {
-        let mut registry = Self::default();
-        for repository in config.repositories() {
-            let root = PathBuf::from(&repository.root_path)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(&repository.root_path));
-            registry.insert_with_repository_id(
-                root,
-                repository.repository_id.0,
-                repository.display_name,
-            );
-        }
-        registry
-    }
-
-    fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
-        self.workspaces.clone()
-    }
-
-    fn workspace_by_repository_id(&self, repository_id: &str) -> Option<AttachedWorkspace> {
-        self.workspaces
-            .iter()
-            .find(|workspace| workspace.repository_id == repository_id)
-            .cloned()
-    }
-
-    fn insert_with_repository_id(
-        &mut self,
-        canonical_root: PathBuf,
-        repository_id: String,
-        display_name: String,
-    ) -> AttachedWorkspace {
-        if let Some(index) = self.by_canonical_root.get(&canonical_root).copied() {
-            return self.workspaces[index].clone();
-        }
-
-        let workspace = AttachedWorkspace {
-            db_path: FriggMcpServer::storage_db_path_for_root(&canonical_root),
-            repository_id,
-            display_name,
-            root: canonical_root.clone(),
-        };
-        self.by_canonical_root
-            .insert(canonical_root, self.workspaces.len());
-        self.workspaces.push(workspace.clone());
-        workspace
-    }
-
-    fn get_or_insert(&mut self, canonical_root: PathBuf) -> AttachedWorkspace {
-        let display_name = FriggMcpServer::display_name_for_root(&canonical_root);
-        let repository_id = format!("repo-{:03}", self.workspaces.len().saturating_add(1));
-        self.insert_with_repository_id(canonical_root, repository_id, display_name)
-    }
-}
-
-#[derive(Clone)]
-struct RepositorySymbolCorpus {
-    repository_id: String,
-    root: PathBuf,
-    root_signature: String,
-    source_paths: Vec<PathBuf>,
-    symbols: Vec<SymbolDefinition>,
-    symbols_by_relative_path: BTreeMap<String, Vec<usize>>,
-    symbol_index_by_stable_id: BTreeMap<String, usize>,
-    symbol_indices_by_name: BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_name: BTreeMap<String, Vec<usize>>,
-    diagnostics: RepositoryDiagnosticsSummary,
-}
-
-#[derive(Debug, Clone, Default)]
-struct RepositoryDiagnosticsSummary {
-    manifest_walk_count: usize,
-    manifest_read_count: usize,
-    symbol_extraction_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SymbolCorpusCacheKey {
-    repository_id: String,
-    manifest_token: String,
-}
-
-#[derive(Clone)]
-struct SymbolCandidate {
-    rank: u8,
-    repository_id: String,
-    root: PathBuf,
-    symbol: SymbolDefinition,
-}
-
-#[derive(Clone)]
-struct ResolvedSymbolTarget {
-    candidate: SymbolCandidate,
-    corpus: Arc<RepositorySymbolCorpus>,
-    candidate_count: usize,
-    selected_rank_candidate_count: usize,
-}
-
-#[derive(Clone)]
-struct ResolvedNavigationTarget {
-    symbol_query: String,
-    target: ResolvedSymbolTarget,
-    resolution_source: &'static str,
-}
-
-struct ReadFileExecution {
-    result: Result<Json<ReadFileResponse>, ErrorData>,
-    resolved_repository_id: Option<String>,
-    resolved_path: Option<String>,
-    resolved_absolute_path: Option<String>,
-    effective_max_bytes: Option<usize>,
-    effective_line_start: Option<usize>,
-    effective_line_end: Option<usize>,
-}
-
-struct SearchTextExecution {
-    result: Result<Json<SearchTextResponse>, ErrorData>,
-    scoped_repository_ids: Vec<String>,
-    effective_limit: Option<usize>,
-    effective_pattern_type: Option<SearchPatternType>,
-    diagnostics_count: usize,
-    walk_diagnostics_count: usize,
-    read_diagnostics_count: usize,
-}
-
-struct SearchHybridExecution {
-    result: Result<Json<SearchHybridResponse>, ErrorData>,
-    scoped_repository_ids: Vec<String>,
-    effective_limit: Option<usize>,
-    effective_weights: Option<SearchHybridChannelWeightsParams>,
-    diagnostics_count: usize,
-    walk_diagnostics_count: usize,
-    read_diagnostics_count: usize,
-    semantic_requested: Option<bool>,
-    semantic_enabled: Option<bool>,
-    semantic_status: Option<String>,
-    semantic_reason: Option<String>,
-}
-
-struct SearchSymbolExecution {
-    result: Result<Json<SearchSymbolResponse>, ErrorData>,
-    scoped_repository_ids: Vec<String>,
-    diagnostics_count: usize,
-    manifest_walk_diagnostics_count: usize,
-    manifest_read_diagnostics_count: usize,
-    symbol_extraction_diagnostics_count: usize,
-    effective_limit: Option<usize>,
-}
-
-struct FindReferencesExecution {
-    result: Result<Json<FindReferencesResponse>, ErrorData>,
-    scoped_repository_ids: Vec<String>,
-    selected_symbol_id: Option<String>,
-    selected_precise_symbol: Option<String>,
-    resolution_precision: Option<String>,
-    diagnostics_count: usize,
-    manifest_walk_diagnostics_count: usize,
-    manifest_read_diagnostics_count: usize,
-    symbol_extraction_diagnostics_count: usize,
-    source_read_diagnostics_count: usize,
-    precise_artifacts_discovered: usize,
-    precise_artifacts_discovered_bytes: u64,
-    precise_artifacts_ingested: usize,
-    precise_artifacts_ingested_bytes: u64,
-    precise_artifacts_failed: usize,
-    precise_artifacts_failed_bytes: u64,
-    precise_reference_count: usize,
-    source_files_discovered: usize,
-    source_files_loaded: usize,
-    source_bytes_loaded: u64,
-    effective_limit: Option<usize>,
-}
-
-struct NavigationToolExecution<T> {
-    result: Result<Json<T>, ErrorData>,
-    scoped_repository_ids: Vec<String>,
-    selected_symbol_id: Option<String>,
-    selected_precise_symbol: Option<String>,
-    resolution_precision: Option<String>,
-    resolution_source: Option<String>,
-    effective_limit: Option<usize>,
-    precise_artifacts_ingested: usize,
-    precise_artifacts_failed: usize,
-    match_count: usize,
-}
-
-#[derive(Debug, Clone)]
-struct PreciseArtifactFailureSample {
-    artifact_label: String,
-    stage: String,
-    detail: String,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PreciseIngestStats {
-    candidate_directories: Vec<String>,
-    discovered_artifacts: Vec<String>,
-    artifacts_discovered: usize,
-    artifacts_discovered_bytes: u64,
-    artifacts_ingested: usize,
-    artifacts_ingested_bytes: u64,
-    artifacts_failed: usize,
-    artifacts_failed_bytes: u64,
-    failed_artifacts: Vec<PreciseArtifactFailureSample>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FindReferencesResourceBudgets {
-    scip_max_artifacts: usize,
-    scip_max_artifact_bytes: usize,
-    scip_max_total_bytes: usize,
-    scip_max_documents_per_artifact: usize,
-    scip_max_elapsed_ms: u64,
-    source_max_files: usize,
-    source_max_file_bytes: usize,
-    source_max_total_bytes: usize,
-    source_max_elapsed_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PreciseGraphCacheKey {
-    repository_id: String,
-    scip_signature: String,
-    corpus_signature: String,
-}
-
-#[derive(Debug, Clone)]
-struct CachedPreciseGraph {
-    graph: Arc<SymbolGraph>,
-    ingest_stats: PreciseIngestStats,
-    corpus_signature: String,
-    discovery: ScipArtifactDiscovery,
-    coverage_mode: PreciseCoverageMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreciseCoverageMode {
-    Full,
-    Partial,
-    None,
-}
-
-impl PreciseCoverageMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Full => "full",
-            Self::Partial => "partial",
-            Self::None => "none",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ProvenanceStorageCacheKey {
-    repository_id: String,
-    db_path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ScipArtifactDigest {
-    path: PathBuf,
-    format: ScipArtifactFormat,
-    size_bytes: u64,
-    mtime_ns: Option<u64>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct ScipArtifactDiscovery {
-    candidate_directories: Vec<String>,
-    candidate_directory_digests: Vec<ScipCandidateDirectoryDigest>,
-    artifact_digests: Vec<ScipArtifactDigest>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ScipCandidateDirectoryDigest {
-    path: PathBuf,
-    exists: bool,
-    mtime_ns: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum ScipArtifactFormat {
-    Json,
-    Protobuf,
-}
-
-impl ScipArtifactFormat {
-    fn from_path(path: &Path) -> Option<Self> {
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("json") => Some(Self::Json),
-            Some("scip") => Some(Self::Protobuf),
-            _ => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Protobuf => "protobuf",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DeterministicSignatureHasher {
-    state: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProvenancePersistenceStage {
-    ResolveStoragePath,
-    InitializeStorage,
-    AppendEvent,
-}
-
-impl ProvenancePersistenceStage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ResolveStoragePath => "resolve_storage_path",
-            Self::InitializeStorage => "initialize_storage",
-            Self::AppendEvent => "append_event",
-        }
-    }
-
-    fn retryable(self) -> bool {
-        matches!(self, Self::InitializeStorage | Self::AppendEvent)
-    }
-}
-
-impl DeterministicSignatureHasher {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
-    fn new() -> Self {
-        Self {
-            state: Self::OFFSET_BASIS,
-        }
-    }
-
-    fn write_bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.state ^= u64::from(*byte);
-            self.state = self.state.wrapping_mul(Self::FNV_PRIME);
-        }
-    }
-
-    fn write_separator(&mut self) {
-        self.write_bytes(&[0xff]);
-    }
-
-    fn write_str(&mut self, value: &str) {
-        self.write_bytes(value.as_bytes());
-        self.write_separator();
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.write_bytes(&value.to_le_bytes());
-        self.write_separator();
-    }
-
-    fn write_optional_u64(&mut self, value: Option<u64>) {
-        match value {
-            Some(value) => {
-                self.write_bytes(&[1]);
-                self.write_u64(value);
-            }
-            None => {
-                self.write_bytes(&[0]);
-                self.write_separator();
-            }
-        }
-    }
-
-    fn finish_hex(self) -> String {
-        format!("{:016x}", self.state)
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkspaceSemanticRefreshPlan {
+    latest_snapshot_id: String,
+    compatible_snapshot_id: String,
+    reason: &'static str,
 }
 
 impl FriggMcpServer {
-    const DEEP_SEARCH_TOOL_NAMES: [&str; 3] = [
+    const EXTENDED_ONLY_TOOL_NAMES: [&str; 4] = [
+        "explore",
         "deep_search_compose_citations",
         "deep_search_replay",
         "deep_search_run",
@@ -487,10 +133,10 @@ impl FriggMcpServer {
     const PRECISE_DISCOVERY_SAMPLE_LIMIT: usize = 16;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
 
-    fn filtered_tool_router(enable_deep_search_tools: bool) -> ToolRouter<Self> {
+    fn filtered_tool_router(enable_extended_tools: bool) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
-        if !enable_deep_search_tools {
-            for tool_name in Self::DEEP_SEARCH_TOOL_NAMES {
+        if !enable_extended_tools {
+            for tool_name in Self::EXTENDED_ONLY_TOOL_NAMES {
                 router.remove_route(tool_name);
             }
         }
@@ -827,49 +473,78 @@ impl FriggMcpServer {
         rank: u8,
     ) {
         let symbol = corpus.symbols[symbol_index].clone();
+        let relative_path = Self::relative_display_path(&corpus.root, &symbol.path);
+        let path_class = Self::navigation_path_class(&relative_path);
         candidates.push(SymbolCandidate {
             rank,
+            path_class_rank: Self::navigation_path_class_rank(path_class),
+            path_class,
             repository_id: corpus.repository_id.clone(),
             root: corpus.root.clone(),
             symbol,
         });
     }
 
-    fn push_ranked_symbol_match(
-        ranked_matches: &mut Vec<(u8, SymbolMatch)>,
+    fn build_ranked_symbol_match(
         corpus: &RepositorySymbolCorpus,
         symbol_index: usize,
         rank: u8,
-    ) {
+        path_class_filter: Option<SearchSymbolPathClass>,
+        path_regex: Option<&regex::Regex>,
+    ) -> Option<RankedSymbolMatch> {
         let symbol = &corpus.symbols[symbol_index];
-        ranked_matches.push((
+        let path = Self::relative_display_path(&corpus.root, &symbol.path);
+        if let Some(path_class_filter) = path_class_filter {
+            if Self::navigation_path_class(&path) != path_class_filter.as_str() {
+                return None;
+            }
+        }
+        if let Some(path_regex) = path_regex {
+            if !path_regex.is_match(&path) {
+                return None;
+            }
+        }
+        let path_class = Self::navigation_path_class(&path);
+        Some(RankedSymbolMatch {
             rank,
-            SymbolMatch {
+            path_class_rank: Self::navigation_path_class_rank(path_class),
+            matched: SymbolMatch {
                 repository_id: corpus.repository_id.clone(),
                 symbol: symbol.name.clone(),
                 kind: symbol.kind.as_str().to_owned(),
-                path: Self::relative_display_path(&corpus.root, &symbol.path),
+                path,
                 line: symbol.line,
             },
-        ));
+        })
     }
 
-    fn sort_ranked_symbol_matches(ranked_matches: &mut [(u8, SymbolMatch)]) {
+    fn sort_ranked_symbol_matches(ranked_matches: &mut [RankedSymbolMatch]) {
         ranked_matches.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then(left.1.repository_id.cmp(&right.1.repository_id))
-                .then(left.1.path.cmp(&right.1.path))
-                .then(left.1.line.cmp(&right.1.line))
-                .then(left.1.kind.cmp(&right.1.kind))
-                .then(left.1.symbol.cmp(&right.1.symbol))
+            left.rank
+                .cmp(&right.rank)
+                .then(left.path_class_rank.cmp(&right.path_class_rank))
+                .then(left.matched.repository_id.cmp(&right.matched.repository_id))
+                .then(left.matched.path.cmp(&right.matched.path))
+                .then(left.matched.line.cmp(&right.matched.line))
+                .then(left.matched.kind.cmp(&right.matched.kind))
+                .then(left.matched.symbol.cmp(&right.matched.symbol))
+        });
+    }
+
+    fn dedup_ranked_symbol_matches(ranked_matches: &mut Vec<RankedSymbolMatch>) {
+        ranked_matches.dedup_by(|left, right| {
+            left.matched.repository_id == right.matched.repository_id
+                && left.matched.path == right.matched.path
+                && left.matched.line == right.matched.line
+                && left.matched.kind == right.matched.kind
+                && left.matched.symbol == right.matched.symbol
         });
     }
 
     fn retain_bounded_ranked_symbol_match(
-        ranked_matches: &mut Vec<(u8, SymbolMatch)>,
+        ranked_matches: &mut Vec<RankedSymbolMatch>,
         limit: usize,
-        candidate: (u8, SymbolMatch),
+        candidate: RankedSymbolMatch,
     ) {
         if limit == 0 {
             return;
@@ -891,15 +566,49 @@ impl FriggMcpServer {
         // repository/path/line/stable-id tie-breakers.
         let mut candidates = Vec::new();
         let query_lower = symbol_query.to_ascii_lowercase();
+        let query_looks_canonical = symbol_query.contains('\\')
+            || symbol_query.contains("::")
+            || symbol_query.contains('$');
         for corpus in corpora {
             if let Some(symbol_index) = corpus.symbol_index_by_stable_id.get(symbol_query) {
                 Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 0);
             }
+            if query_looks_canonical {
+                if let Some(symbol_indices) =
+                    corpus.symbol_indices_by_canonical_name.get(symbol_query)
+                {
+                    for symbol_index in symbol_indices {
+                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 1);
+                    }
+                }
+                if let Some(symbol_indices) = corpus
+                    .symbol_indices_by_lower_canonical_name
+                    .get(&query_lower)
+                {
+                    for symbol_index in symbol_indices {
+                        let Some(canonical_name) = corpus
+                            .canonical_symbol_name_by_stable_id
+                            .get(corpus.symbols[*symbol_index].stable_id.as_str())
+                        else {
+                            continue;
+                        };
+                        if canonical_name != symbol_query {
+                            Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 2);
+                        }
+                    }
+                }
+            }
+            let name_rank_offset = if query_looks_canonical { 3 } else { 1 };
             if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(symbol_query) {
                 for symbol_index in symbol_indices {
                     let symbol = &corpus.symbols[*symbol_index];
                     if navigation_symbol_target_rank(symbol, symbol_query) == Some(1) {
-                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 1);
+                        Self::push_symbol_candidate(
+                            &mut candidates,
+                            corpus,
+                            *symbol_index,
+                            name_rank_offset,
+                        );
                     }
                 }
             }
@@ -907,7 +616,12 @@ impl FriggMcpServer {
                 for symbol_index in symbol_indices {
                     let symbol = &corpus.symbols[*symbol_index];
                     if navigation_symbol_target_rank(symbol, symbol_query) == Some(2) {
-                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 2);
+                        Self::push_symbol_candidate(
+                            &mut candidates,
+                            corpus,
+                            *symbol_index,
+                            name_rank_offset + 1,
+                        );
                     }
                 }
             }
@@ -916,6 +630,7 @@ impl FriggMcpServer {
         candidates.sort_by(|left, right| {
             left.rank
                 .cmp(&right.rank)
+                .then(left.path_class_rank.cmp(&right.path_class_rank))
                 .then(left.repository_id.cmp(&right.repository_id))
                 .then(left.symbol.path.cmp(&right.symbol.path))
                 .then(left.symbol.line.cmp(&right.symbol.line))
@@ -955,6 +670,14 @@ impl FriggMcpServer {
             candidate_count,
             selected_rank_candidate_count,
         })
+    }
+
+    fn navigation_path_class(relative_path: &str) -> &'static str {
+        repository_path_class(relative_path)
+    }
+
+    fn navigation_path_class_rank(path_class: &str) -> u8 {
+        repository_path_class_rank(path_class)
     }
 
     fn normalize_relative_input_path(raw_path: &str) -> String {
@@ -1114,6 +837,99 @@ impl FriggMcpServer {
         })
     }
 
+    fn try_cached_precise_definition_fast_path(
+        &self,
+        repository_id_hint: Option<&str>,
+        raw_path: &str,
+        line: usize,
+        column: Option<usize>,
+        limit: usize,
+    ) -> Result<Option<(Json<GoToDefinitionResponse>, String, String, String)>, ErrorData>
+    {
+        let scoped_roots = self.roots_for_repository(repository_id_hint)?;
+        if repository_id_hint.is_none() && scoped_roots.len() != 1 {
+            return Ok(None);
+        }
+
+        let mut scoped_roots = scoped_roots;
+        scoped_roots.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+
+        for (repository_id, root) in scoped_roots {
+            let Some(cached_precise_graph) =
+                self.try_reuse_latest_precise_graph_for_repository(&repository_id, &root)
+            else {
+                continue;
+            };
+            let relative_path = Self::canonicalize_navigation_path(&root, raw_path);
+            let graph = cached_precise_graph.graph;
+            let Some(precise_target) = graph.select_precise_symbol_for_location(
+                &repository_id,
+                &relative_path,
+                line,
+                column,
+            ) else {
+                continue;
+            };
+
+            let mut precise_matches = graph
+                .precise_occurrences_for_symbol(&repository_id, &precise_target.symbol)
+                .into_iter()
+                .filter(|occurrence| occurrence.is_definition())
+                .map(|occurrence| NavigationLocation {
+                    symbol: if precise_target.display_name.is_empty() {
+                        precise_target.symbol.clone()
+                    } else {
+                        precise_target.display_name.clone()
+                    },
+                    repository_id: repository_id.clone(),
+                    path: Self::canonicalize_navigation_path(&root, &occurrence.path),
+                    line: occurrence.range.start_line,
+                    column: occurrence.range.start_column,
+                    kind: Some(Self::display_symbol_kind(&precise_target.kind)),
+                    precision: Some(
+                        Self::precise_match_precision(cached_precise_graph.coverage_mode)
+                            .to_owned(),
+                    ),
+                })
+                .collect::<Vec<_>>();
+            Self::sort_navigation_locations(&mut precise_matches);
+            if precise_matches.is_empty() {
+                continue;
+            }
+            if precise_matches.len() > limit {
+                precise_matches.truncate(limit);
+            }
+
+            let precision =
+                Self::precise_resolution_precision(cached_precise_graph.coverage_mode).to_owned();
+            let metadata = json!({
+                "precision": precision,
+                "heuristic": false,
+                "target_precise_symbol": precise_target.symbol.clone(),
+                "resolution_source": "location_precise_cache",
+                "precise": Self::precise_note_with_count(
+                    cached_precise_graph.coverage_mode,
+                    &cached_precise_graph.ingest_stats,
+                    "definition_count",
+                    precise_matches.len(),
+                )
+            });
+            let (metadata, note) = Self::metadata_note_pair(metadata);
+            return Ok(Some((
+                Json(GoToDefinitionResponse {
+                    matches: precise_matches,
+                    metadata,
+                    note,
+                }),
+                repository_id,
+                precise_target.symbol,
+                precision,
+            )));
+        }
+
+        Ok(None)
+    }
+
     fn canonicalize_navigation_path(root: &Path, raw_path: &str) -> String {
         let path = PathBuf::from(raw_path);
         let absolute_path = if path.is_absolute() {
@@ -1132,6 +948,98 @@ impl FriggMcpServer {
         graph.precise_definition_occurrence_for_symbol(repository_id, symbol)
     }
 
+    fn precise_navigation_candidate_anchor_rank(
+        graph: &SymbolGraph,
+        repository_id: &str,
+        root: &Path,
+        target_symbol: &SymbolDefinition,
+        precise_target: &crate::graph::PreciseSymbolRecord,
+    ) -> (u8, String, usize, usize) {
+        let Some(definition) = Self::precise_definition_occurrence_for_symbol(
+            graph,
+            repository_id,
+            &precise_target.symbol,
+        ) else {
+            return (4, String::new(), usize::MAX, usize::MAX);
+        };
+
+        let target_path = Self::relative_display_path(root, &target_symbol.path);
+        let definition_path = Self::canonicalize_navigation_path(root, &definition.path);
+        let rank = if definition_path == target_path
+            && definition.range.start_line == target_symbol.line
+            && definition.range.start_column == target_symbol.span.start_column
+        {
+            0
+        } else if definition_path == target_path
+            && definition.range.start_line == target_symbol.line
+        {
+            1
+        } else if definition_path == target_path {
+            2
+        } else {
+            3
+        };
+
+        (
+            rank,
+            definition_path,
+            definition.range.start_line,
+            definition.range.start_column,
+        )
+    }
+
+    fn matching_precise_symbols_for_resolved_target(
+        graph: &SymbolGraph,
+        repository_id: &str,
+        root: &Path,
+        symbol_query: &str,
+        target_symbol: &SymbolDefinition,
+    ) -> Vec<crate::graph::PreciseSymbolRecord> {
+        let mut candidates = graph.matching_precise_symbols_for_navigation(
+            repository_id,
+            symbol_query,
+            &target_symbol.name,
+        );
+        candidates.sort_by(|left, right| {
+            Self::precise_navigation_candidate_anchor_rank(
+                graph,
+                repository_id,
+                root,
+                target_symbol,
+                left,
+            )
+            .cmp(&Self::precise_navigation_candidate_anchor_rank(
+                graph,
+                repository_id,
+                root,
+                target_symbol,
+                right,
+            ))
+            .then(left.symbol.cmp(&right.symbol))
+            .then(left.display_name.cmp(&right.display_name))
+            .then(left.kind.cmp(&right.kind))
+        });
+        candidates
+    }
+
+    fn select_precise_symbol_for_resolved_target(
+        graph: &SymbolGraph,
+        repository_id: &str,
+        root: &Path,
+        symbol_query: &str,
+        target_symbol: &SymbolDefinition,
+    ) -> Option<crate::graph::PreciseSymbolRecord> {
+        Self::matching_precise_symbols_for_resolved_target(
+            graph,
+            repository_id,
+            root,
+            symbol_query,
+            target_symbol,
+        )
+        .into_iter()
+        .next()
+    }
+
     fn precise_relationships_to_symbol_by_kind(
         graph: &SymbolGraph,
         repository_id: &str,
@@ -1141,92 +1049,47 @@ impl FriggMcpServer {
         graph.precise_relationships_to_symbol_by_kinds(repository_id, to_symbol, kinds)
     }
 
-    fn read_line_slice_lossy(
-        path: &Path,
-        line_start: usize,
-        line_end: Option<usize>,
-        max_bytes: usize,
-    ) -> Result<(String, usize, usize), ErrorData> {
-        let file = fs::File::open(path).map_err(|err| {
-            Self::internal(
+    fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {
+        match error {
+            LossyLineSliceError::Io(err) => Self::internal(
                 format!("failed to read file {}: {err}", path.display()),
                 None,
-            )
-        })?;
-        let mut reader = BufReader::new(file);
-        let mut raw_line = Vec::new();
-        let mut content = String::new();
-        let mut total_lines = 0usize;
-        let mut sliced_bytes = 0usize;
-        let mut exceeded_limit = false;
-        let mut first_selected_line = true;
-
-        loop {
-            raw_line.clear();
-            let bytes_read = reader.read_until(b'\n', &mut raw_line).map_err(|err| {
-                Self::internal(
-                    format!("failed to read file {}: {err}", path.display()),
-                    None,
-                )
-            })?;
-            if bytes_read == 0 {
-                break;
-            }
-
-            total_lines = total_lines.saturating_add(1);
-            let include_line = total_lines >= line_start
-                && line_end.is_none_or(|effective_end| total_lines <= effective_end);
-            if !include_line {
-                if line_end.is_some_and(|effective_end| total_lines >= effective_end) {
-                    break;
-                }
-                continue;
-            }
-
-            let normalized_line = Self::normalize_lossy_line_bytes(&raw_line);
-            if !first_selected_line {
-                sliced_bytes = sliced_bytes.saturating_add(1);
-                if !exceeded_limit {
-                    content.push('\n');
-                }
-            }
-            sliced_bytes = sliced_bytes.saturating_add(normalized_line.len());
-            if sliced_bytes > max_bytes {
-                exceeded_limit = true;
-            }
-            if !exceeded_limit {
-                content.push_str(&normalized_line);
-            }
-            first_selected_line = false;
-
-            if line_end.is_some_and(|effective_end| total_lines >= effective_end) {
-                break;
-            }
-        }
-
-        if total_lines > 0 && line_start > total_lines {
-            return Err(Self::invalid_params(
+            ),
+            LossyLineSliceError::LineStartOutside {
+                line_start,
+                line_end,
+                total_lines,
+            } => Self::invalid_params(
                 "line_start is outside file bounds",
                 Some(serde_json::json!({
                     "line_start": line_start,
                     "line_end": line_end,
                     "total_lines": total_lines,
                 })),
-            ));
+            ),
         }
-
-        Ok((content, sliced_bytes, total_lines))
     }
 
-    fn normalize_lossy_line_bytes(raw_line: &[u8]) -> String {
-        let mut line_bytes = raw_line;
-        if line_bytes.ends_with(b"\n") {
-            line_bytes = &line_bytes[..line_bytes.len() - 1];
-        }
-        if line_bytes.ends_with(b"\r") {
-            line_bytes = &line_bytes[..line_bytes.len() - 1];
-        }
-        String::from_utf8_lossy(line_bytes).into_owned()
+    fn line_slice_budget_error(
+        path: &str,
+        bytes: usize,
+        max_bytes: usize,
+        line_start: usize,
+        line_end: usize,
+        total_lines: usize,
+    ) -> ErrorData {
+        Self::invalid_params(
+            format!("selected line range exceeds max_bytes={max_bytes}"),
+            Some(serde_json::json!({
+                "path": path,
+                "bytes": bytes,
+                "max_bytes": max_bytes,
+                "config_max_file_bytes": max_bytes,
+                "line_start": line_start,
+                "line_end": line_end,
+                "total_lines": total_lines,
+            })),
+        )
     }
 
     fn sort_navigation_locations(matches: &mut [NavigationLocation]) {
@@ -1250,6 +1113,7 @@ impl FriggMcpServer {
                 .then(left.line.cmp(&right.line))
                 .then(left.column.cmp(&right.column))
                 .then(left.symbol.cmp(&right.symbol))
+                .then(left.kind.cmp(&right.kind))
                 .then(left.relation.cmp(&right.relation))
                 .then(left.precision.cmp(&right.precision))
                 .then(left.fallback_reason.cmp(&right.fallback_reason))
@@ -1289,6 +1153,7 @@ impl FriggMcpServer {
                 } else {
                     implementation_symbol.display_name
                 },
+                kind: Self::display_symbol_kind(&implementation_symbol.kind),
                 repository_id: repository_id.to_owned(),
                 path: Self::canonicalize_navigation_path(root, &definition.path),
                 line: definition.range.start_line,
@@ -1300,6 +1165,115 @@ impl FriggMcpServer {
         })
         .collect::<Vec<_>>();
         Self::sort_implementation_matches(&mut matches);
+        matches
+    }
+
+    fn precise_implementation_matches_from_occurrences(
+        graph: &SymbolGraph,
+        target_corpus: &RepositorySymbolCorpus,
+        root: &Path,
+        target_symbol_name: &str,
+        coverage_mode: PreciseCoverageMode,
+        precise_target: &crate::graph::PreciseSymbolRecord,
+    ) -> Vec<ImplementationMatch> {
+        let precision = Self::precise_match_precision(coverage_mode).to_owned();
+        let target_name = if precise_target.display_name.is_empty() {
+            target_symbol_name
+        } else {
+            precise_target.display_name.as_str()
+        };
+
+        let mut matches = graph
+            .precise_references_for_symbol(&target_corpus.repository_id, &precise_target.symbol)
+            .into_iter()
+            .filter_map(|occurrence| {
+                let enclosing_symbol = Self::precise_enclosing_symbol_for_occurrence(
+                    target_corpus,
+                    root,
+                    &occurrence,
+                    None,
+                )?;
+                if enclosing_symbol.kind.as_str() != "impl" {
+                    return None;
+                }
+
+                let (implemented_trait, implementing_type) =
+                    Self::parse_rust_impl_signature(enclosing_symbol.name.as_str())?;
+                let (symbol, kind, path, line, column, relation) =
+                    if let Some(implemented_trait) = implemented_trait {
+                        if implemented_trait.eq_ignore_ascii_case(target_name) {
+                            let implementing_symbol = graph.select_precise_symbol_for_navigation(
+                                &target_corpus.repository_id,
+                                implementing_type,
+                                implementing_type,
+                            )?;
+                            let definition = Self::precise_definition_occurrence_for_symbol(
+                                graph,
+                                &target_corpus.repository_id,
+                                &implementing_symbol.symbol,
+                            )?;
+                            (
+                                if implementing_symbol.display_name.is_empty() {
+                                    implementing_symbol.symbol
+                                } else {
+                                    implementing_symbol.display_name
+                                },
+                                Self::display_symbol_kind(&implementing_symbol.kind),
+                                Self::canonicalize_navigation_path(root, &definition.path),
+                                definition.range.start_line,
+                                definition.range.start_column,
+                                Some("implementation".to_owned()),
+                            )
+                        } else if implementing_type.eq_ignore_ascii_case(target_name) {
+                            (
+                                enclosing_symbol.name.clone(),
+                                Self::display_symbol_kind(enclosing_symbol.kind.as_str()),
+                                Self::relative_display_path(root, &enclosing_symbol.path),
+                                enclosing_symbol.line,
+                                enclosing_symbol.span.start_column,
+                                Some("type_definition".to_owned()),
+                            )
+                        } else {
+                            return None;
+                        }
+                    } else if implementing_type.eq_ignore_ascii_case(target_name) {
+                        (
+                            enclosing_symbol.name.clone(),
+                            Self::display_symbol_kind(enclosing_symbol.kind.as_str()),
+                            Self::relative_display_path(root, &enclosing_symbol.path),
+                            enclosing_symbol.line,
+                            enclosing_symbol.span.start_column,
+                            Some("type_definition".to_owned()),
+                        )
+                    } else {
+                        return None;
+                    };
+
+                Some(ImplementationMatch {
+                    symbol,
+                    kind,
+                    repository_id: target_corpus.repository_id.clone(),
+                    path,
+                    line,
+                    column,
+                    relation,
+                    precision: Some(precision.clone()),
+                    fallback_reason: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        Self::sort_implementation_matches(&mut matches);
+        matches.dedup_by(|left, right| {
+            left.repository_id == right.repository_id
+                && left.path == right.path
+                && left.line == right.line
+                && left.column == right.column
+                && left.symbol == right.symbol
+                && left.kind == right.kind
+                && left.relation == right.relation
+                && left.precision == right.precision
+                && left.fallback_reason == right.fallback_reason
+        });
         matches
     }
 
@@ -1345,6 +1319,11 @@ impl FriggMcpServer {
                 column: caller_definition.range.start_column,
                 relation: "calls".to_owned(),
                 precision: Some(precision.clone()),
+                call_path: None,
+                call_line: None,
+                call_column: None,
+                call_end_line: None,
+                call_end_column: None,
             })
         })
         .collect::<Vec<_>>();
@@ -1356,7 +1335,7 @@ impl FriggMcpServer {
         target_corpus: &'a RepositorySymbolCorpus,
         root: &Path,
         occurrence: &crate::graph::PreciseOccurrenceRecord,
-        exclude_symbol_id: &str,
+        exclude_symbol_id: Option<&str>,
     ) -> Option<&'a SymbolDefinition> {
         let occurrence_path = Self::canonicalize_navigation_path(root, &occurrence.path);
         target_corpus
@@ -1365,17 +1344,35 @@ impl FriggMcpServer {
             .into_iter()
             .flat_map(|indices| indices.iter())
             .map(|index| &target_corpus.symbols[*index])
-            .filter(|symbol| symbol.stable_id != exclude_symbol_id)
             .filter(|symbol| {
-                occurrence.range.start_line >= symbol.span.start_line
-                    && occurrence.range.start_line <= symbol.span.end_line
+                exclude_symbol_id
+                    .map(|exclude| symbol.stable_id != exclude)
+                    .unwrap_or(true)
+            })
+            .filter(|symbol| {
+                Self::source_span_contains_precise_range(&symbol.span, &occurrence.range)
             })
             .min_by(|left, right| {
                 let left_span = left.span.end_line.saturating_sub(left.span.start_line);
                 let right_span = right.span.end_line.saturating_sub(right.span.start_line);
+                let left_column_span = if left_span == 0 {
+                    left.span.end_column.saturating_sub(left.span.start_column)
+                } else {
+                    usize::MAX
+                };
+                let right_column_span = if right_span == 0 {
+                    right
+                        .span
+                        .end_column
+                        .saturating_sub(right.span.start_column)
+                } else {
+                    usize::MAX
+                };
                 left_span
                     .cmp(&right_span)
+                    .then(left_column_span.cmp(&right_column_span))
                     .then(left.span.start_line.cmp(&right.span.start_line))
+                    .then(left.span.start_column.cmp(&right.span.start_column))
                     .then(left.stable_id.cmp(&right.stable_id))
             })
     }
@@ -1390,6 +1387,7 @@ impl FriggMcpServer {
         exclude_symbol_id: &str,
     ) -> Vec<CallHierarchyMatch> {
         let precision = Self::precise_match_precision(coverage_mode).to_owned();
+        let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
         let mut matches = graph
             .precise_references_for_symbol(&target_corpus.repository_id, &precise_target.symbol)
             .into_iter()
@@ -1398,8 +1396,16 @@ impl FriggMcpServer {
                     target_corpus,
                     root,
                     &occurrence,
-                    exclude_symbol_id,
+                    Some(exclude_symbol_id),
                 )?;
+                let relation = Self::classify_precise_incoming_occurrence_relation(
+                    root,
+                    precise_target,
+                    &occurrence,
+                    &mut source_cache,
+                );
+                let (call_path, call_line, call_column, call_end_line, call_end_column) =
+                    Self::precise_call_site_fields(root, &occurrence);
                 Some(CallHierarchyMatch {
                     source_symbol: enclosing_symbol.name.clone(),
                     target_symbol: if precise_target.display_name.is_empty() {
@@ -1411,8 +1417,13 @@ impl FriggMcpServer {
                     path: Self::relative_display_path(root, &enclosing_symbol.path),
                     line: enclosing_symbol.line,
                     column: enclosing_symbol.span.start_column,
-                    relation: "refers_to".to_owned(),
+                    relation: relation.to_owned(),
                     precision: Some(precision.clone()),
+                    call_path,
+                    call_line,
+                    call_column,
+                    call_end_line,
+                    call_end_column,
                 })
             })
             .collect::<Vec<_>>();
@@ -1426,8 +1437,472 @@ impl FriggMcpServer {
                 && left.target_symbol == right.target_symbol
                 && left.relation == right.relation
                 && left.precision == right.precision
+                && left.call_path == right.call_path
+                && left.call_line == right.call_line
+                && left.call_column == right.call_column
+                && left.call_end_line == right.call_end_line
+                && left.call_end_column == right.call_end_column
         });
         matches
+    }
+
+    fn classify_precise_incoming_occurrence_relation(
+        root: &Path,
+        precise_target: &crate::graph::PreciseSymbolRecord,
+        occurrence: &crate::graph::PreciseOccurrenceRecord,
+        source_cache: &mut BTreeMap<String, Option<String>>,
+    ) -> &'static str {
+        if !Self::is_precise_callable_kind(&precise_target.kind) {
+            return "refers_to";
+        }
+        if Self::precise_occurrence_has_call_like_source(
+            root,
+            precise_target,
+            occurrence,
+            source_cache,
+        ) {
+            "calls"
+        } else {
+            "refers_to"
+        }
+    }
+
+    fn precise_occurrence_has_call_like_source(
+        root: &Path,
+        precise_target: &crate::graph::PreciseSymbolRecord,
+        occurrence: &crate::graph::PreciseOccurrenceRecord,
+        source_cache: &mut BTreeMap<String, Option<String>>,
+    ) -> bool {
+        let source = source_cache
+            .entry(occurrence.path.clone())
+            .or_insert_with(|| {
+                let occurrence_path = Path::new(&occurrence.path);
+                let absolute_path = if occurrence_path.is_absolute() {
+                    occurrence_path.to_path_buf()
+                } else {
+                    root.join(occurrence_path)
+                };
+                fs::read_to_string(absolute_path).ok()
+            })
+            .as_deref();
+        let Some(source) = source else {
+            return false;
+        };
+        let Some(line) = Self::source_line_for_precise_range(source, &occurrence.range) else {
+            return false;
+        };
+        let target_name = Self::precise_target_call_name(precise_target);
+        line.match_indices(target_name).any(|(index, _)| {
+            let suffix_start = index.saturating_add(target_name.len()).min(line.len());
+            line.get(suffix_start..)
+                .map(Self::source_suffix_looks_like_rust_call)
+                .unwrap_or(false)
+        })
+    }
+
+    fn precise_target_call_name<'a>(
+        precise_target: &'a crate::graph::PreciseSymbolRecord,
+    ) -> &'a str {
+        if !precise_target.display_name.is_empty() {
+            return precise_target.display_name.as_str();
+        }
+        precise_target
+            .symbol
+            .rsplit(['#', '/', '.'])
+            .next()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(precise_target.symbol.as_str())
+    }
+
+    fn source_line_for_precise_range<'a>(
+        source: &'a str,
+        range: &crate::graph::PreciseRange,
+    ) -> Option<&'a str> {
+        source.lines().nth(range.start_line.saturating_sub(1))
+    }
+
+    fn source_suffix_looks_like_rust_call(mut suffix: &str) -> bool {
+        suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+        suffix = suffix.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_');
+        suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+        if suffix.starts_with('(') {
+            return true;
+        }
+        if !suffix.starts_with("::") {
+            return false;
+        }
+
+        suffix = suffix[2..].trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+        if !suffix.starts_with('<') {
+            return false;
+        }
+
+        let mut depth = 0usize;
+        let mut end_index = None;
+        for (index, ch) in suffix.char_indices() {
+            match ch {
+                '<' => depth = depth.saturating_add(1),
+                '>' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end_index = Some(index + ch.len_utf8());
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end_index) = end_index else {
+            return false;
+        };
+        suffix[end_index..]
+            .trim_start_matches(|ch: char| ch == ' ' || ch == '\t')
+            .starts_with('(')
+    }
+
+    fn precise_outgoing_matches_from_occurrences(
+        graph: &SymbolGraph,
+        target_corpus: &RepositorySymbolCorpus,
+        root: &Path,
+        source_symbol_name: &str,
+        coverage_mode: PreciseCoverageMode,
+        precise_target: &crate::graph::PreciseSymbolRecord,
+        enclosing_symbol_id: &str,
+    ) -> Vec<CallHierarchyMatch> {
+        let precision = Self::precise_match_precision(coverage_mode).to_owned();
+        let source_definition = match Self::precise_definition_occurrence_for_symbol(
+            graph,
+            &target_corpus.repository_id,
+            &precise_target.symbol,
+        ) {
+            Some(definition) => definition,
+            None => return Vec::new(),
+        };
+        let source_path = Self::canonicalize_navigation_path(root, &source_definition.path);
+        let mut matches = graph
+            .precise_occurrences_for_file(&target_corpus.repository_id, &source_path)
+            .into_iter()
+            .filter(|occurrence| !occurrence.is_definition())
+            .filter(|occurrence| occurrence.symbol != precise_target.symbol)
+            .filter_map(|occurrence| {
+                let enclosing_symbol = Self::precise_enclosing_symbol_for_occurrence(
+                    target_corpus,
+                    root,
+                    &occurrence,
+                    None,
+                )?;
+                if enclosing_symbol.stable_id != enclosing_symbol_id {
+                    return None;
+                }
+
+                let callee_symbol = graph
+                    .precise_symbol(&target_corpus.repository_id, &occurrence.symbol)?
+                    .clone();
+                if !Self::is_precise_callable_kind(&callee_symbol.kind) {
+                    return None;
+                }
+                let callee_definition = Self::precise_definition_occurrence_for_symbol(
+                    graph,
+                    &target_corpus.repository_id,
+                    &occurrence.symbol,
+                )?;
+                let (call_path, call_line, call_column, call_end_line, call_end_column) =
+                    Self::precise_call_site_fields(root, &occurrence);
+                Some(CallHierarchyMatch {
+                    source_symbol: if precise_target.display_name.is_empty() {
+                        source_symbol_name.to_owned()
+                    } else {
+                        precise_target.display_name.clone()
+                    },
+                    target_symbol: if callee_symbol.display_name.is_empty() {
+                        callee_symbol.symbol
+                    } else {
+                        callee_symbol.display_name
+                    },
+                    repository_id: target_corpus.repository_id.clone(),
+                    path: Self::canonicalize_navigation_path(root, &callee_definition.path),
+                    line: callee_definition.range.start_line,
+                    column: callee_definition.range.start_column,
+                    relation: "calls".to_owned(),
+                    precision: Some(precision.clone()),
+                    call_path,
+                    call_line,
+                    call_column,
+                    call_end_line,
+                    call_end_column,
+                })
+            })
+            .collect::<Vec<_>>();
+        Self::sort_call_hierarchy_matches(&mut matches);
+        matches.dedup_by(|left, right| {
+            left.repository_id == right.repository_id
+                && left.path == right.path
+                && left.line == right.line
+                && left.column == right.column
+                && left.source_symbol == right.source_symbol
+                && left.target_symbol == right.target_symbol
+                && left.relation == right.relation
+                && left.precision == right.precision
+                && left.call_path == right.call_path
+                && left.call_line == right.call_line
+                && left.call_column == right.call_column
+                && left.call_end_line == right.call_end_line
+                && left.call_end_column == right.call_end_column
+        });
+        matches
+    }
+
+    fn position_leq(
+        left_line: usize,
+        left_column: usize,
+        right_line: usize,
+        right_column: usize,
+    ) -> bool {
+        (left_line, left_column) <= (right_line, right_column)
+    }
+
+    fn source_span_contains_precise_range(
+        span: &SourceSpan,
+        range: &crate::graph::PreciseRange,
+    ) -> bool {
+        Self::position_leq(
+            span.start_line,
+            span.start_column,
+            range.start_line,
+            range.start_column,
+        ) && Self::position_leq(
+            range.end_line,
+            range.end_column,
+            span.end_line,
+            span.end_column,
+        )
+    }
+
+    fn precise_kind_numeric_value(kind: &str) -> Option<i32> {
+        kind.strip_prefix("kind_")
+            .unwrap_or(kind)
+            .parse::<i32>()
+            .ok()
+    }
+
+    fn display_symbol_kind(kind: &str) -> Option<String> {
+        let normalized = kind.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+
+        if let Some(value) = Self::precise_kind_numeric_value(normalized) {
+            if let Some(kind) = ScipSymbolKind::from_i32(value) {
+                return Some(Self::camel_to_snake_case(&format!("{kind:?}")));
+            }
+        }
+
+        Some(Self::camel_to_snake_case(normalized))
+    }
+
+    fn camel_to_snake_case(raw: &str) -> String {
+        let mut output = String::with_capacity(raw.len());
+        let mut previous_was_separator = false;
+        let mut previous_was_lower_or_digit = false;
+
+        for character in raw.chars() {
+            if matches!(character, '_' | '-' | ' ' | '\t') {
+                if !output.ends_with('_') && !output.is_empty() {
+                    output.push('_');
+                }
+                previous_was_separator = true;
+                previous_was_lower_or_digit = false;
+                continue;
+            }
+
+            if character.is_ascii_uppercase()
+                && !output.is_empty()
+                && !previous_was_separator
+                && previous_was_lower_or_digit
+            {
+                output.push('_');
+            }
+
+            output.push(character.to_ascii_lowercase());
+            previous_was_separator = false;
+            previous_was_lower_or_digit =
+                character.is_ascii_lowercase() || character.is_ascii_digit();
+        }
+
+        output
+    }
+
+    fn metadata_note_pair(metadata: Value) -> (Option<Value>, Option<String>) {
+        let note = Some(metadata.to_string());
+        (Some(metadata), note)
+    }
+
+    fn precise_call_site_fields(
+        root: &Path,
+        occurrence: &crate::graph::PreciseOccurrenceRecord,
+    ) -> (
+        Option<String>,
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+        Option<usize>,
+    ) {
+        (
+            Some(Self::canonicalize_navigation_path(root, &occurrence.path)),
+            Some(occurrence.range.start_line),
+            Some(occurrence.range.start_column),
+            Some(occurrence.range.end_line),
+            Some(occurrence.range.end_column),
+        )
+    }
+
+    fn source_span_contains_symbol(parent: &SourceSpan, child: &SourceSpan) -> bool {
+        parent.start_byte <= child.start_byte
+            && child.end_byte <= parent.end_byte
+            && (parent.start_byte < child.start_byte || child.end_byte < parent.end_byte)
+    }
+
+    fn build_document_symbol_tree(
+        symbols: &[SymbolDefinition],
+        repository_id: &str,
+        display_path: &str,
+    ) -> Vec<crate::mcp::types::DocumentSymbolItem> {
+        #[derive(Clone)]
+        struct PendingDocumentSymbolNode {
+            item: crate::mcp::types::DocumentSymbolItem,
+            span: SourceSpan,
+            children: Vec<usize>,
+        }
+
+        fn materialize(
+            nodes: &[PendingDocumentSymbolNode],
+            index: usize,
+        ) -> crate::mcp::types::DocumentSymbolItem {
+            let mut item = nodes[index].item.clone();
+            item.children = nodes[index]
+                .children
+                .iter()
+                .map(|child_index| materialize(nodes, *child_index))
+                .collect();
+            item
+        }
+
+        let mut nodes: Vec<PendingDocumentSymbolNode> = Vec::with_capacity(symbols.len());
+        let mut root_indices = Vec::new();
+        let mut stack: Vec<usize> = Vec::new();
+
+        for symbol in symbols {
+            while let Some(parent_index) = stack.last().copied() {
+                if Self::source_span_contains_symbol(&nodes[parent_index].span, &symbol.span) {
+                    break;
+                }
+                stack.pop();
+            }
+
+            let container = stack
+                .last()
+                .map(|parent_index| nodes[*parent_index].item.symbol.clone());
+            let node_index = nodes.len();
+            nodes.push(PendingDocumentSymbolNode {
+                item: crate::mcp::types::DocumentSymbolItem {
+                    symbol: symbol.name.clone(),
+                    kind: symbol.kind.as_str().to_owned(),
+                    repository_id: repository_id.to_owned(),
+                    path: display_path.to_owned(),
+                    line: symbol.span.start_line,
+                    column: symbol.span.start_column,
+                    end_line: Some(symbol.span.end_line),
+                    end_column: Some(symbol.span.end_column),
+                    container,
+                    children: Vec::new(),
+                },
+                span: symbol.span.clone(),
+                children: Vec::new(),
+            });
+
+            if let Some(parent_index) = stack.last().copied() {
+                nodes[parent_index].children.push(node_index);
+            } else {
+                root_indices.push(node_index);
+            }
+            stack.push(node_index);
+        }
+
+        root_indices
+            .into_iter()
+            .map(|index| materialize(&nodes, index))
+            .collect()
+    }
+
+    fn is_precise_callable_kind(kind: &str) -> bool {
+        let normalized = kind.trim().to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "function"
+                | "method"
+                | "constructor"
+                | "abstract_method"
+                | "method_alias"
+                | "method_specification"
+                | "protocol_method"
+                | "pure_virtual_method"
+                | "singleton_method"
+                | "static_method"
+                | "trait_method"
+                | "type_class_method"
+        ) || matches!(
+            Self::precise_kind_numeric_value(&normalized),
+            Some(9 | 17 | 26 | 66 | 67 | 68 | 69 | 70 | 74 | 76 | 80)
+        )
+    }
+
+    fn is_heuristic_callable_kind(kind: &str) -> bool {
+        matches!(
+            kind.trim().to_ascii_lowercase().as_str(),
+            "function" | "method"
+        )
+    }
+
+    fn search_hybrid_warning(
+        semantic_status: Option<&str>,
+        semantic_reason: Option<&str>,
+        semantic_hit_count: Option<usize>,
+        semantic_match_count: Option<usize>,
+    ) -> Option<String> {
+        match semantic_status {
+            Some("disabled") => Some(match semantic_reason {
+                Some(reason) if !reason.trim().is_empty() => format!(
+                    "semantic retrieval is disabled; results are ranked from lexical and graph signals only ({reason})"
+                ),
+                _ => "semantic retrieval is disabled; results are ranked from lexical and graph signals only".to_owned(),
+            }),
+            Some("unavailable") => Some(match semantic_reason {
+                Some(reason) if !reason.trim().is_empty() => format!(
+                    "semantic retrieval is unavailable; results are ranked from lexical and graph signals only ({reason})"
+                ),
+                _ => "semantic retrieval is unavailable; results are ranked from lexical and graph signals only".to_owned(),
+            }),
+            Some("degraded") => Some(match semantic_reason {
+                Some(reason) if !reason.trim().is_empty() => format!(
+                    "semantic retrieval is degraded; semantic contribution may be partial ({reason})"
+                ),
+                _ => "semantic retrieval is degraded; semantic contribution may be partial".to_owned(),
+            }),
+            Some("ok") if semantic_hit_count == Some(0) => Some(
+                "semantic retrieval completed successfully but retained no query-relevant semantic hits; results are ranked from lexical and graph signals only"
+                    .to_owned(),
+            ),
+            Some("ok")
+                if semantic_hit_count.unwrap_or(0) > 0
+                    && semantic_match_count == Some(0) =>
+            {
+                Some(
+                    "semantic retrieval retained semantic hits, but none contributed to the returned top results; ranking is effectively lexical and graph for this result set"
+                        .to_owned(),
+                )
+            }
+            _ => None,
+        }
     }
 
     fn parse_rust_impl_signature(symbol_name: &str) -> Option<(Option<&str>, &str)> {
@@ -1460,6 +1935,7 @@ impl FriggMcpServer {
             "selected_kind": target.symbol.kind,
             "selected_repository_id": target.repository_id,
             "selected_path": Self::relative_display_path(&target.root, &target.symbol.path),
+            "selected_path_class": target.path_class,
             "selected_line": target.symbol.line,
             "selected_rank": target.rank,
             "candidate_count": candidate_count,
@@ -1597,6 +2073,30 @@ impl FriggMcpServer {
         target_corpus: &RepositorySymbolCorpus,
         target_root: &Path,
     ) -> Vec<ImplementationMatch> {
+        match heuristic_implementation_strategy(target_symbol.language) {
+            Some(HeuristicImplementationStrategy::RustImplBlocks) => {
+                Self::heuristic_rust_implementation_matches_from_symbols(
+                    target_symbol,
+                    target_corpus,
+                    target_root,
+                )
+            }
+            Some(HeuristicImplementationStrategy::PhpDeclarationRelations) => {
+                Self::heuristic_php_implementation_matches_from_symbols(
+                    target_symbol,
+                    target_corpus,
+                    target_root,
+                )
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn heuristic_rust_implementation_matches_from_symbols(
+        target_symbol: &SymbolDefinition,
+        target_corpus: &RepositorySymbolCorpus,
+        target_root: &Path,
+    ) -> Vec<ImplementationMatch> {
         let target_name = target_symbol.name.trim();
         if target_name.is_empty() {
             return Vec::new();
@@ -1637,6 +2137,7 @@ impl FriggMcpServer {
 
             matches.push(ImplementationMatch {
                 symbol: matched_display_name,
+                kind: Self::display_symbol_kind(symbol.kind.as_str()),
                 repository_id: target_corpus.repository_id.clone(),
                 path: Self::relative_display_path(target_root, &symbol.path),
                 line: symbol.line,
@@ -1647,6 +2148,52 @@ impl FriggMcpServer {
             });
         }
 
+        Self::dedup_sorted_implementation_matches(matches)
+    }
+
+    fn heuristic_php_implementation_matches_from_symbols(
+        target_symbol: &SymbolDefinition,
+        target_corpus: &RepositorySymbolCorpus,
+        target_root: &Path,
+    ) -> Vec<ImplementationMatch> {
+        let candidate_files = target_corpus
+            .source_paths
+            .iter()
+            .map(|path| (Self::relative_display_path(target_root, path), path.clone()))
+            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for (source_symbol_index, relation) in php_heuristic_implementation_candidates_for_target(
+            target_symbol,
+            &candidate_files,
+            &target_corpus.symbols,
+            &target_corpus.symbols_by_relative_path,
+            Some(&target_corpus.symbol_indices_by_name),
+            Some(&target_corpus.symbol_indices_by_lower_name),
+        ) {
+            let source_symbol = &target_corpus.symbols[source_symbol_index];
+            if source_symbol.stable_id == target_symbol.stable_id {
+                continue;
+            }
+
+            matches.push(ImplementationMatch {
+                symbol: source_symbol.name.clone(),
+                kind: Self::display_symbol_kind(source_symbol.kind.as_str()),
+                repository_id: target_corpus.repository_id.clone(),
+                path: Self::relative_display_path(target_root, &source_symbol.path),
+                line: source_symbol.line,
+                column: 1,
+                relation: Some(relation.as_str().to_owned()),
+                precision: Some("heuristic".to_owned()),
+                fallback_reason: Some("precise_absent".to_owned()),
+            });
+        }
+
+        Self::dedup_sorted_implementation_matches(matches)
+    }
+
+    fn dedup_sorted_implementation_matches(
+        mut matches: Vec<ImplementationMatch>,
+    ) -> Vec<ImplementationMatch> {
         Self::sort_implementation_matches(&mut matches);
         matches.dedup_by(|left, right| {
             left.repository_id == right.repository_id
@@ -1654,6 +2201,7 @@ impl FriggMcpServer {
                 && left.line == right.line
                 && left.column == right.column
                 && left.symbol == right.symbol
+                && left.kind == right.kind
                 && left.relation == right.relation
                 && left.precision == right.precision
                 && left.fallback_reason == right.fallback_reason
@@ -1672,6 +2220,11 @@ impl FriggMcpServer {
                 .then(left.target_symbol.cmp(&right.target_symbol))
                 .then(left.relation.cmp(&right.relation))
                 .then(left.precision.cmp(&right.precision))
+                .then(left.call_path.cmp(&right.call_path))
+                .then(left.call_line.cmp(&right.call_line))
+                .then(left.call_column.cmp(&right.call_column))
+                .then(left.call_end_line.cmp(&right.call_end_line))
+                .then(left.call_end_column.cmp(&right.call_end_column))
         });
     }
 
@@ -1684,24 +2237,21 @@ impl FriggMcpServer {
             return Err(Self::invalid_params("language must not be empty", None));
         }
 
-        let language = match normalized.as_str() {
-            "rust" => SymbolLanguage::Rust,
-            "php" => SymbolLanguage::Php,
-            _ => {
-                return Err(Self::invalid_params(
-                    format!("unsupported language `{value}` for structural search"),
-                    Some(json!({
-                        "language": value,
-                        "supported_languages": ["rust", "php"],
-                    })),
-                ));
-            }
-        };
+        let language = parse_supported_language(&normalized, LanguageCapability::StructuralSearch)
+            .ok_or_else(|| {
+            Self::invalid_params(
+                format!("unsupported language `{value}` for structural search"),
+                Some(json!({
+                    "language": value,
+                    "supported_languages": LanguageCapability::StructuralSearch.supported_language_names(),
+                })),
+            )
+        })?;
         Ok(Some(language))
     }
 
     fn is_heuristic_call_relation(relation: RelationKind) -> bool {
-        matches!(relation, RelationKind::Calls | RelationKind::RefersTo)
+        matches!(relation, RelationKind::Calls)
     }
 
     fn scip_candidate_directories(root: &Path) -> [PathBuf; 1] {
@@ -2145,7 +2695,9 @@ impl FriggMcpServer {
             file_digests
                 .iter()
                 .map(|digest| digest.path.clone())
-                .filter(|path| SymbolLanguage::from_path(path).is_some())
+                .filter(|path| {
+                    supported_language_for_path(path, LanguageCapability::SymbolCorpus).is_some()
+                })
                 .collect::<Vec<_>>()
         });
         source_paths.sort();
@@ -2159,6 +2711,52 @@ impl FriggMcpServer {
         let symbol_index_by_stable_id = Self::symbol_index_by_stable_id(&symbols);
         let symbol_indices_by_name = Self::symbol_indices_by_name(&symbols);
         let symbol_indices_by_lower_name = Self::symbol_indices_by_lower_name(&symbols);
+        let mut php_evidence_by_relative_path = BTreeMap::new();
+        let mut blade_evidence_by_relative_path = BTreeMap::new();
+        let mut canonical_symbol_name_by_stable_id = BTreeMap::new();
+
+        for path in &source_paths {
+            let relative_path = Self::relative_display_path(&root, path);
+            let file_symbols = symbols_by_relative_path
+                .get(&relative_path)
+                .into_iter()
+                .flatten()
+                .map(|index| symbols[*index].clone())
+                .collect::<Vec<_>>();
+            if file_symbols.is_empty() {
+                continue;
+            }
+            let Ok(source) = fs::read_to_string(path) else {
+                continue;
+            };
+            match supported_language_for_path(path, LanguageCapability::SymbolCorpus) {
+                Some(SymbolLanguage::Php) => {
+                    let Ok(evidence) =
+                        extract_php_source_evidence_from_source(path, &source, &file_symbols)
+                    else {
+                        continue;
+                    };
+                    canonical_symbol_name_by_stable_id
+                        .extend(evidence.canonical_names_by_stable_id.clone());
+                    php_evidence_by_relative_path.insert(relative_path, evidence);
+                }
+                Some(SymbolLanguage::Blade) => {
+                    let mut evidence =
+                        extract_blade_source_evidence_from_source(path, &source, &file_symbols);
+                    mark_local_flux_overlays(&mut evidence, &symbols, &symbol_indices_by_name);
+                    blade_evidence_by_relative_path.insert(relative_path, evidence);
+                }
+                _ => {}
+            }
+        }
+        let symbol_indices_by_canonical_name = Self::symbol_indices_by_canonical_name(
+            &symbol_index_by_stable_id,
+            &canonical_symbol_name_by_stable_id,
+        );
+        let symbol_indices_by_lower_canonical_name = Self::symbol_indices_by_lower_canonical_name(
+            &symbol_index_by_stable_id,
+            &canonical_symbol_name_by_stable_id,
+        );
 
         let corpus = Arc::new(RepositorySymbolCorpus {
             repository_id: repository_id.clone(),
@@ -2170,6 +2768,11 @@ impl FriggMcpServer {
             symbol_index_by_stable_id,
             symbol_indices_by_name,
             symbol_indices_by_lower_name,
+            canonical_symbol_name_by_stable_id,
+            symbol_indices_by_canonical_name,
+            symbol_indices_by_lower_canonical_name,
+            php_evidence_by_relative_path,
+            blade_evidence_by_relative_path,
             diagnostics,
         });
 
@@ -2199,10 +2802,36 @@ impl FriggMcpServer {
             .ok()?
     }
 
+    fn current_root_signature_for_repository(root: &Path, repository_id: &str) -> Option<String> {
+        match Self::load_latest_manifest_snapshot(root, repository_id) {
+            Some(snapshot) => {
+                let snapshot_digests = snapshot
+                    .entries
+                    .into_iter()
+                    .map(|entry| FileMetadataDigest {
+                        path: PathBuf::from(entry.path),
+                        size_bytes: entry.size_bytes,
+                        mtime_ns: entry.mtime_ns,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(validated_digests) = validate_manifest_digests_for_root(root, &snapshot_digests) {
+                    return Some(Self::root_signature(&validated_digests));
+                }
+            }
+            None => {}
+        }
+
+        ManifestBuilder::default()
+            .build_metadata_with_diagnostics(root)
+            .ok()
+            .map(|output| Self::root_signature(&output.entries))
+    }
+
     fn manifest_source_paths_for_digests(file_digests: &[FileMetadataDigest]) -> Vec<PathBuf> {
         let mut source_paths = Vec::new();
         for digest in file_digests {
-            if SymbolLanguage::from_path(&digest.path).is_some() {
+            if supported_language_for_path(&digest.path, LanguageCapability::SymbolCorpus).is_some()
+            {
                 source_paths.push(digest.path.clone());
             }
         }
@@ -2267,6 +2896,40 @@ impl FriggMcpServer {
         symbol_indices_by_lower_name
     }
 
+    fn symbol_indices_by_canonical_name(
+        symbol_index_by_stable_id: &BTreeMap<String, usize>,
+        canonical_symbol_name_by_stable_id: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, Vec<usize>> {
+        let mut symbol_indices_by_canonical_name = BTreeMap::new();
+        for (stable_id, canonical_name) in canonical_symbol_name_by_stable_id {
+            let Some(symbol_index) = symbol_index_by_stable_id.get(stable_id).copied() else {
+                continue;
+            };
+            symbol_indices_by_canonical_name
+                .entry(canonical_name.clone())
+                .or_insert_with(Vec::new)
+                .push(symbol_index);
+        }
+        symbol_indices_by_canonical_name
+    }
+
+    fn symbol_indices_by_lower_canonical_name(
+        symbol_index_by_stable_id: &BTreeMap<String, usize>,
+        canonical_symbol_name_by_stable_id: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, Vec<usize>> {
+        let mut symbol_indices_by_lower_canonical_name = BTreeMap::new();
+        for (stable_id, canonical_name) in canonical_symbol_name_by_stable_id {
+            let Some(symbol_index) = symbol_index_by_stable_id.get(stable_id).copied() else {
+                continue;
+            };
+            symbol_indices_by_lower_canonical_name
+                .entry(canonical_name.to_ascii_lowercase())
+                .or_insert_with(Vec::new)
+                .push(symbol_index);
+        }
+        symbol_indices_by_lower_canonical_name
+    }
+
     fn try_reuse_cached_precise_graph(
         &self,
         corpus: &RepositorySymbolCorpus,
@@ -2281,6 +2944,28 @@ impl FriggMcpServer {
             return None;
         }
         if !Self::cached_scip_discovery_is_current(&corpus.root, &cached.discovery) {
+            return None;
+        }
+        Some((*cached).clone())
+    }
+
+    fn try_reuse_latest_precise_graph_for_repository(
+        &self,
+        repository_id: &str,
+        root: &Path,
+    ) -> Option<CachedPreciseGraph> {
+        let current_root_signature =
+            Self::current_root_signature_for_repository(root, repository_id)?;
+        let cached = self
+            .latest_precise_graph_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(repository_id)
+            .cloned()?;
+        if cached.corpus_signature != current_root_signature {
+            return None;
+        }
+        if !Self::cached_scip_discovery_is_current(root, &cached.discovery) {
             return None;
         }
         Some((*cached).clone())
@@ -2358,6 +3043,9 @@ impl FriggMcpServer {
 
         let mut graph = SymbolGraph::default();
         register_symbol_definitions(&mut graph, &corpus.repository_id, &corpus.symbols);
+        Self::register_php_declaration_relations(&mut graph, corpus);
+        Self::register_php_target_evidence_relations(&mut graph, corpus);
+        Self::register_blade_relation_evidence(&mut graph, corpus);
         let ingest_stats = Self::ingest_precise_artifacts_for_repository(
             &mut graph,
             &corpus.repository_id,
@@ -2406,6 +3094,101 @@ impl FriggMcpServer {
             .insert(corpus.repository_id.clone(), cached_graph.clone());
 
         Ok((*cached_graph).clone())
+    }
+
+    fn register_php_declaration_relations(
+        graph: &mut SymbolGraph,
+        corpus: &RepositorySymbolCorpus,
+    ) {
+        for path in &corpus.source_paths {
+            let relative_path = Self::relative_display_path(&corpus.root, path);
+            let edges = match php_declaration_relation_edges_for_file(
+                &relative_path,
+                path,
+                &corpus.symbols,
+                &corpus.symbols_by_relative_path,
+                Some(&corpus.symbol_indices_by_name),
+                Some(&corpus.symbol_indices_by_lower_name),
+            ) {
+                Ok(edges) => edges,
+                Err(err) => {
+                    warn!(
+                        repository_id = corpus.repository_id,
+                        path = %path.display(),
+                        error = %err,
+                        "failed to build php declaration relations while building heuristic graph"
+                    );
+                    continue;
+                }
+            };
+
+            for (source_symbol_index, target_symbol_index, relation) in edges {
+                let source_symbol = &corpus.symbols[source_symbol_index];
+                let target_symbol = &corpus.symbols[target_symbol_index];
+                if source_symbol.stable_id == target_symbol.stable_id {
+                    continue;
+                }
+
+                let _ = graph.add_relation(
+                    &source_symbol.stable_id,
+                    &target_symbol.stable_id,
+                    relation,
+                );
+            }
+        }
+    }
+
+    fn register_php_target_evidence_relations(
+        graph: &mut SymbolGraph,
+        corpus: &RepositorySymbolCorpus,
+    ) {
+        for evidence in corpus.php_evidence_by_relative_path.values() {
+            for (source_symbol_index, target_symbol_index, relation) in
+                resolve_php_target_evidence_edges(
+                    &corpus.symbols,
+                    &corpus.symbol_index_by_stable_id,
+                    &corpus.symbol_indices_by_canonical_name,
+                    &corpus.symbol_indices_by_lower_canonical_name,
+                    evidence,
+                )
+            {
+                let source_symbol = &corpus.symbols[source_symbol_index];
+                let target_symbol = &corpus.symbols[target_symbol_index];
+                if source_symbol.stable_id == target_symbol.stable_id {
+                    continue;
+                }
+                let _ = graph.add_relation(
+                    &source_symbol.stable_id,
+                    &target_symbol.stable_id,
+                    relation,
+                );
+            }
+        }
+    }
+
+    fn register_blade_relation_evidence(graph: &mut SymbolGraph, corpus: &RepositorySymbolCorpus) {
+        for evidence in corpus.blade_evidence_by_relative_path.values() {
+            for (source_symbol_index, target_symbol_index, relation) in
+                resolve_blade_relation_evidence_edges(
+                    &corpus.symbols,
+                    &corpus.symbol_index_by_stable_id,
+                    &corpus.symbol_indices_by_name,
+                    &corpus.symbol_indices_by_lower_name,
+                    evidence,
+                )
+            {
+                let source_symbol = &corpus.symbols[source_symbol_index];
+                let target_symbol = &corpus.symbols[target_symbol_index];
+                if source_symbol.stable_id == target_symbol.stable_id {
+                    continue;
+                }
+                let _ = graph.add_relation(
+                    &source_symbol.stable_id,
+                    &target_symbol.stable_id,
+                    relation,
+                );
+            }
+        }
     }
 
     fn collect_repository_symbol_corpora(
@@ -2633,12 +3416,20 @@ impl FriggMcpServer {
     pub fn new_with_runtime_options(
         config: FriggConfig,
         provenance_best_effort: bool,
-        enable_deep_search_tools: bool,
+        enable_extended_tools: bool,
     ) -> Self {
-        let workspace_registry = WorkspaceRegistry::from_startup_config(&config);
+        let workspace_registry = WorkspaceRegistry::from_startup_repositories(
+            config.repositories().into_iter().map(|repository| {
+                (
+                    repository.repository_id.0,
+                    repository.display_name,
+                    repository.root_path,
+                )
+            }),
+        );
         Self {
             config: Arc::new(config),
-            tool_router: Self::filtered_tool_router(enable_deep_search_tools),
+            tool_router: Self::filtered_tool_router(enable_extended_tools),
             workspace_registry: Arc::new(RwLock::new(workspace_registry)),
             session_default_repository_id: Arc::new(RwLock::new(None)),
             symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -2653,9 +3444,9 @@ impl FriggMcpServer {
         config: FriggConfig,
         provenance_best_effort: bool,
     ) -> Self {
-        let enable_deep_search_tools =
+        let enable_extended_tools =
             active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
-        Self::new_with_runtime_options(config, provenance_best_effort, enable_deep_search_tools)
+        Self::new_with_runtime_options(config, provenance_best_effort, enable_extended_tools)
     }
 
     pub fn runtime_registered_tool_names(&self) -> Vec<String> {
@@ -2711,20 +3502,6 @@ impl FriggMcpServer {
         self.attach_workspace_internal(&current_dir, true, WorkspaceResolveMode::GitRoot)
             .map(|_| ())
             .map_err(|error| std::io::Error::other(error.message))
-    }
-
-    fn display_name_for_root(root: &Path) -> String {
-        root.file_name()
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| root.display().to_string())
-    }
-
-    fn storage_db_path_for_root(root: &Path) -> PathBuf {
-        resolve_provenance_db_path(root).unwrap_or_else(|_| {
-            root.join(crate::storage::PROVENANCE_STORAGE_DIR)
-                .join(crate::storage::PROVENANCE_STORAGE_DB_FILE)
-        })
     }
 
     fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
@@ -2812,14 +3589,6 @@ impl FriggMcpServer {
             .collect())
     }
 
-    fn repository_summary(workspace: &AttachedWorkspace) -> RepositorySummary {
-        RepositorySummary {
-            repository_id: workspace.repository_id.clone(),
-            display_name: workspace.display_name.clone(),
-            root_path: workspace.root.display().to_string(),
-        }
-    }
-
     fn effective_attach_directory(path: &Path) -> Result<PathBuf, ErrorData> {
         if path.exists() {
             let metadata = fs::metadata(path).map_err(|err| {
@@ -2887,13 +3656,31 @@ impl FriggMcpServer {
                 error: None,
             },
             Ok(_) => match storage.verify() {
-                Ok(_) => WorkspaceStorageSummary {
-                    db_path: workspace.db_path.display().to_string(),
-                    exists: true,
-                    initialized: true,
-                    index_state: WorkspaceStorageIndexState::Ready,
-                    error: None,
-                },
+                Ok(_) => {
+                    match storage.load_latest_manifest_for_repository(&workspace.repository_id) {
+                        Ok(Some(_)) => WorkspaceStorageSummary {
+                            db_path: workspace.db_path.display().to_string(),
+                            exists: true,
+                            initialized: true,
+                            index_state: WorkspaceStorageIndexState::Ready,
+                            error: None,
+                        },
+                        Ok(None) => WorkspaceStorageSummary {
+                            db_path: workspace.db_path.display().to_string(),
+                            exists: true,
+                            initialized: true,
+                            index_state: WorkspaceStorageIndexState::Uninitialized,
+                            error: None,
+                        },
+                        Err(err) => WorkspaceStorageSummary {
+                            db_path: workspace.db_path.display().to_string(),
+                            exists: true,
+                            initialized: true,
+                            index_state: WorkspaceStorageIndexState::Error,
+                            error: Some(err.to_string()),
+                        },
+                    }
+                }
                 Err(err) => WorkspaceStorageSummary {
                     db_path: workspace.db_path.display().to_string(),
                     exists: true,
@@ -2910,6 +3697,496 @@ impl FriggMcpServer {
                 error: Some(err.to_string()),
             },
         }
+    }
+
+    fn repository_summary(&self, workspace: &AttachedWorkspace) -> RepositorySummary {
+        let storage = Self::workspace_storage_summary(workspace);
+        let health = self.workspace_index_health_summary(workspace, &storage);
+        RepositorySummary {
+            repository_id: workspace.repository_id.clone(),
+            display_name: workspace.display_name.clone(),
+            root_path: workspace.root.display().to_string(),
+            storage: Some(storage),
+            health: Some(health),
+        }
+    }
+
+    fn workspace_index_health_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+        storage: &WorkspaceStorageSummary,
+    ) -> WorkspaceIndexHealthSummary {
+        WorkspaceIndexHealthSummary {
+            lexical: self.workspace_lexical_index_summary(workspace, storage),
+            semantic: self.workspace_semantic_index_summary(workspace, storage),
+            scip: self.workspace_scip_index_summary(workspace),
+        }
+    }
+
+    fn workspace_lexical_index_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+        storage: &WorkspaceStorageSummary,
+    ) -> WorkspaceIndexComponentSummary {
+        if let Some(summary) = Self::storage_error_health_summary(storage) {
+            return summary;
+        }
+
+        let Some(snapshot) =
+            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
+        else {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Missing,
+                reason: Some("missing_manifest_snapshot".to_owned()),
+                snapshot_id: None,
+                compatible_snapshot_id: None,
+                provider: None,
+                model: None,
+                artifact_count: None,
+            };
+        };
+        let snapshot_id = snapshot.snapshot_id.clone();
+        let snapshot_digests = snapshot
+            .entries
+            .iter()
+            .map(|entry| FileMetadataDigest {
+                path: PathBuf::from(&entry.path),
+                size_bytes: entry.size_bytes,
+                mtime_ns: entry.mtime_ns,
+            })
+            .collect::<Vec<_>>();
+        let state =
+            if validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_some() {
+                WorkspaceIndexComponentState::Ready
+            } else {
+                WorkspaceIndexComponentState::Stale
+            };
+        let reason = match state {
+            WorkspaceIndexComponentState::Ready => None,
+            WorkspaceIndexComponentState::Stale => Some("stale_manifest_snapshot".to_owned()),
+            _ => None,
+        };
+        WorkspaceIndexComponentSummary {
+            state,
+            reason,
+            snapshot_id: Some(snapshot_id),
+            compatible_snapshot_id: None,
+            provider: None,
+            model: None,
+            artifact_count: Some(snapshot.entries.len()),
+        }
+    }
+
+    fn workspace_semantic_index_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+        storage: &WorkspaceStorageSummary,
+    ) -> WorkspaceIndexComponentSummary {
+        if !self.config.semantic_runtime.enabled {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Disabled,
+                reason: Some("semantic_runtime_disabled".to_owned()),
+                snapshot_id: None,
+                compatible_snapshot_id: None,
+                provider: None,
+                model: None,
+                artifact_count: None,
+            };
+        }
+
+        let provider = self
+            .config
+            .semantic_runtime
+            .provider
+            .map(|value| value.as_str().to_owned());
+        let model = self
+            .config
+            .semantic_runtime
+            .normalized_model()
+            .map(ToOwned::to_owned);
+        if provider.is_none() || model.is_none() {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Error,
+                reason: Some("semantic_runtime_invalid_config".to_owned()),
+                snapshot_id: None,
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: None,
+            };
+        }
+        if let Some(summary) = Self::storage_error_health_summary(storage) {
+            return WorkspaceIndexComponentSummary {
+                provider,
+                model,
+                ..summary
+            };
+        }
+
+        let Some(snapshot) =
+            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
+        else {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Missing,
+                reason: Some("missing_manifest_snapshot".to_owned()),
+                snapshot_id: None,
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: None,
+            };
+        };
+        let snapshot_id = snapshot.snapshot_id.clone();
+        let snapshot_digests = snapshot
+            .entries
+            .iter()
+            .map(|entry| FileMetadataDigest {
+                path: PathBuf::from(&entry.path),
+                size_bytes: entry.size_bytes,
+                mtime_ns: entry.mtime_ns,
+            })
+            .collect::<Vec<_>>();
+        if validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_none() {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Stale,
+                reason: Some("stale_manifest_snapshot".to_owned()),
+                snapshot_id: Some(snapshot_id),
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: None,
+            };
+        }
+        let has_semantic_eligible_entries = snapshot
+            .entries
+            .iter()
+            .any(|entry| semantic_chunk_language_for_path(Path::new(&entry.path)).is_some());
+        if !has_semantic_eligible_entries {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Ready,
+                reason: Some("manifest_valid_no_semantic_eligible_entries".to_owned()),
+                snapshot_id: Some(snapshot_id),
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: Some(0),
+            };
+        }
+
+        let storage_reader = Storage::new(&workspace.db_path);
+        let provider_ref = provider
+            .as_deref()
+            .expect("semantic provider should exist after config validation");
+        let model_ref = model
+            .as_deref()
+            .expect("semantic model should exist after config validation");
+        match storage_reader.has_semantic_embeddings_for_repository_snapshot_model(
+            &workspace.repository_id,
+            &snapshot_id,
+            provider_ref,
+            model_ref,
+        ) {
+            Ok(true) => WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Ready,
+                reason: None,
+                snapshot_id: Some(snapshot_id.clone()),
+                compatible_snapshot_id: None,
+                provider: provider.clone(),
+                model: model.clone(),
+                artifact_count: storage_reader
+                    .count_semantic_embeddings_for_repository_snapshot_model(
+                        &workspace.repository_id,
+                        &snapshot_id,
+                        provider_ref,
+                        model_ref,
+                    )
+                    .ok(),
+            },
+            Ok(false) => {
+                let compatible_snapshot_id = storage_reader
+                    .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
+                        &workspace.repository_id,
+                        provider_ref,
+                        model_ref,
+                    )
+                    .ok()
+                    .flatten();
+                WorkspaceIndexComponentSummary {
+                    state: if compatible_snapshot_id.is_some() {
+                        WorkspaceIndexComponentState::Stale
+                    } else {
+                        WorkspaceIndexComponentState::Missing
+                    },
+                    reason: Some("semantic_snapshot_missing_for_active_model".to_owned()),
+                    snapshot_id: Some(snapshot_id),
+                    compatible_snapshot_id: compatible_snapshot_id.clone(),
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    artifact_count: compatible_snapshot_id.as_ref().and_then(
+                        |fallback_snapshot_id| {
+                            storage_reader
+                                .count_semantic_embeddings_for_repository_snapshot_model(
+                                    &workspace.repository_id,
+                                    fallback_snapshot_id,
+                                    provider_ref,
+                                    model_ref,
+                                )
+                                .ok()
+                        },
+                    ),
+                }
+            }
+            Err(err) => WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Error,
+                reason: Some(err.to_string()),
+                snapshot_id: Some(snapshot_id),
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: None,
+            },
+        }
+    }
+
+    fn workspace_scip_index_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> WorkspaceIndexComponentSummary {
+        let discovery = Self::collect_scip_artifact_digests(&workspace.root);
+        let artifact_count = discovery.artifact_digests.len();
+        WorkspaceIndexComponentSummary {
+            state: if artifact_count == 0 {
+                WorkspaceIndexComponentState::Missing
+            } else {
+                WorkspaceIndexComponentState::Ready
+            },
+            reason: if artifact_count == 0 {
+                Some("no_scip_artifacts_discovered".to_owned())
+            } else {
+                None
+            },
+            snapshot_id: None,
+            compatible_snapshot_id: None,
+            provider: None,
+            model: None,
+            artifact_count: Some(artifact_count),
+        }
+    }
+
+    fn workspace_semantic_refresh_plan(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> Option<WorkspaceSemanticRefreshPlan> {
+        if !self.config.semantic_runtime.enabled {
+            return None;
+        }
+
+        let provider = self.config.semantic_runtime.provider?;
+        let model = self.config.semantic_runtime.normalized_model()?;
+        let snapshot =
+            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)?;
+        let snapshot_digests = snapshot
+            .entries
+            .iter()
+            .map(|entry| FileMetadataDigest {
+                path: PathBuf::from(&entry.path),
+                size_bytes: entry.size_bytes,
+                mtime_ns: entry.mtime_ns,
+            })
+            .collect::<Vec<_>>();
+        let lexical_ready =
+            validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_some();
+        let storage = Storage::new(&workspace.db_path);
+        let latest_has_semantic = storage
+            .has_semantic_embeddings_for_repository_snapshot_model(
+                &workspace.repository_id,
+                &snapshot.snapshot_id,
+                provider.as_str(),
+                model,
+            )
+            .ok()?;
+        let compatible_snapshot_id = storage
+            .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
+                &workspace.repository_id,
+                provider.as_str(),
+                model,
+            )
+            .ok()
+            .flatten()?;
+
+        if lexical_ready && latest_has_semantic {
+            return None;
+        }
+
+        Some(WorkspaceSemanticRefreshPlan {
+            latest_snapshot_id: snapshot.snapshot_id,
+            compatible_snapshot_id,
+            reason: if !lexical_ready {
+                "stale_manifest_snapshot"
+            } else {
+                "semantic_snapshot_missing_for_active_model"
+            },
+        })
+    }
+
+    fn refresh_workspace_semantic_snapshot_with_plan(
+        &self,
+        workspace: &AttachedWorkspace,
+        plan: &WorkspaceSemanticRefreshPlan,
+    ) {
+        let credentials = SemanticRuntimeCredentials::from_process_env();
+        if let Err(err) = self.config.semantic_runtime.validate_startup(&credentials) {
+            warn!(
+                repository_id = workspace.repository_id,
+                snapshot_id = %plan.latest_snapshot_id,
+                compatible_snapshot_id = %plan.compatible_snapshot_id,
+                reason = plan.reason,
+                error = %err,
+                "skipping semantic snapshot refresh because runtime startup validation failed"
+            );
+            return;
+        }
+
+        if let Err(err) = reindex_repository_with_runtime_config(
+            &workspace.repository_id,
+            &workspace.root,
+            &workspace.db_path,
+            ReindexMode::ChangedOnly,
+            &self.config.semantic_runtime,
+            &credentials,
+        ) {
+            warn!(
+                repository_id = workspace.repository_id,
+                snapshot_id = %plan.latest_snapshot_id,
+                compatible_snapshot_id = %plan.compatible_snapshot_id,
+                reason = plan.reason,
+                error = %err,
+                "workspace semantic refresh failed during attach"
+            );
+        }
+    }
+
+    fn maybe_refresh_workspace_semantic_snapshot(&self, workspace: &AttachedWorkspace) {
+        let Some(plan) = self.workspace_semantic_refresh_plan(workspace) else {
+            return;
+        };
+        if plan.reason != "semantic_snapshot_missing_for_active_model" {
+            return;
+        }
+        self.refresh_workspace_semantic_snapshot_with_plan(workspace, &plan);
+    }
+
+    fn maybe_spawn_workspace_runtime_prewarm(&self, workspace: &AttachedWorkspace) {
+        let semantic_plan = self.workspace_semantic_refresh_plan(workspace);
+        let should_refresh_semantic = semantic_plan
+            .as_ref()
+            .is_some_and(|plan| plan.reason == "stale_manifest_snapshot");
+        let should_prewarm_precise = !Self::collect_scip_artifact_digests(&workspace.root)
+            .artifact_digests
+            .is_empty();
+        if !should_refresh_semantic && !should_prewarm_precise {
+            return;
+        }
+
+        if should_refresh_semantic {
+            let server = self.clone();
+            let workspace = workspace.clone();
+            let semantic_plan = semantic_plan.clone();
+            let _ = std::thread::Builder::new()
+                .name(format!(
+                    "frigg-semantic-refresh-{}",
+                    workspace.repository_id
+                ))
+                .spawn(move || {
+                    if let Some(plan) = semantic_plan.as_ref() {
+                        server.refresh_workspace_semantic_snapshot_with_plan(&workspace, plan);
+                    }
+                });
+        }
+
+        if should_prewarm_precise {
+            let server = self.clone();
+            let workspace = workspace.clone();
+            let _ = std::thread::Builder::new()
+                .name(format!("frigg-precise-prewarm-{}", workspace.repository_id))
+                .spawn(move || {
+                    server.prewarm_precise_graph_for_workspace(&workspace);
+                });
+        }
+    }
+
+    fn prewarm_precise_graph_for_workspace(&self, workspace: &AttachedWorkspace) {
+        let discovery = Self::collect_scip_artifact_digests(&workspace.root);
+        if discovery.artifact_digests.is_empty() {
+            return;
+        }
+        if self
+            .try_reuse_latest_precise_graph_for_repository(&workspace.repository_id, &workspace.root)
+            .is_some()
+        {
+            return;
+        }
+
+        let corpus = match self.collect_repository_symbol_corpus(
+            workspace.repository_id.clone(),
+            workspace.root.clone(),
+        ) {
+            Ok(corpus) => corpus,
+            Err(err) => {
+                warn!(
+                    repository_id = workspace.repository_id,
+                    error = %err,
+                    "failed to prewarm repository symbol corpus during workspace attach"
+                );
+                return;
+            }
+        };
+
+        if let Err(err) =
+            self.precise_graph_for_corpus(corpus.as_ref(), self.find_references_resource_budgets())
+        {
+            warn!(
+                repository_id = workspace.repository_id,
+                error = %err,
+                "failed to prewarm precise graph during workspace attach"
+            );
+        }
+    }
+
+    fn storage_error_health_summary(
+        storage: &WorkspaceStorageSummary,
+    ) -> Option<WorkspaceIndexComponentSummary> {
+        let (state, reason) = match storage.index_state {
+            WorkspaceStorageIndexState::MissingDb => (
+                WorkspaceIndexComponentState::Missing,
+                Some("missing_db".to_owned()),
+            ),
+            WorkspaceStorageIndexState::Uninitialized => (
+                WorkspaceIndexComponentState::Missing,
+                Some(if storage.initialized {
+                    "missing_manifest_snapshot".to_owned()
+                } else {
+                    "uninitialized_db".to_owned()
+                }),
+            ),
+            WorkspaceStorageIndexState::Ready => return None,
+            WorkspaceStorageIndexState::Error => (
+                WorkspaceIndexComponentState::Error,
+                storage
+                    .error
+                    .clone()
+                    .or_else(|| Some("storage_error".to_owned())),
+            ),
+        };
+        Some(WorkspaceIndexComponentSummary {
+            state,
+            reason,
+            snapshot_id: None,
+            compatible_snapshot_id: None,
+            provider: None,
+            model: None,
+            artifact_count: None,
+        })
     }
 
     fn attach_workspace_internal(
@@ -2946,13 +4223,23 @@ impl FriggMcpServer {
             self.set_current_repository_id(Some(workspace.repository_id.clone()));
         }
 
+        self.maybe_refresh_workspace_semantic_snapshot(&workspace);
+
+        let mut repository = self.repository_summary(&workspace);
+        let storage = repository
+            .storage
+            .clone()
+            .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
+        repository.storage = None;
+        self.maybe_spawn_workspace_runtime_prewarm(&workspace);
+
         Ok(WorkspaceAttachResponse {
-            repository: Self::repository_summary(&workspace),
+            repository,
             resolved_from: resolved_from.display().to_string(),
             resolution,
             session_default: self.current_repository_id().as_deref()
                 == Some(workspace.repository_id.as_str()),
-            storage: Self::workspace_storage_summary(&workspace),
+            storage,
         })
     }
 
@@ -3086,7 +4373,7 @@ impl FriggMcpServer {
 impl FriggMcpServer {
     #[tool(
         name = "list_repositories",
-        description = "List attached local repositories/workspace roots for this Frigg process.",
+        description = "List attached repositories for the current Frigg process.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3101,7 +4388,7 @@ impl FriggMcpServer {
         let repositories = self
             .attached_workspaces()
             .into_iter()
-            .map(|workspace| Self::repository_summary(&workspace))
+            .map(|workspace| self.repository_summary(&workspace))
             .collect::<Vec<_>>();
 
         let response = ListRepositoriesResponse { repositories };
@@ -3121,7 +4408,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_attach",
-        description = "Attach or reuse a local workspace root, inspect its repo-local SQLite readiness, and optionally set it as the session default repository.",
+        description = "Attach a workspace and optionally set it as the session default repository.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3169,7 +4456,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_current",
-        description = "Return the session default repository selected by workspace_attach, if any.",
+        description = "Return the session default repository, if any.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3183,7 +4470,9 @@ impl FriggMcpServer {
         let _params = params.0;
         let current_workspace = self.current_workspace();
         let response = WorkspaceCurrentResponse {
-            repository: current_workspace.as_ref().map(Self::repository_summary),
+            repository: current_workspace
+                .as_ref()
+                .map(|workspace| self.repository_summary(workspace)),
             session_default: current_workspace.is_some(),
         };
         let source_refs = json!({
@@ -3201,7 +4490,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_file",
-        description = "Read a file from the configured workspace roots.",
+        description = "Read a workspace file by canonical path or in-root absolute path; prefer local shell reads for simple direct inspection.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3330,8 +4619,12 @@ impl FriggMcpServer {
                 effective_line_start = Some(line_start);
                 effective_line_end = Some(effective_end_hint.unwrap_or(1));
 
-                let (sliced_content, sliced_bytes, total_lines) =
-                    Self::read_line_slice_lossy(&path, line_start, requested_line_end, max_bytes)?;
+                let line_slice =
+                    read_line_slice_lossy(&path, line_start, requested_line_end, max_bytes)
+                        .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
+                let sliced_content = line_slice.content;
+                let sliced_bytes = line_slice.bytes;
+                let total_lines = line_slice.total_lines;
                 let effective_end = requested_line_end
                     .unwrap_or(total_lines.max(1))
                     .min(total_lines.max(1));
@@ -3406,8 +4699,438 @@ impl FriggMcpServer {
     }
 
     #[tool(
+        name = "explore",
+        description = "Explore one resolved artifact with probe, zoom, or refine follow-up operations.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn explore(
+        &self,
+        params: Parameters<ExploreParams>,
+    ) -> Result<Json<ExploreResponse>, ErrorData> {
+        let params = params.0;
+        let repository_hint = params.repository_id.clone();
+        let params_for_blocking = params.clone();
+        let server = self.clone();
+        let execution = Self::run_blocking_task("explore", move || {
+            let mut resolved_repository_id: Option<String> = None;
+            let mut resolved_path: Option<String> = None;
+            let mut resolved_absolute_path: Option<String> = None;
+            let mut effective_context_lines: Option<usize> = None;
+            let mut effective_max_matches: Option<usize> = None;
+            let mut scan_scope = None;
+            let mut total_matches = 0usize;
+            let mut truncated = false;
+
+            let result = (|| -> Result<Json<ExploreResponse>, ErrorData> {
+                let requested_context_lines = params_for_blocking
+                    .context_lines
+                    .unwrap_or(DEFAULT_CONTEXT_LINES);
+                let context_lines = requested_context_lines.min(MAX_CONTEXT_LINES);
+                effective_context_lines = Some(context_lines);
+
+                let requested_max_matches = params_for_blocking
+                    .max_matches
+                    .unwrap_or(DEFAULT_MAX_MATCHES);
+                if requested_max_matches == 0 {
+                    return Err(Self::invalid_params(
+                        "max_matches must be greater than zero",
+                        None,
+                    ));
+                }
+                let max_matches =
+                    requested_max_matches.min(server.config.max_search_results.max(1));
+                effective_max_matches = Some(max_matches);
+
+                let operation = params_for_blocking.operation;
+                let query = params_for_blocking
+                    .query
+                    .as_ref()
+                    .map(|value| value.trim().to_owned());
+                let anchor = params_for_blocking.anchor.clone();
+                let resume_from = params_for_blocking.resume_from.clone();
+
+                let (matcher, response_query, response_pattern_type, scope, include_scope_content) =
+                    match operation {
+                        ExploreOperation::Probe => {
+                            if anchor.is_some() {
+                                return Err(Self::invalid_params(
+                                    "anchor is not allowed for probe",
+                                    None,
+                                ));
+                            }
+                            let Some(query) = query.clone().filter(|value| !value.is_empty())
+                            else {
+                                return Err(Self::invalid_params("query must not be empty", None));
+                            };
+                            if let Some(cursor) = resume_from.as_ref() {
+                                validate_cursor(cursor).map_err(|message| {
+                                    Self::invalid_params(
+                                        message,
+                                        Some(json!({ "resume_from": cursor })),
+                                    )
+                                })?;
+                            }
+
+                            let pattern_type = params_for_blocking
+                                .pattern_type
+                                .clone()
+                                .unwrap_or(SearchPatternType::Literal);
+                            let matcher = match pattern_type.clone() {
+                                SearchPatternType::Literal => {
+                                    ExploreMatcher::Literal(query.clone())
+                                }
+                                SearchPatternType::Regex => {
+                                    let regex = compile_safe_regex(&query).map_err(|err| {
+                                        Self::invalid_params(
+                                            format!("invalid query regex: {err}"),
+                                            Some(json!({
+                                                "query": query,
+                                                "regex_error_code": err.code(),
+                                            })),
+                                        )
+                                    })?;
+                                    if regex.is_match("") {
+                                        return Err(Self::invalid_params(
+                                            "query regex must not match empty strings",
+                                            Some(json!({ "query": query })),
+                                        ));
+                                    }
+                                    ExploreMatcher::Regex(regex)
+                                }
+                            };
+
+                            (
+                                Some(matcher),
+                                Some(query),
+                                Some(pattern_type),
+                                ExploreScopeRequest {
+                                    start_line: resume_from
+                                        .as_ref()
+                                        .map(|cursor| cursor.line)
+                                        .unwrap_or(1),
+                                    end_line: None,
+                                },
+                                false,
+                            )
+                        }
+                        ExploreOperation::Zoom => {
+                            if params_for_blocking.query.is_some() {
+                                return Err(Self::invalid_params(
+                                    "query is not allowed for zoom",
+                                    None,
+                                ));
+                            }
+                            if params_for_blocking.pattern_type.is_some() {
+                                return Err(Self::invalid_params(
+                                    "pattern_type is not allowed for zoom",
+                                    None,
+                                ));
+                            }
+                            if resume_from.is_some() {
+                                return Err(Self::invalid_params(
+                                    "resume_from is not allowed for zoom",
+                                    None,
+                                ));
+                            }
+                            let Some(anchor) = anchor.as_ref() else {
+                                return Err(Self::invalid_params(
+                                    "anchor is required for zoom",
+                                    None,
+                                ));
+                            };
+                            validate_anchor(anchor).map_err(|message| {
+                                Self::invalid_params(message, Some(json!({ "anchor": anchor })))
+                            })?;
+                            let scope_window = line_window_around_anchor(anchor, context_lines);
+                            (
+                                None,
+                                None,
+                                None,
+                                ExploreScopeRequest {
+                                    start_line: scope_window.start_line,
+                                    end_line: Some(scope_window.end_line),
+                                },
+                                true,
+                            )
+                        }
+                        ExploreOperation::Refine => {
+                            let Some(anchor) = anchor.as_ref() else {
+                                return Err(Self::invalid_params(
+                                    "anchor is required for refine",
+                                    None,
+                                ));
+                            };
+                            validate_anchor(anchor).map_err(|message| {
+                                Self::invalid_params(message, Some(json!({ "anchor": anchor })))
+                            })?;
+                            let Some(query) = query.clone().filter(|value| !value.is_empty())
+                            else {
+                                return Err(Self::invalid_params("query must not be empty", None));
+                            };
+                            let scope_window = line_window_around_anchor(anchor, context_lines);
+                            if let Some(cursor) = resume_from.as_ref() {
+                                validate_cursor(cursor).map_err(|message| {
+                                    Self::invalid_params(
+                                        message,
+                                        Some(json!({ "resume_from": cursor })),
+                                    )
+                                })?;
+                                if cursor.line < scope_window.start_line
+                                    || cursor.line > scope_window.end_line
+                                {
+                                    return Err(Self::invalid_params(
+                                        "resume_from must stay within the refine scan scope",
+                                        Some(json!({
+                                        "resume_from": cursor,
+                                            "scan_scope": scope_window.clone(),
+                                        })),
+                                    ));
+                                }
+                            }
+
+                            let pattern_type = params_for_blocking
+                                .pattern_type
+                                .clone()
+                                .unwrap_or(SearchPatternType::Literal);
+                            let matcher = match pattern_type.clone() {
+                                SearchPatternType::Literal => {
+                                    ExploreMatcher::Literal(query.clone())
+                                }
+                                SearchPatternType::Regex => {
+                                    let regex = compile_safe_regex(&query).map_err(|err| {
+                                        Self::invalid_params(
+                                            format!("invalid query regex: {err}"),
+                                            Some(json!({
+                                                "query": query,
+                                                "regex_error_code": err.code(),
+                                            })),
+                                        )
+                                    })?;
+                                    if regex.is_match("") {
+                                        return Err(Self::invalid_params(
+                                            "query regex must not match empty strings",
+                                            Some(json!({ "query": query })),
+                                        ));
+                                    }
+                                    ExploreMatcher::Regex(regex)
+                                }
+                            };
+
+                            (
+                                Some(matcher),
+                                Some(query),
+                                Some(pattern_type),
+                                ExploreScopeRequest {
+                                    start_line: scope_window.start_line,
+                                    end_line: Some(scope_window.end_line),
+                                },
+                                true,
+                            )
+                        }
+                    };
+
+                let read_params = ReadFileParams {
+                    path: params_for_blocking.path.clone(),
+                    repository_id: params_for_blocking.repository_id.clone(),
+                    max_bytes: None,
+                    line_start: None,
+                    line_end: None,
+                };
+                let (repository_id, path, display_path) = server.resolve_file_path(&read_params)?;
+                resolved_repository_id = Some(repository_id.clone());
+                resolved_path = Some(display_path.clone());
+                resolved_absolute_path = Some(path.display().to_string());
+
+                let mut lossy_utf8 = false;
+                let scan = scan_file_scope_lossy(
+                    &path,
+                    scope,
+                    matcher.as_ref(),
+                    max_matches,
+                    resume_from.as_ref(),
+                    include_scope_content,
+                    include_scope_content.then_some(server.config.max_file_bytes),
+                )
+                .map_err(|err| {
+                    Self::internal(
+                        format!("failed to read file {}: {err}", path.display()),
+                        None,
+                    )
+                })?;
+                lossy_utf8 |= scan.lossy_utf8;
+
+                if let Some(anchor) = anchor.as_ref() {
+                    if scan.total_lines == 0 || anchor.end_line > scan.total_lines {
+                        return Err(Self::invalid_params(
+                            "anchor is outside file bounds",
+                            Some(json!({
+                                "anchor": anchor,
+                                "total_lines": scan.total_lines,
+                            })),
+                        ));
+                    }
+                }
+                if let Some(cursor) = resume_from.as_ref() {
+                    if scan.total_lines == 0 || cursor.line > scan.total_lines {
+                        return Err(Self::invalid_params(
+                            "resume_from is outside file bounds",
+                            Some(json!({
+                                "resume_from": cursor,
+                                "total_lines": scan.total_lines,
+                            })),
+                        ));
+                    }
+                }
+
+                let window = if include_scope_content {
+                    if !scan.scope_within_budget {
+                        return Err(Self::line_slice_budget_error(
+                            &display_path,
+                            scan.scope_bytes.unwrap_or(0),
+                            server.config.max_file_bytes,
+                            scope.start_line,
+                            scan.effective_scope.end_line,
+                            scan.total_lines,
+                        ));
+                    }
+
+                    Some(ExploreWindow {
+                        start_line: scan.effective_scope.start_line,
+                        end_line: scan.effective_scope.end_line,
+                        bytes: scan.scope_bytes.unwrap_or(0),
+                        content: scan.scope_content.clone().unwrap_or_default(),
+                    })
+                } else {
+                    None
+                };
+
+                let mut matches = Vec::with_capacity(scan.matches.len());
+                for (index, matched) in scan.matches.iter().enumerate() {
+                    let match_window = line_window_around_anchor(&matched.anchor, context_lines);
+                    let match_window_slice = read_line_slice_lossy(
+                        &path,
+                        match_window.start_line,
+                        Some(match_window.end_line),
+                        server.config.max_file_bytes,
+                    )
+                    .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
+                    if match_window_slice.bytes > server.config.max_file_bytes {
+                        return Err(Self::line_slice_budget_error(
+                            &display_path,
+                            match_window_slice.bytes,
+                            server.config.max_file_bytes,
+                            match_window.start_line,
+                            match_window
+                                .end_line
+                                .min(match_window_slice.total_lines.max(match_window.start_line)),
+                            match_window_slice.total_lines,
+                        ));
+                    }
+                    lossy_utf8 |= match_window_slice.lossy_utf8;
+                    let match_window_end = if match_window_slice.total_lines == 0 {
+                        0
+                    } else {
+                        match_window.end_line.min(match_window_slice.total_lines)
+                    };
+
+                    matches.push(ExploreMatch {
+                        match_id: format!("match-{index:04}"),
+                        start_line: matched.start_line,
+                        start_column: matched.start_column,
+                        end_line: matched.end_line,
+                        end_column: matched.end_column,
+                        excerpt: matched.excerpt.clone(),
+                        window: ExploreWindow {
+                            start_line: match_window.start_line,
+                            end_line: match_window_end,
+                            bytes: match_window_slice.bytes,
+                            content: match_window_slice.content,
+                        },
+                        anchor: matched.anchor.clone(),
+                    });
+                }
+
+                scan_scope = Some(scan.effective_scope.clone());
+                total_matches = scan.total_matches;
+                truncated = scan.truncated;
+
+                Ok(Json(ExploreResponse {
+                    repository_id,
+                    path: display_path,
+                    operation,
+                    query: response_query,
+                    pattern_type: response_pattern_type,
+                    total_lines: scan.total_lines,
+                    scan_scope: scan.effective_scope,
+                    window,
+                    total_matches: scan.total_matches,
+                    matches,
+                    truncated: scan.truncated,
+                    resume_from: scan.resume_from,
+                    metadata: ExploreMetadata {
+                        lossy_utf8,
+                        effective_context_lines: context_lines,
+                        effective_max_matches: max_matches,
+                    },
+                }))
+            })();
+
+            ExploreExecution {
+                result,
+                resolved_repository_id,
+                resolved_path,
+                resolved_absolute_path,
+                effective_context_lines,
+                effective_max_matches,
+                scan_scope,
+                total_matches,
+                truncated,
+            }
+        })
+        .await?;
+
+        let result = execution.result;
+        let provenance_result = self
+            .record_provenance_blocking(
+                "explore",
+                repository_hint.as_deref(),
+                json!({
+                    "repository_id": repository_hint,
+                    "path": Self::bounded_text(&params.path),
+                    "operation": params.operation,
+                    "query": params.query.as_ref().map(|value| Self::bounded_text(value)),
+                    "pattern_type": params.pattern_type,
+                    "context_lines": params.context_lines,
+                    "max_matches": params.max_matches,
+                    "resume_from": params.resume_from,
+                    "effective_context_lines": execution.effective_context_lines,
+                    "effective_max_matches": execution.effective_max_matches,
+                }),
+                json!({
+                    "resolved_repository_id": execution.resolved_repository_id,
+                    "resolved_path": execution
+                        .resolved_path
+                        .map(|path| Self::bounded_text(&path)),
+                    "resolved_absolute_path": execution
+                        .resolved_absolute_path
+                        .map(|path| Self::bounded_text(&path)),
+                    "scan_scope": execution.scan_scope,
+                    "total_matches": execution.total_matches,
+                    "truncated": execution.truncated,
+                }),
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance("explore", result, provenance_result)
+    }
+
+    #[tool(
         name = "search_text",
-        description = "Search text across configured repository files (literal or regex). Use path_regex to narrow code, docs, or runtime slices when broad repo searches are noisy.",
+        description = "Search literal or regex text with repository-aware paths; prefer local rg/grep for simple scans and use path_regex to narrow noisy scopes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3498,6 +5221,7 @@ impl FriggMcpServer {
                     .diagnostics
                     .count_by_kind(SearchDiagnosticKind::Read);
                 let mut matches = search_output.matches;
+                let total_matches = search_output.total_matches;
                 for found in &mut matches {
                     if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id)
                     {
@@ -3505,12 +5229,21 @@ impl FriggMcpServer {
                     }
                 }
 
-                Ok(Json(SearchTextResponse { matches }))
+                Ok(Json(SearchTextResponse {
+                    total_matches,
+                    matches,
+                }))
             })();
+
+            let total_matches = result
+                .as_ref()
+                .map(|response| response.0.total_matches)
+                .unwrap_or(0);
 
             SearchTextExecution {
                 result,
                 scoped_repository_ids,
+                total_matches,
                 effective_limit,
                 effective_pattern_type,
                 diagnostics_count,
@@ -3535,6 +5268,7 @@ impl FriggMcpServer {
                 }),
                 json!({
                     "scoped_repository_ids": execution.scoped_repository_ids,
+                    "total_matches": execution.total_matches,
                     "diagnostics_count": execution.diagnostics_count,
                     "diagnostics": {
                         "walk": execution.walk_diagnostics_count,
@@ -3550,7 +5284,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Search with deterministic hybrid ranking across lexical, graph, and semantic channels. Use it for broad natural-language doc/runtime questions, then follow with search_symbol or scoped search_text when you need concrete runtime anchors.",
+        description = "Broad repository-aware doc/runtime search when shell grep is too weak; pivot to search_symbol or scoped search_text for concrete anchors.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3576,6 +5310,10 @@ impl FriggMcpServer {
             let mut semantic_enabled: Option<bool> = None;
             let mut semantic_status: Option<String> = None;
             let mut semantic_reason: Option<String> = None;
+            let mut semantic_candidate_count: Option<usize> = None;
+            let mut semantic_hit_count: Option<usize> = None;
+            let mut semantic_match_count: Option<usize> = None;
+            let mut warning: Option<String> = None;
             let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
                 if query.is_empty() {
@@ -3646,6 +5384,15 @@ impl FriggMcpServer {
                 semantic_enabled = Some(search_output.note.semantic_enabled);
                 semantic_status = Some(search_output.note.semantic_status.as_str().to_owned());
                 semantic_reason = search_output.note.semantic_reason.clone();
+                semantic_candidate_count = Some(search_output.note.semantic_candidate_count);
+                semantic_hit_count = Some(search_output.note.semantic_hit_count);
+                semantic_match_count = Some(search_output.note.semantic_match_count);
+                warning = Self::search_hybrid_warning(
+                    semantic_status.as_deref(),
+                    semantic_reason.as_deref(),
+                    semantic_hit_count,
+                    semantic_match_count,
+                );
 
                 let mut matches = search_output
                     .matches
@@ -3672,34 +5419,34 @@ impl FriggMcpServer {
                     }
                 }
 
-                let response_semantic_requested = semantic_requested;
-                let response_semantic_enabled = semantic_enabled;
-                let response_semantic_status = semantic_status.clone();
-                let response_semantic_reason = semantic_reason.clone();
-
-                let note = Some(
-                    json!({
-                        "semantic_requested": response_semantic_requested,
-                        "semantic_enabled": response_semantic_enabled,
-                        "semantic_status": response_semantic_status,
-                        "semantic_reason": response_semantic_reason,
-                        "diagnostics_count": diagnostics_count,
-                        "diagnostics": {
-                            "walk": walk_diagnostics_count,
-                            "read": read_diagnostics_count,
-                            "total": diagnostics_count,
-                        },
-                    })
-                    .to_string(),
-                );
+                let metadata = Some(json!({
+                    "semantic_requested": semantic_requested,
+                    "semantic_enabled": semantic_enabled,
+                    "semantic_status": semantic_status.clone(),
+                    "semantic_reason": semantic_reason.clone(),
+                    "semantic_candidate_count": semantic_candidate_count,
+                    "semantic_hit_count": semantic_hit_count,
+                    "semantic_match_count": semantic_match_count,
+                    "warning": warning.clone(),
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "walk": walk_diagnostics_count,
+                        "read": read_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                }));
 
                 Ok(Json(SearchHybridResponse {
                     matches,
-                    semantic_requested: response_semantic_requested,
-                    semantic_enabled: response_semantic_enabled,
-                    semantic_status: response_semantic_status,
-                    semantic_reason: response_semantic_reason,
-                    note,
+                    semantic_requested: None,
+                    semantic_enabled: None,
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_hit_count: None,
+                    semantic_match_count: None,
+                    warning: None,
+                    metadata,
+                    note: None,
                 }))
             })();
 
@@ -3715,6 +5462,10 @@ impl FriggMcpServer {
                 semantic_enabled,
                 semantic_status,
                 semantic_reason,
+                semantic_candidate_count,
+                semantic_hit_count,
+                semantic_match_count,
+                warning,
             }
         })
         .await?;
@@ -3745,6 +5496,10 @@ impl FriggMcpServer {
                     "semantic_enabled": execution.semantic_enabled,
                     "semantic_status": execution.semantic_status,
                     "semantic_reason": execution.semantic_reason.map(|reason| Self::bounded_text(&reason)),
+                    "semantic_candidate_count": execution.semantic_candidate_count,
+                    "semantic_hit_count": execution.semantic_hit_count,
+                    "semantic_match_count": execution.semantic_match_count,
+                    "warning": execution.warning.map(|warning| Self::bounded_text(&warning)),
                 }),
                 &result,
             )
@@ -3754,7 +5509,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Search symbols extracted from Rust/PHP sources. Use it after broad search_text/search_hybrid results when you know the API, type, or function name you want to inspect.",
+        description = "Find API, type, and function symbols when the runtime anchor is known and repository-aware symbol lookup is needed.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3782,12 +5537,54 @@ impl FriggMcpServer {
                     return Err(Self::invalid_params("query must not be empty", None));
                 }
 
+                let path_regex = match params_for_blocking.path_regex.clone() {
+                    Some(raw) => Some(compile_safe_regex(&raw).map_err(|err| {
+                        Self::invalid_params(
+                            format!("invalid path_regex: {err}"),
+                            Some(serde_json::json!({
+                                "path_regex": raw,
+                                "regex_error_code": err.code(),
+                            })),
+                        )
+                    })?),
+                    None => None,
+                };
+                let path_class_filter = params_for_blocking.path_class;
                 let query_lower = query.to_ascii_lowercase();
+                let query_looks_canonical =
+                    query.contains('\\') || query.contains("::") || query.contains('$');
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
+
+                if params_for_blocking.symbol.is_none() {
+                    if let (Some(path), Some(line)) = (
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                    ) {
+                        if let Some((
+                            response,
+                            repository_id,
+                            precise_symbol,
+                            precision,
+                        )) = server.try_cached_precise_definition_fast_path(
+                            params_for_blocking.repository_id.as_deref(),
+                            path,
+                            line,
+                            params_for_blocking.column,
+                            limit,
+                        )? {
+                            scoped_repository_ids = vec![repository_id];
+                            selected_precise_symbol = Some(precise_symbol);
+                            resolution_source = Some("location_precise_cache".to_owned());
+                            resolution_precision = Some(precision);
+                            match_count = response.0.matches.len();
+                            return Ok(response);
+                        }
+                    }
+                }
 
                 let corpora = server.collect_repository_symbol_corpora(
                     params_for_blocking.repository_id.as_deref(),
@@ -3812,16 +5609,82 @@ impl FriggMcpServer {
                     + manifest_read_diagnostics_count
                     + symbol_extraction_diagnostics_count;
 
-                let mut ranked_matches: Vec<(u8, SymbolMatch)> = Vec::new();
+                let mut ranked_matches: Vec<RankedSymbolMatch> = Vec::new();
                 for corpus in &corpora {
+                    if query_looks_canonical {
+                        if let Some(symbol_indices) =
+                            corpus.symbol_indices_by_canonical_name.get(&query)
+                        {
+                            for symbol_index in symbol_indices {
+                                if let Some(candidate) = Self::build_ranked_symbol_match(
+                                    corpus,
+                                    *symbol_index,
+                                    0,
+                                    path_class_filter,
+                                    path_regex.as_ref(),
+                                ) {
+                                    ranked_matches.push(candidate);
+                                }
+                            }
+                        }
+                        if let Some(symbol_indices) = corpus
+                            .symbol_indices_by_lower_canonical_name
+                            .get(&query_lower)
+                        {
+                            for symbol_index in symbol_indices {
+                                if corpus
+                                    .canonical_symbol_name_by_stable_id
+                                    .get(corpus.symbols[*symbol_index].stable_id.as_str())
+                                    .is_some_and(|canonical| canonical != &query)
+                                {
+                                    if let Some(candidate) = Self::build_ranked_symbol_match(
+                                        corpus,
+                                        *symbol_index,
+                                        1,
+                                        path_class_filter,
+                                        path_regex.as_ref(),
+                                    ) {
+                                        ranked_matches.push(candidate);
+                                    }
+                                }
+                            }
+                        }
+                        for (canonical_name, symbol_indices) in corpus
+                            .symbol_indices_by_lower_canonical_name
+                            .range(query_lower.clone()..)
+                        {
+                            if !canonical_name.starts_with(&query_lower) {
+                                break;
+                            }
+                            if canonical_name == &query_lower {
+                                continue;
+                            }
+                            for symbol_index in symbol_indices {
+                                if let Some(candidate) = Self::build_ranked_symbol_match(
+                                    corpus,
+                                    *symbol_index,
+                                    2,
+                                    path_class_filter,
+                                    path_regex.as_ref(),
+                                ) {
+                                    ranked_matches.push(candidate);
+                                }
+                            }
+                        }
+                    }
+
+                    let name_rank_offset = if query_looks_canonical { 3 } else { 0 };
                     if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(&query) {
                         for symbol_index in symbol_indices {
-                            Self::push_ranked_symbol_match(
-                                &mut ranked_matches,
+                            if let Some(candidate) = Self::build_ranked_symbol_match(
                                 corpus,
                                 *symbol_index,
-                                0,
-                            );
+                                name_rank_offset,
+                                path_class_filter,
+                                path_regex.as_ref(),
+                            ) {
+                                ranked_matches.push(candidate);
+                            }
                         }
                     }
                     if let Some(symbol_indices) =
@@ -3829,12 +5692,15 @@ impl FriggMcpServer {
                     {
                         for symbol_index in symbol_indices {
                             if corpus.symbols[*symbol_index].name != query {
-                                Self::push_ranked_symbol_match(
-                                    &mut ranked_matches,
+                                if let Some(candidate) = Self::build_ranked_symbol_match(
                                     corpus,
                                     *symbol_index,
-                                    1,
-                                );
+                                    name_rank_offset + 1,
+                                    path_class_filter,
+                                    path_regex.as_ref(),
+                                ) {
+                                    ranked_matches.push(candidate);
+                                }
                             }
                         }
                     }
@@ -3849,12 +5715,15 @@ impl FriggMcpServer {
                             continue;
                         }
                         for symbol_index in symbol_indices {
-                            Self::push_ranked_symbol_match(
-                                &mut ranked_matches,
+                            if let Some(candidate) = Self::build_ranked_symbol_match(
                                 corpus,
                                 *symbol_index,
-                                2,
-                            );
+                                name_rank_offset + 2,
+                                path_class_filter,
+                                path_regex.as_ref(),
+                            ) {
+                                ranked_matches.push(candidate);
+                            }
                         }
                     }
                 }
@@ -3862,56 +5731,58 @@ impl FriggMcpServer {
                     let infix_limit = limit.saturating_sub(ranked_matches.len());
                     let mut infix_matches = Vec::new();
                     for corpus in &corpora {
-                        for symbol in &corpus.symbols {
+                        for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
                             if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
                                 != Some(3)
                             {
                                 continue;
                             }
-                            Self::retain_bounded_ranked_symbol_match(
-                                &mut infix_matches,
-                                infix_limit,
-                                (
-                                    3,
-                                    SymbolMatch {
-                                        repository_id: corpus.repository_id.clone(),
-                                        symbol: symbol.name.clone(),
-                                        kind: symbol.kind.as_str().to_owned(),
-                                        path: Self::relative_display_path(
-                                            &corpus.root,
-                                            &symbol.path,
-                                        ),
-                                        line: symbol.line,
-                                    },
-                                ),
-                            );
+                            if let Some(candidate) = Self::build_ranked_symbol_match(
+                                corpus,
+                                symbol_index,
+                                if query_looks_canonical { 6 } else { 3 },
+                                path_class_filter,
+                                path_regex.as_ref(),
+                            ) {
+                                Self::retain_bounded_ranked_symbol_match(
+                                    &mut infix_matches,
+                                    infix_limit,
+                                    candidate,
+                                );
+                            }
                         }
                     }
                     ranked_matches.extend(infix_matches);
                 }
 
                 Self::sort_ranked_symbol_matches(&mut ranked_matches);
+                Self::dedup_ranked_symbol_matches(&mut ranked_matches);
                 let matches = ranked_matches
                     .into_iter()
                     .take(limit)
-                    .map(|(_, matched)| matched)
+                    .map(|ranked| ranked.matched)
                     .collect::<Vec<_>>();
 
-                let note = Some(
-                    json!({
-                        "source": "tree_sitter",
-                        "diagnostics_count": diagnostics_count,
-                        "diagnostics": {
-                            "manifest_walk": manifest_walk_diagnostics_count,
-                            "manifest_read": manifest_read_diagnostics_count,
-                            "symbol_extraction": symbol_extraction_diagnostics_count,
-                            "total": diagnostics_count,
-                        },
-                        "heuristic": false,
-                    })
-                    .to_string(),
-                );
-                Ok(Json(SearchSymbolResponse { matches, note }))
+                let metadata = json!({
+                    "source": "tree_sitter",
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "manifest_walk": manifest_walk_diagnostics_count,
+                        "manifest_read": manifest_read_diagnostics_count,
+                        "symbol_extraction": symbol_extraction_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                    "heuristic": false,
+                    "path_class": path_class_filter.map(|value| value.as_str()),
+                    "path_regex": params_for_blocking.path_regex.clone(),
+                    "path_class_sort": "runtime_first",
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(SearchSymbolResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             SearchSymbolExecution {
@@ -3934,6 +5805,8 @@ impl FriggMcpServer {
                 json!({
                     "repository_id": repository_hint,
                     "query": Self::bounded_text(&params.query),
+                    "path_class": params.path_class.map(|value| value.as_str().to_owned()),
+                    "path_regex": params.path_regex.map(|value| Self::bounded_text(&value)),
                     "limit": params.limit,
                     "effective_limit": execution.effective_limit,
                 }),
@@ -3955,7 +5828,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_references",
-        description = "Find symbol references preferring precise SCIP data with deterministic heuristic fallback.",
+        description = "Find references for a symbol or source position, preferring precise SCIP data.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3975,9 +5848,11 @@ impl FriggMcpServer {
         let resource_budget_metadata_for_blocking = resource_budget_metadata.clone();
         let execution = Self::run_blocking_task("find_references", move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
+            let mut total_matches = 0usize;
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
+            let mut resolution_source: Option<String> = None;
             let mut diagnostics_count = 0usize;
             let mut manifest_walk_diagnostics_count = 0usize;
             let mut manifest_read_diagnostics_count = 0usize;
@@ -3998,11 +5873,6 @@ impl FriggMcpServer {
             let mut target_selection_same_rank_count = 0usize;
 
             let result = (|| -> Result<Json<FindReferencesResponse>, ErrorData> {
-                let symbol_query = params_for_blocking.symbol.trim().to_owned();
-                if symbol_query.is_empty() {
-                    return Err(Self::invalid_params("symbol must not be empty", None));
-                }
-
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
@@ -4031,6 +5901,30 @@ impl FriggMcpServer {
                     + manifest_read_diagnostics_count
                     + symbol_extraction_diagnostics_count;
 
+                let resolve_by_location = params_for_blocking.path.is_some()
+                    || params_for_blocking.line.is_some()
+                    || params_for_blocking.column.is_some();
+                let resolved_target = if resolve_by_location {
+                    Self::resolve_navigation_target(
+                        &corpora,
+                        None,
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                        params_for_blocking.column,
+                        params_for_blocking.repository_id.as_deref(),
+                    )?
+                } else {
+                    Self::resolve_navigation_target(
+                        &corpora,
+                        params_for_blocking.symbol.as_deref(),
+                        None,
+                        None,
+                        None,
+                        params_for_blocking.repository_id.as_deref(),
+                    )?
+                };
+                resolution_source = Some(resolved_target.resolution_source.to_owned());
+                let symbol_query = resolved_target.symbol_query;
                 let target_resolution = Self::resolve_navigation_symbol_target(
                     &corpora,
                     &symbol_query,
@@ -4056,10 +5950,12 @@ impl FriggMcpServer {
                 precise_artifacts_failed = target_precise_stats.artifacts_failed;
                 precise_artifacts_failed_bytes = target_precise_stats.artifacts_failed_bytes;
 
-                let precise_target = graph.select_precise_symbol_for_navigation(
+                let precise_target = Self::select_precise_symbol_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 if let Some(precise_target) = &precise_target {
                     selected_precise_symbol = Some(precise_target.symbol.clone());
@@ -4101,59 +5997,63 @@ impl FriggMcpServer {
                             }
                         })
                         .collect::<Vec<_>>();
+                    total_matches = precise_reference_count;
 
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "target_symbol_id": target.symbol.stable_id,
-                            "target_precise_symbol": precise_target
-                                .as_ref()
-                                .map(|selected| selected.symbol.clone()),
-                            "resolution_source": "symbol",
-                            "target_selection": Self::navigation_target_selection_note(
-                                &symbol_query,
-                                &target,
-                                target_selection_candidate_count,
-                                target_selection_same_rank_count,
-                            ),
-                            "diagnostics_count": diagnostics_count,
-                            "diagnostics": {
-                                "manifest_walk": manifest_walk_diagnostics_count,
-                                "manifest_read": manifest_read_diagnostics_count,
-                                "symbol_extraction": symbol_extraction_diagnostics_count,
-                                "source_read": source_read_diagnostics_count,
-                                "total": diagnostics_count,
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "target_symbol_id": target.symbol.stable_id,
+                        "target_precise_symbol": precise_target
+                            .as_ref()
+                            .map(|selected| selected.symbol.clone()),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "diagnostics_count": diagnostics_count,
+                        "diagnostics": {
+                            "manifest_walk": manifest_walk_diagnostics_count,
+                            "manifest_read": manifest_read_diagnostics_count,
+                            "symbol_extraction": symbol_extraction_diagnostics_count,
+                            "source_read": source_read_diagnostics_count,
+                            "total": diagnostics_count,
+                        },
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &target_precise_stats,
+                            "reference_count",
+                            precise_reference_count,
+                        ),
+                        "resource_budgets": resource_budget_metadata_for_blocking.clone(),
+                        "resource_usage": {
+                            "scip": {
+                                "artifacts_discovered": target_precise_stats.artifacts_discovered,
+                                "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
+                                "artifacts_ingested": target_precise_stats.artifacts_ingested,
+                                "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
+                                "artifacts_failed": target_precise_stats.artifacts_failed,
+                                "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
                             },
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &target_precise_stats,
-                                "reference_count",
-                                precise_reference_count,
-                            ),
-                            "resource_budgets": resource_budget_metadata_for_blocking.clone(),
-                            "resource_usage": {
-                                "scip": {
-                                    "artifacts_discovered": target_precise_stats.artifacts_discovered,
-                                    "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
-                                    "artifacts_ingested": target_precise_stats.artifacts_ingested,
-                                    "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
-                                    "artifacts_failed": target_precise_stats.artifacts_failed,
-                                    "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
-                                },
-                                "source": {
-                                    "files_discovered": source_files_discovered,
-                                    "files_loaded": source_files_loaded,
-                                    "bytes_loaded": source_bytes_loaded,
-                                },
+                            "source": {
+                                "files_discovered": source_files_discovered,
+                                "files_loaded": source_files_loaded,
+                                "bytes_loaded": source_bytes_loaded,
                             },
-                        })
-                        .to_string(),
-                    );
+                        },
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
 
-                    return Ok(Json(FindReferencesResponse { matches, note }));
+                    return Ok(Json(FindReferencesResponse {
+                        total_matches,
+                        matches,
+                        metadata,
+                        note,
+                    }));
                 }
 
                 let mut resolver = HeuristicReferenceResolver::new(
@@ -4303,7 +6203,9 @@ impl FriggMcpServer {
                     }
                 }
 
-                let references = resolver.finish().into_iter().take(limit).collect::<Vec<_>>();
+                let all_references = resolver.finish();
+                total_matches = all_references.len();
+                let references = all_references.into_iter().take(limit).collect::<Vec<_>>();
 
                 let mut high_confidence = 0usize;
                 let mut medium_confidence = 0usize;
@@ -4335,77 +6237,82 @@ impl FriggMcpServer {
                     .collect::<Vec<_>>();
 
                 diagnostics_count += source_read_diagnostics_count;
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &target_precise_stats,
-                            precise_reference_count,
-                        ),
-                        "target_symbol_id": target.symbol.stable_id,
-                        "resolution_source": "symbol",
-                        "target_selection": Self::navigation_target_selection_note(
-                            &symbol_query,
-                            &target,
-                            target_selection_candidate_count,
-                            target_selection_same_rank_count,
-                        ),
-                        "confidence": {
-                            "high": high_confidence,
-                            "medium": medium_confidence,
-                            "low": low_confidence,
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &target_precise_stats,
+                        precise_reference_count,
+                    ),
+                    "target_symbol_id": target.symbol.stable_id,
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "confidence": {
+                        "high": high_confidence,
+                        "medium": medium_confidence,
+                        "low": low_confidence,
+                    },
+                    "evidence": {
+                        "graph_relation": graph_evidence,
+                        "lexical_token": lexical_evidence,
+                    },
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "manifest_walk": manifest_walk_diagnostics_count,
+                        "manifest_read": manifest_read_diagnostics_count,
+                        "symbol_extraction": symbol_extraction_diagnostics_count,
+                        "source_read": source_read_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &target_precise_stats,
+                        "reference_count",
+                        precise_reference_count,
+                    ),
+                    "resource_budgets": resource_budget_metadata_for_blocking.clone(),
+                    "resource_usage": {
+                        "scip": {
+                            "artifacts_discovered": target_precise_stats.artifacts_discovered,
+                            "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
+                            "artifacts_ingested": target_precise_stats.artifacts_ingested,
+                            "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
+                            "artifacts_failed": target_precise_stats.artifacts_failed,
+                            "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
                         },
-                        "evidence": {
-                            "graph_relation": graph_evidence,
-                            "lexical_token": lexical_evidence,
+                        "source": {
+                            "files_discovered": source_files_discovered,
+                            "files_loaded": source_files_loaded,
+                            "bytes_loaded": source_bytes_loaded,
                         },
-                        "diagnostics_count": diagnostics_count,
-                        "diagnostics": {
-                            "manifest_walk": manifest_walk_diagnostics_count,
-                            "manifest_read": manifest_read_diagnostics_count,
-                            "symbol_extraction": symbol_extraction_diagnostics_count,
-                            "source_read": source_read_diagnostics_count,
-                            "total": diagnostics_count,
-                        },
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &target_precise_stats,
-                            "reference_count",
-                            precise_reference_count,
-                        ),
-                        "resource_budgets": resource_budget_metadata_for_blocking.clone(),
-                        "resource_usage": {
-                            "scip": {
-                                "artifacts_discovered": target_precise_stats.artifacts_discovered,
-                                "artifacts_discovered_bytes": target_precise_stats.artifacts_discovered_bytes,
-                                "artifacts_ingested": target_precise_stats.artifacts_ingested,
-                                "artifacts_ingested_bytes": target_precise_stats.artifacts_ingested_bytes,
-                                "artifacts_failed": target_precise_stats.artifacts_failed,
-                                "artifacts_failed_bytes": target_precise_stats.artifacts_failed_bytes,
-                            },
-                            "source": {
-                                "files_discovered": source_files_discovered,
-                                "files_loaded": source_files_loaded,
-                                "bytes_loaded": source_bytes_loaded,
-                            },
-                        },
-                    })
-                    .to_string(),
-                );
+                    },
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
                 resolution_precision = Some("heuristic".to_owned());
 
-                Ok(Json(FindReferencesResponse { matches, note }))
+                Ok(Json(FindReferencesResponse {
+                    total_matches,
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             FindReferencesExecution {
                 result,
                 scoped_repository_ids,
+                total_matches,
                 selected_symbol_id,
                 selected_precise_symbol,
                 resolution_precision,
+                resolution_source,
                 diagnostics_count,
                 manifest_walk_diagnostics_count,
                 manifest_read_diagnostics_count,
@@ -4433,15 +6340,20 @@ impl FriggMcpServer {
             repository_hint.as_deref(),
             json!({
                 "repository_id": repository_hint,
-                "symbol": Self::bounded_text(&params.symbol),
+                "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
+                "path": params.path.map(|path| Self::bounded_text(&path)),
+                "line": params.line,
+                "column": params.column,
                 "limit": params.limit,
                 "effective_limit": execution.effective_limit,
             }),
             json!({
                 "scoped_repository_ids": execution.scoped_repository_ids,
+                "total_matches": execution.total_matches,
                 "selected_symbol_id": execution.selected_symbol_id,
                 "selected_precise_symbol": execution.selected_precise_symbol,
                 "resolution_precision": execution.resolution_precision,
+                "resolution_source": execution.resolution_source,
                 "diagnostics_count": execution.diagnostics_count,
                 "diagnostics": {
                     "manifest_walk": execution.manifest_walk_diagnostics_count,
@@ -4470,7 +6382,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Resolve definition locations for a symbol or source position with precise-first deterministic fallback.",
+        description = "Go to definitions for a symbol or source position.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -4492,6 +6404,8 @@ impl FriggMcpServer {
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
             let mut resolution_source: Option<String> = None;
+            let mut target_selection_candidate_count = 0usize;
+            let mut target_selection_same_rank_count = 0usize;
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
@@ -4522,6 +6436,9 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
+                target_selection_candidate_count = resolved_target.target.candidate_count;
+                target_selection_same_rank_count =
+                    resolved_target.target.selected_rank_candidate_count;
                 let target = resolved_target.target.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
                 let target_corpus = resolved_target.target.corpus;
@@ -4532,10 +6449,12 @@ impl FriggMcpServer {
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_target = graph.select_precise_symbol_for_navigation(
+                let precise_target = Self::select_precise_symbol_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 if let Some(precise_target) = &precise_target {
                     selected_precise_symbol = Some(precise_target.symbol.clone());
@@ -4564,11 +6483,7 @@ impl FriggMcpServer {
                                 ),
                                 line: occurrence.range.start_line,
                                 column: occurrence.range.start_column,
-                                kind: if precise_target.kind.is_empty() {
-                                    None
-                                } else {
-                                    Some(precise_target.kind.clone())
-                                },
+                                kind: Self::display_symbol_kind(&precise_target.kind),
                                 precision: Some(
                                     Self::precise_match_precision(precise_coverage).to_owned(),
                                 ),
@@ -4585,24 +6500,29 @@ impl FriggMcpServer {
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "target_symbol_id": target.symbol.stable_id.clone(),
-                            "target_precise_symbol": selected_precise_symbol.clone(),
-                            "resolution_source": resolution_source.clone(),
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &cached_precise_graph.ingest_stats,
-                                "definition_count",
-                                precise_matches.len(),
-                            )
-                        })
-                        .to_string(),
-                    );
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "target_symbol_id": target.symbol.stable_id.clone(),
+                        "target_precise_symbol": selected_precise_symbol.clone(),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "definition_count",
+                            precise_matches.len(),
+                        )
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(GoToDefinitionResponse {
                         matches: precise_matches,
+                        metadata,
                         note,
                     }));
                 }
@@ -4613,7 +6533,7 @@ impl FriggMcpServer {
                     path: Self::relative_display_path(&target.root, &target.symbol.path),
                     line: target.symbol.line,
                     column: 1,
-                    kind: Some(target.symbol.kind.as_str().to_owned()),
+                    kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
                     precision: Some("heuristic".to_owned()),
                 }];
                 Self::sort_navigation_locations(&mut matches);
@@ -4623,28 +6543,36 @@ impl FriggMcpServer {
 
                 resolution_precision = Some("heuristic".to_owned());
                 match_count = matches.len();
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            0,
-                        ),
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "definition_count",
-                            0,
-                        )
-                    })
-                    .to_string(),
-                );
-                Ok(Json(GoToDefinitionResponse { matches, note }))
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                    ),
+                    "target_symbol_id": target.symbol.stable_id.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        "definition_count",
+                        0,
+                    )
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(GoToDefinitionResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             NavigationToolExecution {
@@ -4678,6 +6606,7 @@ impl FriggMcpServer {
                 }),
                 json!({
                     "scoped_repository_ids": execution.scoped_repository_ids,
+                    "total_matches": execution.match_count,
                     "selected_symbol_id": execution.selected_symbol_id,
                     "selected_precise_symbol": execution.selected_precise_symbol,
                     "resolution_precision": execution.resolution_precision,
@@ -4694,7 +6623,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_declarations",
-        description = "Resolve declaration anchors (v1 uses definition anchors) for symbol or source position with precise-first deterministic fallback.",
+        description = "Find declaration anchors for a symbol or source position.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -4716,6 +6645,8 @@ impl FriggMcpServer {
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
             let mut resolution_source: Option<String> = None;
+            let mut target_selection_candidate_count = 0usize;
+            let mut target_selection_same_rank_count = 0usize;
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
@@ -4746,6 +6677,9 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
+                target_selection_candidate_count = resolved_target.target.candidate_count;
+                target_selection_same_rank_count =
+                    resolved_target.target.selected_rank_candidate_count;
                 let target = resolved_target.target.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
                 let target_corpus = resolved_target.target.corpus;
@@ -4756,10 +6690,12 @@ impl FriggMcpServer {
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_target = graph.select_precise_symbol_for_navigation(
+                let precise_target = Self::select_precise_symbol_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 if let Some(precise_target) = &precise_target {
                     selected_precise_symbol = Some(precise_target.symbol.clone());
@@ -4788,11 +6724,7 @@ impl FriggMcpServer {
                                 ),
                                 line: occurrence.range.start_line,
                                 column: occurrence.range.start_column,
-                                kind: if precise_target.kind.is_empty() {
-                                    None
-                                } else {
-                                    Some(precise_target.kind.clone())
-                                },
+                                kind: Self::display_symbol_kind(&precise_target.kind),
                                 precision: Some(
                                     Self::precise_match_precision(precise_coverage).to_owned(),
                                 ),
@@ -4809,25 +6741,30 @@ impl FriggMcpServer {
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "declaration_mode": "definition_anchor_v1",
-                            "target_symbol_id": target.symbol.stable_id.clone(),
-                            "target_precise_symbol": selected_precise_symbol.clone(),
-                            "resolution_source": resolution_source.clone(),
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &cached_precise_graph.ingest_stats,
-                                "declaration_count",
-                                precise_matches.len(),
-                            )
-                        })
-                        .to_string(),
-                    );
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "declaration_mode": "definition_anchor_v1",
+                        "target_symbol_id": target.symbol.stable_id.clone(),
+                        "target_precise_symbol": selected_precise_symbol.clone(),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "declaration_count",
+                            precise_matches.len(),
+                        )
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(FindDeclarationsResponse {
                         matches: precise_matches,
+                        metadata,
                         note,
                     }));
                 }
@@ -4838,7 +6775,7 @@ impl FriggMcpServer {
                     path: Self::relative_display_path(&target.root, &target.symbol.path),
                     line: target.symbol.line,
                     column: 1,
-                    kind: Some(target.symbol.kind.as_str().to_owned()),
+                    kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
                     precision: Some("heuristic".to_owned()),
                 }];
                 Self::sort_navigation_locations(&mut matches);
@@ -4848,29 +6785,37 @@ impl FriggMcpServer {
 
                 resolution_precision = Some("heuristic".to_owned());
                 match_count = matches.len();
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            0,
-                        ),
-                        "declaration_mode": "definition_anchor_v1",
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "declaration_count",
-                            0,
-                        )
-                    })
-                    .to_string(),
-                );
-                Ok(Json(FindDeclarationsResponse { matches, note }))
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                    ),
+                    "declaration_mode": "definition_anchor_v1",
+                    "target_symbol_id": target.symbol.stable_id.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        "declaration_count",
+                        0,
+                    )
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(FindDeclarationsResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             NavigationToolExecution {
@@ -4920,7 +6865,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_implementations",
-        description = "Find implementation targets for a symbol with precise-first deterministic fallback.",
+        description = "Find implementations for a symbol or source position.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -4942,6 +6887,8 @@ impl FriggMcpServer {
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
             let mut resolution_source: Option<String> = None;
+            let mut target_selection_candidate_count = 0usize;
+            let mut target_selection_same_rank_count = 0usize;
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
@@ -4972,6 +6919,9 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
+                target_selection_candidate_count = resolved_target.target.candidate_count;
+                target_selection_same_rank_count =
+                    resolved_target.target.selected_rank_candidate_count;
                 let target = resolved_target.target.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
                 let target_corpus = resolved_target.target.corpus;
@@ -4982,10 +6932,12 @@ impl FriggMcpServer {
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_targets = graph.matching_precise_symbols_for_navigation(
+                let precise_targets = Self::matching_precise_symbols_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 let mut precise_matches = Vec::new();
                 for precise_target in &precise_targets {
@@ -5002,6 +6954,23 @@ impl FriggMcpServer {
                         break;
                     }
                 }
+                if precise_matches.is_empty() {
+                    for precise_target in &precise_targets {
+                        let matches = Self::precise_implementation_matches_from_occurrences(
+                            graph.as_ref(),
+                            target_corpus.as_ref(),
+                            &target.root,
+                            &target.symbol.name,
+                            precise_coverage,
+                            precise_target,
+                        );
+                        if !matches.is_empty() {
+                            selected_precise_symbol = Some(precise_target.symbol.clone());
+                            precise_matches = matches;
+                            break;
+                        }
+                    }
+                }
                 if precise_matches.len() > limit {
                     precise_matches.truncate(limit);
                 }
@@ -5010,24 +6979,29 @@ impl FriggMcpServer {
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "target_symbol_id": target.symbol.stable_id.clone(),
-                            "target_precise_symbol": selected_precise_symbol.clone(),
-                            "resolution_source": resolution_source.clone(),
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &cached_precise_graph.ingest_stats,
-                                "implementation_count",
-                                precise_matches.len(),
-                            )
-                        })
-                        .to_string(),
-                    );
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "target_symbol_id": target.symbol.stable_id.clone(),
+                        "target_precise_symbol": selected_precise_symbol.clone(),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "implementation_count",
+                            precise_matches.len(),
+                        )
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(FindImplementationsResponse {
                         matches: precise_matches,
+                        metadata,
                         note,
                     }));
                 }
@@ -5043,6 +7017,7 @@ impl FriggMcpServer {
                     })
                     .map(|adjacent| ImplementationMatch {
                         symbol: adjacent.symbol.display_name,
+                        kind: Self::display_symbol_kind(&adjacent.symbol.kind),
                         repository_id: target_corpus.repository_id.clone(),
                         path: Self::canonicalize_navigation_path(
                             &target.root,
@@ -5067,6 +7042,7 @@ impl FriggMcpServer {
                         && left.line == right.line
                         && left.column == right.column
                         && left.symbol == right.symbol
+                        && left.kind == right.kind
                         && left.relation == right.relation
                         && left.precision == right.precision
                         && left.fallback_reason == right.fallback_reason
@@ -5077,28 +7053,36 @@ impl FriggMcpServer {
 
                 resolution_precision = Some("heuristic".to_owned());
                 match_count = matches.len();
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            0,
-                        ),
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "implementation_count",
-                            matches.len(),
-                        )
-                    })
-                    .to_string(),
-                );
-                Ok(Json(FindImplementationsResponse { matches, note }))
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                    ),
+                    "target_symbol_id": target.symbol.stable_id.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        "implementation_count",
+                        matches.len(),
+                    )
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(FindImplementationsResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             NavigationToolExecution {
@@ -5148,7 +7132,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "incoming_calls",
-        description = "Return incoming call hierarchy entries for a symbol with precise-first deterministic fallback.",
+        description = "Find incoming callers for a symbol or source position.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5170,6 +7154,8 @@ impl FriggMcpServer {
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
             let mut resolution_source: Option<String> = None;
+            let mut target_selection_candidate_count = 0usize;
+            let mut target_selection_same_rank_count = 0usize;
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
@@ -5200,6 +7186,9 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
+                target_selection_candidate_count = resolved_target.target.candidate_count;
+                target_selection_same_rank_count =
+                    resolved_target.target.selected_rank_candidate_count;
                 let target = resolved_target.target.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
                 let target_corpus = resolved_target.target.corpus;
@@ -5210,10 +7199,12 @@ impl FriggMcpServer {
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_targets = graph.matching_precise_symbols_for_navigation(
+                let precise_targets = Self::matching_precise_symbols_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 let mut precise_matches = Vec::new();
                 for precise_target in &precise_targets {
@@ -5257,24 +7248,29 @@ impl FriggMcpServer {
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "target_symbol_id": target.symbol.stable_id.clone(),
-                            "target_precise_symbol": selected_precise_symbol.clone(),
-                            "resolution_source": resolution_source.clone(),
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &cached_precise_graph.ingest_stats,
-                                "incoming_count",
-                                precise_matches.len(),
-                            )
-                        })
-                        .to_string(),
-                    );
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "target_symbol_id": target.symbol.stable_id.clone(),
+                        "target_precise_symbol": selected_precise_symbol.clone(),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "incoming_count",
+                            precise_matches.len(),
+                        )
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(IncomingCallsResponse {
                         matches: precise_matches,
+                        metadata,
                         note,
                     }));
                 }
@@ -5295,6 +7291,11 @@ impl FriggMcpServer {
                         column: 1,
                         relation: adjacent.relation.as_str().to_owned(),
                         precision: Some("heuristic".to_owned()),
+                        call_path: None,
+                        call_line: None,
+                        call_column: None,
+                        call_end_line: None,
+                        call_end_column: None,
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);
@@ -5304,28 +7305,36 @@ impl FriggMcpServer {
 
                 resolution_precision = Some("heuristic".to_owned());
                 match_count = matches.len();
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            0,
-                        ),
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "incoming_count",
-                            0,
-                        )
-                    })
-                    .to_string(),
-                );
-                Ok(Json(IncomingCallsResponse { matches, note }))
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                    ),
+                    "target_symbol_id": target.symbol.stable_id.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        "incoming_count",
+                        0,
+                    )
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(IncomingCallsResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             NavigationToolExecution {
@@ -5375,7 +7384,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "outgoing_calls",
-        description = "Return outgoing call hierarchy entries for a symbol with precise-first deterministic fallback.",
+        description = "Find outgoing callees for a symbol or source position.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5397,6 +7406,8 @@ impl FriggMcpServer {
             let mut selected_precise_symbol: Option<String> = None;
             let mut resolution_precision: Option<String> = None;
             let mut resolution_source: Option<String> = None;
+            let mut target_selection_candidate_count = 0usize;
+            let mut target_selection_same_rank_count = 0usize;
             let mut effective_limit: Option<usize> = None;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
@@ -5427,6 +7438,9 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
+                target_selection_candidate_count = resolved_target.target.candidate_count;
+                target_selection_same_rank_count =
+                    resolved_target.target.selected_rank_candidate_count;
                 let target = resolved_target.target.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
                 let target_corpus = resolved_target.target.corpus;
@@ -5437,10 +7451,12 @@ impl FriggMcpServer {
                 let graph = cached_precise_graph.graph;
                 precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_targets = graph.matching_precise_symbols_for_navigation(
+                let precise_targets = Self::matching_precise_symbols_for_resolved_target(
+                    graph.as_ref(),
                     &target_corpus.repository_id,
+                    &target.root,
                     &symbol_query,
-                    &target.symbol.name,
+                    &target.symbol,
                 );
                 let mut precise_matches = Vec::new();
                 for precise_target in &precise_targets {
@@ -5460,6 +7476,9 @@ impl FriggMcpServer {
                                     &relationship.to_symbol,
                                 )?
                                 .clone();
+                            if !Self::is_precise_callable_kind(&callee_symbol.kind) {
+                                return None;
+                            }
                             let callee_definition = Self::precise_definition_occurrence_for_symbol(
                                 graph.as_ref(),
                                 &target_corpus.repository_id,
@@ -5487,6 +7506,11 @@ impl FriggMcpServer {
                                 precision: Some(
                                     Self::precise_match_precision(precise_coverage).to_owned(),
                                 ),
+                                call_path: None,
+                                call_line: None,
+                                call_column: None,
+                                call_end_line: None,
+                                call_end_column: None,
                             })
                         })
                         .collect::<Vec<_>>();
@@ -5497,6 +7521,24 @@ impl FriggMcpServer {
                         break;
                     }
                 }
+                if precise_matches.is_empty() {
+                    for precise_target in &precise_targets {
+                        let matches = Self::precise_outgoing_matches_from_occurrences(
+                            graph.as_ref(),
+                            target_corpus.as_ref(),
+                            &target.root,
+                            &target.symbol.name,
+                            precise_coverage,
+                            precise_target,
+                            &target.symbol.stable_id,
+                        );
+                        if !matches.is_empty() {
+                            selected_precise_symbol = Some(precise_target.symbol.clone());
+                            precise_matches = matches;
+                            break;
+                        }
+                    }
+                }
                 if precise_matches.len() > limit {
                     precise_matches.truncate(limit);
                 }
@@ -5505,24 +7547,29 @@ impl FriggMcpServer {
                     let precision = Self::precise_resolution_precision(precise_coverage);
                     resolution_precision = Some(precision.to_owned());
                     match_count = precise_matches.len();
-                    let note = Some(
-                        json!({
-                            "precision": precision,
-                            "heuristic": false,
-                            "target_symbol_id": target.symbol.stable_id.clone(),
-                            "target_precise_symbol": selected_precise_symbol.clone(),
-                            "resolution_source": resolution_source.clone(),
-                            "precise": Self::precise_note_with_count(
-                                precise_coverage,
-                                &cached_precise_graph.ingest_stats,
-                                "outgoing_count",
-                                precise_matches.len(),
-                            )
-                        })
-                        .to_string(),
-                    );
+                    let metadata = json!({
+                        "precision": precision,
+                        "heuristic": false,
+                        "target_symbol_id": target.symbol.stable_id.clone(),
+                        "target_precise_symbol": selected_precise_symbol.clone(),
+                        "resolution_source": resolution_source.clone(),
+                        "target_selection": Self::navigation_target_selection_note(
+                            &symbol_query,
+                            &target,
+                            target_selection_candidate_count,
+                            target_selection_same_rank_count,
+                        ),
+                        "precise": Self::precise_note_with_count(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            "outgoing_count",
+                            precise_matches.len(),
+                        )
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(OutgoingCallsResponse {
                         matches: precise_matches,
+                        metadata,
                         note,
                     }));
                 }
@@ -5530,7 +7577,10 @@ impl FriggMcpServer {
                 let mut matches = graph
                     .outgoing_adjacency(&target.symbol.stable_id)
                     .into_iter()
-                    .filter(|adjacent| Self::is_heuristic_call_relation(adjacent.relation))
+                    .filter(|adjacent| {
+                        Self::is_heuristic_call_relation(adjacent.relation)
+                            && Self::is_heuristic_callable_kind(&adjacent.symbol.kind)
+                    })
                     .map(|adjacent| CallHierarchyMatch {
                         source_symbol: target.symbol.name.clone(),
                         target_symbol: adjacent.symbol.display_name,
@@ -5543,6 +7593,11 @@ impl FriggMcpServer {
                         column: 1,
                         relation: adjacent.relation.as_str().to_owned(),
                         precision: Some("heuristic".to_owned()),
+                        call_path: None,
+                        call_line: None,
+                        call_column: None,
+                        call_end_line: None,
+                        call_end_column: None,
                     })
                     .collect::<Vec<_>>();
                 Self::sort_call_hierarchy_matches(&mut matches);
@@ -5552,28 +7607,36 @@ impl FriggMcpServer {
 
                 resolution_precision = Some("heuristic".to_owned());
                 match_count = matches.len();
-                let note = Some(
-                    json!({
-                        "precision": "heuristic",
-                        "heuristic": true,
-                        "fallback_reason": "precise_absent",
-                        "precise_absence_reason": Self::precise_absence_reason(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            0,
-                        ),
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "outgoing_count",
-                            0,
-                        )
-                    })
-                    .to_string(),
-                );
-                Ok(Json(OutgoingCallsResponse { matches, note }))
+                let metadata = json!({
+                    "precision": "heuristic",
+                    "heuristic": true,
+                    "fallback_reason": "precise_absent",
+                    "precise_absence_reason": Self::precise_absence_reason(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                    ),
+                    "target_symbol_id": target.symbol.stable_id.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "target_selection": Self::navigation_target_selection_note(
+                        &symbol_query,
+                        &target,
+                        target_selection_candidate_count,
+                        target_selection_same_rank_count,
+                    ),
+                    "precise": Self::precise_note_with_count(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        "outgoing_count",
+                        0,
+                    )
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(OutgoingCallsResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             NavigationToolExecution {
@@ -5623,7 +7686,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "document_symbols",
-        description = "Return a deterministic symbol outline for a supported source file.",
+        description = "Outline symbols in one supported source file.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5656,15 +7719,18 @@ impl FriggMcpServer {
                 resolved_repository_id = Some(repository_id.clone());
                 resolved_path = Some(display_path.clone());
 
-                let language = SymbolLanguage::from_path(&absolute_path).ok_or_else(|| {
-                    Self::invalid_params(
-                        "document_symbols only supports Rust and PHP files",
-                        Some(json!({
-                            "path": display_path.clone(),
-                            "supported_extensions": [".rs", ".php"],
-                        })),
-                    )
-                })?;
+                let language =
+                    supported_language_for_path(&absolute_path, LanguageCapability::DocumentSymbols)
+                        .ok_or_else(|| {
+                            Self::invalid_params(
+                                LanguageCapability::DocumentSymbols
+                                    .unsupported_file_message("document_symbols"),
+                                Some(json!({
+                                    "path": display_path.clone(),
+                                    "supported_extensions": LanguageCapability::DocumentSymbols.supported_extensions(),
+                                })),
+                            )
+                        })?;
                 let metadata = fs::metadata(&absolute_path).map_err(|err| {
                     Self::internal(
                         format!(
@@ -5699,33 +7765,61 @@ impl FriggMcpServer {
                 let symbols = extract_symbols_from_source(language, &absolute_path, &source)
                     .map_err(Self::map_frigg_error)?;
 
-                let outline = symbols
-                    .into_iter()
-                    .map(|symbol| crate::mcp::types::DocumentSymbolItem {
-                        symbol: symbol.name,
-                        kind: symbol.kind.as_str().to_owned(),
-                        repository_id: repository_id.clone(),
-                        path: display_path.clone(),
-                        line: symbol.span.start_line,
-                        column: symbol.span.start_column,
-                        end_line: Some(symbol.span.end_line),
-                        end_column: Some(symbol.span.end_column),
-                        container: None,
-                    })
-                    .collect::<Vec<_>>();
+                let outline =
+                    Self::build_document_symbol_tree(&symbols, &repository_id, &display_path);
                 symbol_count = outline.len();
 
-                let note = Some(
+                let metadata = if language == SymbolLanguage::Blade {
+                    let blade_evidence =
+                        extract_blade_source_evidence_from_source(&absolute_path, &source, &symbols);
+                    json!({
+                        "source": "tree_sitter",
+                        "language": language.as_str(),
+                        "symbol_count": symbol_count,
+                        "heuristic": false,
+                        "blade": {
+                            "relations_detected": blade_evidence.relations.len(),
+                            "livewire_components": blade_evidence.livewire_components,
+                            "wire_directives": blade_evidence.wire_directives,
+                            "flux_components": blade_evidence.flux_components,
+                            "flux_registry_version": FLUX_REGISTRY_VERSION,
+                            "flux_hints": blade_evidence.flux_hints,
+                        },
+                    })
+                } else if language == SymbolLanguage::Php {
+                    let php_metadata = extract_php_source_evidence_from_source(
+                        &absolute_path,
+                        &source,
+                        &symbols,
+                    )
+                    .ok()
+                    .map(|evidence| {
+                        json!({
+                            "canonical_name_count": evidence.canonical_names_by_stable_id.len(),
+                            "type_evidence_count": evidence.type_evidence.len(),
+                            "target_evidence_count": evidence.target_evidence.len(),
+                            "literal_evidence_count": evidence.literal_evidence.len(),
+                        })
+                    });
+                    json!({
+                        "source": "tree_sitter",
+                        "language": language.as_str(),
+                        "symbol_count": symbol_count,
+                        "heuristic": false,
+                        "php": php_metadata,
+                    })
+                } else {
                     json!({
                         "source": "tree_sitter",
                         "language": language.as_str(),
                         "symbol_count": symbol_count,
                         "heuristic": false,
                     })
-                    .to_string(),
-                );
+                };
+                let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(DocumentSymbolsResponse {
                     symbols: outline,
+                    metadata,
                     note,
                 }))
             })();
@@ -5756,7 +7850,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_structural",
-        description = "Run deterministic tree-sitter structural query search for Rust/PHP sources.",
+        description = "Run tree-sitter structural queries for supported source files.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5778,6 +7872,10 @@ impl FriggMcpServer {
             let mut files_scanned = 0usize;
             let mut files_matched = 0usize;
             let mut diagnostics_count = 0usize;
+            let mut blade_relations_detected = 0usize;
+            let mut blade_livewire_components = BTreeSet::new();
+            let mut blade_wire_directives = BTreeSet::new();
+            let mut blade_flux_components = BTreeSet::new();
 
             let result = (|| -> Result<Json<SearchStructuralResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
@@ -5827,7 +7925,10 @@ impl FriggMcpServer {
                 let mut matches = Vec::new();
                 for corpus in corpora {
                     for source_path in &corpus.source_paths {
-                        let Some(language) = SymbolLanguage::from_path(source_path) else {
+                        let Some(language) = supported_language_for_path(
+                            source_path,
+                            LanguageCapability::StructuralSearch,
+                        ) else {
                             continue;
                         };
                         if let Some(target_language) = target_language {
@@ -5861,6 +7962,18 @@ impl FriggMcpServer {
                         let structural_matches =
                             search_structural_in_source(language, source_path, &source, &query)
                                 .map_err(Self::map_frigg_error)?;
+                        if language == SymbolLanguage::Blade {
+                            let blade_evidence =
+                                extract_blade_source_evidence_from_source(source_path, &source, &[]);
+                            blade_relations_detected = blade_relations_detected
+                                .saturating_add(blade_evidence.relations.len());
+                            blade_livewire_components
+                                .extend(blade_evidence.livewire_components.into_iter());
+                            blade_wire_directives
+                                .extend(blade_evidence.wire_directives.into_iter());
+                            blade_flux_components
+                                .extend(blade_evidence.flux_components.into_iter());
+                        }
                         files_matched = files_matched
                             .saturating_add(usize::from(!structural_matches.is_empty()));
 
@@ -5892,7 +8005,23 @@ impl FriggMcpServer {
                     matches.truncate(limit);
                 }
 
-                let note = Some(
+                let metadata = if target_language == Some(SymbolLanguage::Blade) {
+                    json!({
+                        "source": "tree_sitter_query",
+                        "language": language_filter.clone().unwrap_or_else(|| "mixed".to_owned()),
+                        "heuristic": false,
+                        "diagnostics_count": diagnostics_count,
+                        "files_scanned": files_scanned,
+                        "files_matched": files_matched,
+                        "blade": {
+                            "relations_detected": blade_relations_detected,
+                            "livewire_components": blade_livewire_components.into_iter().collect::<Vec<_>>(),
+                            "wire_directives": blade_wire_directives.into_iter().collect::<Vec<_>>(),
+                            "flux_components": blade_flux_components.into_iter().collect::<Vec<_>>(),
+                            "flux_registry_version": FLUX_REGISTRY_VERSION,
+                        },
+                    })
+                } else {
                     json!({
                         "source": "tree_sitter_query",
                         "language": language_filter.clone().unwrap_or_else(|| "mixed".to_owned()),
@@ -5901,9 +8030,13 @@ impl FriggMcpServer {
                         "files_scanned": files_scanned,
                         "files_matched": files_matched,
                     })
-                    .to_string(),
-                );
-                Ok(Json(SearchStructuralResponse { matches, note }))
+                };
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(SearchStructuralResponse {
+                    matches,
+                    metadata,
+                    note,
+                }))
             })();
 
             (
@@ -5954,7 +8087,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "deep_search_run",
-        description = "Run a deep-search playbook and return a deterministic trace artifact.",
+        description = "Run a deep-search playbook and return a trace artifact.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -6004,7 +8137,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "deep_search_replay",
-        description = "Replay a deep-search playbook against an expected trace and return deterministic diff output.",
+        description = "Replay a deep-search playbook against an expected trace.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -6068,7 +8201,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "deep_search_compose_citations",
-        description = "Compose deterministic citation payloads from a deep-search trace artifact.",
+        description = "Compose citation payloads from a deep-search trace artifact.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -6141,7 +8274,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Use list_repositories first; if it returns no repositories or you want a session-local default repo, call workspace_attach. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include deep-search tools). search_hybrid is the broad natural-language entrypoint and may intentionally mix contracts, README, runtime, and tests for doc/runtime questions; when you need concrete implementation anchors, pivot to search_symbol for API/type/function names or provide search_text.path_regex to constrain noise, for example `^(README\\.md|crates/cli/src/.*)$` when broad doc/runtime regexes would also match helper files. read_file returns full content when max_bytes is omitted; when capped, invalid_params includes suggested_max_bytes; use line_start/line_end for targeted slices. search_symbol returns tree-sitter symbol matches and find_references prefers precise SCIP references with deterministic heuristic fallback metadata in note."
+                    "Use list_repositories first; if no repository is attached or you want a session-local default repo, call workspace_attach. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include explore plus deep-search tools). For simple local file reads or literal scans in the checked-out workspace, shell tools may be faster than read_file or search_text. Use search_hybrid for broad doc/runtime questions, then pivot to search_symbol or scoped search_text.path_regex for concrete anchors. Use explore after discovery when you want bounded single-artifact probe/zoom/refine follow-up. Use read_file to confirm exact source when repository-aware evidence is useful, and treat search_hybrid warnings or non-`ok` semantic_status as weaker evidence."
                 ),
             )
     }
@@ -6151,12 +8284,19 @@ impl ServerHandler for FriggMcpServer {
 mod runtime_gate_tests {
     use std::collections::BTreeSet;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::domain::FriggError;
-    use crate::settings::FriggConfig;
+    use crate::indexer::FileMetadataDigest;
+    use crate::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
+    use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
+    use protobuf::{EnumOrUnknown, Message};
     use rmcp::model::ErrorCode;
+    use scip::types::{
+        Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
+        SymbolInformation as ScipSymbolInformationProto,
+    };
 
     use super::FriggMcpServer;
 
@@ -6182,32 +8322,135 @@ mod runtime_gate_tests {
         ))
     }
 
+    fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
+        SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAi),
+            model: Some("text-embedding-3-small".to_owned()),
+            strict_mode: false,
+        }
+    }
+
+    fn seed_manifest_snapshot(
+        workspace_root: &Path,
+        repository_id: &str,
+        snapshot_id: &str,
+        paths: &[&str],
+    ) {
+        let db_path = crate::storage::ensure_provenance_db_parent_dir(workspace_root)
+            .expect("manifest storage path should work");
+        let storage = Storage::new(db_path);
+        storage
+            .initialize()
+            .expect("manifest storage should initialize");
+
+        let mut manifest_entries = paths
+            .iter()
+            .map(|path| {
+                let metadata = fs::metadata(workspace_root.join(path))
+                    .expect("manifest snapshot path should exist for test");
+                ManifestEntry {
+                    path: (*path).to_owned(),
+                    sha256: format!("hash-{path}"),
+                    size_bytes: metadata.len(),
+                    mtime_ns: metadata
+                        .modified()
+                        .ok()
+                        .and_then(FriggMcpServer::system_time_to_unix_nanos),
+                }
+            })
+            .collect::<Vec<_>>();
+        manifest_entries.sort_by(|left, right| left.path.cmp(&right.path));
+        manifest_entries.dedup_by(|left, right| left.path == right.path);
+
+        storage
+            .upsert_manifest(repository_id, snapshot_id, &manifest_entries)
+            .expect("manifest snapshot should persist");
+    }
+
+    fn semantic_record(
+        repository_id: &str,
+        snapshot_id: &str,
+        path: &str,
+    ) -> SemanticChunkEmbeddingRecord {
+        SemanticChunkEmbeddingRecord {
+            chunk_id: format!("chunk-{}", path.replace('/', "_")),
+            repository_id: repository_id.to_owned(),
+            snapshot_id: snapshot_id.to_owned(),
+            path: path.to_owned(),
+            language: "rust".to_owned(),
+            chunk_index: 0,
+            start_line: 1,
+            end_line: 1,
+            provider: "openai".to_owned(),
+            model: "text-embedding-3-small".to_owned(),
+            trace_id: Some("trace-001".to_owned()),
+            content_hash_blake3: format!("hash-{}", path.replace('/', "_")),
+            content_text: path.to_owned(),
+            embedding: vec![0.25, 0.75],
+        }
+    }
+
+    fn write_scip_protobuf_fixture(workspace_root: &Path, file_name: &str) {
+        let fixture_dir = workspace_root.join(".frigg/scip");
+        fs::create_dir_all(&fixture_dir).expect("failed to create scip fixture directory");
+
+        let mut index = ScipIndexProto::new();
+        let mut document = ScipDocumentProto::new();
+        document.relative_path = "src/lib.rs".to_owned();
+
+        let mut definition = ScipOccurrenceProto::new();
+        definition.symbol = "scip-rust pkg repo#User".to_owned();
+        definition.range = vec![0, 11, 15];
+        definition.symbol_roles = 1;
+        document.occurrences.push(definition);
+
+        let mut reference = ScipOccurrenceProto::new();
+        reference.symbol = "scip-rust pkg repo#User".to_owned();
+        reference.range = vec![2, 31, 35];
+        reference.symbol_roles = 8;
+        document.occurrences.push(reference);
+
+        let mut symbol = ScipSymbolInformationProto::new();
+        symbol.symbol = "scip-rust pkg repo#User".to_owned();
+        symbol.display_name = "User".to_owned();
+        symbol.kind = EnumOrUnknown::from_i32(7);
+        document.symbols.push(symbol);
+
+        index.documents.push(document);
+        let payload = index
+            .write_to_bytes()
+            .expect("protobuf fixture payload should serialize");
+        fs::write(fixture_dir.join(file_name), payload)
+            .expect("failed to write scip protobuf fixture payload");
+    }
+
     #[test]
-    fn deep_search_tools_are_hidden_by_default_runtime_options() {
+    fn extended_only_tools_are_hidden_by_default_runtime_options() {
         let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, false);
         let names = to_set(server.runtime_registered_tool_names());
 
-        for tool_name in FriggMcpServer::DEEP_SEARCH_TOOL_NAMES {
+        for tool_name in FriggMcpServer::EXTENDED_ONLY_TOOL_NAMES {
             assert!(
                 !names.contains(tool_name),
-                "deep-search tool should not be registered by default: {tool_name}"
+                "extended-only tool should not be registered by default: {tool_name}"
             );
         }
         assert!(
             names.contains("list_repositories"),
-            "core tools should remain registered when deep-search tools are disabled"
+            "core tools should remain registered when extended-only tools are disabled"
         );
     }
 
     #[test]
-    fn deep_search_tools_are_registered_when_runtime_option_enabled() {
+    fn extended_only_tools_are_registered_when_runtime_option_enabled() {
         let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, true);
         let names = to_set(server.runtime_registered_tool_names());
 
-        for tool_name in FriggMcpServer::DEEP_SEARCH_TOOL_NAMES {
+        for tool_name in FriggMcpServer::EXTENDED_ONLY_TOOL_NAMES {
             assert!(
                 names.contains(tool_name),
-                "deep-search tool should be registered when enabled: {tool_name}"
+                "extended-only tool should be registered when enabled: {tool_name}"
             );
         }
     }
@@ -6237,6 +8480,30 @@ mod runtime_gate_tests {
                 .and_then(|value| value.get("semantic_status"))
                 .and_then(|value| value.as_str()),
             Some("strict_failure")
+        );
+    }
+
+    #[test]
+    fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
+        let warning = FriggMcpServer::search_hybrid_warning(Some("ok"), None, Some(0), Some(0));
+
+        assert_eq!(
+            warning.as_deref(),
+            Some(
+                "semantic retrieval completed successfully but retained no query-relevant semantic hits; results are ranked from lexical and graph signals only"
+            )
+        );
+    }
+
+    #[test]
+    fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
+        let warning = FriggMcpServer::search_hybrid_warning(Some("ok"), None, Some(3), Some(0));
+
+        assert_eq!(
+            warning.as_deref(),
+            Some(
+                "semantic retrieval retained semantic hits, but none contributed to the returned top results; ranking is effectively lexical and graph for this result set"
+            )
         );
     }
 
@@ -6275,6 +8542,138 @@ mod runtime_gate_tests {
                 .map(|digest| digest.format.as_str())
                 .collect::<Vec<_>>(),
             vec!["json", "protobuf"]
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn manifest_source_paths_filter_to_symbol_corpus_capability() {
+        let digests = vec![
+            FileMetadataDigest {
+                path: PathBuf::from("src/lib.rs"),
+                size_bytes: 10,
+                mtime_ns: Some(1),
+            },
+            FileMetadataDigest {
+                path: PathBuf::from("src/server.php"),
+                size_bytes: 20,
+                mtime_ns: Some(2),
+            },
+            FileMetadataDigest {
+                path: PathBuf::from("src/app.ts"),
+                size_bytes: 30,
+                mtime_ns: Some(3),
+            },
+            FileMetadataDigest {
+                path: PathBuf::from("README.md"),
+                size_bytes: 40,
+                mtime_ns: Some(4),
+            },
+        ];
+
+        let source_paths = FriggMcpServer::manifest_source_paths_for_digests(&digests);
+
+        assert_eq!(
+            source_paths,
+            vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/server.php")]
+        );
+    }
+
+    #[test]
+    fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
+        let workspace_root = temp_workspace_root("semantic-refresh-plan");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace src directory");
+        fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+            .expect("failed to write source fixture");
+
+        let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config");
+        config.semantic_runtime = semantic_runtime_enabled_openai();
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let workspace = server
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .attached_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        seed_manifest_snapshot(
+            &workspace_root,
+            &workspace.repository_id,
+            "snapshot-001",
+            &["src/lib.rs"],
+        );
+        let storage = Storage::new(&workspace.db_path);
+        storage
+            .replace_semantic_embeddings_for_repository(
+                &workspace.repository_id,
+                "snapshot-001",
+                &[semantic_record(
+                    &workspace.repository_id,
+                    "snapshot-001",
+                    "src/lib.rs",
+                )],
+            )
+            .expect("seed semantic embeddings should persist");
+        seed_manifest_snapshot(
+            &workspace_root,
+            &workspace.repository_id,
+            "snapshot-002",
+            &["src/lib.rs"],
+        );
+
+        let plan = server
+            .workspace_semantic_refresh_plan(&workspace)
+            .expect("latest snapshot without active-model semantic rows should trigger refresh");
+        assert_eq!(plan.latest_snapshot_id, "snapshot-002");
+        assert_eq!(plan.compatible_snapshot_id, "snapshot-001");
+        assert_eq!(plan.reason, "semantic_snapshot_missing_for_active_model");
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn precise_graph_prewarm_populates_latest_precise_cache() {
+        let workspace_root = temp_workspace_root("precise-prewarm");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace src directory");
+        fs::write(
+            workspace_root.join("src/lib.rs"),
+            "pub struct User;\n\npub fn current_user() -> User { User }\n",
+        )
+        .expect("failed to write source fixture");
+        write_scip_protobuf_fixture(&workspace_root, "fixture.scip");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config");
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let workspace = server
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .attached_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        server.prewarm_precise_graph_for_workspace(&workspace);
+
+        let cached = server
+            .latest_precise_graph_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&workspace.repository_id)
+            .cloned()
+            .expect("precise prewarm should populate the latest precise graph cache");
+        assert_eq!(cached.ingest_stats.artifacts_ingested, 1);
+        assert_eq!(cached.ingest_stats.artifacts_failed, 0);
+        assert_eq!(
+            cached.coverage_mode,
+            crate::mcp::server_state::PreciseCoverageMode::Full
         );
 
         let _ = fs::remove_dir_all(workspace_root);

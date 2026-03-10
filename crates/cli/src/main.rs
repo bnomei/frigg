@@ -11,6 +11,8 @@ use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
 use frigg::mcp::FriggMcpServer;
+use frigg::playbooks::run_hybrid_playbook_regressions;
+use frigg::searcher::TextSearcher;
 use frigg::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
     SemanticRuntimeProvider, SemanticRuntimeStartupError, WatchConfig, WatchMode,
@@ -21,8 +23,31 @@ use frigg::storage::{
 };
 use frigg::watch::maybe_start_watch_runtime;
 use rmcp::transport::StreamableHttpServerConfig;
+use serde_json::to_string_pretty;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
+
+mod cli_runtime;
+mod http_runtime;
+use cli_runtime::{
+    StorageBootstrapCommand, resolve_command_config, resolve_startup_config,
+    resolve_watch_runtime_config, run_hybrid_playbook_command, run_reindex_command,
+    run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
+    run_strict_startup_vector_readiness_gate,
+};
+#[cfg(test)]
+use cli_runtime::{
+    ensure_storage_db_path_for_write, find_enclosing_git_root, resolve_semantic_runtime_config,
+    resolve_storage_db_path, resolve_watch_config,
+    run_semantic_runtime_startup_gate_with_credentials,
+};
+use http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
+#[cfg(test)]
+use http_runtime::{
+    allowed_authorities_for_bind, authority_allowed, constant_time_equals, host_header_allowed,
+    origin_header_allowed, parse_host_authority, parse_origin_authority,
+    typed_access_denied_response,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
@@ -111,7 +136,7 @@ struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Initialize storage schema for each workspace root.
     Init,
@@ -123,56 +148,18 @@ enum Command {
         #[arg(long, default_value_t = false)]
         changed: bool,
     },
-}
-
-#[derive(Debug, Clone, Copy)]
-enum StorageBootstrapCommand {
-    Init,
-    Verify,
-}
-
-#[derive(Debug, Clone)]
-struct HttpRuntimeConfig {
-    bind_addr: SocketAddr,
-    auth_token: Option<String>,
-    allowed_authorities: Option<Vec<String>>,
-}
-
-#[derive(Clone)]
-struct HttpAuthState {
-    expected_bearer_header: Option<String>,
-    allowed_authorities: Option<Vec<String>>,
-}
-
-#[derive(Debug)]
-enum SemanticStartupGateError {
-    InvalidConfig(SemanticRuntimeStartupError),
-}
-
-impl SemanticStartupGateError {
-    fn code(&self) -> &'static str {
-        match self {
-            Self::InvalidConfig(err) => err.code(),
-        }
-    }
-}
-
-impl HttpRuntimeConfig {
-    fn transport_kind(&self) -> RuntimeTransportKind {
-        if self.bind_addr.ip().is_loopback() {
-            RuntimeTransportKind::LoopbackHttp
-        } else {
-            RuntimeTransportKind::RemoteHttp
-        }
-    }
-}
-
-impl std::fmt::Display for SemanticStartupGateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidConfig(err) => write!(f, "{err}"),
-        }
-    }
+    /// Execute markdown hybrid playbooks against the selected workspace root(s).
+    PlaybookHybridRun {
+        /// Directory containing executable markdown playbooks.
+        #[arg(long = "playbooks-root", value_name = "PATH")]
+        playbooks_root: PathBuf,
+        /// Enforce target witness groups in addition to required witness groups.
+        #[arg(long, default_value_t = false)]
+        enforce_targets: bool,
+        /// Optional path for pretty JSON summary output.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -185,8 +172,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(RuntimeTransportKind::Stdio);
     init_tracing(default_tracing_filter(&cli, transport_kind));
 
-    if let Some(command) = cli.command.as_ref().copied() {
-        match command {
+    if let Some(command) = cli.command.clone() {
+        match command.clone() {
             Command::Init => {
                 let config = resolve_command_config(&cli, command)?;
                 run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?
@@ -199,6 +186,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let config = resolve_command_config(&cli, command)?;
                 run_semantic_runtime_startup_gate(&config)?;
                 run_reindex_command(&config, changed)?
+            }
+            Command::PlaybookHybridRun {
+                playbooks_root,
+                enforce_targets,
+                output,
+            } => {
+                let config = resolve_command_config(&cli, command)?;
+                run_semantic_runtime_startup_gate(&config)?;
+                run_hybrid_playbook_command(
+                    &config,
+                    &playbooks_root,
+                    enforce_targets,
+                    output.as_deref(),
+                )?
             }
         }
         return Ok(());
@@ -217,542 +218,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         server.auto_attach_stdio_default_workspace_from_current_dir()?;
         server.serve_stdio().await?;
     }
-
-    Ok(())
-}
-
-fn resolve_base_config(
-    cli: &Cli,
-    workspace_roots_required: bool,
-    watch_default_transport: Option<RuntimeTransportKind>,
-) -> Result<FriggConfig, Box<dyn Error>> {
-    if workspace_roots_required && cli.workspace_roots.is_empty() {
-        return Err(Box::new(io::Error::other(
-            "at least one workspace root is required",
-        )));
-    }
-
-    let mut config = if workspace_roots_required {
-        FriggConfig::from_workspace_roots(cli.workspace_roots.clone())?
-    } else {
-        FriggConfig::from_optional_workspace_roots(cli.workspace_roots.clone())?
-    };
-    if let Some(max_file_bytes) = cli.max_file_bytes {
-        config.max_file_bytes = max_file_bytes;
-    }
-    config.watch = resolve_watch_config(cli, watch_default_transport);
-    if workspace_roots_required {
-        config.validate()?;
-    } else {
-        config.validate_for_serving()?;
-    }
-    Ok(config)
-}
-
-fn resolve_command_config(cli: &Cli, command: Command) -> Result<FriggConfig, Box<dyn Error>> {
-    match command {
-        Command::Init | Command::Verify => resolve_base_config(cli, true, None),
-        Command::Reindex { .. } => resolve_startup_config(cli, RuntimeTransportKind::Stdio),
-    }
-}
-
-fn resolve_startup_config(
-    cli: &Cli,
-    transport_kind: RuntimeTransportKind,
-) -> Result<FriggConfig, Box<dyn Error>> {
-    let mut config = resolve_base_config(cli, false, Some(transport_kind))?;
-    config.semantic_runtime = resolve_semantic_runtime_config(cli);
-    config.validate_for_serving()?;
-    Ok(config)
-}
-
-fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfig {
-    SemanticRuntimeConfig {
-        enabled: cli.semantic_runtime_enabled.unwrap_or(false),
-        provider: cli.semantic_runtime_provider,
-        model: cli.semantic_runtime_model.clone(),
-        strict_mode: cli.semantic_runtime_strict_mode.unwrap_or(false),
-    }
-}
-
-fn resolve_watch_config(
-    cli: &Cli,
-    watch_default_transport: Option<RuntimeTransportKind>,
-) -> WatchConfig {
-    let mut watch = watch_default_transport
-        .map(WatchConfig::default_for_transport)
-        .unwrap_or_default();
-    if let Some(mode) = cli.watch_mode {
-        watch.mode = mode;
-    }
-    if let Some(debounce_ms) = cli.watch_debounce_ms {
-        watch.debounce_ms = debounce_ms;
-    }
-    if let Some(retry_ms) = cli.watch_retry_ms {
-        watch.retry_ms = retry_ms;
-    }
-    watch
-}
-
-fn resolve_watch_runtime_config(
-    config: &FriggConfig,
-    transport_kind: RuntimeTransportKind,
-) -> io::Result<FriggConfig> {
-    if transport_kind != RuntimeTransportKind::Stdio || !config.workspace_roots.is_empty() {
-        return Ok(config.clone());
-    }
-
-    let mut watch_config = config.clone();
-    watch_config.workspace_roots = vec![resolve_stdio_default_workspace_root()?];
-    Ok(watch_config)
-}
-
-fn resolve_stdio_default_workspace_root() -> io::Result<PathBuf> {
-    let current_dir = std::env::current_dir()?;
-    Ok(find_enclosing_git_root(&current_dir).unwrap_or(current_dir))
-}
-
-fn find_enclosing_git_root(start: &Path) -> Option<PathBuf> {
-    start.ancestors().find_map(|ancestor| {
-        ancestor
-            .join(".git")
-            .exists()
-            .then(|| ancestor.to_path_buf())
-    })
-}
-
-fn run_storage_bootstrap_command(
-    config: &FriggConfig,
-    command: StorageBootstrapCommand,
-) -> Result<(), Box<dyn Error>> {
-    let repositories = config.repositories();
-    let command_name = match command {
-        StorageBootstrapCommand::Init => "init",
-        StorageBootstrapCommand::Verify => "verify",
-    };
-
-    for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "{command_name} summary status=failed repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
-        let db_path = match command {
-            StorageBootstrapCommand::Init => ensure_storage_db_path_for_write(root, command_name)?,
-            StorageBootstrapCommand::Verify => resolve_storage_db_path(root, command_name)?,
-        };
-        let storage = Storage::new(&db_path);
-
-        let operation_result = match command {
-            StorageBootstrapCommand::Init => storage.initialize(),
-            StorageBootstrapCommand::Verify => storage.verify(),
-        };
-
-        if let Err(err) = operation_result {
-            println!(
-                "{command_name} summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                repositories.len(),
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                err
-            );
-            return Err(Box::new(io::Error::other(format!(
-                "{command_name} failed for repository_id={} root={} db={}: {err}",
-                repo.repository_id.0,
-                root.display(),
-                db_path.display()
-            ))));
-        }
-
-        println!(
-            "{command_name} ok repository_id={} root={} db={}",
-            repo.repository_id.0,
-            root.display(),
-            db_path.display()
-        );
-    }
-
-    println!(
-        "{command_name} summary status=ok repositories={}",
-        repositories.len()
-    );
-    Ok(())
-}
-
-fn run_reindex_command(config: &FriggConfig, changed: bool) -> Result<(), Box<dyn Error>> {
-    let repositories = config.repositories();
-    let mode = if changed {
-        ReindexMode::ChangedOnly
-    } else {
-        ReindexMode::Full
-    };
-    let mode_name = mode.as_str();
-    let mut total_files_scanned = 0usize;
-    let mut total_files_changed = 0usize;
-    let mut total_files_deleted = 0usize;
-    let mut total_diagnostics = 0usize;
-    let mut total_walk_diagnostics = 0usize;
-    let mut total_read_diagnostics = 0usize;
-    let mut total_duration_ms = 0u128;
-
-    for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "reindex summary status=failed mode={mode_name} repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
-        let db_path = ensure_storage_db_path_for_write(root, "reindex")?;
-
-        let summary = match reindex_repository_with_runtime_config(
-            &repo.repository_id.0,
-            root,
-            &db_path,
-            mode,
-            &config.semantic_runtime,
-            &SemanticRuntimeCredentials::from_process_env(),
-        ) {
-            Ok(summary) => summary,
-            Err(err) => {
-                println!(
-                    "reindex summary status=failed mode={mode_name} repositories={} repository_id={} root={} db={} error={}",
-                    repositories.len(),
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    err
-                );
-                return Err(Box::new(io::Error::other(format!(
-                    "reindex failed mode={mode_name} repository_id={} root={} db={}: {err}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display()
-                ))));
-            }
-        };
-
-        total_files_scanned += summary.files_scanned;
-        total_files_changed += summary.files_changed;
-        total_files_deleted += summary.files_deleted;
-        let diagnostics_total = summary.diagnostics.total_count();
-        let diagnostics_walk = summary
-            .diagnostics
-            .count_by_kind(ManifestDiagnosticKind::Walk);
-        let diagnostics_read = summary
-            .diagnostics
-            .count_by_kind(ManifestDiagnosticKind::Read);
-        total_diagnostics += diagnostics_total;
-        total_walk_diagnostics += diagnostics_walk;
-        total_read_diagnostics += diagnostics_read;
-        total_duration_ms += summary.duration_ms;
-
-        for diagnostic in &summary.diagnostics.entries {
-            println!(
-                "reindex diagnostic mode={mode_name} repository_id={} kind={} path={} message={}",
-                repo.repository_id.0,
-                diagnostic.kind.as_str(),
-                diagnostic
-                    .path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_owned()),
-                diagnostic.message
-            );
-        }
-
-        println!(
-            "reindex ok mode={mode_name} repository_id={} root={} db={} snapshot_id={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
-            repo.repository_id.0,
-            root.display(),
-            db_path.display(),
-            summary.snapshot_id,
-            summary.files_scanned,
-            summary.files_changed,
-            summary.files_deleted,
-            diagnostics_total,
-            diagnostics_walk,
-            diagnostics_read,
-            summary.duration_ms
-        );
-    }
-
-    println!(
-        "reindex summary status=ok mode={mode_name} repositories={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
-        repositories.len(),
-        total_files_scanned,
-        total_files_changed,
-        total_files_deleted,
-        total_diagnostics,
-        total_walk_diagnostics,
-        total_read_diagnostics,
-        total_duration_ms
-    );
-    Ok(())
-}
-
-fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> io::Result<()> {
-    let repositories = config.repositories();
-
-    for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "startup summary status=failed repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
-        let db_path = resolve_storage_db_path(root, "startup")?;
-        if !db_path.is_file() {
-            let err_message = format!(
-                "startup strict vector readiness failed repository_id={} root={} db={}: storage db file is missing; run `frigg init --workspace-root {}` first",
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                root.display()
-            );
-            println!(
-                "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                repositories.len(),
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                err_message
-            );
-            return Err(io::Error::other(err_message));
-        }
-        let storage = Storage::new(&db_path);
-        let status = storage
-            .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "startup strict vector readiness failed repository_id={} root={} db={}: {err}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display()
-                ))
-            });
-
-        let status = match status {
-            Ok(status) => status,
-            Err(err) => {
-                println!(
-                    "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                    repositories.len(),
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    err
-                );
-                return Err(err);
-            }
-        };
-
-        if status.backend != VectorStoreBackend::SqliteVec {
-            let err_message = format!(
-                "vector subsystem not ready: sqlite-vec backend unavailable (active backend: {})",
-                status.backend.as_str()
-            );
-            println!(
-                "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                repositories.len(),
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                err_message
-            );
-            return Err(io::Error::other(format!(
-                "startup strict vector readiness failed repository_id={} root={} db={}: {err_message}",
-                repo.repository_id.0,
-                root.display(),
-                db_path.display()
-            )));
-        }
-
-        info!(
-            repository_id = %repo.repository_id.0,
-            root = %root.display(),
-            db = %db_path.display(),
-            extension_version = %status.extension_version,
-            "startup strict vector readiness passed"
-        );
-    }
-
-    Ok(())
-}
-
-fn run_semantic_runtime_startup_gate(config: &FriggConfig) -> io::Result<()> {
-    let credentials = SemanticRuntimeCredentials::from_process_env();
-    run_semantic_runtime_startup_gate_with_credentials(config, &credentials)
-}
-
-fn run_semantic_runtime_startup_gate_with_credentials(
-    config: &FriggConfig,
-    credentials: &SemanticRuntimeCredentials,
-) -> io::Result<()> {
-    if !config.semantic_runtime.enabled {
-        return Ok(());
-    }
-
-    if let Err(err) = config.semantic_runtime.validate_startup(credentials) {
-        let startup_error = SemanticStartupGateError::InvalidConfig(err);
-        let provider = config
-            .semantic_runtime
-            .provider
-            .map(SemanticRuntimeProvider::as_str)
-            .unwrap_or("-");
-        let model = config.semantic_runtime.normalized_model().unwrap_or("-");
-        println!(
-            "startup summary status=failed semantic_enabled=true semantic_provider={} semantic_model={} semantic_code={} error={}",
-            provider,
-            model,
-            startup_error.code(),
-            startup_error
-        );
-        return Err(io::Error::other(format!(
-            "startup semantic runtime readiness failed code={}: {}",
-            startup_error.code(),
-            startup_error
-        )));
-    }
-
-    let provider = config
-        .semantic_runtime
-        .provider
-        .expect("semantic runtime provider must exist after successful validation");
-    let model = config
-        .semantic_runtime
-        .normalized_model()
-        .expect("semantic runtime model must exist after successful validation");
-    info!(
-        semantic_provider = %provider.as_str(),
-        semantic_model = %model,
-        semantic_strict_mode = config.semantic_runtime.strict_mode,
-        "startup semantic runtime readiness passed"
-    );
-    Ok(())
-}
-
-fn resolve_storage_db_path(workspace_root: &Path, command_name: &str) -> io::Result<PathBuf> {
-    resolve_provenance_db_path(workspace_root).map_err(|err| {
-        io::Error::other(format!(
-            "{command_name} summary status=failed root={} error={err}",
-            workspace_root.display()
-        ))
-    })
-}
-
-fn ensure_storage_db_path_for_write(
-    workspace_root: &Path,
-    command_name: &str,
-) -> io::Result<PathBuf> {
-    ensure_provenance_db_parent_dir(workspace_root).map_err(|err| {
-        io::Error::other(format!(
-            "{command_name} summary status=failed root={} error={err}",
-            workspace_root.display()
-        ))
-    })
-}
-
-fn resolve_http_runtime_config(cli: &Cli) -> Result<Option<HttpRuntimeConfig>, Box<dyn Error>> {
-    let has_http_port = cli.mcp_http_port.is_some();
-    let has_http_related_flags =
-        cli.mcp_http_host.is_some() || cli.allow_remote_http || cli.mcp_http_auth_token.is_some();
-
-    if !has_http_port {
-        if has_http_related_flags {
-            return Err(Box::new(io::Error::other(
-                "HTTP transport flags require --mcp-http-port",
-            )));
-        }
-        return Ok(None);
-    }
-
-    let host = cli.mcp_http_host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    let port = cli
-        .mcp_http_port
-        .expect("checked: mcp_http_port is set when has_http_port is true");
-    let bind_addr = SocketAddr::new(host, port);
-
-    let auth_token = match cli.mcp_http_auth_token.as_deref() {
-        Some(raw) if raw.trim().is_empty() => {
-            return Err(Box::new(io::Error::other(
-                "--mcp-http-auth-token must not be blank",
-            )));
-        }
-        Some(raw) => Some(raw.trim().to_owned()),
-        None => None,
-    };
-
-    if !host.is_loopback() && !cli.allow_remote_http {
-        return Err(Box::new(io::Error::other(format!(
-            "refusing non-loopback HTTP bind at {bind_addr}; pass --allow-remote-http and set --mcp-http-auth-token"
-        ))));
-    }
-
-    if !host.is_loopback() && auth_token.is_none() {
-        return Err(Box::new(io::Error::other(
-            "HTTP mode requires --mcp-http-auth-token for non-loopback binds",
-        )));
-    }
-
-    let allowed_authorities = allowed_authorities_for_bind(bind_addr);
-
-    Ok(Some(HttpRuntimeConfig {
-        bind_addr,
-        auth_token,
-        allowed_authorities,
-    }))
-}
-
-async fn serve_http(
-    runtime: HttpRuntimeConfig,
-    server: FriggMcpServer,
-) -> Result<(), Box<dyn Error>> {
-    let listener = tokio::net::TcpListener::bind(runtime.bind_addr).await?;
-    let config = StreamableHttpServerConfig {
-        stateful_mode: true,
-        ..StreamableHttpServerConfig::default()
-    };
-    let shutdown = config.cancellation_token.clone();
-    let service = server.streamable_http_service(config);
-
-    info!(
-        bind_addr = %runtime.bind_addr,
-        "serving MCP over streamable HTTP at /mcp"
-    );
-
-    if let Some(authorities) = runtime.allowed_authorities.as_ref() {
-        info!(
-            ?authorities,
-            "HTTP origin/host allowlist enabled for MCP endpoint"
-        );
-    } else {
-        warn!("HTTP origin/host allowlist disabled because bind host is unspecified");
-    }
-
-    if runtime.auth_token.is_some() {
-        info!("HTTP bearer token auth enabled for MCP endpoint");
-    } else {
-        warn!("HTTP bearer token auth disabled for loopback MCP endpoint");
-    }
-
-    let router = Router::new()
-        .nest_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(
-            HttpAuthState {
-                expected_bearer_header: runtime.auth_token.map(|token| format!("Bearer {token}")),
-                allowed_authorities: runtime.allowed_authorities,
-            },
-            bearer_auth_middleware,
-        ));
-
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            shutdown.cancel();
-        })
-        .await?;
 
     Ok(())
 }
@@ -777,168 +242,10 @@ fn init_tracing(default_filter: &str) {
         .try_init();
 }
 
-async fn bearer_auth_middleware(
-    State(state): State<HttpAuthState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if !host_header_allowed(request.headers(), &state.allowed_authorities) {
-        return typed_access_denied_response(StatusCode::FORBIDDEN, "unauthorized host header");
-    }
-
-    if !origin_header_allowed(request.headers(), &state.allowed_authorities) {
-        return typed_access_denied_response(StatusCode::FORBIDDEN, "unauthorized origin header");
-    }
-
-    let Some(expected_bearer_header) = state.expected_bearer_header.as_deref() else {
-        return next.run(request).await;
-    };
-
-    let provided = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let authorized = constant_time_equals(provided, expected_bearer_header);
-
-    if !authorized {
-        return typed_access_denied_response(
-            StatusCode::UNAUTHORIZED,
-            "missing or invalid bearer authorization",
-        )
-        .into_response();
-    }
-
-    next.run(request).await
-}
-
-fn allowed_authorities_for_bind(bind_addr: SocketAddr) -> Option<Vec<String>> {
-    if bind_addr.ip().is_unspecified() {
-        return None;
-    }
-
-    let mut authorities = Vec::new();
-    let port = bind_addr.port();
-
-    match bind_addr {
-        SocketAddr::V4(addr) => {
-            push_authority_variants(&mut authorities, &addr.ip().to_string(), port);
-            if addr.ip().is_loopback() {
-                push_authority_variants(&mut authorities, "localhost", port);
-            }
-        }
-        SocketAddr::V6(addr) => {
-            push_authority_variants(&mut authorities, &format!("[{}]", addr.ip()), port);
-            if addr.ip().is_loopback() {
-                push_authority_variants(&mut authorities, "localhost", port);
-            }
-        }
-    }
-
-    authorities.sort();
-    authorities.dedup();
-    Some(authorities)
-}
-
-fn push_authority_variants(authorities: &mut Vec<String>, host: &str, port: u16) {
-    authorities.push(host.to_ascii_lowercase());
-    authorities.push(format!("{host}:{port}").to_ascii_lowercase());
-}
-
-fn host_header_allowed(
-    headers: &axum::http::HeaderMap,
-    allowed_authorities: &Option<Vec<String>>,
-) -> bool {
-    let Some(authority) = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_host_authority)
-    else {
-        return false;
-    };
-
-    authority_allowed(&authority, allowed_authorities)
-}
-
-fn origin_header_allowed(
-    headers: &axum::http::HeaderMap,
-    allowed_authorities: &Option<Vec<String>>,
-) -> bool {
-    let Some(raw_origin) = headers.get(header::ORIGIN) else {
-        return true;
-    };
-    let Some(authority) = raw_origin.to_str().ok().and_then(parse_origin_authority) else {
-        return false;
-    };
-
-    authority_allowed(&authority, allowed_authorities)
-}
-
-fn parse_host_authority(raw: &str) -> Option<String> {
-    let authority = raw.trim().trim_end_matches('.');
-    if authority.is_empty() {
-        return None;
-    }
-    Some(authority.to_ascii_lowercase())
-}
-
-fn parse_origin_authority(raw: &str) -> Option<String> {
-    let origin = raw.trim();
-    if origin.is_empty() || origin.eq_ignore_ascii_case("null") {
-        return None;
-    }
-    let (_scheme, rest) = origin.split_once("://")?;
-    let authority = rest.split('/').next()?.trim().trim_end_matches('.');
-    if authority.is_empty() {
-        return None;
-    }
-    Some(authority.to_ascii_lowercase())
-}
-
-fn authority_allowed(authority: &str, allowed_authorities: &Option<Vec<String>>) -> bool {
-    match allowed_authorities {
-        None => true,
-        Some(allowlist) => allowlist
-            .iter()
-            .any(|candidate| constant_time_equals(candidate, authority)),
-    }
-}
-
-fn constant_time_equals(left: &str, right: &str) -> bool {
-    let left_bytes = left.as_bytes();
-    let right_bytes = right.as_bytes();
-    let max_len = left_bytes.len().max(right_bytes.len());
-    let mut diff = left_bytes.len() ^ right_bytes.len();
-
-    for idx in 0..max_len {
-        let lhs = *left_bytes.get(idx).unwrap_or(&0);
-        let rhs = *right_bytes.get(idx).unwrap_or(&0);
-        diff |= (lhs ^ rhs) as usize;
-    }
-
-    diff == 0
-}
-
-fn typed_access_denied_response(status: StatusCode, message: &str) -> Response {
-    let escaped_message = message
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t");
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(
-            r#"{{"error_code":"access_denied","retryable":false,"message":"{escaped_message}"}}"#
-        ),
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::net::Ipv6Addr;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -1087,6 +394,21 @@ mod tests {
     }
 
     #[test]
+    fn transport_rejects_blank_auth_token() {
+        let mut cli = base_cli();
+        cli.mcp_http_port = Some(4014);
+        cli.mcp_http_auth_token = Some("   ".to_owned());
+
+        let error = resolve_http_runtime_config(&cli).expect_err("blank auth token should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("--mcp-http-auth-token must not be blank"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn transport_host_allowlist_rejects_unknown_host() {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
@@ -1113,6 +435,70 @@ mod tests {
 
         let allowed = Some(vec!["localhost:4000".to_owned()]);
         assert!(!origin_header_allowed(&headers, &allowed));
+    }
+
+    #[test]
+    fn transport_authority_helpers_normalize_loopback_and_unspecified_hosts() {
+        assert_eq!(
+            allowed_authorities_for_bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4020)),
+            Some(vec![
+                "127.0.0.1".to_owned(),
+                "127.0.0.1:4020".to_owned(),
+                "localhost".to_owned(),
+                "localhost:4020".to_owned(),
+            ])
+        );
+        assert_eq!(
+            allowed_authorities_for_bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 4020)),
+            None
+        );
+        assert_eq!(
+            allowed_authorities_for_bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 4020)),
+            Some(vec![
+                "[::1]".to_owned(),
+                "[::1]:4020".to_owned(),
+                "localhost".to_owned(),
+                "localhost:4020".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn transport_parsers_normalize_authorities_and_reject_invalid_values() {
+        assert_eq!(
+            parse_host_authority("LOCALHOST:4020."),
+            Some("localhost:4020".to_owned())
+        );
+        assert_eq!(parse_host_authority("   "), None);
+        assert_eq!(
+            parse_origin_authority("https://LOCALHOST:4020/path?q=1"),
+            Some("localhost:4020".to_owned())
+        );
+        assert_eq!(parse_origin_authority("null"), None);
+        assert_eq!(parse_origin_authority(""), None);
+    }
+
+    #[test]
+    fn transport_authority_allowlist_uses_constant_time_equality() {
+        let allowed = Some(vec!["localhost:4020".to_owned()]);
+
+        assert!(authority_allowed("localhost:4020", &allowed));
+        assert!(!authority_allowed("localhost:4021", &allowed));
+        assert!(authority_allowed("anything", &None));
+    }
+
+    #[tokio::test]
+    async fn typed_access_denied_response_escapes_json_message() {
+        let response = typed_access_denied_response(StatusCode::FORBIDDEN, "bad \"host\"\nvalue\t");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body_text = String::from_utf8(body.to_vec()).expect("body should be utf-8");
+
+        assert_eq!(
+            body_text,
+            "{\"error_code\":\"access_denied\",\"retryable\":false,\"message\":\"bad \\\"host\\\"\\nvalue\\t\"}"
+        );
     }
 
     #[test]
@@ -1330,6 +716,18 @@ mod tests {
     }
 
     #[test]
+    fn verify_command_resolution_keeps_semantic_runtime_unset() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(&cli, Command::Verify)
+            .expect("verify command should resolve base config");
+        assert!(!config.semantic_runtime.enabled);
+        assert!(config.semantic_runtime.provider.is_none());
+    }
+
+    #[test]
     fn startup_config_applies_max_file_bytes_override() {
         let mut cli = base_cli();
         cli.max_file_bytes = Some(2 * 1024 * 1024);
@@ -1404,12 +802,57 @@ mod tests {
     }
 
     #[test]
+    fn stdio_watch_runtime_config_preserves_existing_startup_roots() {
+        let workspace_root = temp_workspace_root("watch-runtime-existing-root");
+        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        let watch_config = resolve_watch_runtime_config(&config, RuntimeTransportKind::Stdio)
+            .expect("stdio watch runtime config should preserve explicit startup roots");
+        assert_eq!(watch_config.workspace_roots, vec![workspace_root.clone()]);
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
     fn semantic_startup_gate_skips_validation_when_disabled() {
         let config = FriggConfig::from_workspace_roots(vec![PathBuf::from(".")])
             .expect("config should load for semantic disabled gate check");
         let credentials = SemanticRuntimeCredentials::default();
         run_semantic_runtime_startup_gate_with_credentials(&config, &credentials)
             .expect("semantic startup gate should no-op when disabled");
+    }
+
+    #[test]
+    fn semantic_startup_gate_rejects_blank_credentials() {
+        let mut config = FriggConfig::from_workspace_roots(vec![PathBuf::from(".")])
+            .expect("config should load from workspace root");
+        config.semantic_runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAi),
+            model: Some("text-embedding-3-small".to_owned()),
+            strict_mode: false,
+        };
+
+        let error = run_semantic_runtime_startup_gate_with_credentials(
+            &config,
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("   ".to_owned()),
+                gemini_api_key: None,
+            },
+        )
+        .expect_err("semantic gate must fail when provider credentials are blank");
+        assert!(
+            error
+                .to_string()
+                .contains("startup semantic runtime readiness failed code=invalid_params"),
+            "unexpected semantic startup error: {error}"
+        );
+        assert!(
+            error.to_string().contains("OPENAI_API_KEY"),
+            "unexpected semantic startup error detail: {error}"
+        );
     }
 
     #[test]
@@ -1516,6 +959,171 @@ mod tests {
         cleanup_workspace(&workspace_root);
     }
 
+    #[test]
+    fn storage_db_path_for_write_creates_parent_dir() {
+        let workspace_root = temp_workspace_root("storage-db-write-path");
+        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        let canonical_root = workspace_root
+            .canonicalize()
+            .expect("workspace root should canonicalize");
+
+        let db_path = ensure_storage_db_path_for_write(&workspace_root, "init")
+            .expect("storage db path for write should resolve");
+        assert!(
+            db_path.starts_with(&canonical_root),
+            "storage db path should stay inside the canonical workspace root"
+        );
+        assert!(
+            db_path.ends_with(Path::new(PROVENANCE_STORAGE_DIR).join(PROVENANCE_STORAGE_DB_FILE)),
+            "storage db path should use the provenance storage suffix"
+        );
+        assert!(
+            db_path
+                .parent()
+                .expect("db path should have a parent directory")
+                .is_dir(),
+            "storage db parent directory should be created"
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn storage_db_path_resolution_wraps_missing_workspace_root() {
+        let workspace_root = temp_workspace_root("storage-db-missing-root");
+
+        let error = resolve_storage_db_path(&workspace_root, "verify")
+            .expect_err("storage db path resolution should fail for a missing workspace root");
+        let message = error.to_string();
+        assert!(
+            message.contains("verify summary status=failed"),
+            "unexpected storage db path error: {message}"
+        );
+        assert!(
+            message.contains(&format!("root={}", workspace_root.display())),
+            "unexpected storage db path error: {message}"
+        );
+        assert!(
+            message.contains("failed to canonicalize workspace root"),
+            "unexpected storage db path error: {message}"
+        );
+    }
+
+    #[test]
+    fn storage_bootstrap_init_reports_workspace_path_resolution_failure() {
+        let workspace_root = temp_workspace_root("storage-init-missing-root");
+        let config = FriggConfig {
+            workspace_roots: vec![workspace_root.clone()],
+            ..FriggConfig::default()
+        };
+
+        let error = run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+            .expect_err("init bootstrap should fail for a missing workspace root");
+        let message = error.to_string();
+        assert!(
+            message.contains("init summary status=failed"),
+            "unexpected init bootstrap error: {message}"
+        );
+        assert!(
+            message.contains(&format!("root={}", workspace_root.display())),
+            "unexpected init bootstrap error: {message}"
+        );
+        assert!(
+            message.contains("failed to canonicalize workspace root"),
+            "unexpected init bootstrap error: {message}"
+        );
+    }
+
+    #[test]
+    fn storage_bootstrap_verify_reports_missing_db_file() {
+        let workspace_root = temp_workspace_root("storage-verify-missing-db");
+        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        let db_path = resolve_storage_db_path(&workspace_root, "verify")
+            .expect("storage db path should resolve for an existing workspace root");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        let error = run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)
+            .expect_err("verify bootstrap should fail when the storage db file is missing");
+        let message = error.to_string();
+        assert!(
+            message.contains("verify failed for repository_id=repo-001"),
+            "unexpected verify bootstrap error: {message}"
+        );
+        assert!(
+            message.contains(&format!("root={}", workspace_root.display())),
+            "unexpected verify bootstrap error: {message}"
+        );
+        assert!(
+            message.contains(&format!("db={}", db_path.display())),
+            "unexpected verify bootstrap error: {message}"
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn storage_bootstrap_init_and_verify_succeed_for_simple_workspace() {
+        let workspace_root = temp_workspace_root("storage-bootstrap-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+
+        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+            .expect("init bootstrap should succeed for a simple workspace");
+        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)
+            .expect("verify bootstrap should succeed after init");
+
+        let db_path = resolve_storage_db_path(&workspace_root, "verify")
+            .expect("storage db path should resolve after init");
+        assert!(db_path.is_file(), "storage db should exist after init");
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn reindex_command_succeeds_for_simple_workspace() {
+        let workspace_root = temp_workspace_root("reindex-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_reindex_command(&config, false)
+            .expect("full reindex should succeed for a simple workspace");
+        run_reindex_command(&config, true)
+            .expect("changed-only reindex should succeed for a simple workspace");
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn find_enclosing_git_root_returns_matching_ancestor() {
+        let workspace_root = temp_workspace_root("git-root-match");
+        let nested = workspace_root.join("nested").join("deeper");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("git directory marker should be creatable");
+        fs::create_dir_all(&nested).expect("nested workspace path should be creatable");
+
+        assert_eq!(
+            find_enclosing_git_root(&nested),
+            Some(workspace_root.clone())
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn find_enclosing_git_root_returns_none_without_git_marker() {
+        let workspace_root = temp_workspace_root("git-root-miss");
+        let nested = workspace_root.join("nested").join("deeper");
+        fs::create_dir_all(&nested).expect("nested workspace path should be creatable");
+
+        assert_eq!(find_enclosing_git_root(&nested), None);
+
+        cleanup_workspace(&workspace_root);
+    }
+
     fn temp_workspace_root(test_name: &str) -> PathBuf {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1525,6 +1133,17 @@ mod tests {
             "frigg-cli-{test_name}-{}-{now}",
             std::process::id()
         ))
+    }
+
+    fn create_simple_workspace(root: &Path) {
+        fs::create_dir_all(root.join("src")).expect("workspace src directory should be creatable");
+        fs::write(root.join("README.md"), "hello from frigg\n")
+            .expect("workspace readme should be writable");
+        fs::write(
+            root.join("src/main.rs"),
+            "fn main() { println!(\"hello from frigg\"); }\n",
+        )
+        .expect("workspace main source should be writable");
     }
 
     fn cleanup_workspace(path: &Path) {

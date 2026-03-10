@@ -8,10 +8,10 @@ use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     DeepSearchComposeCitationsParams, DeepSearchPlaybookContract, DeepSearchPlaybookStepContract,
     DeepSearchReplayParams, DeepSearchRunParams, DeepSearchTraceOutcomeContract,
-    DocumentSymbolsParams, FindDeclarationsParams, FindImplementationsParams, FindReferencesParams,
-    GoToDefinitionParams, IncomingCallsParams, ListRepositoriesParams, OutgoingCallsParams,
-    ReadFileParams, SearchHybridParams, SearchPatternType, SearchStructuralParams,
-    SearchSymbolParams, SearchTextParams,
+    DocumentSymbolsParams, ExploreOperation, ExploreParams, FindDeclarationsParams,
+    FindImplementationsParams, FindReferencesParams, GoToDefinitionParams, IncomingCallsParams,
+    ListRepositoriesParams, OutgoingCallsParams, ReadFileParams, SearchHybridParams,
+    SearchPatternType, SearchStructuralParams, SearchSymbolParams, SearchTextParams,
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
 use rmcp::handler::server::wrapper::Parameters;
@@ -30,6 +30,7 @@ const BENCH_NAVIGATION_SYMBOL: &str = "Service";
 const BENCH_NAVIGATION_CALLER_SYMBOL: &str = "consumer";
 const BENCH_HYBRID_QUERY: &str = "needle_hotspot";
 const BENCH_HYBRID_LIMIT: usize = 20;
+const BENCH_EXPLORE_PATH: &str = "src/file_001.rs";
 const BENCH_DEEP_SEARCH_PLAYBOOK_ID: &str = "deep-search-bench-basic-v1";
 const BENCH_DEEP_SEARCH_VARIANT: &str = "basic-playbook";
 
@@ -46,15 +47,35 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
     let mut semantic_config = config.clone();
     semantic_config.semantic_runtime = semantic_runtime_enabled_non_strict();
 
-    let server = FriggMcpServer::new(config);
+    let server = FriggMcpServer::new(config.clone());
+    let extended_server = FriggMcpServer::new_with_runtime_options(config, false, true);
     let semantic_server = FriggMcpServer::new(semantic_config);
     assert_precise_reference_workload(runtime, &server);
     assert_precise_navigation_workload(runtime, &server);
     assert_search_hybrid_semantic_toggle_off_workload(runtime, &server);
     assert_search_hybrid_semantic_degraded_workload(runtime, &semantic_server);
+    let explore_probe = runtime
+        .block_on(extended_server.explore(Parameters(ExploreParams {
+            path: BENCH_EXPLORE_PATH.to_owned(),
+            repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("needle".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: Some(2),
+            max_matches: Some(4),
+            resume_from: None,
+        })))
+        .expect("explore benchmark probe should succeed")
+        .0;
+    assert!(
+        !explore_probe.matches.is_empty(),
+        "explore benchmark probe must return at least one anchor"
+    );
+    let explore_anchor = explore_probe.matches[0].anchor.clone();
     let deep_search_playbook = build_deep_search_playbook();
     let deep_search_trace_artifact = runtime
-        .block_on(server.deep_search_run(Parameters(DeepSearchRunParams {
+        .block_on(extended_server.deep_search_run(Parameters(DeepSearchRunParams {
             playbook: deep_search_playbook.clone(),
         })))
         .expect("deep_search benchmark probe should succeed")
@@ -73,7 +94,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
         "deep_search benchmark probe should produce successful deterministic trace steps"
     );
     let deep_search_citations_probe = runtime
-        .block_on(server.deep_search_compose_citations(Parameters(
+        .block_on(extended_server.deep_search_compose_citations(Parameters(
             DeepSearchComposeCitationsParams {
                 trace_artifact: deep_search_trace_artifact.clone(),
                 answer: None,
@@ -133,11 +154,73 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
         });
     });
 
+    group.bench_function(BenchmarkId::new("explore", "probe"), |b| {
+        b.iter(|| {
+            let params = Parameters(ExploreParams {
+                path: BENCH_EXPLORE_PATH.to_owned(),
+                repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                operation: ExploreOperation::Probe,
+                query: Some("needle".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: None,
+                context_lines: Some(2),
+                max_matches: Some(4),
+                resume_from: None,
+            });
+            let response = runtime
+                .block_on(extended_server.explore(params))
+                .expect("explore probe benchmark should succeed");
+            criterion::black_box(response);
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("explore", "zoom"), |b| {
+        b.iter(|| {
+            let params = Parameters(ExploreParams {
+                path: BENCH_EXPLORE_PATH.to_owned(),
+                repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                operation: ExploreOperation::Zoom,
+                query: None,
+                pattern_type: None,
+                anchor: Some(explore_anchor.clone()),
+                context_lines: Some(2),
+                max_matches: None,
+                resume_from: None,
+            });
+            let response = runtime
+                .block_on(extended_server.explore(params))
+                .expect("explore zoom benchmark should succeed");
+            criterion::black_box(response);
+        });
+    });
+
+    group.bench_function(BenchmarkId::new("explore", "refine"), |b| {
+        b.iter(|| {
+            let params = Parameters(ExploreParams {
+                path: BENCH_EXPLORE_PATH.to_owned(),
+                repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                operation: ExploreOperation::Refine,
+                query: Some("needle".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: Some(explore_anchor.clone()),
+                context_lines: Some(2),
+                max_matches: Some(4),
+                resume_from: None,
+            });
+            let response = runtime
+                .block_on(extended_server.explore(params))
+                .expect("explore refine benchmark should succeed");
+            criterion::black_box(response);
+        });
+    });
+
     group.bench_function(BenchmarkId::new("search_symbol", "tree-sitter"), |b| {
         b.iter(|| {
             let params = Parameters(SearchSymbolParams {
                 query: "Entity001".to_owned(),
                 repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                path_class: None,
+                path_regex: None,
                 limit: Some(200),
             });
             let response = runtime
@@ -150,8 +233,11 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("find_references", "heuristic"), |b| {
         b.iter(|| {
             let params = Parameters(FindReferencesParams {
-                symbol: "Entity001".to_owned(),
+                symbol: Some("Entity001".to_owned()),
                 repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                path: None,
+                line: None,
+                column: None,
                 limit: Some(200),
             });
             let response = runtime
@@ -164,8 +250,11 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("find_references", "precise"), |b| {
         b.iter(|| {
             let params = Parameters(FindReferencesParams {
-                symbol: BENCH_PRECISE_SYMBOL.to_owned(),
+                symbol: Some(BENCH_PRECISE_SYMBOL.to_owned()),
                 repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+                path: None,
+                line: None,
+                column: None,
                 limit: Some(200),
             });
             let response = runtime
@@ -358,7 +447,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                     playbook: deep_search_playbook.clone(),
                 });
                 let response = runtime
-                    .block_on(server.deep_search_run(params))
+                    .block_on(extended_server.deep_search_run(params))
                     .expect("deep_search_run benchmark should succeed");
                 criterion::black_box(response);
             });
@@ -374,7 +463,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                     expected_trace_artifact: deep_search_trace_artifact.clone(),
                 });
                 let response = runtime
-                    .block_on(server.deep_search_replay(params))
+                    .block_on(extended_server.deep_search_replay(params))
                     .expect("deep_search_replay benchmark should succeed");
                 criterion::black_box(response);
             });
@@ -390,7 +479,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                     answer: Some("benchmark deep-search answer".to_owned()),
                 });
                 let response = runtime
-                    .block_on(server.deep_search_compose_citations(params))
+                    .block_on(extended_server.deep_search_compose_citations(params))
                     .expect("deep_search_compose_citations benchmark should succeed");
                 criterion::black_box(response);
             });
@@ -473,8 +562,11 @@ fn build_deep_search_playbook() -> DeepSearchPlaybookContract {
 
 fn assert_precise_reference_workload(runtime: &Runtime, server: &FriggMcpServer) {
     let params = Parameters(FindReferencesParams {
-        symbol: BENCH_PRECISE_SYMBOL.to_owned(),
+        symbol: Some(BENCH_PRECISE_SYMBOL.to_owned()),
         repository_id: Some(BENCH_REPOSITORY_ID.to_owned()),
+        path: None,
+        line: None,
+        column: None,
         limit: Some(200),
     });
     let response = runtime

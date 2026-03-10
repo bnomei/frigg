@@ -4,13 +4,19 @@ use std::time::Instant;
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use protobuf::Message;
+use protobuf::Enum;
+use scip::types::symbol_information::Kind as ScipSymbolKindProto;
 use scip::types::{
     Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
     Relationship as ScipRelationshipProto, SymbolInformation as ScipSymbolInformationProto,
 };
 use serde::Deserialize;
 use thiserror::Error;
+
+mod scip_support;
+use scip_support::{
+    apply_scip_documents, map_scip_documents, parse_scip_json, parse_scip_protobuf,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolNode {
@@ -189,6 +195,22 @@ pub struct PreciseOccurrenceRecord {
 impl PreciseOccurrenceRecord {
     pub fn is_definition(&self) -> bool {
         (self.symbol_roles & SCIP_SYMBOL_ROLE_DEFINITION) != 0
+    }
+
+    pub fn contains_location(&self, line: usize, column: Option<usize>) -> bool {
+        if line < self.range.start_line || line > self.range.end_line {
+            return false;
+        }
+        let Some(column) = column else {
+            return true;
+        };
+        if line == self.range.start_line && column < self.range.start_column {
+            return false;
+        }
+        if line == self.range.end_line && column > self.range.end_column {
+            return false;
+        }
+        true
     }
 }
 
@@ -790,6 +812,63 @@ impl SymbolGraph {
         occurrences
     }
 
+    pub fn select_precise_symbol_for_location(
+        &self,
+        repository_id: &str,
+        path: &str,
+        line: usize,
+        column: Option<usize>,
+    ) -> Option<PreciseSymbolRecord> {
+        let mut ranked = self
+            .precise_occurrences_for_file(repository_id, path)
+            .into_iter()
+            .filter(|occurrence| occurrence.range.start_line <= line)
+            .filter(|occurrence| {
+                column.is_none_or(|value| {
+                    occurrence.range.start_line < line
+                        || occurrence.range.start_column <= value
+                })
+            })
+            .filter_map(|occurrence| {
+                let symbol = self
+                    .precise_symbol(repository_id, &occurrence.symbol)?
+                    .clone();
+                let line_distance = line.saturating_sub(occurrence.range.start_line);
+                let column_distance = if line_distance == 0 {
+                    column
+                        .map(|value| value.saturating_sub(occurrence.range.start_column))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let containment_rank = if occurrence.contains_location(line, column) {
+                    0u8
+                } else {
+                    1u8
+                };
+                Some((
+                    containment_rank,
+                    line_distance,
+                    column_distance,
+                    occurrence.range.start_line,
+                    occurrence.range.start_column,
+                    occurrence.symbol.clone(),
+                    symbol,
+                ))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(left.1.cmp(&right.1))
+                .then(left.2.cmp(&right.2))
+                .then(right.3.cmp(&left.3))
+                .then(right.4.cmp(&left.4))
+                .then(left.5.cmp(&right.5))
+        });
+        ranked.into_iter().next().map(|(_, _, _, _, _, _, symbol)| symbol)
+    }
+
     pub fn precise_relationships_from_symbol(
         &self,
         repository_id: &str,
@@ -1009,428 +1088,6 @@ impl SymbolGraph {
 
         hints.sort_by(heuristic_relation_hint_order);
         hints
-    }
-}
-
-fn parse_scip_json(artifact_label: &str, payload: &[u8]) -> ScipIngestResult<ScipIndexJson> {
-    serde_json::from_slice::<ScipIndexJson>(payload).map_err(|error| {
-        ScipIngestError::InvalidInput {
-            diagnostic: ScipInvalidInputDiagnostic {
-                artifact_label: artifact_label.to_owned(),
-                code: ScipInvalidInputCode::JsonDecode,
-                message: error.to_string(),
-                line: Some(error.line()),
-                column: Some(error.column()),
-            },
-        }
-    })
-}
-
-fn parse_scip_protobuf(artifact_label: &str, payload: &[u8]) -> ScipIngestResult<ScipIndexJson> {
-    let index = ScipIndexProto::parse_from_bytes(payload).map_err(|error| {
-        invalid_input(
-            artifact_label,
-            ScipInvalidInputCode::ProtobufDecode,
-            error.to_string(),
-        )
-    })?;
-    scip_index_from_protobuf(artifact_label, index)
-}
-
-fn scip_index_from_protobuf(
-    artifact_label: &str,
-    index: ScipIndexProto,
-) -> ScipIngestResult<ScipIndexJson> {
-    let mut documents = Vec::with_capacity(index.documents.len());
-    for document in index.documents {
-        documents.push(scip_document_from_protobuf(artifact_label, document)?);
-    }
-    Ok(ScipIndexJson { documents })
-}
-
-fn scip_document_from_protobuf(
-    artifact_label: &str,
-    document: ScipDocumentProto,
-) -> ScipIngestResult<ScipDocumentJson> {
-    let relative_path = document.relative_path;
-    let mut occurrences = Vec::with_capacity(document.occurrences.len());
-    for occurrence in document.occurrences {
-        occurrences.push(scip_occurrence_from_protobuf(
-            artifact_label,
-            &relative_path,
-            occurrence,
-        )?);
-    }
-
-    let symbols = document
-        .symbols
-        .into_iter()
-        .map(scip_symbol_information_from_protobuf)
-        .collect();
-
-    Ok(ScipDocumentJson {
-        relative_path,
-        occurrences,
-        symbols,
-    })
-}
-
-fn scip_occurrence_from_protobuf(
-    artifact_label: &str,
-    path: &str,
-    occurrence: ScipOccurrenceProto,
-) -> ScipIngestResult<ScipOccurrenceJson> {
-    let symbol = occurrence.symbol.trim().to_owned();
-    let range = occurrence
-        .range
-        .into_iter()
-        .enumerate()
-        .map(|(index, value)| {
-            u32::try_from(value).map_err(|_| {
-                invalid_input(
-                    artifact_label,
-                    ScipInvalidInputCode::InvalidRange,
-                    format!(
-                        "occurrence range component {index} for symbol '{}' in '{}' must be non-negative",
-                        symbol, path
-                    ),
-                )
-            })
-        })
-        .collect::<ScipIngestResult<Vec<_>>>()?;
-
-    let symbol_roles = u32::try_from(occurrence.symbol_roles).map_err(|_| {
-        invalid_input(
-            artifact_label,
-            ScipInvalidInputCode::InvalidRange,
-            format!(
-                "occurrence symbol_roles for symbol '{}' in '{}' must be non-negative",
-                symbol, path
-            ),
-        )
-    })?;
-
-    Ok(ScipOccurrenceJson {
-        symbol,
-        range,
-        symbol_roles,
-    })
-}
-
-fn scip_symbol_information_from_protobuf(
-    symbol: ScipSymbolInformationProto,
-) -> ScipSymbolInformationJson {
-    ScipSymbolInformationJson {
-        symbol: symbol.symbol,
-        display_name: symbol.display_name,
-        kind: Some(ScipSymbolKindJson::Numeric(i64::from(symbol.kind.value()))),
-        relationships: symbol
-            .relationships
-            .into_iter()
-            .map(scip_relationship_from_protobuf)
-            .collect(),
-    }
-}
-
-fn scip_relationship_from_protobuf(relationship: ScipRelationshipProto) -> ScipRelationshipJson {
-    ScipRelationshipJson {
-        symbol: relationship.symbol,
-        is_reference: relationship.is_reference,
-        is_implementation: relationship.is_implementation,
-        is_type_definition: relationship.is_type_definition,
-        is_definition: relationship.is_definition,
-    }
-}
-
-fn map_scip_documents(
-    repository_id: &str,
-    artifact_label: &str,
-    index_json: ScipIndexJson,
-) -> ScipIngestResult<Vec<ParsedScipDocument>> {
-    let mut documents = index_json
-        .documents
-        .into_iter()
-        .map(|document| map_scip_document(repository_id, artifact_label, document))
-        .collect::<ScipIngestResult<Vec<_>>>()?;
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(documents)
-}
-
-fn map_scip_document(
-    repository_id: &str,
-    artifact_label: &str,
-    document: ScipDocumentJson,
-) -> ScipIngestResult<ParsedScipDocument> {
-    let path = document.relative_path.trim().to_owned();
-    if path.is_empty() {
-        return Err(invalid_input(
-            artifact_label,
-            ScipInvalidInputCode::MissingDocumentPath,
-            "document.relative_path must not be empty",
-        ));
-    }
-
-    let mut occurrences = document
-        .occurrences
-        .into_iter()
-        .map(|occurrence| map_scip_occurrence(repository_id, artifact_label, &path, occurrence))
-        .collect::<ScipIngestResult<Vec<_>>>()?;
-    occurrences.sort_by(precise_occurrence_order);
-    occurrences.dedup();
-
-    let mut symbols = Vec::new();
-    let mut relationships = Vec::new();
-    for symbol_info in document.symbols {
-        let symbol = symbol_info.symbol.trim().to_owned();
-        if symbol.is_empty() {
-            return Err(invalid_input(
-                artifact_label,
-                ScipInvalidInputCode::MissingSymbol,
-                format!("document '{}' contains symbol info with empty symbol", path),
-            ));
-        }
-        let display_name = symbol_info.display_name.trim().to_owned();
-        let kind = normalize_scip_symbol_kind(symbol_info.kind);
-        symbols.push(PreciseSymbolRecord {
-            repository_id: repository_id.to_owned(),
-            symbol: symbol.clone(),
-            display_name,
-            kind,
-        });
-
-        let mapped_relationships = map_scip_relationships(
-            repository_id,
-            artifact_label,
-            &path,
-            &symbol,
-            symbol_info.relationships,
-        )?;
-        relationships.extend(mapped_relationships);
-    }
-
-    symbols.sort_by(precise_symbol_order);
-    symbols.dedup();
-    relationships.sort_by(precise_relationship_order);
-    relationships.dedup();
-
-    Ok(ParsedScipDocument {
-        repository_id: repository_id.to_owned(),
-        path,
-        symbols,
-        occurrences,
-        relationships,
-    })
-}
-
-fn normalize_scip_symbol_kind(kind: Option<ScipSymbolKindJson>) -> String {
-    match kind {
-        Some(ScipSymbolKindJson::Numeric(value)) => format!("kind_{value}"),
-        Some(ScipSymbolKindJson::Text(value)) => value.trim().to_owned(),
-        None => "unknown".to_owned(),
-    }
-}
-
-fn map_scip_occurrence(
-    repository_id: &str,
-    artifact_label: &str,
-    path: &str,
-    occurrence: ScipOccurrenceJson,
-) -> ScipIngestResult<PreciseOccurrenceRecord> {
-    let symbol = occurrence.symbol.trim().to_owned();
-    if symbol.is_empty() {
-        return Err(invalid_input(
-            artifact_label,
-            ScipInvalidInputCode::MissingSymbol,
-            format!("occurrence in '{}' has empty symbol", path),
-        ));
-    }
-    let range = map_scip_range(artifact_label, path, &symbol, &occurrence.range)?;
-    Ok(PreciseOccurrenceRecord {
-        repository_id: repository_id.to_owned(),
-        path: path.to_owned(),
-        symbol,
-        range,
-        symbol_roles: occurrence.symbol_roles,
-    })
-}
-
-fn map_scip_range(
-    artifact_label: &str,
-    path: &str,
-    symbol: &str,
-    range: &[u32],
-) -> ScipIngestResult<PreciseRange> {
-    let mapped = match range {
-        [start_line, start_column, end_column] => PreciseRange {
-            start_line: (*start_line as usize).saturating_add(1),
-            start_column: (*start_column as usize).saturating_add(1),
-            end_line: (*start_line as usize).saturating_add(1),
-            end_column: (*end_column as usize).saturating_add(1),
-        },
-        [start_line, start_column, end_line, end_column] => PreciseRange {
-            start_line: (*start_line as usize).saturating_add(1),
-            start_column: (*start_column as usize).saturating_add(1),
-            end_line: (*end_line as usize).saturating_add(1),
-            end_column: (*end_column as usize).saturating_add(1),
-        },
-        _ => {
-            return Err(invalid_input(
-                artifact_label,
-                ScipInvalidInputCode::InvalidRange,
-                format!(
-                    "occurrence range for symbol '{}' in '{}' must have 3 or 4 numbers",
-                    symbol, path
-                ),
-            ));
-        }
-    };
-
-    let valid_order = mapped.end_line > mapped.start_line
-        || (mapped.end_line == mapped.start_line && mapped.end_column >= mapped.start_column);
-    if !valid_order {
-        return Err(invalid_input(
-            artifact_label,
-            ScipInvalidInputCode::InvalidRange,
-            format!(
-                "occurrence range for symbol '{}' in '{}' has end before start",
-                symbol, path
-            ),
-        ));
-    }
-
-    Ok(mapped)
-}
-
-fn map_scip_relationships(
-    repository_id: &str,
-    artifact_label: &str,
-    path: &str,
-    source_symbol: &str,
-    relationships: Vec<ScipRelationshipJson>,
-) -> ScipIngestResult<Vec<PreciseRelationshipRecord>> {
-    let mut mapped = Vec::new();
-    for relationship in relationships {
-        let target_symbol = relationship.symbol.trim().to_owned();
-        if target_symbol.is_empty() {
-            return Err(invalid_input(
-                artifact_label,
-                ScipInvalidInputCode::MissingSymbol,
-                format!(
-                    "relationship for symbol '{}' in '{}' has empty target symbol",
-                    source_symbol, path
-                ),
-            ));
-        }
-
-        let relationship_kinds = relationship_kinds(&relationship);
-        if relationship_kinds.is_empty() {
-            return Err(invalid_input(
-                artifact_label,
-                ScipInvalidInputCode::InvalidRelationship,
-                format!(
-                    "relationship for symbol '{}' in '{}' must set at least one relationship flag",
-                    source_symbol, path
-                ),
-            ));
-        }
-
-        for kind in relationship_kinds {
-            mapped.push(PreciseRelationshipRecord {
-                repository_id: repository_id.to_owned(),
-                from_symbol: source_symbol.to_owned(),
-                to_symbol: target_symbol.clone(),
-                kind,
-            });
-        }
-    }
-
-    mapped.sort_by(precise_relationship_order);
-    mapped.dedup();
-    Ok(mapped)
-}
-
-fn relationship_kinds(relationship: &ScipRelationshipJson) -> Vec<PreciseRelationshipKind> {
-    let mut kinds = Vec::new();
-    if relationship.is_definition {
-        kinds.push(PreciseRelationshipKind::Definition);
-    }
-    if relationship.is_reference {
-        kinds.push(PreciseRelationshipKind::Reference);
-    }
-    if relationship.is_implementation {
-        kinds.push(PreciseRelationshipKind::Implementation);
-    }
-    if relationship.is_type_definition {
-        kinds.push(PreciseRelationshipKind::TypeDefinition);
-    }
-    kinds
-}
-
-fn apply_scip_documents(
-    graph: &mut SymbolGraph,
-    artifact_label: &str,
-    documents: &[ParsedScipDocument],
-    mode: ScipFileIngestMode,
-) -> ScipIngestSummary {
-    let mut symbols_upserted = 0usize;
-    let mut occurrences_upserted = 0usize;
-    let mut relationships_upserted = 0usize;
-
-    for document in documents {
-        match mode {
-            ScipFileIngestMode::Replace => {
-                replace_precise_occurrences_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.occurrences,
-                );
-                replace_precise_symbols_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.symbols,
-                );
-                replace_precise_relationships_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.relationships,
-                );
-            }
-            ScipFileIngestMode::Overlay => {
-                overlay_precise_occurrences_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.occurrences,
-                );
-                overlay_precise_symbols_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.symbols,
-                );
-                overlay_precise_relationships_for_file(
-                    graph,
-                    &document.repository_id,
-                    &document.path,
-                    &document.relationships,
-                );
-            }
-        }
-
-        occurrences_upserted += document.occurrences.len();
-        symbols_upserted += document.symbols.len();
-        relationships_upserted += document.relationships.len();
-    }
-
-    ScipIngestSummary {
-        artifact_label: artifact_label.to_owned(),
-        documents_ingested: documents.len(),
-        symbols_upserted,
-        occurrences_upserted,
-        relationships_upserted,
     }
 }
 
@@ -2417,6 +2074,45 @@ mod tests {
                 .is_none(),
             "missing query and fallback should return None"
         );
+    }
+
+    #[test]
+    fn precise_navigation_location_selection_prefers_containing_occurrence() {
+        let mut graph = SymbolGraph::default();
+        let payload = br#"{
+          "documents": [
+            {
+              "relative_path": "src/a.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg a#User", "range": [0, 7, 11], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg a#Entity", "range": [0, 13, 19], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg a#User", "range": [1, 18, 22], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                { "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] },
+                { "symbol": "scip-rust pkg a#Entity", "display_name": "Entity", "kind": "struct", "relationships": [] }
+              ]
+            }
+          ]
+        }"#;
+        graph
+            .ingest_scip_json("repo-001", "fixture:precise-location.json", payload)
+            .expect("fixture payload should ingest");
+
+        let containing = graph
+            .select_precise_symbol_for_location("repo-001", "src/a.rs", 1, Some(9))
+            .expect("containing occurrence should resolve");
+        assert_eq!(containing.symbol, "scip-rust pkg a#User");
+
+        let later = graph
+            .select_precise_symbol_for_location("repo-001", "src/a.rs", 1, Some(15))
+            .expect("later containing occurrence should resolve");
+        assert_eq!(later.symbol, "scip-rust pkg a#Entity");
+
+        let reference = graph
+            .select_precise_symbol_for_location("repo-001", "src/a.rs", 2, Some(20))
+            .expect("reference occurrence should resolve");
+        assert_eq!(reference.symbol, "scip-rust pkg a#User");
     }
 
     #[test]

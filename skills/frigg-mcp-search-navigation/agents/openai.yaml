@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frigg MCP Search Navigation"
+  short_description: "Use Frigg MCP when shell search is not enough for repo-aware discovery or navigation"
+  default_prompt: "Prefer local shell tools for straightforward reads and literal scans. Use Frigg MCP for repository-aware discovery, canonical paths, symbol lookup, structural search, cross-file navigation, and source-backed evidence."

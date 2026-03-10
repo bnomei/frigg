@@ -4,8 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::types::{
     DeepSearchComposeCitationsParams, DeepSearchPlaybookContract, DeepSearchPlaybookStepContract,
-    DeepSearchReplayParams, DeepSearchRunParams, FindReferencesParams, ListRepositoriesParams,
-    ReadFileParams, SearchPatternType, SearchSymbolParams, SearchTextParams,
+    DeepSearchReplayParams, DeepSearchRunParams, ExploreOperation, ExploreParams,
+    FindReferencesParams, ListRepositoriesParams, ReadFileParams, SearchPatternType,
+    SearchSymbolParams, SearchTextParams,
 };
 use frigg::mcp::{DeepSearchHarness, FriggMcpServer};
 use frigg::settings::FriggConfig;
@@ -48,6 +49,12 @@ fn server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
 }
 
 fn deep_search_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
+        .expect("workspace fixture should produce valid config");
+    FriggMcpServer::new_with_runtime_options(config, false, true)
+}
+
+fn extended_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace fixture should produce valid config");
     FriggMcpServer::new_with_runtime_options(config, false, true)
@@ -125,6 +132,8 @@ async fn provenance_core_tool_invocations_are_persisted() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(5),
         }))
         .await
@@ -132,8 +141,11 @@ async fn provenance_core_tool_invocations_are_persisted() {
 
     server
         .find_references(Parameters(FindReferencesParams {
-            symbol: "greeting".to_owned(),
+            symbol: Some("greeting".to_owned()),
             repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
             limit: Some(5),
         }))
         .await
@@ -195,6 +207,8 @@ async fn provenance_bounded_text_fields_are_truncated() {
         .search_symbol(Parameters(SearchSymbolParams {
             query: long_query,
             repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(5),
         }))
         .await
@@ -239,6 +253,8 @@ async fn provenance_invalid_repository_hint_is_not_attributed_to_default_reposit
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
             repository_id: Some(invalid_repository_id.to_owned()),
+            path_class: None,
+            path_regex: None,
             limit: Some(5),
         }))
         .await
@@ -363,7 +379,11 @@ async fn provenance_deep_search_runtime_tool_invocations_emit_budget_metadata() 
         .expect("deep_search_compose_citations should succeed")
         .0;
 
-    assert!(replay.matches, "expected deterministic replay match");
+    assert!(
+        replay.matches,
+        "expected deterministic replay match: {:?}",
+        replay.diff
+    );
     assert!(
         !compose.citation_payload.claims.is_empty(),
         "expected composed citation claims"
@@ -469,6 +489,56 @@ async fn provenance_deep_search_runtime_invalid_params_failure_is_typed_and_pers
     assert!(
         payload["source_refs"]["resource_usage"].is_array(),
         "expected resource_usage key even on deep-search invalid_params failure"
+    );
+
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test]
+async fn provenance_extended_explore_invocations_include_scope_metadata() {
+    let workspace_root = build_workspace_fixture("explore-runtime-provenance");
+    let server = extended_runtime_server_for_workspace(&workspace_root);
+
+    server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("provenance".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: Some(1),
+            max_matches: Some(1),
+            resume_from: None,
+        }))
+        .await
+        .expect("explore should succeed");
+
+    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
+    let rows = storage
+        .load_provenance_events_for_tool("explore", 1)
+        .expect("expected explore provenance rows");
+    assert_eq!(rows.len(), 1);
+
+    let payload = serde_json::from_str::<Value>(&rows[0].payload_json)
+        .expect("failed to parse explore provenance payload");
+    assert_eq!(payload["outcome"]["status"].as_str(), Some("ok"));
+    assert_eq!(payload["params"]["operation"].as_str(), Some("probe"));
+    assert_eq!(
+        payload["source_refs"]["resolved_path"].as_str(),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        payload["source_refs"]["scan_scope"]["start_line"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["source_refs"]["total_matches"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["source_refs"]["truncated"].as_bool(),
+        Some(false)
     );
 
     cleanup_workspace(&workspace_root);

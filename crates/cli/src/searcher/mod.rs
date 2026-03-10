@@ -1,25 +1,85 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::future::Future;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::pin::Pin;
+
+mod candidates;
+mod graph_channel;
+mod hybrid_execution;
+mod intent;
+mod laravel;
+mod lexical_channel;
+mod lexical_recall;
+mod ordering;
+mod query_terms;
+mod ranker;
+mod regex_support;
+mod reranker;
+mod scan_engine;
+mod semantic;
+mod surfaces;
 
 use crate::domain::{FriggError, FriggResult, model::TextMatch};
-use crate::embeddings::{
-    EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
-    OpenAiEmbeddingProvider,
-};
-use crate::indexer::{FileMetadataDigest, SymbolLanguage};
+use crate::indexer::FileMetadataDigest;
+use crate::language_support::{LanguageCapability, SymbolLanguage, parse_supported_language};
 use crate::manifest_validation::validate_manifest_digests_for_root;
 use crate::playbooks::scrub_playbook_metadata_header;
-use crate::settings::{FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{SemanticChunkEmbeddingProjection, Storage, resolve_provenance_db_path};
+use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
+use crate::storage::{Storage, resolve_provenance_db_path};
 use aho_corasick::AhoCorasick;
-use ignore::WalkBuilder;
-use regex::{Regex, RegexBuilder};
-use thiserror::Error;
+use candidates::{
+    hard_excluded_runtime_path, hidden_workflow_candidates_for_repository, merge_candidate_files,
+    normalize_repository_relative_path, walk_candidate_files_for_repository,
+};
+use graph_channel::search_graph_channel_hits;
+use intent::HybridRankingIntent;
+use laravel::{
+    is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
+    is_laravel_command_or_middleware_path, is_laravel_core_provider_path,
+    is_laravel_form_action_blade_path, is_laravel_job_or_listener_path,
+    is_laravel_layout_blade_view_path, is_laravel_livewire_component_path,
+    is_laravel_livewire_view_path, is_laravel_nested_blade_component_path,
+    is_laravel_non_livewire_blade_view_path, is_laravel_provider_path, is_laravel_route_path,
+    is_laravel_view_component_class_path,
+};
+use lexical_channel::{
+    best_path_witness_excerpt, build_hybrid_lexical_hits_with_intent,
+    hybrid_canonical_match_multiplier, hybrid_path_has_exact_stem_match,
+    hybrid_path_quality_multiplier_with_intent, hybrid_path_witness_recall_score,
+    merge_hybrid_lexical_search_output, merge_hybrid_path_witness_recall_output, semantic_excerpt,
+};
+#[cfg(test)]
+use lexical_channel::{build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query};
+use lexical_recall::{build_hybrid_lexical_recall_regex, hybrid_lexical_recall_tokens};
+use ordering::{
+    retain_bounded_match, sort_matches_deterministically,
+    sort_search_diagnostics_deterministically, text_match_candidate_order,
+};
+use query_terms::{
+    hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
+    hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
+    hybrid_path_overlap_count, hybrid_path_overlap_tokens, hybrid_query_exact_terms,
+    hybrid_query_overlap_terms, path_has_exact_query_term_match,
+};
+use ranker::blend_hybrid_evidence;
+pub use ranker::rank_hybrid_evidence;
+use regex::Regex;
+pub use regex_support::{RegexSearchError, compile_safe_regex};
+use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
+use reranker::diversify_hybrid_ranked_evidence;
+use semantic::{
+    RuntimeSemanticQueryEmbeddingExecutor, SemanticRuntimeQueryEmbeddingExecutor,
+    retain_semantic_hits_for_query, search_semantic_channel_hits,
+};
+use surfaces::{
+    HybridSourceClass, hybrid_source_class, is_bench_support_path, is_ci_workflow_path,
+    is_cli_test_support_path, is_entrypoint_build_workflow_path, is_entrypoint_reference_doc_path,
+    is_entrypoint_runtime_path, is_example_support_path, is_frontend_runtime_noise_path,
+    is_generic_runtime_witness_doc_path, is_loose_python_test_module_path,
+    is_navigation_reference_doc_path, is_navigation_runtime_path, is_non_code_test_doc_path,
+    is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
+    is_repo_metadata_path, is_runtime_config_artifact_path, is_scripts_ops_path,
+    is_test_harness_path, is_test_support_path,
+};
 
 #[derive(Debug, Clone)]
 pub struct SearchTextQuery {
@@ -68,6 +128,7 @@ impl SearchExecutionDiagnostics {
 
 #[derive(Debug, Clone, Default)]
 pub struct SearchExecutionOutput {
+    pub total_matches: usize,
     pub matches: Vec<TextMatch>,
     pub diagnostics: SearchExecutionDiagnostics,
 }
@@ -150,6 +211,7 @@ pub struct SearchHybridQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridSemanticStatus {
     Disabled,
+    Unavailable,
     Ok,
     Degraded,
 }
@@ -158,6 +220,7 @@ impl HybridSemanticStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
+            Self::Unavailable => "unavailable",
             Self::Ok => "ok",
             Self::Degraded => "degraded",
         }
@@ -170,6 +233,9 @@ pub struct HybridExecutionNote {
     pub semantic_enabled: bool,
     pub semantic_status: HybridSemanticStatus,
     pub semantic_reason: Option<String>,
+    pub semantic_candidate_count: usize,
+    pub semantic_hit_count: usize,
+    pub semantic_match_count: usize,
 }
 
 impl Default for HybridExecutionNote {
@@ -179,6 +245,9 @@ impl Default for HybridExecutionNote {
             semantic_enabled: false,
             semantic_status: HybridSemanticStatus::Disabled,
             semantic_reason: None,
+            semantic_candidate_count: 0,
+            semantic_hit_count: 0,
+            semantic_match_count: 0,
         }
     }
 }
@@ -203,169 +272,6 @@ pub struct HybridRankedEvidence {
     pub semantic_sources: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-struct HybridScoreAccumulator {
-    excerpt: String,
-    lexical_score: f32,
-    graph_score: f32,
-    semantic_score: f32,
-    lexical_sources: Vec<String>,
-    graph_sources: Vec<String>,
-    semantic_sources: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum HybridSourceClass {
-    ErrorContracts,
-    ToolContracts,
-    BenchmarkDocs,
-    Documentation,
-    Readme,
-    Runtime,
-    Tests,
-    Fixtures,
-    Playbooks,
-    Specs,
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct HybridRankingIntent {
-    wants_docs: bool,
-    wants_runtime: bool,
-    wants_tests: bool,
-    wants_fixtures: bool,
-    wants_benchmarks: bool,
-    wants_readme: bool,
-    wants_contracts: bool,
-    wants_error_taxonomy: bool,
-    wants_tool_contracts: bool,
-    penalize_playbook_self_reference: bool,
-}
-
-impl HybridRankingIntent {
-    fn from_query(query_text: &str) -> Self {
-        let query = query_text.trim().to_ascii_lowercase();
-        let has_any = |needles: &[&str]| needles.iter().any(|needle| query.contains(needle));
-
-        let wants_docs = has_any(&[
-            "docs",
-            "documented",
-            "documentation",
-            "public docs",
-            "contract",
-            "contracts",
-            "readme",
-            "invalid_params",
-            "error_code",
-            "typed error",
-            "citation",
-            "citations",
-        ]);
-        let wants_tests = has_any(&[
-            "test", "tests", "coverage", "assert", "parity", "canary", "replay",
-        ]);
-        let wants_fixtures = has_any(&[
-            "fixture",
-            "fixtures",
-            "playbook",
-            "playbooks",
-            "replay",
-            "trace artifact",
-        ]);
-        let wants_benchmarks =
-            has_any(&[
-                "benchmark",
-                "benchmarks",
-                "metric",
-                "metrics",
-                "acceptance metric",
-                "acceptance metrics",
-                "replayability",
-                "deterministic replay",
-            ]) || (has_any(&["deterministic", "replay", "suite", "fixture", "fixtures"])
-                && has_any(&["trace artifact", "citation", "citations", "playbook"]));
-        let wants_error_taxonomy = has_any(&[
-            "invalid_params",
-            "-32602",
-            "error taxonomy",
-            "unavailable",
-            "strict_failure",
-            "semantic_status",
-            "semantic_reason",
-        ]);
-        let wants_tool_contracts = has_any(&[
-            "search_hybrid",
-            "semantic_status",
-            "semantic_reason",
-            "tool schema",
-            "tool contract",
-            "tool contracts",
-            "tool surface",
-            "tools/list",
-            "mcp tool",
-            "mcp tools",
-            "core versus extended",
-            "core vs extended",
-            "extended_only",
-        ]) || (has_any(&["mcp", "tool", "tools"])
-            && has_any(&["core", "extended", "schema"]));
-
-        Self {
-            wants_docs,
-            wants_runtime: true,
-            wants_tests,
-            wants_fixtures,
-            wants_benchmarks,
-            wants_readme: has_any(&["readme", "documented"]),
-            wants_contracts: has_any(&[
-                "contract",
-                "contracts",
-                "invalid_params",
-                "error_code",
-                "typed error",
-                "unavailable",
-                "strict_failure",
-            ]),
-            wants_error_taxonomy,
-            wants_tool_contracts,
-            penalize_playbook_self_reference: !has_any(&["playbook", "playbooks"]),
-        }
-    }
-
-    fn wants_class(self, class: HybridSourceClass) -> bool {
-        match class {
-            HybridSourceClass::ErrorContracts => self.wants_error_taxonomy || self.wants_contracts,
-            HybridSourceClass::ToolContracts => self.wants_tool_contracts || self.wants_contracts,
-            HybridSourceClass::BenchmarkDocs => self.wants_benchmarks,
-            HybridSourceClass::Documentation => self.wants_docs,
-            HybridSourceClass::Readme => self.wants_readme,
-            HybridSourceClass::Runtime => self.wants_runtime,
-            HybridSourceClass::Tests => self.wants_tests,
-            HybridSourceClass::Fixtures => self.wants_fixtures,
-            HybridSourceClass::Playbooks => !self.penalize_playbook_self_reference,
-            HybridSourceClass::Specs | HybridSourceClass::Other => false,
-        }
-    }
-}
-
-pub fn rank_hybrid_evidence(
-    lexical_hits: &[HybridChannelHit],
-    graph_hits: &[HybridChannelHit],
-    semantic_hits: &[HybridChannelHit],
-    weights: HybridChannelWeights,
-    limit: usize,
-) -> FriggResult<Vec<HybridRankedEvidence>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let mut ranked = blend_hybrid_evidence(lexical_hits, graph_hits, semantic_hits, weights)?;
-    ranked.truncate(limit);
-
-    Ok(ranked)
-}
-
 fn rank_hybrid_evidence_for_query(
     lexical_hits: &[HybridChannelHit],
     graph_hits: &[HybridChannelHit],
@@ -382,205 +288,14 @@ fn rank_hybrid_evidence_for_query(
     Ok(diversify_hybrid_ranked_evidence(ranked, limit, query_text))
 }
 
-fn blend_hybrid_evidence(
-    lexical_hits: &[HybridChannelHit],
-    graph_hits: &[HybridChannelHit],
-    semantic_hits: &[HybridChannelHit],
-    weights: HybridChannelWeights,
-) -> FriggResult<Vec<HybridRankedEvidence>> {
-    let weights = weights.validate()?;
-    let mut by_document: BTreeMap<HybridDocumentRef, HybridScoreAccumulator> = BTreeMap::new();
-
-    apply_hybrid_channel_hits(lexical_hits, HybridChannel::Lexical, &mut by_document);
-    apply_hybrid_channel_hits(graph_hits, HybridChannel::Graph, &mut by_document);
-    apply_hybrid_channel_hits(semantic_hits, HybridChannel::Semantic, &mut by_document);
-
-    let mut ranked = by_document
-        .into_iter()
-        .map(|(document, state)| {
-            let blended_score = (state.lexical_score * weights.lexical)
-                + (state.graph_score * weights.graph)
-                + (state.semantic_score * weights.semantic);
-            HybridRankedEvidence {
-                document,
-                excerpt: state.excerpt,
-                blended_score,
-                lexical_score: state.lexical_score,
-                graph_score: state.graph_score,
-                semantic_score: state.semantic_score,
-                lexical_sources: state.lexical_sources,
-                graph_sources: state.graph_sources,
-                semantic_sources: state.semantic_sources,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    ranked.sort_by(|left, right| {
-        right
-            .blended_score
-            .total_cmp(&left.blended_score)
-            .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
-            .then_with(|| right.graph_score.total_cmp(&left.graph_score))
-            .then_with(|| right.semantic_score.total_cmp(&left.semantic_score))
-            .then(left.document.cmp(&right.document))
-            .then(left.excerpt.cmp(&right.excerpt))
-    });
-
-    Ok(ranked)
-}
-
-fn diversify_hybrid_ranked_evidence(
-    ranked: Vec<HybridRankedEvidence>,
-    limit: usize,
-    query_text: &str,
-) -> Vec<HybridRankedEvidence> {
-    let intent = HybridRankingIntent::from_query(query_text);
-    let mut seen_classes = BTreeMap::<HybridSourceClass, usize>::new();
-    let mut remaining = ranked;
-    let mut selected = Vec::with_capacity(limit.min(remaining.len()));
-
-    while selected.len() < limit && !remaining.is_empty() {
-        let best_index = remaining
-            .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| {
-                hybrid_selection_score(left, &intent, &seen_classes)
-                    .total_cmp(&hybrid_selection_score(right, &intent, &seen_classes))
-                    .then_with(|| hybrid_ranked_evidence_order(right, left))
-            })
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        let chosen = remaining.remove(best_index);
-        let class = hybrid_source_class(&chosen.document.path);
-        *seen_classes.entry(class).or_insert(0) += 1;
-        selected.push(chosen);
-    }
-
-    selected
-}
-
 #[derive(Debug, Clone, Default)]
 struct NormalizedSearchFilters {
     repository_id: Option<String>,
-    language: Option<NormalizedLanguage>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NormalizedLanguage {
-    Rust,
-    Php,
-}
-
-impl NormalizedLanguage {
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "rust" | "rs" => Some(Self::Rust),
-            "php" => Some(Self::Php),
-            _ => None,
-        }
-    }
-
-    fn matches_path(self, path: &Path) -> bool {
-        match SymbolLanguage::from_path(path) {
-            Some(SymbolLanguage::Rust) => self == Self::Rust,
-            Some(SymbolLanguage::Php) => self == Self::Php,
-            None => false,
-        }
-    }
+    language: Option<SymbolLanguage>,
 }
 
 pub struct TextSearcher {
     config: FriggConfig,
-}
-
-trait SemanticRuntimeQueryEmbeddingExecutor {
-    fn embed_query<'a>(
-        &'a self,
-        provider: SemanticRuntimeProvider,
-        model: &'a str,
-        query: String,
-    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>>;
-}
-
-#[derive(Debug, Default)]
-struct RuntimeSemanticQueryEmbeddingExecutor {
-    credentials: SemanticRuntimeCredentials,
-}
-
-impl RuntimeSemanticQueryEmbeddingExecutor {
-    fn new(credentials: SemanticRuntimeCredentials) -> Self {
-        Self { credentials }
-    }
-}
-
-impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExecutor {
-    fn embed_query<'a>(
-        &'a self,
-        provider: SemanticRuntimeProvider,
-        model: &'a str,
-        query: String,
-    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>> {
-        let model = model.trim().to_owned();
-        let api_key = self
-            .credentials
-            .api_key_for(provider)
-            .map(str::to_owned)
-            .unwrap_or_default();
-        Box::pin(async move {
-            let request = EmbeddingRequest {
-                model,
-                input: vec![query],
-                purpose: EmbeddingPurpose::Query,
-                dimensions: None,
-                trace_id: None,
-            };
-            let response = match provider {
-                SemanticRuntimeProvider::OpenAi => {
-                    let client = OpenAiEmbeddingProvider::new(api_key);
-                    client.embed(request).await
-                }
-                SemanticRuntimeProvider::Google => {
-                    let client = GoogleEmbeddingProvider::new(api_key);
-                    client.embed(request).await
-                }
-            }
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic query embedding provider call failed: {err}"
-                ))
-            })?;
-
-            if response.vectors.len() != 1 {
-                return Err(FriggError::Internal(format!(
-                    "semantic query embedding response length mismatch: expected 1 vector, received {}",
-                    response.vectors.len()
-                )));
-            }
-            let vector = response
-                .vectors
-                .into_iter()
-                .next()
-                .map(|entry| entry.values);
-            let Some(vector) = vector else {
-                return Err(FriggError::Internal(
-                    "semantic query embedding response did not include vector payload".to_owned(),
-                ));
-            };
-            if vector.is_empty() {
-                return Err(FriggError::Internal(
-                    "semantic query embedding provider returned an empty vector".to_owned(),
-                ));
-            }
-            if vector.iter().any(|value| !value.is_finite()) {
-                return Err(FriggError::Internal(
-                    "semantic query embedding provider returned non-finite vector values"
-                        .to_owned(),
-                ));
-            }
-
-            Ok(vector)
-        })
-    }
 }
 
 pub const MAX_REGEX_PATTERN_BYTES: usize = 512;
@@ -592,149 +307,18 @@ pub const MAX_REGEX_DFA_SIZE_LIMIT_BYTES: usize = 1_000_000;
 const BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD: usize = 256;
 const HYBRID_LEXICAL_RECALL_MAX_TOKENS: usize = 12;
 const HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN: usize = 4;
+const HYBRID_GRAPH_MAX_ANCHORS: usize = 8;
+const HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR: usize = 12;
+const HYBRID_GRAPH_CANDIDATE_POOL_MULTIPLIER: usize = 4;
+const HYBRID_GRAPH_CANDIDATE_POOL_MIN: usize = 16;
 const HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER: usize = 6;
 const HYBRID_SEMANTIC_CANDIDATE_POOL_MIN: usize = 24;
+const HYBRID_SEMANTIC_RETAINED_DOCUMENT_MULTIPLIER: usize = 8;
+const HYBRID_SEMANTIC_RETAINED_DOCUMENT_MIN: usize = 24;
+const HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR: f32 = 0.72;
 const REGEX_TRIGRAM_BITMAP_BITS: usize = 1 << 16;
 const REGEX_TRIGRAM_BITMAP_WORDS: usize = REGEX_TRIGRAM_BITMAP_BITS / 64;
 const REGEX_TRIGRAM_HASH_MULTIPLIER: u32 = 0x9E37_79B1;
-
-#[derive(Debug, Clone)]
-struct RegexPrefilterPlan {
-    checks: Vec<RegexPrefilterLiteralCheck>,
-    needs_bitmap: bool,
-}
-
-#[derive(Debug, Clone)]
-struct RegexPrefilterLiteralCheck {
-    literal: String,
-    trigram_hashes: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
-struct TrigramBitmap {
-    words: [u64; REGEX_TRIGRAM_BITMAP_WORDS],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParsedRegexAtom {
-    Literal(u8),
-    NonLiteral,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ParsedRegexQuantifier {
-    min_repetitions: usize,
-    exact_one: bool,
-}
-
-impl RegexPrefilterPlan {
-    fn build(pattern: &str) -> Option<Self> {
-        let literals = extract_required_regex_literals(pattern)?;
-        let mut checks = Vec::with_capacity(literals.len());
-        let mut needs_bitmap = false;
-
-        for literal in literals {
-            let trigram_hashes = literal_trigram_hashes(literal.as_bytes());
-            if !trigram_hashes.is_empty() {
-                needs_bitmap = true;
-            }
-            checks.push(RegexPrefilterLiteralCheck {
-                literal,
-                trigram_hashes,
-            });
-        }
-
-        Some(Self {
-            checks,
-            needs_bitmap,
-        })
-    }
-
-    fn file_may_match(&self, content: &str) -> bool {
-        let bitmap = self
-            .needs_bitmap
-            .then(|| TrigramBitmap::from_bytes(content.as_bytes()));
-
-        for check in &self.checks {
-            if !check.trigram_hashes.is_empty() {
-                if let Some(bitmap) = bitmap.as_ref() {
-                    if check
-                        .trigram_hashes
-                        .iter()
-                        .any(|&hash| !bitmap.contains(hash))
-                    {
-                        return false;
-                    }
-                }
-            } else if !content.contains(check.literal.as_str()) {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    #[cfg(test)]
-    fn required_literals(&self) -> Vec<&str> {
-        self.checks
-            .iter()
-            .map(|check| check.literal.as_str())
-            .collect()
-    }
-}
-
-impl TrigramBitmap {
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut bitmap = Self {
-            words: [0; REGEX_TRIGRAM_BITMAP_WORDS],
-        };
-        for window in bytes.windows(3) {
-            bitmap.insert(trigram_hash(window[0], window[1], window[2]));
-        }
-        bitmap
-    }
-
-    fn insert(&mut self, hash: usize) {
-        let word_index = hash / 64;
-        let bit_index = hash % 64;
-        self.words[word_index] |= 1_u64 << bit_index;
-    }
-
-    fn contains(&self, hash: usize) -> bool {
-        let word_index = hash / 64;
-        let bit_index = hash % 64;
-        (self.words[word_index] & (1_u64 << bit_index)) != 0
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum RegexSearchError {
-    #[error("regex pattern must not be empty")]
-    EmptyPattern,
-    #[error("regex pattern length {actual} exceeds limit {max}")]
-    PatternTooLong { actual: usize, max: usize },
-    #[error("regex pattern alternation count {actual} exceeds limit {max}")]
-    TooManyAlternations { actual: usize, max: usize },
-    #[error("regex pattern group count {actual} exceeds limit {max}")]
-    TooManyGroups { actual: usize, max: usize },
-    #[error("regex pattern quantifier count {actual} exceeds limit {max}")]
-    TooManyQuantifiers { actual: usize, max: usize },
-    #[error("invalid regex: {0}")]
-    InvalidRegex(#[from] regex::Error),
-}
-
-impl RegexSearchError {
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::EmptyPattern => "regex_empty_pattern",
-            Self::PatternTooLong { .. } => "regex_pattern_too_long",
-            Self::TooManyAlternations { .. } => "regex_too_many_alternations",
-            Self::TooManyGroups { .. } => "regex_too_many_groups",
-            Self::TooManyQuantifiers { .. } => "regex_too_many_quantifiers",
-            Self::InvalidRegex(_) => "regex_invalid_pattern",
-        }
-    }
-}
 
 impl TextSearcher {
     pub fn new(config: FriggConfig) -> Self {
@@ -881,713 +465,39 @@ impl TextSearcher {
         credentials: &SemanticRuntimeCredentials,
         semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
     ) -> FriggResult<SearchHybridExecutionOutput> {
-        let query_text = query.query.trim().to_owned();
-        let ranking_intent = HybridRankingIntent::from_query(&query_text);
-        if query_text.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "hybrid search query must not be empty".to_owned(),
-            ));
-        }
-        if query.limit == 0 {
-            return Ok(SearchHybridExecutionOutput::default());
-        }
-
-        let lexical_limit = query.limit.max(self.config.max_search_results);
-        let semantic_limit = query.limit.max(self.config.max_search_results);
-        let mut lexical_output = self.search_literal_with_filters_diagnostics(
-            SearchTextQuery {
-                query: query_text.clone(),
-                path_regex: None,
-                limit: lexical_limit,
-            },
-            filters.clone(),
-        )?;
-        let graph_hits: Vec<HybridChannelHit> = Vec::new();
-
-        let semantic_requested = query
-            .semantic
-            .unwrap_or(self.config.semantic_runtime.enabled);
-        let strict_semantic = self.config.semantic_runtime.strict_mode;
-        let (semantic_hits, note) = if matches!(query.semantic, Some(false)) {
-            (
-                Vec::new(),
-                HybridExecutionNote {
-                    semantic_requested,
-                    semantic_enabled: false,
-                    semantic_status: HybridSemanticStatus::Disabled,
-                    semantic_reason: Some("semantic channel disabled by request toggle".to_owned()),
-                },
-            )
-        } else if !self.config.semantic_runtime.enabled {
-            (
-                Vec::new(),
-                HybridExecutionNote {
-                    semantic_requested,
-                    semantic_enabled: false,
-                    semantic_status: HybridSemanticStatus::Disabled,
-                    semantic_reason: Some(
-                        "semantic runtime disabled in active configuration".to_owned(),
-                    ),
-                },
-            )
-        } else {
-            match self.search_semantic_channel_hits(
-                &query_text,
-                &filters,
-                semantic_limit,
-                credentials,
-                semantic_executor,
-            ) {
-                Ok(hits) => (
-                    hits,
-                    HybridExecutionNote {
-                        semantic_requested,
-                        semantic_enabled: true,
-                        semantic_status: HybridSemanticStatus::Ok,
-                        semantic_reason: None,
-                    },
-                ),
-                Err(err) => {
-                    if strict_semantic {
-                        return Err(FriggError::Internal(format!(
-                            "semantic_status=strict_failure: {err}"
-                        )));
-                    }
-                    (
-                        Vec::new(),
-                        HybridExecutionNote {
-                            semantic_requested,
-                            semantic_enabled: false,
-                            semantic_status: HybridSemanticStatus::Degraded,
-                            semantic_reason: Some(err.to_string()),
-                        },
-                    )
-                }
-            }
-        };
-
-        let should_expand_lexical = lexical_output.matches.len() < query.limit
-            && (note.semantic_status != HybridSemanticStatus::Ok
-                || ranking_intent.wants_docs
-                || ranking_intent.wants_contracts
-                || ranking_intent.wants_error_taxonomy
-                || ranking_intent.wants_tool_contracts
-                || ranking_intent.wants_benchmarks);
-        if should_expand_lexical {
-            let recall_tokens = hybrid_lexical_recall_tokens(&query_text);
-
-            // Exact token recall should land before broad regex expansion so
-            // high-signal contract terms survive generic phrase misses.
-            for token in recall_tokens
-                .iter()
-                .take(HYBRID_LEXICAL_RECALL_MAX_TOKENS)
-                .cloned()
-            {
-                let expanded = self.search_literal_with_filters_diagnostics(
-                    SearchTextQuery {
-                        query: token,
-                        path_regex: None,
-                        limit: lexical_limit,
-                    },
-                    filters.clone(),
-                )?;
-                merge_hybrid_lexical_search_output(&mut lexical_output, expanded, lexical_limit);
-                if lexical_output.matches.len() >= lexical_limit {
-                    break;
-                }
-            }
-
-            if lexical_output.matches.len() < lexical_limit {
-                if let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text) {
-                    let expanded = self.search_regex_with_filters_diagnostics(
-                        SearchTextQuery {
-                            query: token_regex,
-                            path_regex: None,
-                            limit: lexical_limit,
-                        },
-                        filters.clone(),
-                    )?;
-                    merge_hybrid_lexical_search_output(
-                        &mut lexical_output,
-                        expanded,
-                        lexical_limit,
-                    );
-                }
-            }
-        }
-        let lexical_hits =
-            build_hybrid_lexical_hits_with_intent(&lexical_output.matches, &ranking_intent);
-
-        let matches = rank_hybrid_evidence_for_query(
-            &lexical_hits,
-            &graph_hits,
-            &semantic_hits,
-            query.weights,
-            query.limit,
-            &query_text,
-        )?;
-
-        Ok(SearchHybridExecutionOutput {
-            matches,
-            diagnostics: lexical_output.diagnostics,
-            note,
-        })
-    }
-
-    fn search_semantic_channel_hits(
-        &self,
-        query_text: &str,
-        filters: &SearchFilters,
-        limit: usize,
-        credentials: &SemanticRuntimeCredentials,
-        semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
-    ) -> FriggResult<Vec<HybridChannelHit>> {
-        #[derive(Debug)]
-        struct PendingSemanticHit {
-            repository_id: String,
-            snapshot_id: String,
-            path: String,
-            chunk_id: String,
-            raw_score: f32,
-        }
-
-        self.config
-            .semantic_runtime
-            .validate_startup(credentials)
-            .map_err(|err| {
-                FriggError::InvalidInput(format!(
-                    "semantic runtime validation failed code={}: {err}",
-                    err.code()
-                ))
-            })?;
-
-        let provider = self.config.semantic_runtime.provider.ok_or_else(|| {
-            FriggError::Internal(
-                "semantic runtime provider missing after successful startup validation".to_owned(),
-            )
-        })?;
-        let model = self
-            .config
-            .semantic_runtime
-            .normalized_model()
-            .ok_or_else(|| {
-                FriggError::Internal(
-                    "semantic runtime model missing after successful startup validation".to_owned(),
-                )
-            })?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to build tokio runtime for semantic query embedding request: {err}"
-                ))
-            })?;
-        let query_embedding = runtime.block_on(semantic_executor.embed_query(
-            provider,
-            model,
-            query_text.to_owned(),
-        ))?;
-        if query_embedding.is_empty() {
-            return Err(FriggError::Internal(
-                "semantic query embedding provider returned an empty vector".to_owned(),
-            ));
-        }
-        if query_embedding.iter().any(|value| !value.is_finite()) {
-            return Err(FriggError::Internal(
-                "semantic query embedding provider returned non-finite vector values".to_owned(),
-            ));
-        }
-
-        let normalized_filters = normalize_search_filters(filters.clone())?;
-        let ranking_intent = HybridRankingIntent::from_query(query_text);
-        let mut repositories = self.config.repositories();
-        repositories.sort_by(|left, right| {
-            left.repository_id
-                .cmp(&right.repository_id)
-                .then(left.root_path.cmp(&right.root_path))
-        });
-
-        let mut pending_hits = Vec::new();
-        let mut db_paths_by_repository = BTreeMap::new();
-        for repo in repositories {
-            if normalized_filters
-                .repository_id
-                .as_ref()
-                .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
-            {
-                continue;
-            }
-            let repository_id = repo.repository_id.0;
-            let root = Path::new(&repo.root_path);
-            let db_path = resolve_provenance_db_path(root).map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic storage path resolution failed for repository '{repository_id}': {err}"
-                ))
-            })?;
-            if !db_path.exists() {
-                continue;
-            }
-            db_paths_by_repository.insert(repository_id.clone(), db_path.clone());
-
-            let storage = Storage::new(db_path);
-            let latest = storage
-                .load_latest_manifest_for_repository(&repository_id)
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "semantic storage snapshot lookup failed for repository '{repository_id}': {err}"
-                    ))
-                })?;
-            let Some(latest_snapshot) = latest else {
-                continue;
-            };
-            let projections = storage
-                .load_semantic_embedding_projections_for_repository_snapshot_model(
-                    &repository_id,
-                    &latest_snapshot.snapshot_id,
-                    Some(provider.as_str()),
-                    Some(model),
-                )
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "semantic storage embedding projection load failed for repository '{repository_id}' snapshot '{}': {err}",
-                        latest_snapshot.snapshot_id
-                    ))
-                })?;
-
-            for projection in projections {
-                if hard_excluded_runtime_path(root, Path::new(&projection.path)) {
-                    continue;
-                }
-                if let Some(language) = normalized_filters.language {
-                    if !language.matches_path(Path::new(&projection.path)) {
-                        continue;
-                    }
-                }
-                let score =
-                    semantic_projection_score(&query_embedding, &projection, &repository_id)?
-                        * hybrid_path_quality_multiplier_with_intent(
-                            &projection.path,
-                            &ranking_intent,
-                        );
-                if !score.is_finite() {
-                    return Err(FriggError::Internal(format!(
-                        "semantic similarity produced non-finite score for repository '{repository_id}' path '{}' chunk_id='{}'",
-                        projection.path, projection.chunk_id
-                    )));
-                }
-
-                pending_hits.push(PendingSemanticHit {
-                    repository_id: repository_id.clone(),
-                    snapshot_id: latest_snapshot.snapshot_id.clone(),
-                    path: projection.path,
-                    chunk_id: projection.chunk_id,
-                    raw_score: score,
-                });
-            }
-        }
-
-        pending_hits.sort_by(|left, right| {
-            right
-                .raw_score
-                .total_cmp(&left.raw_score)
-                .then(left.repository_id.cmp(&right.repository_id))
-                .then(left.path.cmp(&right.path))
-                .then(left.chunk_id.cmp(&right.chunk_id))
-        });
-        let semantic_candidate_limit = limit
-            .saturating_mul(HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER)
-            .max(HYBRID_SEMANTIC_CANDIDATE_POOL_MIN);
-        pending_hits.truncate(semantic_candidate_limit);
-
-        let mut chunk_texts_by_group = BTreeMap::new();
-        for ((repository_id, snapshot_id), chunk_ids) in pending_hits.iter().fold(
-            BTreeMap::<(String, String), Vec<String>>::new(),
-            |mut grouped, hit| {
-                grouped
-                    .entry((hit.repository_id.clone(), hit.snapshot_id.clone()))
-                    .or_default()
-                    .push(hit.chunk_id.clone());
-                grouped
-            },
-        ) {
-            let Some(db_path) = db_paths_by_repository.get(&repository_id) else {
-                continue;
-            };
-            let storage = Storage::new(db_path.clone());
-            let texts = storage
-                .load_semantic_chunk_texts_for_repository_snapshot(
-                    &repository_id,
-                    &snapshot_id,
-                    &chunk_ids,
-                )
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "semantic storage chunk text load failed for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                    ))
-                })?;
-            chunk_texts_by_group.insert((repository_id, snapshot_id), texts);
-        }
-
-        let semantic_hits = pending_hits
-            .into_iter()
-            .map(|hit| {
-                let excerpt_source = chunk_texts_by_group
-                    .get(&(hit.repository_id.clone(), hit.snapshot_id.clone()))
-                    .and_then(|texts| texts.get(&hit.chunk_id))
-                    .map(|text| semantic_excerpt(text, &hit.path))
-                    .unwrap_or_else(|| semantic_excerpt("", &hit.path));
-                HybridChannelHit {
-                    document: HybridDocumentRef {
-                        repository_id: hit.repository_id,
-                        path: hit.path.clone(),
-                        line: 1,
-                        column: 1,
-                    },
-                    raw_score: hit.raw_score,
-                    excerpt: excerpt_source,
-                    provenance_id: hit.chunk_id,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        Ok(semantic_hits)
+        hybrid_execution::search_hybrid_with_filters_using_executor(
+            self,
+            query,
+            filters,
+            credentials,
+            semantic_executor,
+        )
     }
 
     fn search_with_streaming_lines<F>(
         &self,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
-        mut match_columns: F,
+        match_columns: F,
     ) -> FriggResult<SearchExecutionOutput>
     where
         F: FnMut(&str, &mut Vec<usize>),
     {
-        let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
-        let mut matches = if use_bounded_retention {
-            Vec::with_capacity(query.limit)
-        } else {
-            Vec::new()
-        };
-        let mut diagnostics = SearchExecutionDiagnostics::default();
-        let mut match_columns_buffer = Vec::new();
-        let mut repositories = self.config.repositories();
-        repositories.sort_by(|left, right| {
-            left.repository_id
-                .cmp(&right.repository_id)
-                .then(left.root_path.cmp(&right.root_path))
-        });
-
-        for repo in repositories {
-            if filters
-                .repository_id
-                .as_ref()
-                .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
-            {
-                continue;
-            }
-
-            let repository_id = repo.repository_id.0.clone();
-            let file_candidates = self.candidate_files_for_repository(
-                &repository_id,
-                Path::new(&repo.root_path),
-                query,
-                filters,
-                &mut diagnostics,
-            );
-
-            for (rel_path, path) in file_candidates {
-                if should_scrub_playbook_metadata(&rel_path) {
-                    let content = match fs::read_to_string(&path) {
-                        Ok(content) => content,
-                        Err(err) => {
-                            diagnostics.entries.push(SearchDiagnostic {
-                                repository_id: repository_id.clone(),
-                                path: Some(rel_path),
-                                kind: SearchDiagnosticKind::Read,
-                                message: err.to_string(),
-                            });
-                            continue;
-                        }
-                    };
-                    let content = scrub_search_content(&rel_path, &content);
-
-                    for (line_idx, line) in content.lines().enumerate() {
-                        match_columns(line, &mut match_columns_buffer);
-                        if match_columns_buffer.is_empty() {
-                            continue;
-                        }
-
-                        let line_number = line_idx + 1;
-                        let mut excerpt_for_line: Option<String> = None;
-
-                        for &column in &match_columns_buffer {
-                            if use_bounded_retention
-                                && matches.len() == query.limit
-                                && matches.last().is_some_and(|worst| {
-                                    !text_match_candidate_order(
-                                        &repository_id,
-                                        &rel_path,
-                                        line_number,
-                                        column,
-                                        line,
-                                        worst,
-                                    )
-                                    .is_lt()
-                                })
-                            {
-                                continue;
-                            }
-
-                            let candidate = TextMatch {
-                                repository_id: repository_id.clone(),
-                                path: rel_path.clone(),
-                                line: line_number,
-                                column,
-                                excerpt: excerpt_for_line
-                                    .get_or_insert_with(|| line.to_owned())
-                                    .clone(),
-                            };
-
-                            if use_bounded_retention {
-                                retain_bounded_match(&mut matches, query.limit, candidate);
-                            } else {
-                                matches.push(candidate);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                let file = match fs::File::open(&path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        diagnostics.entries.push(SearchDiagnostic {
-                            repository_id: repository_id.clone(),
-                            path: Some(rel_path),
-                            kind: SearchDiagnosticKind::Read,
-                            message: err.to_string(),
-                        });
-                        continue;
-                    }
-                };
-                let mut reader = BufReader::new(file);
-                let mut line = String::new();
-                let mut line_number = 0usize;
-
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            line_number = line_number.saturating_add(1);
-                        }
-                        Err(err) => {
-                            diagnostics.entries.push(SearchDiagnostic {
-                                repository_id: repository_id.clone(),
-                                path: Some(rel_path.clone()),
-                                kind: SearchDiagnosticKind::Read,
-                                message: err.to_string(),
-                            });
-                            break;
-                        }
-                    }
-
-                    trim_trailing_newline(&mut line);
-                    match_columns(&line, &mut match_columns_buffer);
-                    if match_columns_buffer.is_empty() {
-                        continue;
-                    }
-
-                    let mut excerpt_for_line: Option<String> = None;
-                    for &column in &match_columns_buffer {
-                        if use_bounded_retention
-                            && matches.len() == query.limit
-                            && matches.last().is_some_and(|worst| {
-                                !text_match_candidate_order(
-                                    &repository_id,
-                                    &rel_path,
-                                    line_number,
-                                    column,
-                                    &line,
-                                    worst,
-                                )
-                                .is_lt()
-                            })
-                        {
-                            continue;
-                        }
-
-                        let candidate = TextMatch {
-                            repository_id: repository_id.clone(),
-                            path: rel_path.clone(),
-                            line: line_number,
-                            column,
-                            excerpt: excerpt_for_line.get_or_insert_with(|| line.clone()).clone(),
-                        };
-
-                        if use_bounded_retention {
-                            retain_bounded_match(&mut matches, query.limit, candidate);
-                        } else {
-                            matches.push(candidate);
-                        }
-                    }
-                }
-            }
-        }
-
-        sort_search_diagnostics_deterministically(&mut diagnostics.entries);
-
-        if use_bounded_retention {
-            return Ok(SearchExecutionOutput {
-                matches,
-                diagnostics,
-            });
-        }
-
-        sort_matches_deterministically(&mut matches);
-        matches.truncate(query.limit);
-
-        Ok(SearchExecutionOutput {
-            matches,
-            diagnostics,
-        })
+        scan_engine::search_with_streaming_lines(self, query, filters, match_columns)
     }
 
     fn search_with_matcher<F, P>(
         &self,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
-        mut file_may_match: P,
-        mut match_columns: F,
+        file_may_match: P,
+        match_columns: F,
     ) -> FriggResult<SearchExecutionOutput>
     where
         P: FnMut(&str) -> bool,
         F: FnMut(&str, &mut Vec<usize>),
     {
-        let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
-        let mut matches = if use_bounded_retention {
-            Vec::with_capacity(query.limit)
-        } else {
-            Vec::new()
-        };
-        let mut diagnostics = SearchExecutionDiagnostics::default();
-        let mut match_columns_buffer = Vec::new();
-        let mut repositories = self.config.repositories();
-        repositories.sort_by(|left, right| {
-            left.repository_id
-                .cmp(&right.repository_id)
-                .then(left.root_path.cmp(&right.root_path))
-        });
-
-        for repo in repositories {
-            if filters
-                .repository_id
-                .as_ref()
-                .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
-            {
-                continue;
-            }
-            let repository_id = repo.repository_id.0.clone();
-            let root = Path::new(&repo.root_path);
-            let file_candidates = self.candidate_files_for_repository(
-                &repository_id,
-                root,
-                query,
-                filters,
-                &mut diagnostics,
-            );
-
-            for (rel_path, path) in file_candidates {
-                let content = match fs::read_to_string(&path) {
-                    Ok(content) => content,
-                    Err(err) => {
-                        diagnostics.entries.push(SearchDiagnostic {
-                            repository_id: repository_id.clone(),
-                            path: Some(rel_path),
-                            kind: SearchDiagnosticKind::Read,
-                            message: err.to_string(),
-                        });
-                        continue;
-                    }
-                };
-                let content = scrub_search_content(&rel_path, &content);
-                if !file_may_match(content.as_ref()) {
-                    continue;
-                }
-
-                for (line_idx, line) in content.lines().enumerate() {
-                    match_columns(line, &mut match_columns_buffer);
-                    if match_columns_buffer.is_empty() {
-                        continue;
-                    }
-
-                    let line_number = line_idx + 1;
-                    let mut excerpt_for_line: Option<String> = None;
-
-                    for &column in &match_columns_buffer {
-                        if use_bounded_retention
-                            && matches.len() == query.limit
-                            && matches.last().is_some_and(|worst| {
-                                !text_match_candidate_order(
-                                    &repository_id,
-                                    &rel_path,
-                                    line_number,
-                                    column,
-                                    line,
-                                    worst,
-                                )
-                                .is_lt()
-                            })
-                        {
-                            continue;
-                        }
-
-                        let candidate = TextMatch {
-                            repository_id: repository_id.clone(),
-                            path: rel_path.clone(),
-                            line: line_number,
-                            column,
-                            excerpt: excerpt_for_line
-                                .get_or_insert_with(|| line.to_owned())
-                                .clone(),
-                        };
-
-                        if use_bounded_retention {
-                            retain_bounded_match(&mut matches, query.limit, candidate);
-                        } else {
-                            matches.push(candidate);
-                        }
-                    }
-                }
-            }
-        }
-
-        sort_search_diagnostics_deterministically(&mut diagnostics.entries);
-
-        if use_bounded_retention {
-            return Ok(SearchExecutionOutput {
-                matches,
-                diagnostics,
-            });
-        }
-
-        sort_matches_deterministically(&mut matches);
-        matches.truncate(query.limit);
-
-        Ok(SearchExecutionOutput {
-            matches,
-            diagnostics,
-        })
-    }
-}
-
-fn trim_trailing_newline(line: &mut String) {
-    if line.ends_with('\n') {
-        line.pop();
-        if line.ends_with('\r') {
-            line.pop();
-        }
+        scan_engine::search_with_matcher(self, query, filters, file_may_match, match_columns)
     }
 }
 
@@ -1675,443 +585,101 @@ impl TextSearcher {
         candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
         Some(candidates)
     }
-}
 
-fn walk_candidate_files_for_repository(
-    repository_id: &str,
-    root: &Path,
-    query: &SearchTextQuery,
-    filters: &NormalizedSearchFilters,
-    diagnostics: &mut SearchExecutionDiagnostics,
-) -> Vec<(String, std::path::PathBuf)> {
-    let walker = search_walk_builder(root).build();
-    let mut file_candidates = Vec::new();
+    fn search_path_witness_recall_with_filters(
+        &self,
+        query_text: &str,
+        filters: &SearchFilters,
+        limit: usize,
+        intent: &HybridRankingIntent,
+    ) -> FriggResult<SearchExecutionOutput> {
+        if limit == 0 || !intent.wants_path_witness_recall() {
+            return Ok(SearchExecutionOutput::default());
+        }
 
-    for dent in walker {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(err) => {
-                diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.to_owned(),
-                    path: None,
-                    kind: SearchDiagnosticKind::Walk,
-                    message: err.to_string(),
-                });
-                continue;
-            }
+        let normalized_filters = normalize_search_filters(filters.clone())?;
+        let empty_query = SearchTextQuery {
+            query: String::new(),
+            path_regex: None,
+            limit,
         };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
+        let mut diagnostics = SearchExecutionDiagnostics::default();
+        let mut repositories = self.config.repositories();
+        repositories.sort_by(|left, right| {
+            left.repository_id
+                .cmp(&right.repository_id)
+                .then(left.root_path.cmp(&right.root_path))
+        });
 
-        let path = dent.path();
-        if hard_excluded_runtime_path(root, path) {
-            continue;
-        }
-        let rel_path = normalize_repository_relative_path(root, path);
-
-        if let Some(language) = filters.language {
-            if !language.matches_path(path) {
+        let mut scored = Vec::<(f32, String, String, std::path::PathBuf)>::new();
+        for repo in repositories {
+            if normalized_filters
+                .repository_id
+                .as_ref()
+                .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
+            {
                 continue;
             }
-        }
 
-        if let Some(path_regex) = &query.path_regex {
-            if !path_regex.is_match(&rel_path) {
-                continue;
+            let repository_id = repo.repository_id.0.clone();
+            let root = Path::new(&repo.root_path);
+            let mut candidates = self.candidate_files_for_repository(
+                &repository_id,
+                root,
+                &empty_query,
+                &normalized_filters,
+                &mut diagnostics,
+            );
+            merge_candidate_files(
+                &mut candidates,
+                hidden_workflow_candidates_for_repository(
+                    root,
+                    &normalized_filters,
+                    intent,
+                    &mut diagnostics,
+                ),
+            );
+
+            for (rel_path, path) in candidates {
+                let Some(score) = hybrid_path_witness_recall_score(&rel_path, intent, query_text)
+                else {
+                    continue;
+                };
+                scored.push((score, repository_id.clone(), rel_path, path));
             }
         }
 
-        file_candidates.push((rel_path, path.to_path_buf()));
-    }
-    file_candidates.sort_by(|left, right| left.0.cmp(&right.0));
-    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
-    file_candidates
-}
-
-fn search_walk_builder(root: &Path) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root);
-    builder.standard_filters(true).require_git(false);
-    builder
-}
-
-fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
-    let relative = if path.is_absolute() {
-        let Ok(relative) = path.strip_prefix(root) else {
-            return true;
-        };
-        relative
-    } else {
-        path
-    };
-    let Some(component) = relative.components().next() else {
-        return false;
-    };
-    matches!(
-        component.as_os_str().to_string_lossy().as_ref(),
-        ".frigg" | ".git" | "target"
-    )
-}
-
-pub fn compile_safe_regex(pattern: &str) -> Result<Regex, RegexSearchError> {
-    validate_regex_budget(pattern)?;
-
-    RegexBuilder::new(pattern)
-        .size_limit(MAX_REGEX_SIZE_LIMIT_BYTES)
-        .dfa_size_limit(MAX_REGEX_DFA_SIZE_LIMIT_BYTES)
-        .build()
-        .map_err(RegexSearchError::InvalidRegex)
-}
-
-fn validate_regex_budget(pattern: &str) -> Result<(), RegexSearchError> {
-    if pattern.is_empty() {
-        return Err(RegexSearchError::EmptyPattern);
-    }
-
-    if pattern.len() > MAX_REGEX_PATTERN_BYTES {
-        return Err(RegexSearchError::PatternTooLong {
-            actual: pattern.len(),
-            max: MAX_REGEX_PATTERN_BYTES,
+        scored.sort_by(|left, right| {
+            right
+                .0
+                .total_cmp(&left.0)
+                .then(left.1.cmp(&right.1))
+                .then(left.2.cmp(&right.2))
+                .then(left.3.cmp(&right.3))
         });
-    }
+        scored.truncate(limit.max(24));
 
-    let alternations = count_unescaped_regex_chars(pattern, &['|']);
-    if alternations > MAX_REGEX_ALTERNATIONS {
-        return Err(RegexSearchError::TooManyAlternations {
-            actual: alternations,
-            max: MAX_REGEX_ALTERNATIONS,
-        });
-    }
-
-    let groups = count_unescaped_regex_chars(pattern, &['(']);
-    if groups > MAX_REGEX_GROUPS {
-        return Err(RegexSearchError::TooManyGroups {
-            actual: groups,
-            max: MAX_REGEX_GROUPS,
-        });
-    }
-
-    let quantifiers = count_unescaped_regex_chars(pattern, &['*', '+', '?', '{']);
-    if quantifiers > MAX_REGEX_QUANTIFIERS {
-        return Err(RegexSearchError::TooManyQuantifiers {
-            actual: quantifiers,
-            max: MAX_REGEX_QUANTIFIERS,
-        });
-    }
-
-    Ok(())
-}
-
-fn count_unescaped_regex_chars(pattern: &str, targets: &[char]) -> usize {
-    let mut count = 0usize;
-    let mut escaped = false;
-    let mut in_class = false;
-
-    for ch in pattern.chars() {
-        if escaped {
-            escaped = false;
-            continue;
+        let mut matches = Vec::new();
+        for (_, repository_id, rel_path, path) in scored {
+            let excerpt = fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| best_path_witness_excerpt(&rel_path, &content, query_text))
+                .unwrap_or_else(|| rel_path.clone());
+            matches.push(TextMatch {
+                repository_id,
+                path: rel_path.clone(),
+                line: 1,
+                column: 1,
+                excerpt,
+            });
         }
 
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-
-        if ch == '[' {
-            in_class = true;
-            continue;
-        }
-
-        if ch == ']' && in_class {
-            in_class = false;
-            continue;
-        }
-
-        if in_class {
-            continue;
-        }
-
-        if targets.contains(&ch) {
-            count += 1;
-        }
+        Ok(SearchExecutionOutput {
+            total_matches: matches.len(),
+            matches,
+            diagnostics,
+        })
     }
-
-    count
-}
-
-fn build_regex_prefilter_plan(pattern: &str) -> Option<RegexPrefilterPlan> {
-    RegexPrefilterPlan::build(pattern)
-}
-
-fn extract_required_regex_literals(pattern: &str) -> Option<Vec<String>> {
-    if pattern.is_empty() || !pattern.is_ascii() {
-        return None;
-    }
-
-    let bytes = pattern.as_bytes();
-    let mut index = 0usize;
-    let mut literals = Vec::new();
-    let mut current_literal = Vec::new();
-
-    while index < bytes.len() {
-        let atom = parse_regex_atom(bytes, &mut index)?;
-        let quantifier = parse_regex_quantifier(bytes, &mut index)?;
-
-        match atom {
-            ParsedRegexAtom::Literal(byte) => {
-                if quantifier.min_repetitions == 0 {
-                    flush_required_literal(&mut literals, &mut current_literal);
-                } else if quantifier.exact_one {
-                    current_literal.push(byte);
-                } else {
-                    flush_required_literal(&mut literals, &mut current_literal);
-                    literals.push(char::from(byte).to_string());
-                }
-            }
-            ParsedRegexAtom::NonLiteral => {
-                flush_required_literal(&mut literals, &mut current_literal);
-            }
-        }
-    }
-
-    flush_required_literal(&mut literals, &mut current_literal);
-
-    if literals.is_empty() {
-        return None;
-    }
-
-    let mut deduped = Vec::with_capacity(literals.len());
-    for literal in literals {
-        if !deduped.iter().any(|existing| existing == &literal) {
-            deduped.push(literal);
-        }
-    }
-
-    if deduped.is_empty() {
-        None
-    } else {
-        Some(deduped)
-    }
-}
-
-fn parse_regex_atom(bytes: &[u8], index: &mut usize) -> Option<ParsedRegexAtom> {
-    let byte = *bytes.get(*index)?;
-    *index += 1;
-
-    match byte {
-        b'|' | b'(' | b')' => None,
-        b'[' => {
-            parse_char_class(bytes, index)?;
-            Some(ParsedRegexAtom::NonLiteral)
-        }
-        b'\\' => parse_escape_atom(bytes, index),
-        b'.' | b'^' | b'$' => Some(ParsedRegexAtom::NonLiteral),
-        b'*' | b'+' | b'?' | b'{' | b'}' => None,
-        _ => Some(ParsedRegexAtom::Literal(byte)),
-    }
-}
-
-fn parse_char_class(bytes: &[u8], index: &mut usize) -> Option<()> {
-    let mut escaped = false;
-    while let Some(&byte) = bytes.get(*index) {
-        *index += 1;
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if byte == b'\\' {
-            escaped = true;
-            continue;
-        }
-        if byte == b']' {
-            return Some(());
-        }
-    }
-    None
-}
-
-fn parse_escape_atom(bytes: &[u8], index: &mut usize) -> Option<ParsedRegexAtom> {
-    let escaped = *bytes.get(*index)?;
-    *index += 1;
-
-    if is_regex_literal_escape(escaped) {
-        return Some(ParsedRegexAtom::Literal(escaped));
-    }
-
-    if is_supported_non_literal_escape(escaped) {
-        return Some(ParsedRegexAtom::NonLiteral);
-    }
-
-    None
-}
-
-fn is_regex_literal_escape(escaped: u8) -> bool {
-    matches!(
-        escaped,
-        b'\\'
-            | b'.'
-            | b'+'
-            | b'*'
-            | b'?'
-            | b'|'
-            | b'('
-            | b')'
-            | b'['
-            | b']'
-            | b'{'
-            | b'}'
-            | b'^'
-            | b'$'
-            | b'-'
-    )
-}
-
-fn is_supported_non_literal_escape(escaped: u8) -> bool {
-    matches!(
-        escaped,
-        b'd' | b'D'
-            | b's'
-            | b'S'
-            | b'w'
-            | b'W'
-            | b'b'
-            | b'B'
-            | b'A'
-            | b'z'
-            | b'n'
-            | b'r'
-            | b't'
-            | b'f'
-            | b'v'
-    )
-}
-
-fn parse_regex_quantifier(bytes: &[u8], index: &mut usize) -> Option<ParsedRegexQuantifier> {
-    let mut quantifier = ParsedRegexQuantifier {
-        min_repetitions: 1,
-        exact_one: true,
-    };
-    let Some(&byte) = bytes.get(*index) else {
-        return Some(quantifier);
-    };
-
-    match byte {
-        b'?' => {
-            *index += 1;
-            quantifier.min_repetitions = 0;
-            quantifier.exact_one = false;
-            consume_lazy_quantifier_suffix(bytes, index);
-        }
-        b'*' => {
-            *index += 1;
-            quantifier.min_repetitions = 0;
-            quantifier.exact_one = false;
-            consume_lazy_quantifier_suffix(bytes, index);
-        }
-        b'+' => {
-            *index += 1;
-            quantifier.min_repetitions = 1;
-            quantifier.exact_one = false;
-            consume_lazy_quantifier_suffix(bytes, index);
-        }
-        b'{' => {
-            *index += 1;
-            let (min, max) = parse_braced_quantifier(bytes, index)?;
-            quantifier.min_repetitions = min;
-            quantifier.exact_one = min == 1 && max == Some(1);
-            consume_lazy_quantifier_suffix(bytes, index);
-        }
-        _ => {}
-    }
-
-    Some(quantifier)
-}
-
-fn parse_braced_quantifier(bytes: &[u8], index: &mut usize) -> Option<(usize, Option<usize>)> {
-    let min = parse_quantifier_number(bytes, index)?;
-    let mut max = Some(min);
-
-    match bytes.get(*index).copied() {
-        Some(b'}') => {
-            *index += 1;
-        }
-        Some(b',') => {
-            *index += 1;
-            match bytes.get(*index).copied() {
-                Some(b'}') => {
-                    *index += 1;
-                    max = None;
-                }
-                Some(_) => {
-                    let upper = parse_quantifier_number(bytes, index)?;
-                    if upper < min {
-                        return None;
-                    }
-                    max = Some(upper);
-                    if bytes.get(*index).copied() != Some(b'}') {
-                        return None;
-                    }
-                    *index += 1;
-                }
-                None => return None,
-            }
-        }
-        _ => return None,
-    }
-
-    Some((min, max))
-}
-
-fn parse_quantifier_number(bytes: &[u8], index: &mut usize) -> Option<usize> {
-    let start = *index;
-    while let Some(&byte) = bytes.get(*index) {
-        if !byte.is_ascii_digit() {
-            break;
-        }
-        *index += 1;
-    }
-    if *index == start {
-        return None;
-    }
-
-    std::str::from_utf8(&bytes[start..*index])
-        .ok()?
-        .parse()
-        .ok()
-}
-
-fn consume_lazy_quantifier_suffix(bytes: &[u8], index: &mut usize) {
-    if bytes.get(*index).copied() == Some(b'?') {
-        *index += 1;
-    }
-}
-
-fn flush_required_literal(literals: &mut Vec<String>, current_literal: &mut Vec<u8>) {
-    if current_literal.is_empty() {
-        return;
-    }
-    literals.push(String::from_utf8_lossy(current_literal).to_string());
-    current_literal.clear();
-}
-
-fn literal_trigram_hashes(bytes: &[u8]) -> Vec<usize> {
-    let mut hashes = bytes
-        .windows(3)
-        .map(|window| trigram_hash(window[0], window[1], window[2]))
-        .collect::<Vec<_>>();
-    hashes.sort_unstable();
-    hashes.dedup();
-    hashes
-}
-
-fn trigram_hash(left: u8, middle: u8, right: u8) -> usize {
-    let packed = (u32::from(left) << 16) | (u32::from(middle) << 8) | u32::from(right);
-    (packed.wrapping_mul(REGEX_TRIGRAM_HASH_MULTIPLIER) as usize) & (REGEX_TRIGRAM_BITMAP_BITS - 1)
-}
-
-fn regex_error_to_frigg_error(err: RegexSearchError) -> FriggError {
-    FriggError::InvalidInput(format!("regex search error [{}]: {err}", err.code()))
 }
 
 fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSearchFilters> {
@@ -2128,11 +696,14 @@ fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSea
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(raw) => Some(NormalizedLanguage::parse(raw).ok_or_else(|| {
-            FriggError::InvalidInput(format!(
-                "unsupported language filter '{raw}'; supported values: rust, rs, php"
-            ))
-        })?),
+        Some(raw) => Some(
+            parse_supported_language(raw, LanguageCapability::SourceFilter).ok_or_else(|| {
+                FriggError::InvalidInput(format!(
+                    "unsupported language filter '{raw}'; supported values: {}",
+                    SymbolLanguage::supported_search_filter_values().join(", ")
+                ))
+            })?,
+        ),
         None => None,
     };
 
@@ -2140,598 +711,6 @@ fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSea
         repository_id,
         language,
     })
-}
-
-fn sort_matches_deterministically(matches: &mut [TextMatch]) {
-    matches.sort_by(text_match_order);
-}
-
-fn sort_search_diagnostics_deterministically(diagnostics: &mut [SearchDiagnostic]) {
-    diagnostics.sort_by(search_diagnostic_order);
-}
-
-fn search_diagnostic_order(
-    left: &SearchDiagnostic,
-    right: &SearchDiagnostic,
-) -> std::cmp::Ordering {
-    left.repository_id
-        .cmp(&right.repository_id)
-        .then(left.path.cmp(&right.path))
-        .then(left.kind.cmp(&right.kind))
-        .then(left.message.cmp(&right.message))
-}
-
-fn normalize_repository_relative_path(root: &Path, path: &Path) -> String {
-    let normalized = path
-        .strip_prefix(root)
-        .ok()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string())
-        .replace('\\', "/");
-    normalized.trim_start_matches("./").to_owned()
-}
-
-fn text_match_order(left: &TextMatch, right: &TextMatch) -> std::cmp::Ordering {
-    left.repository_id
-        .cmp(&right.repository_id)
-        .then(left.path.cmp(&right.path))
-        .then(left.line.cmp(&right.line))
-        .then(left.column.cmp(&right.column))
-        .then(left.excerpt.cmp(&right.excerpt))
-}
-
-fn text_match_candidate_order(
-    repository_id: &str,
-    path: &str,
-    line: usize,
-    column: usize,
-    excerpt: &str,
-    existing: &TextMatch,
-) -> std::cmp::Ordering {
-    repository_id
-        .cmp(&existing.repository_id)
-        .then(path.cmp(&existing.path))
-        .then(line.cmp(&existing.line))
-        .then(column.cmp(&existing.column))
-        .then(excerpt.cmp(&existing.excerpt))
-}
-
-fn retain_bounded_match(matches: &mut Vec<TextMatch>, limit: usize, candidate: TextMatch) {
-    if matches.len() < limit {
-        insert_sorted_match(matches, candidate);
-        return;
-    }
-
-    if matches
-        .last()
-        .is_some_and(|worst| text_match_order(&candidate, worst).is_lt())
-    {
-        insert_sorted_match(matches, candidate);
-        matches.truncate(limit);
-    }
-}
-
-fn insert_sorted_match(matches: &mut Vec<TextMatch>, candidate: TextMatch) {
-    let insert_at = matches.partition_point(|existing| {
-        matches!(
-            text_match_order(existing, &candidate),
-            std::cmp::Ordering::Less
-        )
-    });
-    matches.insert(insert_at, candidate);
-}
-
-#[cfg(test)]
-fn build_hybrid_lexical_hits(matches: &[TextMatch]) -> Vec<HybridChannelHit> {
-    build_hybrid_lexical_hits_with_intent(matches, &HybridRankingIntent::default())
-}
-
-#[cfg(test)]
-fn build_hybrid_lexical_hits_for_query(
-    matches: &[TextMatch],
-    query_text: &str,
-) -> Vec<HybridChannelHit> {
-    let intent = HybridRankingIntent::from_query(query_text);
-    build_hybrid_lexical_hits_with_intent(matches, &intent)
-}
-
-fn build_hybrid_lexical_hits_with_intent(
-    matches: &[TextMatch],
-    intent: &HybridRankingIntent,
-) -> Vec<HybridChannelHit> {
-    let mut frequency_by_document: BTreeMap<(String, String), f32> = BTreeMap::new();
-    for found in matches {
-        let key = (found.repository_id.clone(), found.path.clone());
-        *frequency_by_document.entry(key).or_insert(0.0) += 1.0;
-    }
-
-    matches
-        .iter()
-        .map(|found| {
-            let key = (found.repository_id.clone(), found.path.clone());
-            let frequency = *frequency_by_document.get(&key).unwrap_or(&1.0);
-            let raw_score =
-                frequency.sqrt() * hybrid_path_quality_multiplier_with_intent(&found.path, intent);
-            HybridChannelHit {
-                document: HybridDocumentRef {
-                    repository_id: found.repository_id.clone(),
-                    path: found.path.clone(),
-                    line: 1,
-                    column: 1,
-                },
-                raw_score,
-                excerpt: found.excerpt.clone(),
-                provenance_id: format!("text:{}:{}:{}", found.path, found.line, found.column),
-            }
-        })
-        .collect()
-}
-
-fn hybrid_path_quality_multiplier_with_intent(path: &str, intent: &HybridRankingIntent) -> f32 {
-    let class = hybrid_source_class(path);
-    let mut multiplier = match class {
-        HybridSourceClass::ErrorContracts => 1.0,
-        HybridSourceClass::ToolContracts => 1.0,
-        HybridSourceClass::BenchmarkDocs => 0.98,
-        HybridSourceClass::Playbooks => {
-            if intent.penalize_playbook_self_reference {
-                0.25
-            } else {
-                0.45
-            }
-        }
-        HybridSourceClass::Documentation => 0.88,
-        HybridSourceClass::Readme => 0.78,
-        HybridSourceClass::Specs => 0.82,
-        HybridSourceClass::Fixtures => 0.92,
-        HybridSourceClass::Tests => 0.97,
-        HybridSourceClass::Runtime => 1.0,
-        HybridSourceClass::Other => {
-            match Path::new(path).extension().and_then(|ext| ext.to_str()) {
-                Some(
-                    "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt"
-                    | "kts",
-                ) => 1.0,
-                _ => 0.9,
-            }
-        }
-    };
-
-    if intent.wants_docs
-        && matches!(
-            class,
-            HybridSourceClass::Documentation
-                | HybridSourceClass::ErrorContracts
-                | HybridSourceClass::ToolContracts
-                | HybridSourceClass::BenchmarkDocs
-        )
-    {
-        multiplier *= 1.36;
-    }
-    if intent.wants_readme && class == HybridSourceClass::Readme {
-        multiplier *= 1.15;
-    }
-    if intent.wants_readme && path == "README.md" {
-        multiplier *= 1.45;
-    }
-    if intent.wants_contracts
-        && matches!(
-            class,
-            HybridSourceClass::ErrorContracts | HybridSourceClass::ToolContracts
-        )
-    {
-        multiplier *= 1.55;
-    }
-    if intent.wants_error_taxonomy && class == HybridSourceClass::ErrorContracts {
-        multiplier *= 1.95;
-    }
-    if path == "contracts/errors.md" && (intent.wants_error_taxonomy || intent.wants_contracts) {
-        multiplier *= 1.70;
-    }
-    if intent.wants_error_taxonomy && path == "crates/cli/src/mcp/server.rs" {
-        multiplier *= 1.35;
-    }
-    if intent.wants_error_taxonomy && path == "crates/cli/src/mcp/deep_search.rs" {
-        multiplier *= 1.18;
-    }
-    if intent.wants_tool_contracts && class == HybridSourceClass::ToolContracts {
-        multiplier *= 2.10;
-    }
-    if path == "contracts/tools/v1/README.md" && intent.wants_tool_contracts {
-        multiplier *= 1.75;
-    }
-    if intent.wants_tool_contracts && path == "crates/cli/src/mcp/tool_surface.rs" {
-        multiplier *= 1.12;
-    }
-    if intent.wants_tool_contracts && path == "crates/cli/tests/tool_surface_parity.rs" {
-        multiplier *= 1.10;
-    }
-    if intent.wants_benchmarks && class == HybridSourceClass::BenchmarkDocs {
-        multiplier *= 2.00;
-    }
-    if intent.wants_benchmarks && path == "benchmarks/deep-search.md" {
-        multiplier *= 1.65;
-    }
-    if intent.wants_contracts && class == HybridSourceClass::Readme {
-        multiplier *= 0.65;
-    }
-    if intent.wants_tool_contracts && class == HybridSourceClass::Readme {
-        multiplier *= 0.68;
-    }
-    if intent.wants_benchmarks && class == HybridSourceClass::Readme {
-        multiplier *= 0.68;
-    }
-    if intent.wants_tests && class == HybridSourceClass::Tests {
-        multiplier *= 1.12;
-    }
-    if intent.wants_fixtures && class == HybridSourceClass::Fixtures {
-        multiplier *= 1.14;
-    }
-    if intent.wants_runtime && class == HybridSourceClass::Runtime {
-        multiplier *= 1.05;
-    }
-
-    multiplier
-}
-
-fn hybrid_source_class(path: &str) -> HybridSourceClass {
-    if path.starts_with("playbooks/") {
-        return HybridSourceClass::Playbooks;
-    }
-    if is_error_contract_path(path) {
-        return HybridSourceClass::ErrorContracts;
-    }
-    if is_tool_contract_path(path) {
-        return HybridSourceClass::ToolContracts;
-    }
-    if path.starts_with("benchmarks/") {
-        return HybridSourceClass::BenchmarkDocs;
-    }
-    if is_readme_path(path) {
-        return HybridSourceClass::Readme;
-    }
-    if path.starts_with("docs/") {
-        return HybridSourceClass::Documentation;
-    }
-    if path.starts_with("fixtures/") {
-        return HybridSourceClass::Fixtures;
-    }
-    if path.starts_with("specs/") {
-        return HybridSourceClass::Specs;
-    }
-    if path.starts_with("tests/")
-        || path.contains("/tests/")
-        || path.ends_with("_test.rs")
-        || path.ends_with("_tests.rs")
-    {
-        return HybridSourceClass::Tests;
-    }
-    if path.starts_with("src/") || path.starts_with("crates/") {
-        return HybridSourceClass::Runtime;
-    }
-
-    HybridSourceClass::Other
-}
-
-fn is_error_contract_path(path: &str) -> bool {
-    path == "contracts/errors.md"
-}
-
-fn is_tool_contract_path(path: &str) -> bool {
-    path.starts_with("contracts/tools/")
-}
-
-fn is_readme_path(path: &str) -> bool {
-    path == "README.md" || path.ends_with("/README.md")
-}
-
-fn hybrid_selection_score(
-    evidence: &HybridRankedEvidence,
-    intent: &HybridRankingIntent,
-    seen_classes: &BTreeMap<HybridSourceClass, usize>,
-) -> f32 {
-    let class = hybrid_source_class(&evidence.document.path);
-    let seen_count = seen_classes.get(&class).copied().unwrap_or(0);
-    let mut score = evidence.blended_score
-        * hybrid_path_quality_multiplier_with_intent(&evidence.document.path, intent);
-
-    if intent.wants_class(class) && seen_count == 0 {
-        score += hybrid_class_novelty_bonus(class);
-    }
-    if seen_count > 0 {
-        score -= hybrid_class_repeat_penalty(class) * seen_count as f32;
-    }
-
-    score
-}
-
-fn hybrid_class_novelty_bonus(class: HybridSourceClass) -> f32 {
-    match class {
-        HybridSourceClass::ErrorContracts
-        | HybridSourceClass::ToolContracts
-        | HybridSourceClass::BenchmarkDocs => 0.08,
-        HybridSourceClass::Documentation
-        | HybridSourceClass::Runtime
-        | HybridSourceClass::Tests => 0.04,
-        HybridSourceClass::Fixtures => 0.035,
-        HybridSourceClass::Readme => 0.02,
-        HybridSourceClass::Playbooks | HybridSourceClass::Specs | HybridSourceClass::Other => 0.0,
-    }
-}
-
-fn hybrid_class_repeat_penalty(class: HybridSourceClass) -> f32 {
-    match class {
-        HybridSourceClass::ToolContracts => 0.09,
-        HybridSourceClass::BenchmarkDocs => 0.07,
-        HybridSourceClass::ErrorContracts | HybridSourceClass::Documentation => 0.05,
-        HybridSourceClass::Readme => 0.03,
-        HybridSourceClass::Runtime | HybridSourceClass::Tests | HybridSourceClass::Fixtures => {
-            0.015
-        }
-        HybridSourceClass::Playbooks | HybridSourceClass::Specs | HybridSourceClass::Other => 0.01,
-    }
-}
-
-fn hybrid_ranked_evidence_order(
-    left: &HybridRankedEvidence,
-    right: &HybridRankedEvidence,
-) -> std::cmp::Ordering {
-    right
-        .blended_score
-        .total_cmp(&left.blended_score)
-        .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
-        .then_with(|| right.graph_score.total_cmp(&left.graph_score))
-        .then_with(|| right.semantic_score.total_cmp(&left.semantic_score))
-        .then(left.document.cmp(&right.document))
-        .then(left.excerpt.cmp(&right.excerpt))
-}
-
-fn build_hybrid_lexical_recall_regex(query_text: &str) -> Option<String> {
-    let tokens = hybrid_lexical_recall_tokens(query_text);
-    if tokens.len() < 2 {
-        return None;
-    }
-
-    let token_pattern = tokens
-        .into_iter()
-        .take(HYBRID_LEXICAL_RECALL_MAX_TOKENS)
-        .map(|token| regex::escape(&token))
-        .collect::<Vec<_>>()
-        .join("|");
-    if token_pattern.is_empty() {
-        return None;
-    }
-
-    Some(format!(r"(?i)\b(?:{token_pattern})\b"))
-}
-
-fn hybrid_lexical_recall_tokens(query_text: &str) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-
-    for ch in query_text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            current.push(ch.to_ascii_lowercase());
-            continue;
-        }
-
-        if let Some(token) = normalize_hybrid_recall_token(&current) {
-            if seen.insert(token.clone()) {
-                tokens.push(token);
-            }
-            current.clear();
-        } else {
-            current.clear();
-        }
-    }
-    if let Some(token) = normalize_hybrid_recall_token(&current) {
-        if seen.insert(token.clone()) {
-            tokens.push(token);
-        }
-    }
-
-    tokens
-}
-
-fn normalize_hybrid_recall_token(token: &str) -> Option<String> {
-    if token.len() < HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN {
-        return None;
-    }
-
-    let token = token.trim().to_ascii_lowercase();
-    if token.is_empty() || is_low_signal_hybrid_recall_token(&token) {
-        return None;
-    }
-
-    Some(token)
-}
-
-fn is_low_signal_hybrid_recall_token(token: &str) -> bool {
-    matches!(
-        token,
-        "about"
-            | "does"
-            | "from"
-            | "frigg"
-            | "into"
-            | "that"
-            | "these"
-            | "this"
-            | "those"
-            | "turn"
-            | "what"
-            | "when"
-            | "where"
-            | "which"
-    )
-}
-
-fn merge_hybrid_lexical_search_output(
-    base: &mut SearchExecutionOutput,
-    supplement: SearchExecutionOutput,
-    limit: usize,
-) {
-    let mut merged_by_key: BTreeMap<(String, String, usize, usize, String), TextMatch> =
-        BTreeMap::new();
-    for found in &base.matches {
-        merged_by_key.insert(
-            (
-                found.repository_id.clone(),
-                found.path.clone(),
-                found.line,
-                found.column,
-                found.excerpt.clone(),
-            ),
-            found.clone(),
-        );
-    }
-    for found in supplement.matches {
-        merged_by_key
-            .entry((
-                found.repository_id.clone(),
-                found.path.clone(),
-                found.line,
-                found.column,
-                found.excerpt.clone(),
-            ))
-            .or_insert(found);
-    }
-
-    base.matches = merged_by_key.into_values().collect::<Vec<_>>();
-    sort_matches_deterministically(&mut base.matches);
-    base.matches.truncate(limit);
-
-    base.diagnostics
-        .entries
-        .extend(supplement.diagnostics.entries);
-    sort_search_diagnostics_deterministically(&mut base.diagnostics.entries);
-    base.diagnostics.entries.dedup();
-}
-
-fn semantic_excerpt(content_text: &str, fallback_path: &str) -> String {
-    content_text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| fallback_path.to_owned())
-}
-
-fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
-    if left.is_empty() || left.len() != right.len() {
-        return None;
-    }
-
-    let mut dot = 0.0_f32;
-    let mut left_norm = 0.0_f32;
-    let mut right_norm = 0.0_f32;
-    for (left_value, right_value) in left.iter().zip(right.iter()) {
-        dot += left_value * right_value;
-        left_norm += left_value * left_value;
-        right_norm += right_value * right_value;
-    }
-
-    if left_norm <= 0.0 || right_norm <= 0.0 {
-        return Some(0.0);
-    }
-
-    Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
-}
-
-fn semantic_projection_score(
-    query_embedding: &[f32],
-    projection: &SemanticChunkEmbeddingProjection,
-    repository_id: &str,
-) -> FriggResult<f32> {
-    cosine_similarity(query_embedding, &projection.embedding).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "semantic similarity dimension mismatch for repository '{repository_id}' path '{}' chunk_id='{}' (query={}, chunk={})",
-            projection.path,
-            projection.chunk_id,
-            query_embedding.len(),
-            projection.embedding.len()
-        ))
-    })
-}
-
-fn apply_hybrid_channel_hits(
-    hits: &[HybridChannelHit],
-    channel: HybridChannel,
-    by_document: &mut BTreeMap<HybridDocumentRef, HybridScoreAccumulator>,
-) {
-    if hits.is_empty() {
-        return;
-    }
-
-    let max_raw_score = hits
-        .iter()
-        .map(|hit| hit.raw_score.max(0.0))
-        .fold(0.0_f32, f32::max);
-    let mut ordered_hits = hits.to_vec();
-    ordered_hits.sort_by(|left, right| {
-        left.document
-            .cmp(&right.document)
-            .then_with(|| right.raw_score.total_cmp(&left.raw_score))
-            .then(left.provenance_id.cmp(&right.provenance_id))
-            .then(left.excerpt.cmp(&right.excerpt))
-    });
-
-    for hit in ordered_hits {
-        let normalized_score = normalize_channel_score(hit.raw_score, max_raw_score);
-        let state =
-            by_document
-                .entry(hit.document.clone())
-                .or_insert_with(|| HybridScoreAccumulator {
-                    excerpt: hit.excerpt.clone(),
-                    lexical_score: 0.0,
-                    graph_score: 0.0,
-                    semantic_score: 0.0,
-                    lexical_sources: Vec::new(),
-                    graph_sources: Vec::new(),
-                    semantic_sources: Vec::new(),
-                });
-
-        if state.excerpt.is_empty() {
-            state.excerpt = hit.excerpt.clone();
-        }
-
-        match channel {
-            HybridChannel::Lexical => {
-                if normalized_score > state.lexical_score {
-                    state.lexical_score = normalized_score;
-                }
-                insert_sorted_unique(&mut state.lexical_sources, hit.provenance_id);
-            }
-            HybridChannel::Graph => {
-                if normalized_score > state.graph_score {
-                    state.graph_score = normalized_score;
-                }
-                insert_sorted_unique(&mut state.graph_sources, hit.provenance_id);
-            }
-            HybridChannel::Semantic => {
-                if normalized_score > state.semantic_score {
-                    state.semantic_score = normalized_score;
-                }
-                insert_sorted_unique(&mut state.semantic_sources, hit.provenance_id);
-            }
-        }
-    }
-}
-
-fn normalize_channel_score(raw_score: f32, max_raw_score: f32) -> f32 {
-    if max_raw_score <= 0.0 {
-        return 0.0;
-    }
-
-    (raw_score.max(0.0) / max_raw_score).clamp(0.0, 1.0)
-}
-
-fn insert_sorted_unique(values: &mut Vec<String>, value: String) {
-    match values.binary_search(&value) {
-        Ok(_) => {}
-        Err(index) => values.insert(index, value),
-    }
 }
 
 #[cfg(test)]
@@ -2754,11 +733,11 @@ mod tests {
     use regex::Regex;
 
     use crate::searcher::{
-        HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridSemanticStatus,
-        HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS, MAX_REGEX_PATTERN_BYTES,
-        MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind, SearchFilters,
-        SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor, TextSearcher,
-        build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
+        HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridRankingIntent,
+        HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS,
+        MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind,
+        SearchFilters, SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor,
+        TextSearcher, build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
         build_hybrid_lexical_recall_regex, build_regex_prefilter_plan, compile_safe_regex,
         hybrid_lexical_recall_tokens, hybrid_source_class, normalize_search_filters,
         rank_hybrid_evidence, rank_hybrid_evidence_for_query,
@@ -3086,6 +1065,117 @@ mod tests {
         assert_eq!(hybrid.note.semantic_status, HybridSemanticStatus::Disabled);
         assert_eq!(hybrid.matches.len(), 1);
         assert_eq!(hybrid.matches[0].document.path, "src/indexed.rs");
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_supplements_manifest_with_hidden_workflows() -> FriggResult<()> {
+        let root = temp_workspace_root("candidate-discovery-hidden-workflow-supplement");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src-tauri/src/main.rs",
+                    "fn main() {\n\
+                     let config = AppConfig::load();\n\
+                     run_pipeline(&config);\n\
+                     }\n",
+                ),
+                (
+                    "src-tauri/src/lib.rs",
+                    "pub fn run() {\n\
+                     let config = AppConfig::load();\n\
+                     run_pipeline(&config);\n\
+                     }\n",
+                ),
+                (
+                    "src-tauri/src/proxy/config.rs",
+                    "pub struct ProxyConfig;\n\
+                     impl ProxyConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/modules/config.rs",
+                    "pub struct ModuleConfig;\n\
+                     impl ModuleConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/models/config.rs",
+                    "pub struct AppConfig;\n\
+                     impl AppConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/proxy/proxy_pool.rs",
+                    "pub struct ProxyPool;\n\
+                     impl ProxyPool { pub fn runner() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/commands/security.rs",
+                    "pub fn security_command_runner() {}\n",
+                ),
+                ("src-tauri/build.rs", "fn main() { tauri_build::build() }\n"),
+                (
+                    ".github/workflows/deploy-pages.yml",
+                    "name: Deploy static content to Pages\n\
+                     jobs:\n\
+                       deploy:\n\
+                         steps:\n\
+                           - name: Deploy to GitHub Pages\n",
+                ),
+                (
+                    ".github/workflows/release.yml",
+                    "name: Release\n\
+                     jobs:\n\
+                       build-tauri:\n\
+                         steps:\n\
+                           - name: Build the app\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                "src-tauri/src/main.rs",
+                "src-tauri/src/lib.rs",
+                "src-tauri/src/proxy/config.rs",
+                "src-tauri/src/modules/config.rs",
+                "src-tauri/src/models/config.rs",
+                "src-tauri/src/proxy/proxy_pool.rs",
+                "src-tauri/src/commands/security.rs",
+                "src-tauri/build.rs",
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap build flow command runner main config".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(8).any(|path| {
+                matches!(
+                    *path,
+                    ".github/workflows/deploy-pages.yml" | ".github/workflows/release.yml"
+                )
+            }),
+            "manifest-backed path recall should still surface hidden GitHub workflow build configs in top-k: {ranked_paths:?}"
+        );
 
         cleanup_workspace(&root);
         Ok(())
@@ -3772,6 +1862,2606 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_http_auth_queries_demote_repo_metadata_noise() -> FriggResult<()> {
+        let query = "where is the optional HTTP MCP auth token declared enforced and documented";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "Cargo.lock",
+                    1,
+                    1,
+                    "source = \"registry+https://github.com/rust-lang/crates.io-index\"",
+                ),
+                text_match(
+                    "repo-001",
+                    "README.md",
+                    1,
+                    1,
+                    "POST /mcp --mcp-http-auth-token FRIGG_MCP_HTTP_AUTH_TOKEN",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/main.rs",
+                    1,
+                    1,
+                    "mcp_http_auth_token bearer_auth_middleware serve_http",
+                ),
+            ],
+            query,
+        );
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            3,
+            query,
+        )?;
+
+        assert_eq!(ranked[0].document.path, "crates/cli/src/main.rs");
+        assert_eq!(ranked[1].document.path, "README.md");
+        assert_eq!(ranked[2].document.path, "Cargo.lock");
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_auth_queries_keep_runtime_and_readme_witnesses() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-auth-runtime-readme");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "README.md",
+                    "POST /mcp --mcp-http-auth-token FRIGG_MCP_HTTP_AUTH_TOKEN\n\
+                     keep --mcp-http-auth-token set or use the FRIGG_MCP_HTTP_AUTH_TOKEN env var\n",
+                ),
+                (
+                    "crates/cli/src/main.rs",
+                    "mcp_http_auth_token: Option<String>\n\
+                     env = \"FRIGG_MCP_HTTP_AUTH_TOKEN\"\n\
+                     bearer_auth_middleware\n\
+                     serve_http\n",
+                ),
+                (
+                    "contracts/errors.md",
+                    "## MCP payload guidance\n\
+                     invalid_params payload guidance\n",
+                ),
+                (
+                    "benchmarks/mcp-tools.md",
+                    "# MCP Tool Benchmark Methodology\n\
+                     benchmark notes for MCP tools\n",
+                ),
+                (
+                    "crates/cli/tests/security.rs",
+                    "fn auth_token_marker() { let marker = \"auth token\"; }\n",
+                ),
+                ("crates/cli/src/lib.rs", "pub mod domain;\n"),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/src/main.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record("repo-001", "snapshot-001", "README.md", 0, vec![0.82, 0.0]),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "contracts/errors.md",
+                    0,
+                    vec![0.76, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "benchmarks/mcp-tools.md",
+                    0,
+                    vec![0.71, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/tests/security.rs",
+                    0,
+                    vec![0.36, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "crates/cli/src/lib.rs",
+                    0,
+                    vec![0.62, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "where is the optional HTTP MCP auth token declared enforced and documented"
+                    .to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert!(output.note.semantic_enabled);
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.contains(&"crates/cli/src/main.rs"),
+            "runtime auth witness should remain visible under semantic-ok ranking: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.contains(&"README.md"),
+            "README auth witness should remain visible when the query explicitly asks where behavior is documented: {ranked_paths:?}"
+        );
+        let readme_position = output
+            .matches
+            .iter()
+            .position(|entry| entry.document.path == "README.md")
+            .expect("README witness position should be present");
+        let benchmark_position = output
+            .matches
+            .iter()
+            .position(|entry| entry.document.path == "benchmarks/mcp-tools.md");
+        assert!(
+            benchmark_position.is_none() || Some(readme_position) < benchmark_position,
+            "README auth docs should outrank benchmark docs for auth-entrypoint queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_queries_choose_build_anchor_excerpt() -> FriggResult<()> {
+        let query = "where the app starts and builds the pipeline runner";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "src/main.rs",
+                    1081,
+                    26,
+                    "let mut runner = build_pipeline_runner(&self.config);",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/main.rs",
+                    1453,
+                    5,
+                    "runner: &PipelineRunner,",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/runner.rs",
+                    1216,
+                    12,
+                    "struct FakeInProcessExecutor {",
+                ),
+            ],
+            query,
+        );
+        let main_hit = lexical
+            .iter()
+            .find(|hit| hit.document.path == "src/main.rs")
+            .expect("main.rs lexical hit should exist");
+
+        assert!(
+            main_hit.excerpt.contains("build_pipeline_runner"),
+            "entrypoint/build-flow queries should keep the strongest build anchor excerpt for main.rs, got {:?}",
+            main_hit.excerpt
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_queries_promote_main_over_runner_helpers() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-entrypoint-build-flow");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/main.rs",
+                    "fn main() {\n\
+                     let config = AppConfig::load();\n\
+                     let mut runner = build_pipeline_runner(&config);\n\
+                     run_pipeline(&mut runner);\n\
+                     }\n\
+                     fn build_pipeline_runner(config: &AppConfig) -> PipelineRunner {\n\
+                     PipelineRunner::new(config.clone())\n\
+                     }\n",
+                ),
+                (
+                    "src/runner.rs",
+                    "pub struct PipelineRunner;\n\
+                     struct FakeInProcessExecutor;\n\
+                     impl PipelineRunner {\n\
+                     pub fn new(_config: AppConfig) -> Self { Self }\n\
+                     }\n",
+                ),
+                (
+                    "tests/pipeline_runner_contract.rs",
+                    "#[test]\n\
+                     fn contract() { let runner = PipelineRunner::default(); }\n",
+                ),
+                (
+                    "specs/01-pipeline-runner/design.md",
+                    "# Design\n\
+                     The pipeline runner boots from the app startup flow.\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/main.rs",
+                    0,
+                    vec![0.92, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/runner.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "tests/pipeline_runner_contract.rs",
+                    0,
+                    vec![0.72, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "specs/01-pipeline-runner/design.md",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "where the app starts and builds the pipeline runner".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert_eq!(output.matches[0].document.path, "src/main.rs");
+        assert!(
+            output.matches[0].excerpt.contains("build_pipeline_runner"),
+            "top entrypoint/build-flow witness should surface the build anchor excerpt, got {:?}",
+            output.matches[0].excerpt
+        );
+        assert!(
+            output
+                .matches
+                .iter()
+                .any(|entry| entry.document.path == "src/runner.rs"),
+            "runner helper should remain available as a secondary witness"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_symbol_plus_entrypoint_queries_keep_runner_family_above_semantic_tail()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-entrypoint-symbol-tail");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/main.rs",
+                    "fn main() {\n\
+                     let config = load_config();\n\
+                     let mut runner = build_pipeline_runner(&config);\n\
+                     run_pipeline(&mut runner);\n\
+                     }\n",
+                ),
+                (
+                    "src/runner.rs",
+                    "pub struct PipelineRunner;\n\
+                     impl PipelineRunner {\n\
+                     pub fn new() -> Self { Self }\n\
+                     }\n",
+                ),
+                ("src/replay.rs", "pub fn bootstrap_replay() {}\n"),
+                (
+                    "src/stt_google_tool.rs",
+                    "pub fn bootstrap_google_tool() {}\n",
+                ),
+                ("src/config.rs", "pub fn bootstrap_config() {}\n"),
+                ("src/lib.rs", "pub fn bootstrap_runtime() {}\n"),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record("repo-001", "snapshot-001", "src/main.rs", 0, vec![1.0, 0.0]),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/runner.rs",
+                    0,
+                    vec![0.82, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/replay.rs",
+                    0,
+                    vec![0.96, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/stt_google_tool.rs",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/config.rs",
+                    0,
+                    vec![0.94, 0.0],
+                ),
+                semantic_record("repo-001", "snapshot-001", "src/lib.rs", 0, vec![0.93, 0.0]),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "build_pipeline_runner entry point bootstrap".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let runner_position = output
+            .matches
+            .iter()
+            .position(|entry| entry.document.path == "src/runner.rs")
+            .expect("runner witness should remain in the ranked set");
+        let replay_position = output
+            .matches
+            .iter()
+            .position(|entry| entry.document.path == "src/replay.rs");
+        let stt_position = output
+            .matches
+            .iter()
+            .position(|entry| entry.document.path == "src/stt_google_tool.rs");
+
+        assert_eq!(output.matches[0].document.path, "src/main.rs");
+        assert!(
+            replay_position.is_none() || runner_position < replay_position.unwrap(),
+            "runner witness should outrank replay semantic tail for mixed symbol-plus-entrypoint queries: {:?}",
+            output.matches
+        );
+        assert!(
+            stt_position.is_none() || runner_position < stt_position.unwrap(),
+            "runner witness should outrank unrelated semantic tail for mixed symbol-plus-entrypoint queries: {:?}",
+            output.matches
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_python_entrypoint_queries_keep_python_witnesses_above_frontend_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-entrypoints-vs-frontend-noise");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "classic/original_autogpt/autogpt/app/main.py",
+                    "from autogpt.app.cli import run_cli\n\
+                     run_cli()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/app.py",
+                    "from fastapi import FastAPI\n\
+                     application = FastAPI()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                    "from backend.copilot.executor.processor import Processor\n\
+                     Processor().run()\n",
+                ),
+                (
+                    "autogpt_platform/backend/pyproject.toml",
+                    "[project]\n\
+                     name = \"autogpt-backend\"\n\
+                     [project.scripts]\n\
+                     backend = \"backend.app:app\"\n",
+                ),
+                (
+                    "classic/benchmark/tests/test_benchmark_workflow.py",
+                    "def verify_graph_shape() -> None:\n\
+                     assert True\n",
+                ),
+                (
+                    "autogpt_platform/frontend/src/components/renderers/InputRenderer/docs/HEIRARCHY.md",
+                    "# Hierarchy\n\
+                     app startup cli main renderer bootstrap guide\n",
+                ),
+                (
+                    "autogpt_platform/frontend/CONTRIBUTING.md",
+                    "# Frontend contributing\n\
+                     app startup cli main contributor notes\n",
+                ),
+                (
+                    "docs/platform/advanced_setup.md",
+                    "# Advanced setup\n\
+                     bootstrap app startup cli main platform setup\n",
+                ),
+                (
+                    "classic/benchmark/frontend/package.json",
+                    "{\n\
+                     \"name\": \"frontend-benchmark\",\n\
+                     \"main\": \"index.js\"\n\
+                     }\n",
+                ),
+                (
+                    "autogpt_platform/frontend/src/app/api/openapi.json",
+                    "{\n\
+                     \"openapi\": \"3.1.0\",\n\
+                     \"info\": {\"title\": \"frontend app main api\"}\n\
+                     }\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/src/components/renderers/InputRenderer/docs/HEIRARCHY.md",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "docs/platform/advanced_setup.md",
+                    0,
+                    vec![0.99, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/src/app/api/openapi.json",
+                    0,
+                    vec![0.97, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/CONTRIBUTING.md",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "classic/benchmark/frontend/package.json",
+                    0,
+                    vec![0.93, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "classic/original_autogpt/autogpt/app/main.py",
+                    0,
+                    vec![0.78, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/backend/app.py",
+                    0,
+                    vec![0.76, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                    0,
+                    vec![0.74, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/pyproject.toml",
+                    0,
+                    vec![0.70, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "classic/benchmark/tests/test_benchmark_workflow.py",
+                    0,
+                    vec![0.68, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap app startup cli main".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(5)
+                .any(|path| *path == "classic/original_autogpt/autogpt/app/main.py"),
+            "python main entrypoint should appear in the top witness set: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(5)
+                .any(|path| *path == "autogpt_platform/backend/backend/app.py"),
+            "python app runtime witness should appear in the top witness set: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(5)
+                .any(|path| *path == "autogpt_platform/backend/pyproject.toml"),
+            "python runtime config should appear in the top witness set: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(5)
+                .any(|path| *path == "classic/benchmark/tests/test_benchmark_workflow.py"),
+            "python tests should remain visible in the top witness set: {ranked_paths:?}"
+        );
+
+        let main_position = ranked_paths
+            .iter()
+            .position(|path| *path == "classic/original_autogpt/autogpt/app/main.py")
+            .expect("python main entrypoint should be ranked");
+        let app_position = ranked_paths
+            .iter()
+            .position(|path| *path == "autogpt_platform/backend/backend/app.py")
+            .expect("python app witness should be ranked");
+        if let Some(openapi_position) = ranked_paths
+            .iter()
+            .position(|path| *path == "autogpt_platform/frontend/src/app/api/openapi.json")
+        {
+            assert!(
+                main_position < openapi_position,
+                "python main entrypoint should outrank frontend openapi noise: {ranked_paths:?}"
+            );
+        }
+        if let Some(frontend_doc_position) = ranked_paths.iter().position(|path| {
+            *path == "autogpt_platform/frontend/src/components/renderers/InputRenderer/docs/HEIRARCHY.md"
+        }) {
+            assert!(
+                app_position < frontend_doc_position,
+                "python app witness should outrank frontend hierarchy docs: {ranked_paths:?}"
+            );
+        }
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_python_entrypoint_queries_prefer_canonical_entrypoints_over_backend_modules()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-entrypoints-vs-backend-modules");
+        let mut files = vec![
+            (
+                "classic/original_autogpt/autogpt/app/main.py".to_owned(),
+                "from autogpt.app.cli import run_cli\nrun_cli()\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/app.py".to_owned(),
+                "from fastapi import FastAPI\napplication = FastAPI()\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/copilot/executor/__main__.py".to_owned(),
+                "from backend.copilot.executor.processor import Processor\nProcessor().run()\n"
+                    .to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/pyproject.toml".to_owned(),
+                "[project]\nname = \"autogpt-backend\"\n[project.scripts]\nbackend = \"backend.app:app\"\n"
+                    .to_owned(),
+            ),
+            (
+                "autogpt_platform/autogpt_libs/pyproject.toml".to_owned(),
+                "[project]\nname = \"autogpt-libs\"\n".to_owned(),
+            ),
+            (
+                "classic/original_autogpt/pyproject.toml".to_owned(),
+                "[project]\nname = \"classic-autogpt\"\n".to_owned(),
+            ),
+            (
+                "classic/benchmark/tests/test_benchmark_workflow.py".to_owned(),
+                "def verify_graph_shape() -> None:\n    assert True\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/blocks/twitter/tweets/manage.py".to_owned(),
+                "def main() -> None:\n    return None\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/cli.py".to_owned(),
+                "def main() -> None:\n    return None\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/blocks/notion/read_database.py".to_owned(),
+                "def read_database() -> dict:\n    return {\"status\": \"ok\"}\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/api/features/mcp/test_routes.py".to_owned(),
+                "def test_routes_health() -> None:\n    assert True\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/copilot/executor/processor.py".to_owned(),
+                "class Processor:\n    def run(self) -> None:\n        pass\n".to_owned(),
+            ),
+            (
+                "autogpt_platform/backend/backend/blocks/data_manipulation.py".to_owned(),
+                "def transform_records() -> None:\n    return None\n".to_owned(),
+            ),
+        ];
+        for index in 0..40 {
+            files.push((
+                format!("autogpt_platform/backend/backend/blocks/generated/noise_{index}.py"),
+                format!("def generated_module_{index}() -> None:\n    return None\n"),
+            ));
+        }
+        let file_refs = files
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str()))
+            .collect::<Vec<_>>();
+        prepare_workspace(&root, &file_refs)?;
+
+        let mut semantic_records = vec![
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/pyproject.toml",
+                0,
+                vec![1.0, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/autogpt_libs/pyproject.toml",
+                0,
+                vec![0.995, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "classic/original_autogpt/pyproject.toml",
+                0,
+                vec![0.992, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/blocks/notion/read_database.py",
+                0,
+                vec![0.99, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/blocks/twitter/tweets/manage.py",
+                0,
+                vec![0.985, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/api/features/mcp/test_routes.py",
+                0,
+                vec![0.98, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/cli.py",
+                0,
+                vec![0.975, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/copilot/executor/processor.py",
+                0,
+                vec![0.97, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/blocks/data_manipulation.py",
+                0,
+                vec![0.96, 0.0],
+            ),
+        ];
+        for index in 0..40 {
+            semantic_records.push(semantic_record(
+                "repo-001",
+                "snapshot-001",
+                &format!("autogpt_platform/backend/backend/blocks/generated/noise_{index}.py"),
+                0,
+                vec![0.95 - (index as f32 * 0.002), 0.0],
+            ));
+        }
+        semantic_records.extend([
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "classic/original_autogpt/autogpt/app/main.py",
+                0,
+                vec![0.78, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/app.py",
+                0,
+                vec![0.76, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                0,
+                vec![0.74, 0.0],
+            ),
+            semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "classic/benchmark/tests/test_benchmark_workflow.py",
+                0,
+                vec![0.72, 0.0],
+            ),
+        ]);
+        seed_semantic_embeddings(&root, "repo-001", "snapshot-001", &semantic_records)?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        config.max_search_results = 8;
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap app startup cli main config tests benchmark workflow"
+                    .to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(8)
+                .any(|path| *path == "classic/original_autogpt/autogpt/app/main.py"),
+            "main.py should remain visible via path-shaped witness recall even without content overlap: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(8)
+                .any(|path| *path == "autogpt_platform/backend/backend/app.py"),
+            "app.py should remain visible via path-shaped witness recall even without content overlap: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(8).any(
+                |path| *path == "autogpt_platform/backend/backend/copilot/executor/__main__.py"
+            ),
+            "__main__.py should remain visible via path-shaped witness recall even without content overlap: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(8)
+                .any(|path| *path == "classic/benchmark/tests/test_benchmark_workflow.py"),
+            "python tests should remain visible in the crowded anchored witness set: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_python_config_queries_prefer_runtime_manifests_over_readmes()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-config-vs-readmes");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "README.md",
+                    "# Setup\nconfig setup pyproject installation guide\n",
+                ),
+                (
+                    "docs/setup.md",
+                    "# Platform setup\nconfig setup pyproject walkthrough\n",
+                ),
+                (
+                    "autogpt_platform/backend/pyproject.toml",
+                    "[project]\nname = \"autogpt-backend\"\n",
+                ),
+                (
+                    "classic/original_autogpt/setup.py",
+                    "from setuptools import setup\nsetup(name=\"classic-autogpt\")\n",
+                ),
+                (
+                    "autogpt_platform/frontend/package.json",
+                    "{\n  \"name\": \"frontend\"\n}\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record("repo-001", "snapshot-001", "README.md", 0, vec![1.0, 0.0]),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "docs/setup.md",
+                    0,
+                    vec![0.98, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/package.json",
+                    0,
+                    vec![0.96, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/pyproject.toml",
+                    0,
+                    vec![0.82, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "classic/original_autogpt/setup.py",
+                    0,
+                    vec![0.8, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        config.max_search_results = 5;
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "config setup pyproject".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        let backend_pyproject_position = ranked_paths
+            .iter()
+            .position(|path| *path == "autogpt_platform/backend/pyproject.toml")
+            .expect("pyproject witness should be ranked");
+        let readme_position = ranked_paths
+            .iter()
+            .position(|path| *path == "README.md")
+            .expect("README noise should still be ranked");
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(3)
+                .any(|path| *path == "autogpt_platform/backend/pyproject.toml"),
+            "runtime manifest should appear near the top for focused config queries: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(4)
+                .any(|path| *path == "classic/original_autogpt/setup.py"),
+            "setup.py witness should remain visible for focused config queries: {ranked_paths:?}"
+        );
+        assert!(
+            backend_pyproject_position < readme_position,
+            "runtime manifest should outrank README drift for focused config queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_python_test_queries_prefer_backend_tests_over_frontend_docs()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-tests-vs-frontend-docs");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                    "def test_e2e_auth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+                    "def build_test_helpers() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/frontend/src/tests/CLAUDE.md",
+                    "# Frontend tests\ntests e2e helpers guidance\n",
+                ),
+                (
+                    "autogpt_platform/frontend/CLAUDE.md",
+                    "# Frontend guide\ntests e2e helpers overview\n",
+                ),
+                (
+                    "docs/testing.md",
+                    "# Testing guide\ntests e2e helpers reference\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/src/tests/CLAUDE.md",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/frontend/CLAUDE.md",
+                    0,
+                    vec![0.98, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "docs/testing.md",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                    0,
+                    vec![0.82, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+                    0,
+                    vec![0.80, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        config.max_search_results = 5;
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests e2e helpers".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        let backend_test_position = ranked_paths
+            .iter()
+            .position(|path| *path == "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py")
+            .expect("backend test witness should be ranked");
+        let frontend_doc_position = ranked_paths
+            .iter()
+            .position(|path| *path == "autogpt_platform/frontend/src/tests/CLAUDE.md")
+            .expect("frontend doc noise should still be ranked");
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(3)
+                .any(|path| *path == "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py"),
+            "backend test witness should appear near the top for focused tests queries: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(4)
+                .any(|path| *path == "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py"),
+            "test helper witness should remain visible for focused tests queries: {ranked_paths:?}"
+        );
+        assert!(
+            backend_test_position < frontend_doc_position,
+            "backend test witness should outrank frontend test docs: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_rust_config_queries_rescue_cargo_manifests_from_path_witness_recall()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-config-path-witness");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "crates/ruff/src/commands/config.rs",
+                    "pub fn config_command() { let _ = \"config cargo\"; }\n",
+                ),
+                ("crates/ruff/Cargo.toml", "[package]\nname = \"ruff\"\n"),
+                (
+                    "README.md",
+                    "# Config guide\nconfig cargo setup walkthrough\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "config cargo".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let cargo_position = ranked_paths
+            .iter()
+            .position(|path| *path == "crates/ruff/Cargo.toml")
+            .expect("Cargo.toml witness should be ranked");
+        let readme_position = ranked_paths
+            .iter()
+            .position(|path| *path == "README.md")
+            .expect("README noise should still be ranked");
+
+        assert!(
+            cargo_position < readme_position,
+            "Cargo.toml should outrank README drift for `config cargo` queries: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(3)
+                .any(|path| *path == "crates/ruff/Cargo.toml"),
+            "Cargo.toml should land near the top via config-artifact path recall: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_examples_queries_keep_examples_and_benches_visible_over_test_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-examples-benches");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "crates/ruff/tests/cli/main.rs",
+                    "tests examples fixtures integration benchmark\n",
+                ),
+                (
+                    "crates/ruff/tests/cli/lint.rs",
+                    "tests examples fixtures integration benchmark\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/tests/examples.rs",
+                    "tests examples fixtures integration benchmark\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/examples/expected_type.rs",
+                    "pub fn demo_example() {}\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/formatter.rs",
+                    "pub fn bench_formatter() {}\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/ty.rs",
+                    "pub fn bench_ty() {}\n",
+                ),
+                (
+                    "crates/ruff/src/cache.rs",
+                    "tests examples fixtures integration benchmark\n",
+                ),
+                (
+                    "docs/examples.md",
+                    "# Examples\ntests examples fixtures integration benchmark\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests examples fixtures integration benchmark".to_owned(),
+                limit: 6,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(3).any(|path| matches!(
+                *path,
+                "crates/ruff_annotate_snippets/examples/expected_type.rs"
+                    | "crates/ruff_benchmark/benches/formatter.rs"
+            )),
+            "an examples-or-benches witness should land near the top: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_tests_queries_keep_cli_runtime_witnesses_visible_over_bounded_doc_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-cli-runtime-test-witnesses");
+        let mut files = (0..24)
+            .map(|index| {
+                (
+                    format!("docs/alpha-{index:02}.md"),
+                    format!(
+                        "# Alpha {index}\ntests examples fixtures integration benchmark latest tool\n"
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        files.extend([
+            (
+                "docs/cli/latest.md".to_owned(),
+                "# `mise latest`\nGets the latest available version for a plugin\n".to_owned(),
+            ),
+            (
+                "docs/cli/tool.md".to_owned(),
+                "# `mise tool`\nGets information about a tool\n".to_owned(),
+            ),
+            (
+                "src/cli/latest.rs".to_owned(),
+                "/// Gets the latest available version for a plugin\npub struct Latest;\n"
+                    .to_owned(),
+            ),
+            (
+                "src/cli/test_tool.rs".to_owned(),
+                "/// Test a tool installs and executes\npub struct TestTool;\n".to_owned(),
+            ),
+            (
+                "src/test.rs".to_owned(),
+                "pub fn init_test_env() { let _ = \"tests fixtures integration\"; }\n".to_owned(),
+            ),
+        ]);
+        let file_refs = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect::<Vec<_>>();
+        prepare_workspace(&root, &file_refs)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests examples fixtures integration benchmark latest tool".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.contains(&"src/cli/latest.rs"),
+            "path witness recall should keep the CLI runtime witness visible in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_laravel_ui_queries_surface_livewire_and_blade_witnesses()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-laravel-ui-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                ("app/Livewire/Dashboard.php", "<?php\nclass Dashboard {}\n"),
+                (
+                    "app/Livewire/ActivityMonitor.php",
+                    "<?php\nclass ActivityMonitor {}\n",
+                ),
+                (
+                    "resources/views/livewire/subscription/show.blade.php",
+                    "<div>subscription</div>\n",
+                ),
+                (
+                    "resources/views/livewire/dashboard.blade.php",
+                    "<div>dashboard</div>\n",
+                ),
+                (
+                    "resources/views/layouts/simple.blade.php",
+                    "<x-layouts.simple />\n",
+                ),
+                (
+                    "resources/views/layouts/app.blade.php",
+                    "<x-app-layout />\n",
+                ),
+                ("resources/views/components/navbar.blade.php", "<nav />\n"),
+                (
+                    "resources/views/components/applications/advanced.blade.php",
+                    "<x-applications.advanced />\n",
+                ),
+                (
+                    "resources/views/auth/verify-email.blade.php",
+                    "<x-auth.verify-email />\n",
+                ),
+                ("TECH_STACK.md", "# Tech Stack\nLaravel Livewire Flux\n"),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/livewire/subscription/show.blade.php",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/layouts/simple.blade.php",
+                    0,
+                    vec![0.99, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/components/navbar.blade.php",
+                    0,
+                    vec![0.985, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/livewire/dashboard.blade.php",
+                    0,
+                    vec![0.98, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/layouts/app.blade.php",
+                    0,
+                    vec![0.97, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "TECH_STACK.md",
+                    0,
+                    vec![0.965, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Livewire/Dashboard.php",
+                    0,
+                    vec![0.90, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Livewire/ActivityMonitor.php",
+                    0,
+                    vec![0.89, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/components/applications/advanced.blade.php",
+                    0,
+                    vec![0.87, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/auth/verify-email.blade.php",
+                    0,
+                    vec![0.86, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "blade livewire flux component view slot section".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths
+                .iter()
+                .any(|path| *path == "app/Livewire/Dashboard.php"
+                    || *path == "app/Livewire/ActivityMonitor.php"),
+            "Laravel UI ranking should keep a Livewire component witness in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().any(|path| {
+                *path == "resources/views/components/applications/advanced.blade.php"
+                    || *path == "resources/views/auth/verify-email.blade.php"
+            }),
+            "Laravel UI ranking should keep a Blade view witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_laravel_ui_queries_avoid_unit3d_component_only_collapse() -> FriggResult<()> {
+        let query = "blade livewire flux component view slot section";
+        let make_hit = |path: &str, raw_score: f32, excerpt: &str| HybridChannelHit {
+            document: HybridDocumentRef {
+                repository_id: "repo-001".to_owned(),
+                path: path.to_owned(),
+                line: 1,
+                column: 1,
+            },
+            raw_score,
+            excerpt: excerpt.to_owned(),
+            provenance_id: format!("lexical::{path}"),
+        };
+        let lexical = vec![
+            make_hit(
+                "resources/views/components/forum/post.blade.php",
+                1.00,
+                "@props(['post'])\n<article class=\"post\" x-data>\n",
+            ),
+            make_hit(
+                "resources/views/components/torrent/row.blade.php",
+                0.99,
+                "@props(['torrent'])\n<tr data-torrent-id=\"1\">\n",
+            ),
+            make_hit(
+                "resources/views/components/forum/topic-listing.blade.php",
+                0.98,
+                "<section class=\"topic-listing\"></section>\n",
+            ),
+            make_hit(
+                "resources/views/components/torrent/comment-listing.blade.php",
+                0.97,
+                "<section class=\"comment-listing\"></section>\n",
+            ),
+            make_hit(
+                "resources/views/components/tv/card.blade.php",
+                0.96,
+                "<x-card><x-slot:title>TV</x-slot:title></x-card>\n",
+            ),
+            make_hit(
+                "resources/views/components/forum/subforum-listing.blade.php",
+                0.95,
+                "<section class=\"subforum-listing\"></section>\n",
+            ),
+            make_hit(
+                "resources/views/components/user-tag.blade.php",
+                0.94,
+                "<x-user-tag />\n",
+            ),
+            make_hit(
+                "resources/views/components/playlist/card.blade.php",
+                0.93,
+                "<x-card><x-slot:title>Playlist</x-slot:title></x-card>\n",
+            ),
+            make_hit(
+                "resources/views/Staff/announce/index.blade.php",
+                0.91,
+                "@section('main')\n    @livewire('announce-search')\n@endsection\n",
+            ),
+            make_hit(
+                "resources/views/Staff/application/index.blade.php",
+                0.90,
+                "@section('main')\n    @livewire('application-search')\n@endsection\n",
+            ),
+            make_hit(
+                "resources/views/livewire/announce-search.blade.php",
+                0.89,
+                "<section class=\"panelV2\">\n    <input wire:model.live=\"torrentId\" />\n</section>\n",
+            ),
+            make_hit(
+                "resources/views/livewire/apikey-search.blade.php",
+                0.88,
+                "<section class=\"panelV2\">\n    <input wire:model.live=\"apikey\" />\n</section>\n",
+            ),
+            make_hit(
+                "app/Http/Livewire/AnnounceSearch.php",
+                0.87,
+                "<?php class AnnounceSearch extends Component {}\n",
+            ),
+        ];
+
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            8,
+            query,
+        )?;
+        let ranked_paths = ranked
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .any(|path| path.starts_with("resources/views/Staff/")),
+            "Laravel UI ranking should keep a non-component Blade view witness in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .any(|path| path.starts_with("resources/views/livewire/")),
+            "Laravel UI ranking should keep a Livewire Blade view witness in top-k: {ranked_paths:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_laravel_route_queries_surface_route_witnesses() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-laravel-route-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                ("composer.lock", "{\n  \"packages\": []\n}\n"),
+                (
+                    "tests/Feature/TrustHostsMiddlewareTest.php",
+                    "<?php\nclass TrustHostsMiddlewareTest {}\n",
+                ),
+                (
+                    "tests/Feature/CommandInjectionSecurityTest.php",
+                    "<?php\nclass CommandInjectionSecurityTest {}\n",
+                ),
+                (
+                    "app/Providers/FortifyServiceProvider.php",
+                    "<?php\nclass FortifyServiceProvider {}\n",
+                ),
+                (
+                    "app/Providers/RouteServiceProvider.php",
+                    "<?php\nclass RouteServiceProvider {}\n",
+                ),
+                (
+                    "app/Providers/ConfigurationServiceProvider.php",
+                    "<?php\nclass ConfigurationServiceProvider {}\n",
+                ),
+                ("routes/web.php", "<?php\nRoute::get('/', fn () => 'ok');\n"),
+                (
+                    "routes/api.php",
+                    "<?php\nRoute::get('/api', fn () => 'ok');\n",
+                ),
+                (
+                    "routes/webhooks.php",
+                    "<?php\nRoute::post('/webhooks', fn () => 'ok');\n",
+                ),
+                ("bootstrap/app.php", "<?php\nreturn 'bootstrap';\n"),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "tests/Feature/CommandInjectionSecurityTest.php",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "tests/Feature/TrustHostsMiddlewareTest.php",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Providers/FortifyServiceProvider.php",
+                    0,
+                    vec![0.92, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Providers/RouteServiceProvider.php",
+                    0,
+                    vec![0.90, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Providers/ConfigurationServiceProvider.php",
+                    0,
+                    vec![0.89, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "composer.lock",
+                    0,
+                    vec![0.87, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "routes/web.php",
+                    0,
+                    vec![0.82, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "routes/api.php",
+                    0,
+                    vec![0.81, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "routes/webhooks.php",
+                    0,
+                    vec![0.80, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "bootstrap/app.php",
+                    0,
+                    vec![0.79, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "bootstrap providers routes middleware app entrypoint".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().any(|path| matches!(
+                *path,
+                "routes/web.php" | "routes/api.php" | "routes/webhooks.php"
+            )),
+            "Laravel route ranking should keep a routes witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_laravel_linkstack_queries_recover_layouts_and_blade_views()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-laravel-linkstack-layouts-and-views");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "app/View/Components/AppLayout.php",
+                    "<?php\nnamespace App\\View\\Components;\nuse Illuminate\\View\\Component;\nclass AppLayout extends Component {\n    public function render() {\n        return view('layouts.app');\n    }\n}\n",
+                ),
+                (
+                    "app/View/Components/GuestLayout.php",
+                    "<?php\nnamespace App\\View\\Components;\nuse Illuminate\\View\\Component;\nclass GuestLayout extends Component {\n    public function render() {\n        return view('layouts.guest');\n    }\n}\n",
+                ),
+                (
+                    "app/View/Components/Modal.php",
+                    "<?php\nnamespace App\\View\\Components;\nuse Illuminate\\View\\Component;\nclass Modal extends Component {\n    public function render() {\n        return view('components.modal');\n    }\n}\n",
+                ),
+                (
+                    "app/View/Components/PageItemDisplay.php",
+                    "<?php\nnamespace App\\View\\Components;\nuse Illuminate\\View\\Component;\nclass PageItemDisplay extends Component {\n    public function render() {\n        return view('components.page-item-display');\n    }\n}\n",
+                ),
+                (
+                    "app/Models/Page.php",
+                    "<?php\nnamespace App\\Models;\nclass Page {}\n",
+                ),
+                (
+                    "resources/views/components/finishing.blade.php",
+                    "<x-alert>\n<x-slot name=\"title\">blade layout component slot section render page navigation</x-slot>\n<div>blade layout component slot section render page navigation blade layout component slot section render page navigation</div>\n</x-alert>\n",
+                ),
+                (
+                    "resources/views/components/alert.blade.php",
+                    "<div class=\"alert\">blade component layout slot section view render</div>\n",
+                ),
+                (
+                    "resources/views/components/auth-card.blade.php",
+                    "<section class=\"auth-card\">blade component layout slot section view render</section>\n",
+                ),
+                (
+                    "resources/views/layouts/app.blade.php",
+                    "@include('layouts.analytics')\n@include('layouts.navigation')\n<header>{{ $header }}</header>\n<main>{{ $slot }}</main>\n",
+                ),
+                (
+                    "resources/views/layouts/guest.blade.php",
+                    "<main class=\"guest-layout\">{{ $slot }}</main>\n",
+                ),
+                (
+                    "resources/views/layouts/analytics.blade.php",
+                    "<script>window.analytics = true;</script>\n",
+                ),
+                (
+                    "resources/views/layouts/navigation.blade.php",
+                    "<nav class=\"main-nav\">navigation</nav>\n",
+                ),
+                (
+                    "resources/views/auth/forgot-password.blade.php",
+                    "<x-guest-layout>\n@include('layouts.lang')\n<x-auth-card>\n<x-slot name=\"logo\"></x-slot>\n@section('content') blade component layout slot section view render @endsection\n</x-auth-card>\n</x-guest-layout>\n",
+                ),
+                (
+                    "resources/views/auth/login.blade.php",
+                    "<x-guest-layout>\n<x-auth-card>\n<x-slot name=\"logo\"></x-slot>\n@section('content') blade component layout slot section view render @endsection\n</x-auth-card>\n</x-guest-layout>\n",
+                ),
+                (
+                    "resources/views/admin/linktype/index.blade.php",
+                    "@extends('layouts.app')\n@section('content')\n<a href=\"/admin/linktype/create\">blade component layout slot section view render</a>\n@endsection\n",
+                ),
+                (
+                    "TECH_STACK.md",
+                    "Blade Laravel view component layout reference.\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/components/finishing.blade.php",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/Models/Page.php",
+                    0,
+                    vec![0.99, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/View/Components/AppLayout.php",
+                    0,
+                    vec![0.98, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/View/Components/GuestLayout.php",
+                    0,
+                    vec![0.97, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/View/Components/PageItemDisplay.php",
+                    0,
+                    vec![0.96, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/components/alert.blade.php",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "app/View/Components/Modal.php",
+                    0,
+                    vec![0.94, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/components/auth-card.blade.php",
+                    0,
+                    vec![0.93, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/auth/forgot-password.blade.php",
+                    0,
+                    vec![0.92, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/auth/login.blade.php",
+                    0,
+                    vec![0.91, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/admin/linktype/index.blade.php",
+                    0,
+                    vec![0.90, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/layouts/app.blade.php",
+                    0,
+                    vec![0.89, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/layouts/guest.blade.php",
+                    0,
+                    vec![0.88, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "resources/views/layouts/analytics.blade.php",
+                    0,
+                    vec![0.87, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "TECH_STACK.md",
+                    0,
+                    vec![0.86, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let layout_output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "blade layout component slot section render page navigation".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &executor,
+        )?;
+        let layout_paths = layout_output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            layout_paths.iter().any(|path| matches!(
+                *path,
+                "resources/views/layouts/app.blade.php"
+                    | "resources/views/layouts/guest.blade.php"
+                    | "resources/views/layouts/analytics.blade.php"
+            )),
+            "Laravel UI ranking should keep a Blade layout witness in top-k under component-class pressure: {layout_paths:?}"
+        );
+
+        let blade_view_output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "blade component layout slot section view render".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &executor,
+        )?;
+        let blade_view_paths = blade_view_output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            blade_view_paths.iter().any(|path| matches!(
+                *path,
+                "resources/views/auth/forgot-password.blade.php"
+                    | "resources/views/auth/login.blade.php"
+                    | "resources/views/admin/linktype/index.blade.php"
+            )),
+            "Laravel UI ranking should keep a concrete Blade page witness in top-k under component-class pressure: {blade_view_paths:?}"
+        );
+        assert!(
+            blade_view_paths.iter().any(|path| matches!(
+                *path,
+                "resources/views/components/alert.blade.php"
+                    | "resources/views/components/auth-card.blade.php"
+                    | "resources/views/components/finishing.blade.php"
+            )),
+            "Laravel UI ranking should still keep a Blade component witness in top-k: {blade_view_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_prefers_exact_php_test_harness_excerpt() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-php-test-harness-excerpt");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "tests/CreatesApplication.php",
+                    "<?php\n\ntrait CreatesApplication {}\n",
+                ),
+                (
+                    "tests/DuskTestCase.php",
+                    "<?php\n\nabstract class DuskTestCase {}\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let query = "tests fixtures integration tests createsapplication dusktestcase";
+        let intent = HybridRankingIntent::from_query(query);
+        let output = searcher.search_path_witness_recall_with_filters(
+            query,
+            &SearchFilters::default(),
+            8,
+            &intent,
+        )?;
+
+        let creates_application = output
+            .matches
+            .iter()
+            .find(|entry| entry.path == "tests/CreatesApplication.php")
+            .expect("CreatesApplication path witness should be returned");
+        let dusk_test_case = output
+            .matches
+            .iter()
+            .find(|entry| entry.path == "tests/DuskTestCase.php")
+            .expect("DuskTestCase path witness should be returned");
+
+        assert!(
+            creates_application.excerpt.contains("CreatesApplication"),
+            "path witness recall should choose the exact harness line, got {:?}",
+            creates_application.excerpt
+        );
+        assert!(
+            dusk_test_case.excerpt.contains("DuskTestCase"),
+            "path witness recall should choose the exact harness line, got {:?}",
+            dusk_test_case.excerpt
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_cli_entrypoint_queries_prefer_cli_test_witnesses_over_runtime_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-cli-test-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "crates/ruff/src/commands/analyze_graph.rs",
+                    "pub fn analyze_graph() { let _ = \"ruff analyze\"; }\n",
+                ),
+                (
+                    "crates/ruff_linter/src/checkers/ast/analyze/expression.rs",
+                    "pub fn analyze_expression() { let _ = \"ruff analyze\"; }\n",
+                ),
+                (
+                    "crates/ruff_linter/src/checkers/ast/analyze/module.rs",
+                    "pub fn analyze_module() { let _ = \"ruff analyze\"; }\n",
+                ),
+                (
+                    "crates/ruff_linter/src/checkers/ast/analyze/suite.rs",
+                    "pub fn analyze_suite() { let _ = \"ruff analyze\"; }\n",
+                ),
+                (
+                    "crates/ruff_linter/src/lib.rs",
+                    "pub fn lib_runtime() { let _ = \"ruff analyze\"; }\n",
+                ),
+                (
+                    "crates/ruff_linter/resources/test/fixtures/isort/pyproject.toml",
+                    "[tool.ruff]\nline-length = 88\n",
+                ),
+                (
+                    "crates/ruff/tests/integration_test.rs",
+                    "mod integration_test {}\n",
+                ),
+                (
+                    ".github/workflows/ci.yaml",
+                    "ruff analyze cli entrypoint workflow\n",
+                ),
+                (
+                    "crates/ruff/tests/cli/analyze_graph.rs",
+                    "mod cli_analyze_graph {}\n",
+                ),
+                ("crates/ruff/tests/cli/main.rs", "mod cli_main {}\n"),
+                ("crates/ruff/tests/cli/format.rs", "mod cli_format {}\n"),
+                ("crates/ruff/tests/cli/lint.rs", "mod cli_lint {}\n"),
+                ("crates/ruff/tests/config.rs", "mod config_test {}\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "ruff analyze ruff cli entrypoint".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths
+                .iter()
+                .take(4)
+                .any(|path| *path == "crates/ruff/tests/cli/analyze_graph.rs"),
+            "CLI analyze_graph test witness should land near the top for the saved query: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(5)
+                .any(|path| *path == "crates/ruff/tests/cli/main.rs"),
+            "secondary CLI test witness should remain visible near the top: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_ci_workflow_queries_surface_hidden_workflow_witnesses() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-ci-workflow-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    ".github/workflows/autofix.yml",
+                    "name: autofix.ci\njobs:\n  autofix:\n    steps:\n      - run: cargo codegen\n",
+                ),
+                (
+                    ".github/workflows/bench_cli.yml",
+                    "name: Bench CLI\njobs:\n  bench:\n    steps:\n      - run: cargo bench\n",
+                ),
+                (
+                    "crates/noise/src/github.rs",
+                    "pub fn github_reporter() { let _ = \"github workflow autofix\"; }\n",
+                ),
+                (
+                    "crates/noise/src/autofix.rs",
+                    "pub fn autofix_runtime() { let _ = \"autofix runtime\"; }\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "github workflow autofix bench cli".to_owned(),
+                limit: 4,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(4).any(|path| matches!(
+                *path,
+                ".github/workflows/autofix.yml" | ".github/workflows/bench_cli.yml"
+            )),
+            "CI workflow query should surface a hidden workflow witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_scripts_ops_queries_surface_script_and_justfile_witnesses() -> FriggResult<()>
+    {
+        let root = temp_workspace_root("hybrid-scripts-ops-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                ("justfile", "fmt:\n\tcargo fmt\n"),
+                (
+                    "scripts/print-changelog.sh",
+                    "#!/usr/bin/env bash\necho changelog\n",
+                ),
+                (
+                    "scripts/update-manifests.mjs",
+                    "console.log('update manifests');\n",
+                ),
+                ("docs/changelog.md", "# Changelog\nupdate notes\n"),
+                ("src/version.rs", "pub const VERSION: &str = \"1.0.0\";\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "scripts justfile changelog manifests".to_owned(),
+                limit: 4,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(4).any(|path| matches!(
+                *path,
+                "justfile" | "scripts/print-changelog.sh" | "scripts/update-manifests.mjs"
+            )),
+            "scripts/ops query should surface a concrete script witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-entrypoint-build-workflows");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src-tauri/src/main.rs",
+                    "fn main() {\n\
+                     let config = AppConfig::load();\n\
+                     run_pipeline(&config);\n\
+                     }\n",
+                ),
+                (
+                    "src-tauri/src/lib.rs",
+                    "pub fn run() {\n\
+                     let config = AppConfig::load();\n\
+                     run_pipeline(&config);\n\
+                     }\n",
+                ),
+                (
+                    "src-tauri/src/proxy/config.rs",
+                    "pub struct ProxyConfig;\n\
+                     impl ProxyConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/modules/config.rs",
+                    "pub struct ModuleConfig;\n\
+                     impl ModuleConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/models/config.rs",
+                    "pub struct AppConfig;\n\
+                     impl AppConfig { pub fn load() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/proxy/proxy_pool.rs",
+                    "pub struct ProxyPool;\n\
+                     impl ProxyPool { pub fn runner() -> Self { Self } }\n",
+                ),
+                (
+                    "src-tauri/src/commands/security.rs",
+                    "pub fn security_command_runner() {}\n",
+                ),
+                ("src-tauri/build.rs", "fn main() { tauri_build::build() }\n"),
+                (
+                    ".github/workflows/deploy-pages.yml",
+                    "name: Deploy static content to Pages\n\
+                     jobs:\n\
+                       deploy:\n\
+                         steps:\n\
+                           - name: Deploy to GitHub Pages\n",
+                ),
+                (
+                    ".github/workflows/release.yml",
+                    "name: Release\n\
+                     jobs:\n\
+                       build-tauri:\n\
+                         steps:\n\
+                           - name: Build the app\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap build flow command runner main config".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths
+                .iter()
+                .take(8)
+                .any(|path| *path == "src-tauri/src/main.rs"),
+            "entrypoint runtime witness should remain visible near the top: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(8).any(|path| {
+                matches!(
+                    *path,
+                    ".github/workflows/deploy-pages.yml" | ".github/workflows/release.yml"
+                )
+            }),
+            "entrypoint/build-flow queries should surface at least one GitHub workflow config witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semantic_runtime()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-entrypoint-build-workflows-semantic");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src-tauri/src/main.rs",
+                    "fn main() {\n\
+                     // entry point bootstrap build flow command runner main config\n\
+                     let config = load_config();\n\
+                     run_build_flow(config);\n\
+                     }\n",
+                ),
+                (
+                    "src-tauri/src/proxy/config.rs",
+                    "pub struct ProxyConfig;\n// entry point bootstrap build flow command runner main config\n",
+                ),
+                (
+                    "src-tauri/src/lib.rs",
+                    "pub fn run() {\n// entry point bootstrap build flow command runner main config\n}\n",
+                ),
+                (
+                    "src-tauri/src/modules/config.rs",
+                    "pub struct ModuleConfig;\n// entry point bootstrap build flow command runner main config\n",
+                ),
+                (
+                    "src-tauri/src/models/config.rs",
+                    "pub struct ModelConfig;\n// entry point bootstrap build flow command runner main config\n",
+                ),
+                (
+                    "src-tauri/src/proxy/proxy_pool.rs",
+                    "pub struct ProxyPool;\n// entry point bootstrap build flow command runner main config\n",
+                ),
+                (
+                    "src-tauri/build.rs",
+                    "fn main() {\n tauri_build::build();\n}\n",
+                ),
+                (
+                    "src-tauri/src/commands/security.rs",
+                    "pub fn security_command() {\n// entry point bootstrap build flow command runner main config\n}\n",
+                ),
+                (
+                    ".github/workflows/deploy-pages.yml",
+                    "name: Deploy static content to Pages\n\
+                     jobs:\n\
+                       deploy:\n\
+                         steps:\n\
+                           - name: Upload artifact\n\
+                             run: echo upload build artifacts\n\
+                           - name: Deploy to GitHub Pages\n\
+                             run: echo deploy release pages\n",
+                ),
+                (
+                    ".github/workflows/release.yml",
+                    "name: Release\n\
+                     jobs:\n\
+                       build-tauri:\n\
+                         steps:\n\
+                           - name: Build the app\n\
+                             run: cargo build --release\n\
+                           - name: Publish release artifacts\n\
+                             run: echo publish release artifacts\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/main.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/proxy/config.rs",
+                    0,
+                    vec![0.99, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/lib.rs",
+                    0,
+                    vec![0.98, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/modules/config.rs",
+                    0,
+                    vec![0.97, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/models/config.rs",
+                    0,
+                    vec![0.96, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/proxy/proxy_pool.rs",
+                    0,
+                    vec![0.95, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/build.rs",
+                    0,
+                    vec![0.94, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src-tauri/src/commands/security.rs",
+                    0,
+                    vec![0.93, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    ".github/workflows/release.yml",
+                    0,
+                    vec![0.82, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    ".github/workflows/deploy-pages.yml",
+                    0,
+                    vec![0.81, 0.0],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        config.max_search_results = 8;
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap build flow command runner main config".to_owned(),
+                limit: 8,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(8).any(|path| {
+                matches!(
+                    *path,
+                    ".github/workflows/deploy-pages.yml" | ".github/workflows/release.yml"
+                )
+            }),
+            "entrypoint/build-flow queries should keep a workflow config witness visible even under semantic runtime pressure: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_lexical_recall_tokens_preserve_signal_order_for_tool_surface_queries() {
         let tokens = hybrid_lexical_recall_tokens(
             "which MCP tools are core versus extended and where is tool surface gating enforced in runtime docs and tests",
@@ -3850,6 +4540,108 @@ mod tests {
                     .position(|entry| entry.document.path == "README.md"),
             "tool contract docs should outrank the generic README for tool-surface queries"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_navigation_fallback_queries_promote_mcp_runtime_witnesses() -> FriggResult<()>
+    {
+        let query = "find EmbeddingProvider implementations and fallback when precise navigation data is missing";
+        let ranked = rank_hybrid_evidence_for_query(
+            &[
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/src/embeddings/mod.rs",
+                    1.00,
+                    "lex-impl-runtime",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/src/searcher/mod.rs",
+                    0.98,
+                    "lex-searcher-runtime",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "skills/frigg-mcp-search-navigation/references/navigation-fallbacks.md",
+                    0.97,
+                    "lex-nav-doc",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/tests/tool_handlers.rs",
+                    0.96,
+                    "lex-tests",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "contracts/tools/v1/README.md",
+                    0.95,
+                    "lex-tool-contract",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "contracts/semantic.md",
+                    0.94,
+                    "lex-semantic-contract",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "contracts/errors.md",
+                    0.93,
+                    "lex-error-contract",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/src/indexer/mod.rs",
+                    0.92,
+                    "lex-indexer-runtime",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/src/mcp/server.rs",
+                    0.88,
+                    "lex-mcp-server-runtime",
+                ),
+                hybrid_hit(
+                    "repo-001",
+                    "crates/cli/src/mcp/types.rs",
+                    0.87,
+                    "lex-mcp-types-runtime",
+                ),
+            ],
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            8,
+            query,
+        )?;
+
+        let ranked_paths = ranked
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.contains(&"crates/cli/src/mcp/server.rs")
+                || ranked_paths.contains(&"crates/cli/src/mcp/types.rs"),
+            "navigation-fallback queries should surface at least one MCP runtime witness in top-k"
+        );
+        assert!(
+            ranked
+                .iter()
+                .position(|entry| entry.document.path == "crates/cli/src/mcp/server.rs")
+                < ranked.iter().position(|entry| {
+                    entry.document.path
+                        == "skills/frigg-mcp-search-navigation/references/navigation-fallbacks.md"
+                }),
+            "MCP runtime witness should outrank the secondary navigation reference doc"
+        );
+
         Ok(())
     }
 
@@ -3955,6 +4747,48 @@ mod tests {
             ranked_paths.contains(&"crates/cli/tests/tool_handlers.rs"),
             "test witness should be promoted into top-k"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_shared_path_class_demotes_support_paths_under_crates_prefixes()
+    -> FriggResult<()> {
+        let query = "builder configuration";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "crates/cli/examples/server.rs",
+                    1,
+                    1,
+                    "builder configuration builder configuration builder configuration",
+                ),
+                text_match(
+                    "repo-001",
+                    "crates/cli/src/builder.rs",
+                    1,
+                    1,
+                    "builder configuration",
+                ),
+            ],
+            query,
+        );
+
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            2,
+            query,
+        )?;
+
+        assert_eq!(ranked[0].document.path, "crates/cli/src/builder.rs");
+        assert_eq!(ranked[1].document.path, "crates/cli/examples/server.rs");
         Ok(())
     }
 
@@ -4124,11 +4958,334 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert_eq!(output.note.semantic_candidate_count, 3);
+        assert_eq!(output.note.semantic_hit_count, 2);
+        assert!(output.note.semantic_match_count >= 2);
+        assert!(output.note.semantic_enabled);
         assert!(paths.contains(&"crates/cli/src/mcp/tool_surface.rs"));
         assert!(paths.contains(&"crates/cli/tests/tool_surface_parity.rs"));
         assert!(
             paths.contains(&"contracts/tools/v1/README.md"),
             "underfilled natural-language queries should still pull in tool-contract docs via lexical expansion when semantic retrieval is healthy; got {paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_hit_count_tracks_retained_documents_not_raw_chunks()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-retained-hit-count");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/relevant.rs",
+                    "pub fn relevant() { let _ = \"needle\"; }\n",
+                ),
+                (
+                    "src/secondary.rs",
+                    "pub fn secondary() { let _ = \"needle\"; }\n",
+                ),
+                ("src/noisy.rs", "pub fn noisy() { let _ = \"needle\"; }\n"),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/relevant.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/relevant.rs",
+                    1,
+                    vec![0.82, 0.02],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/secondary.rs",
+                    0,
+                    vec![0.69, 0.72],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/noisy.rs",
+                    0,
+                    vec![0.41, 0.91],
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "needle".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert_eq!(
+            output.note.semantic_candidate_count, 4,
+            "semantic_candidate_count should expose the broader raw semantic chunk pool"
+        );
+        assert_eq!(
+            output.note.semantic_hit_count, 1,
+            "semantic_hit_count should reflect retained semantic documents, not raw chunk count"
+        );
+        assert_eq!(output.matches[0].document.path, "src/relevant.rs");
+        assert!(output.note.semantic_match_count >= 1);
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_unavailable_without_corpus_still_expands_lexical_recall()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-unavailable-lexical-recall");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/config.rs",
+                    "pub fn resolve_config_path() {\n\
+                     let precedence = \"cli then env then file\";\n\
+                     }\n",
+                ),
+                (
+                    "src/main.rs",
+                    "pub fn load_config() {\n\
+                     let config_loaded = true;\n\
+                     }\n",
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "Where is config loaded and what is the precedence?".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+        let paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            output.note.semantic_status,
+            HybridSemanticStatus::Unavailable
+        );
+        assert_eq!(output.note.semantic_hit_count, 0);
+        assert_eq!(output.note.semantic_match_count, 0);
+        assert!(!output.note.semantic_enabled);
+        assert!(
+            output
+                .note
+                .semantic_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no semantic storage database")),
+            "unavailable note should explain that no semantic storage database exists"
+        );
+        assert!(
+            !output.matches.is_empty(),
+            "semantic-unavailable hybrid search should still recover lexical matches when the semantic channel cannot run against a corpus"
+        );
+        assert!(paths.contains(&"src/config.rs"));
+        assert!(paths.contains(&"src/main.rs"));
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_ok_empty_channel_when_active_index_is_filtered_out()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-ok-filtered-empty-channel");
+        prepare_workspace(
+            &root,
+            &[("src/lib.rs", "pub fn rust_only() { let _ = \"needle\"; }\n")],
+        )?;
+        seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/lib.rs"])?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[semantic_record(
+                "repo-001",
+                "snapshot-001",
+                "src/lib.rs",
+                0,
+                vec![1.0, 0.0],
+            )],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "needle".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters {
+                repository_id: None,
+                language: Some("php".to_owned()),
+            },
+            &credentials,
+            &semantic_executor,
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert_eq!(output.note.semantic_hit_count, 0);
+        assert_eq!(output.note.semantic_match_count, 0);
+        assert!(!output.note.semantic_enabled);
+        assert!(output.note.semantic_reason.is_none());
+        assert!(
+            output.matches.is_empty(),
+            "language-filtered semantic search should be allowed to return an empty but healthy result set"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_manifest_lacks_embeddings()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-semantic-fallback-split-snapshot");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/current.rs",
+                    "pub fn current() { let _ = \"semantic needle\"; }\n",
+                ),
+                (
+                    "src/deleted.rs",
+                    "pub fn deleted() { let _ = \"semantic needle\"; }\n",
+                ),
+            ],
+        )?;
+        seed_semantic_embeddings(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/current.rs",
+                    0,
+                    vec![1.0, 0.0],
+                ),
+                semantic_record(
+                    "repo-001",
+                    "snapshot-001",
+                    "src/deleted.rs",
+                    0,
+                    vec![0.95, 0.05],
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(&root, "repo-001", "snapshot-002", &["src/current.rs"])?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        let searcher = TextSearcher::new(config);
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "semantic needle".to_owned(),
+                limit: 5,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &credentials,
+            &semantic_executor,
+        )?;
+        let paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Degraded);
+        assert!(output.note.semantic_enabled);
+        assert!(
+            output
+                .note
+                .semantic_reason
+                .as_deref()
+                .is_some_and(
+                    |reason| reason.contains("snapshot-002") && reason.contains("snapshot-001")
+                ),
+            "split-snapshot fallback should name both latest and fallback snapshots"
+        );
+        assert!(
+            paths.contains(&"src/current.rs"),
+            "current manifest path should remain visible under semantic fallback: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"src/deleted.rs"),
+            "paths removed from the latest manifest must not resurface from an older semantic snapshot: {paths:?}"
+        );
+        assert!(
+            output.matches.iter().any(|entry| {
+                entry.document.path == "src/current.rs" && entry.semantic_score > 0.0
+            }),
+            "fallback semantic snapshot should still contribute non-zero semantic score"
         );
 
         cleanup_workspace(&root);
@@ -4342,6 +5499,8 @@ mod tests {
         )?;
 
         assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+        assert!(output.note.semantic_hit_count > 0);
+        assert!(output.note.semantic_match_count > 0);
         assert!(output.note.semantic_enabled);
         assert!(output.note.semantic_reason.is_none());
         assert!(
@@ -4478,6 +5637,8 @@ mod tests {
         )?;
 
         assert_eq!(output.note.semantic_status, HybridSemanticStatus::Disabled);
+        assert_eq!(output.note.semantic_hit_count, 0);
+        assert_eq!(output.note.semantic_match_count, 0);
         assert!(!output.note.semantic_enabled);
         assert_eq!(
             output.note.semantic_reason.as_deref(),
@@ -4520,6 +5681,8 @@ mod tests {
         )?;
 
         assert_eq!(output.note.semantic_status, HybridSemanticStatus::Degraded);
+        assert_eq!(output.note.semantic_hit_count, 0);
+        assert_eq!(output.note.semantic_match_count, 0);
         assert!(!output.note.semantic_enabled);
         assert!(
             output
@@ -4712,6 +5875,47 @@ mod tests {
 
         assert_eq!(first.to_string(), second.to_string());
         assert!(first.to_string().contains("semantic_status=strict_failure"));
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_search_semantic_query_embedding_works_inside_existing_tokio_runtime()
+    -> FriggResult<()> {
+        let (searcher, root) = semantic_hybrid_fixture(
+            "hybrid-semantic-inside-current-runtime",
+            semantic_runtime_enabled(false),
+        )?;
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build");
+
+        let output = runtime.block_on(async {
+            searcher.search_hybrid_with_filters_using_executor(
+                SearchHybridQuery {
+                    query: "needle".to_owned(),
+                    limit: 10,
+                    weights: HybridChannelWeights::default(),
+                    semantic: Some(true),
+                },
+                SearchFilters::default(),
+                &credentials,
+                &semantic_executor,
+            )
+        })?;
+
+        assert!(
+            !output.matches.is_empty(),
+            "hybrid search inside an existing runtime should still return matches"
+        );
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
 
         cleanup_workspace(&root);
         Ok(())

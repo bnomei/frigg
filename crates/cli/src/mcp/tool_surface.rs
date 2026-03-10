@@ -6,7 +6,9 @@ pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolSurfaceProfile {
+    /// Stable default read-only runtime surface.
     Core,
+    /// Advanced runtime surface that layers deep-search tools on top of the stable profile.
     Extended,
 }
 
@@ -27,7 +29,8 @@ pub struct ToolSurfaceManifest {
     pub tool_names: Vec<String>,
 }
 
-const EXTENDED_ONLY_TOOL_NAMES: [&str; 3] = [
+const EXTENDED_ONLY_TOOL_NAMES: [&str; 4] = [
+    "explore",
     "deep_search_compose_citations",
     "deep_search_replay",
     "deep_search_run",

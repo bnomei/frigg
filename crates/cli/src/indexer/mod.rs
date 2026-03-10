@@ -1,11 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::fs::File;
-use std::future::Future;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
@@ -13,14 +12,37 @@ use crate::embeddings::{
     EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
     OpenAiEmbeddingProvider,
 };
-use crate::graph::{HeuristicConfidence, SymbolGraph, SymbolNode};
+use crate::graph::{HeuristicConfidence, RelationKind, SymbolGraph, SymbolNode};
+pub use crate::language_support::SymbolLanguage;
+use crate::language_support::{
+    PhpSymbolLookup, blade_component_name_for_path, blade_view_name_for_path, is_blade_path,
+    parser_for_language, php_name_resolution_context_from_root, php_relation_targets_symbol_name,
+    resolve_php_declaration_relation_indices, symbol_from_node, tree_sitter_language,
+};
 use crate::playbooks::scrub_playbook_metadata_header;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
 use blake3::Hasher;
 use ignore::WalkBuilder;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
+
+mod manifest;
+mod semantic;
+#[cfg(test)]
+pub(crate) use manifest::file_digest_order;
+use manifest::{
+    deterministic_snapshot_id, diff, file_digest_to_manifest_entry, manifest_entry_to_file_digest,
+    normalize_repository_relative_path,
+};
+pub(crate) use semantic::semantic_chunk_language_for_path;
+use semantic::{
+    RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor,
+    build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
+};
+#[cfg(test)]
+pub(crate) use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
 
 const FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_ENABLED";
 const FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_PROVIDER";
@@ -101,34 +123,14 @@ pub struct RepositoryManifest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SymbolLanguage {
-    Rust,
-    Php,
-}
-
-impl SymbolLanguage {
-    pub fn from_path(path: &Path) -> Option<Self> {
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some("rs") => Some(Self::Rust),
-            Some("php") => Some(Self::Php),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Php => "php",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
     Module,
+    Component,
+    Section,
+    Slot,
     Struct,
     Enum,
+    EnumCase,
     Trait,
     Impl,
     Function,
@@ -148,8 +150,12 @@ impl SymbolKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Module => "module",
+            Self::Component => "component",
+            Self::Section => "section",
+            Self::Slot => "slot",
             Self::Struct => "struct",
             Self::Enum => "enum",
+            Self::EnumCase => "enum_case",
             Self::Trait => "trait",
             Self::Impl => "impl",
             Self::Function => "function",
@@ -187,6 +193,115 @@ pub struct SymbolDefinition {
     pub line: usize,
     pub span: SourceSpan,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhpDeclarationRelation {
+    pub source_kind: SymbolKind,
+    pub source_name: String,
+    pub source_line: usize,
+    pub target_name: String,
+    pub relation: RelationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PhpTypeEvidenceKind {
+    Parameter,
+    Return,
+    Property,
+    PromotedProperty,
+    Catch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhpTypeEvidence {
+    pub owner_symbol_id: Option<String>,
+    pub kind: PhpTypeEvidenceKind,
+    pub target_canonical_name: String,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PhpTargetEvidenceKind {
+    Attribute,
+    ClassString,
+    Instantiation,
+    CallableLiteral,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhpTargetEvidence {
+    pub owner_symbol_id: Option<String>,
+    pub kind: PhpTargetEvidenceKind,
+    pub target_canonical_name: String,
+    pub target_member_name: Option<String>,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PhpLiteralEvidence {
+    pub owner_symbol_id: Option<String>,
+    pub array_keys: Vec<String>,
+    pub named_arguments: Vec<String>,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhpSourceEvidence {
+    pub canonical_names_by_stable_id: BTreeMap<String, String>,
+    pub type_evidence: Vec<PhpTypeEvidence>,
+    pub target_evidence: Vec<PhpTargetEvidence>,
+    pub literal_evidence: Vec<PhpLiteralEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BladeRelationKind {
+    Extends,
+    Include,
+    Component,
+    Yield,
+    DynamicComponent,
+}
+
+impl BladeRelationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Extends => "extends",
+            Self::Include => "include",
+            Self::Component => "component",
+            Self::Yield => "yield",
+            Self::DynamicComponent => "dynamic_component",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BladeRelationEvidence {
+    pub owner_symbol_id: Option<String>,
+    pub kind: BladeRelationKind,
+    pub target_name: String,
+    pub target_symbol_kind: SymbolKind,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FluxComponentHint {
+    pub props: Vec<String>,
+    pub slots: Vec<String>,
+    pub variant_values: Vec<String>,
+    pub size_values: Vec<String>,
+    pub local_overlay: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BladeSourceEvidence {
+    pub relations: Vec<BladeRelationEvidence>,
+    pub livewire_components: Vec<String>,
+    pub wire_directives: Vec<String>,
+    pub flux_components: Vec<String>,
+    pub flux_hints: BTreeMap<String, FluxComponentHint>,
+}
+
+pub const FLUX_REGISTRY_VERSION: &str = "2026-03-08-mvp";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolExtractionDiagnostic {
@@ -449,17 +564,6 @@ pub fn resolve_heuristic_references(
     resolver.finish()
 }
 
-pub fn extract_symbols_from_file(path: &Path) -> FriggResult<Vec<SymbolDefinition>> {
-    let language = SymbolLanguage::from_path(path).ok_or_else(|| {
-        FriggError::InvalidInput(format!(
-            "unsupported source file extension for symbol extraction: {}",
-            path.display()
-        ))
-    })?;
-    let source = fs::read_to_string(path).map_err(FriggError::Io)?;
-    extract_symbols_from_source(language, path, &source)
-}
-
 pub fn extract_symbols_from_source(
     language: SymbolLanguage,
     path: &Path,
@@ -475,39 +579,25 @@ pub fn extract_symbols_from_source(
     let mut symbols = Vec::new();
     collect_symbols_from_tree(language, path, source, &tree, &mut symbols);
     symbols.sort_by(symbol_definition_order);
-
     Ok(symbols)
 }
 
-pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
-    let mut ordered_paths = paths.to_vec();
-    ordered_paths.sort();
-
-    let mut output = SymbolExtractionOutput::default();
-    for path in ordered_paths {
-        let Some(language) = SymbolLanguage::from_path(&path) else {
-            continue;
-        };
-
-        match fs::read_to_string(&path) {
-            Ok(source) => match extract_symbols_from_source(language, &path, &source) {
-                Ok(mut symbols) => output.symbols.append(&mut symbols),
-                Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
-                    path: path.clone(),
-                    language: Some(language),
-                    message: err.to_string(),
-                }),
-            },
-            Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
-                path: path.clone(),
-                language: Some(language),
-                message: err.to_string(),
-            }),
-        }
-    }
-
-    output.symbols.sort_by(symbol_definition_order);
-    output
+pub fn extract_php_declaration_relations_from_source(
+    path: &Path,
+    source: &str,
+) -> FriggResult<Vec<PhpDeclarationRelation>> {
+    let mut parser = parser_for_language(SymbolLanguage::Php)?;
+    let tree = parser.parse(source, None).ok_or_else(|| {
+        FriggError::Internal(format!(
+            "failed to parse source for php declaration relations: {}",
+            path.display()
+        ))
+    })?;
+    let mut relations = Vec::new();
+    collect_php_declaration_relations(source, tree.root_node(), &mut relations);
+    relations.sort();
+    relations.dedup();
+    Ok(relations)
 }
 
 pub fn search_structural_in_source(
@@ -540,7 +630,6 @@ pub fn search_structural_in_source(
     })?;
     let mut cursor = QueryCursor::new();
     let mut matches = Vec::new();
-
     let mut captures = cursor.captures(&compiled_query, tree.root_node(), source.as_bytes());
     while let Some((query_match, capture_index)) = captures.next() {
         let capture = query_match.captures[*capture_index];
@@ -563,30 +652,1365 @@ pub fn search_structural_in_source(
             excerpt,
         });
     }
-
     matches.sort_by(structural_query_match_order);
     matches.dedup();
     Ok(matches)
 }
 
-fn tree_sitter_language(language: SymbolLanguage) -> tree_sitter::Language {
-    match language {
-        SymbolLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
-        SymbolLanguage::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+pub fn extract_symbols_from_file(path: &Path) -> FriggResult<Vec<SymbolDefinition>> {
+    let language = SymbolLanguage::from_path(path).ok_or_else(|| {
+        FriggError::InvalidInput(format!(
+            "unsupported source file extension for symbol extraction: {}",
+            path.display()
+        ))
+    })?;
+    let source = fs::read_to_string(path).map_err(FriggError::Io)?;
+    extract_symbols_from_source(language, path, &source)
+}
+
+pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
+    let mut ordered_paths = paths.to_vec();
+    ordered_paths.sort();
+
+    let mut output = SymbolExtractionOutput::default();
+    for path in ordered_paths {
+        let Some(language) = SymbolLanguage::from_path(&path) else {
+            continue;
+        };
+
+        match fs::read_to_string(&path) {
+            Ok(source) => match extract_symbols_from_source(language, &path, &source) {
+                Ok(mut symbols) => output.symbols.append(&mut symbols),
+                Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
+                    path: path.clone(),
+                    language: Some(language),
+                    message: err.to_string(),
+                }),
+            },
+            Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
+                path: path.clone(),
+                language: Some(language),
+                message: err.to_string(),
+            }),
+        }
+    }
+
+    output.symbols.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.span.start_byte.cmp(&right.span.start_byte))
+            .then(left.span.end_byte.cmp(&right.span.end_byte))
+            .then(left.kind.cmp(&right.kind))
+            .then(left.name.cmp(&right.name))
+            .then(left.stable_id.cmp(&right.stable_id))
+    });
+    output
+}
+
+pub fn php_declaration_relation_edges_for_file(
+    relative_path: &str,
+    absolute_path: &Path,
+    symbols: &[SymbolDefinition],
+    symbols_by_relative_path: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_name: Option<&BTreeMap<String, Vec<usize>>>,
+    symbol_indices_by_lower_name: Option<&BTreeMap<String, Vec<usize>>>,
+) -> FriggResult<Vec<(usize, usize, RelationKind)>> {
+    if SymbolLanguage::from_path(absolute_path) != Some(SymbolLanguage::Php) {
+        return Ok(Vec::new());
+    }
+
+    let source = fs::read_to_string(absolute_path).map_err(FriggError::Io)?;
+    let relations = extract_php_declaration_relations_from_source(absolute_path, &source)?;
+    let owned_name_index;
+    let name_index = match symbol_indices_by_name {
+        Some(index) => index,
+        None => {
+            owned_name_index = php_symbol_indices_by_name(symbols);
+            &owned_name_index
+        }
+    };
+    let owned_lower_name_index;
+    let lower_name_index = match symbol_indices_by_lower_name {
+        Some(index) => index,
+        None => {
+            owned_lower_name_index = php_symbol_indices_by_lower_name(symbols);
+            &owned_lower_name_index
+        }
+    };
+    let lookup = PhpSymbolLookup {
+        symbols,
+        symbols_by_relative_path,
+        symbol_indices_by_name: name_index,
+        symbol_indices_by_lower_name: lower_name_index,
+    };
+
+    let mut edges = Vec::new();
+    for relation in relations {
+        if let Some((source_symbol_index, target_symbol_index)) =
+            resolve_php_declaration_relation_indices(&lookup, relative_path, &relation)
+        {
+            edges.push((source_symbol_index, target_symbol_index, relation.relation));
+        }
+    }
+    edges.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    edges.dedup();
+    Ok(edges)
+}
+
+pub fn php_heuristic_implementation_candidates_for_target(
+    target_symbol: &SymbolDefinition,
+    candidate_files: &[(String, PathBuf)],
+    symbols: &[SymbolDefinition],
+    symbols_by_relative_path: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_name: Option<&BTreeMap<String, Vec<usize>>>,
+    symbol_indices_by_lower_name: Option<&BTreeMap<String, Vec<usize>>>,
+) -> Vec<(usize, RelationKind)> {
+    let target_name = target_symbol.name.trim();
+    if target_name.is_empty() {
+        return Vec::new();
+    }
+    if !matches!(
+        target_symbol.kind,
+        SymbolKind::Interface | SymbolKind::Class
+    ) {
+        return Vec::new();
+    }
+    let Some(target_symbol_index) = symbols
+        .iter()
+        .position(|symbol| symbol.stable_id == target_symbol.stable_id)
+    else {
+        return Vec::new();
+    };
+
+    let owned_name_index;
+    let name_index = match symbol_indices_by_name {
+        Some(index) => index,
+        None => {
+            owned_name_index = php_symbol_indices_by_name(symbols);
+            &owned_name_index
+        }
+    };
+    let owned_lower_name_index;
+    let lower_name_index = match symbol_indices_by_lower_name {
+        Some(index) => index,
+        None => {
+            owned_lower_name_index = php_symbol_indices_by_lower_name(symbols);
+            &owned_lower_name_index
+        }
+    };
+    let lookup = PhpSymbolLookup {
+        symbols,
+        symbols_by_relative_path,
+        symbol_indices_by_name: name_index,
+        symbol_indices_by_lower_name: lower_name_index,
+    };
+
+    let mut matches = Vec::new();
+    for (relative_path, absolute_path) in candidate_files {
+        if SymbolLanguage::from_path(absolute_path) != Some(SymbolLanguage::Php) {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(absolute_path) else {
+            continue;
+        };
+        let Ok(relations) = extract_php_declaration_relations_from_source(absolute_path, &source)
+        else {
+            continue;
+        };
+
+        for relation in relations {
+            if !php_relation_targets_symbol_name(&relation, target_symbol) {
+                continue;
+            }
+            let Some((source_symbol_index, resolved_target_index)) =
+                resolve_php_declaration_relation_indices(&lookup, relative_path, &relation)
+            else {
+                continue;
+            };
+            if resolved_target_index != target_symbol_index {
+                continue;
+            }
+            matches.push((source_symbol_index, relation.relation));
+        }
+    }
+    matches.sort_by(|left, right| {
+        let left_symbol = &symbols[left.0];
+        let right_symbol = &symbols[right.0];
+        left_symbol
+            .path
+            .cmp(&right_symbol.path)
+            .then(left_symbol.line.cmp(&right_symbol.line))
+            .then(left_symbol.stable_id.cmp(&right_symbol.stable_id))
+            .then(left.1.cmp(&right.1))
+    });
+    matches.dedup();
+    matches
+}
+
+pub(crate) fn extract_php_source_evidence_from_source(
+    path: &Path,
+    source: &str,
+    file_symbols: &[SymbolDefinition],
+) -> FriggResult<PhpSourceEvidence> {
+    let mut parser = parser_for_language(SymbolLanguage::Php)?;
+    let tree = parser.parse(source, None).ok_or_else(|| {
+        FriggError::Internal(format!(
+            "failed to parse source for php evidence extraction: {}",
+            path.display()
+        ))
+    })?;
+    let context = php_name_resolution_context_from_root(source, tree.root_node());
+    let mut evidence = PhpSourceEvidence::default();
+    collect_php_source_evidence(
+        source,
+        tree.root_node(),
+        file_symbols,
+        &context,
+        context.namespace.as_deref(),
+        None,
+        None,
+        &mut evidence,
+    );
+    normalize_php_source_evidence(&mut evidence);
+    Ok(evidence)
+}
+
+pub(crate) fn extract_blade_source_evidence_from_source(
+    _path: &Path,
+    source: &str,
+    file_symbols: &[SymbolDefinition],
+) -> BladeSourceEvidence {
+    let owner_symbol_id = file_symbols
+        .iter()
+        .find(|symbol| {
+            symbol.language == SymbolLanguage::Blade && symbol.kind == SymbolKind::Module
+        })
+        .map(|symbol| symbol.stable_id.clone());
+    let mut evidence = BladeSourceEvidence::default();
+
+    for capture in blade_view_relation_regex().captures_iter(source) {
+        let Some(directive) = capture.name("directive").map(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(target) = capture.get(2).or_else(|| capture.get(3)) else {
+            continue;
+        };
+        let target_name = target.as_str().trim();
+        if target_name.is_empty() {
+            continue;
+        }
+        let (kind, target_symbol_kind) = match directive {
+            "extends" => (BladeRelationKind::Extends, SymbolKind::Module),
+            "component" => (BladeRelationKind::Component, SymbolKind::Module),
+            "yield" => (BladeRelationKind::Yield, SymbolKind::Section),
+            _ => (BladeRelationKind::Include, SymbolKind::Module),
+        };
+        evidence.relations.push(BladeRelationEvidence {
+            owner_symbol_id: owner_symbol_id.clone(),
+            kind,
+            target_name: target_name.to_owned(),
+            target_symbol_kind,
+            line: line_column_for_offset(source, target.start()).0,
+        });
+    }
+
+    for capture in blade_dynamic_component_regex().captures_iter(source) {
+        let Some(target) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        let target_name = normalize_blade_dynamic_component_target(target.as_str());
+        if target_name.is_empty() {
+            continue;
+        }
+        evidence.relations.push(BladeRelationEvidence {
+            owner_symbol_id: owner_symbol_id.clone(),
+            kind: BladeRelationKind::DynamicComponent,
+            target_name,
+            target_symbol_kind: SymbolKind::Component,
+            line: line_column_for_offset(source, target.start()).0,
+        });
+    }
+
+    for capture in blade_tag_regex().captures_iter(source) {
+        let Some(tag_name) = capture.get(1) else {
+            continue;
+        };
+        let normalized = tag_name.as_str().trim();
+        if let Some(component_name) = normalized.strip_prefix("livewire:") {
+            insert_sorted_unique_owned(
+                &mut evidence.livewire_components,
+                component_name.to_owned(),
+            );
+            continue;
+        }
+        if normalized.starts_with("flux:") {
+            insert_sorted_unique_owned(&mut evidence.flux_components, normalized.to_owned());
+            if let Some(hint) = flux_registry_hint(normalized) {
+                evidence
+                    .flux_hints
+                    .entry(normalized.to_owned())
+                    .or_insert(hint);
+            }
+            continue;
+        }
+        if let Some((SymbolKind::Component, component_name)) = classify_blade_tag_name(normalized) {
+            evidence.relations.push(BladeRelationEvidence {
+                owner_symbol_id: owner_symbol_id.clone(),
+                kind: BladeRelationKind::Component,
+                target_name: component_name,
+                target_symbol_kind: SymbolKind::Component,
+                line: line_column_for_offset(source, tag_name.start()).0,
+            });
+        }
+    }
+
+    for capture in blade_livewire_directive_regex().captures_iter(source) {
+        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        insert_sorted_unique_owned(
+            &mut evidence.livewire_components,
+            name.as_str().trim().to_owned(),
+        );
+    }
+
+    for capture in blade_wire_directive_regex().captures_iter(source) {
+        let Some(name) = capture.get(1) else {
+            continue;
+        };
+        insert_sorted_unique_owned(
+            &mut evidence.wire_directives,
+            name.as_str().trim().to_owned(),
+        );
+    }
+
+    normalize_blade_source_evidence(&mut evidence);
+    evidence
+}
+
+pub(crate) fn mark_local_flux_overlays(
+    evidence: &mut BladeSourceEvidence,
+    symbols: &[SymbolDefinition],
+    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
+) {
+    for component_name in &evidence.flux_components {
+        let local_component_name = component_name.replacen("flux:", "flux.", 1);
+        let local_overlay = symbol_indices_by_name
+            .get(&local_component_name)
+            .into_iter()
+            .flatten()
+            .any(|index| {
+                let symbol = &symbols[*index];
+                symbol.language == SymbolLanguage::Blade && symbol.kind == SymbolKind::Component
+            });
+        if !local_overlay {
+            continue;
+        }
+        evidence
+            .flux_hints
+            .entry(component_name.clone())
+            .or_default()
+            .local_overlay = true;
     }
 }
 
-fn parser_for_language(language: SymbolLanguage) -> FriggResult<Parser> {
-    let mut parser = Parser::new();
-    let ts_language = tree_sitter_language(language);
+pub(crate) fn resolve_php_target_evidence_edges(
+    symbols: &[SymbolDefinition],
+    symbol_index_by_stable_id: &BTreeMap<String, usize>,
+    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
+    evidence: &PhpSourceEvidence,
+) -> Vec<(usize, usize, RelationKind)> {
+    let mut edges = Vec::new();
+    for target in &evidence.target_evidence {
+        let Some(source_symbol_id) = target.owner_symbol_id.as_ref() else {
+            continue;
+        };
+        let Some(source_symbol_index) = symbol_index_by_stable_id.get(source_symbol_id).copied()
+        else {
+            continue;
+        };
+        let Some(target_symbol_index) = resolve_php_target_symbol_index(
+            symbols,
+            symbol_indices_by_canonical_name,
+            symbol_indices_by_lower_canonical_name,
+            target,
+        ) else {
+            continue;
+        };
+        if source_symbol_index == target_symbol_index {
+            continue;
+        }
+        edges.push((
+            source_symbol_index,
+            target_symbol_index,
+            RelationKind::RefersTo,
+        ));
+    }
+    edges.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    edges.dedup();
+    edges
+}
 
-    parser.set_language(&ts_language).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to configure tree-sitter parser for {}: {err}",
-            language.as_str()
-        ))
-    })?;
-    Ok(parser)
+pub(crate) fn resolve_blade_relation_evidence_edges(
+    symbols: &[SymbolDefinition],
+    symbol_index_by_stable_id: &BTreeMap<String, usize>,
+    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
+    evidence: &BladeSourceEvidence,
+) -> Vec<(usize, usize, RelationKind)> {
+    let mut edges = Vec::new();
+    for relation in &evidence.relations {
+        let Some(source_symbol_id) = relation.owner_symbol_id.as_ref() else {
+            continue;
+        };
+        let Some(source_symbol_index) = symbol_index_by_stable_id.get(source_symbol_id).copied()
+        else {
+            continue;
+        };
+        let Some(target_symbol_index) = resolve_blade_relation_target_symbol_index(
+            symbols,
+            symbol_indices_by_name,
+            symbol_indices_by_lower_name,
+            relation,
+        ) else {
+            continue;
+        };
+        if source_symbol_index == target_symbol_index {
+            continue;
+        }
+        edges.push((
+            source_symbol_index,
+            target_symbol_index,
+            RelationKind::RefersTo,
+        ));
+    }
+    edges.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    edges.dedup();
+    edges
+}
+
+fn collect_php_source_evidence(
+    source: &str,
+    node: Node<'_>,
+    file_symbols: &[SymbolDefinition],
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_namespace: Option<&str>,
+    current_class_canonical_name: Option<&str>,
+    current_owner_symbol_id: Option<&str>,
+    evidence: &mut PhpSourceEvidence,
+) {
+    let mut next_namespace = current_namespace.map(ToOwned::to_owned);
+    let mut next_class_canonical_name = current_class_canonical_name.map(ToOwned::to_owned);
+    let mut next_owner_symbol_id = current_owner_symbol_id.map(ToOwned::to_owned);
+
+    match node.kind() {
+        "namespace_definition" => {
+            if let Some(namespace_name) = node
+                .child_by_field_name("name")
+                .and_then(|field| field.utf8_text(source.as_bytes()).ok())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                next_namespace = Some(namespace_name.to_owned());
+                if let Some(symbol) =
+                    find_symbol_for_node(file_symbols, SymbolKind::Module, namespace_name, node)
+                {
+                    evidence
+                        .canonical_names_by_stable_id
+                        .entry(symbol.stable_id.clone())
+                        .or_insert_with(|| namespace_name.to_owned());
+                    next_owner_symbol_id = Some(symbol.stable_id.clone());
+                }
+            }
+        }
+        "class_declaration"
+        | "interface_declaration"
+        | "trait_declaration"
+        | "enum_declaration" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                let canonical_name = php_namespace_qualified_name(next_namespace.as_deref(), &name);
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    evidence
+                        .canonical_names_by_stable_id
+                        .entry(symbol.stable_id.clone())
+                        .or_insert_with(|| canonical_name.clone());
+                    next_owner_symbol_id = Some(symbol.stable_id.clone());
+                }
+                next_class_canonical_name = Some(canonical_name);
+            }
+        }
+        "function_definition" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                let canonical_name = php_namespace_qualified_name(next_namespace.as_deref(), &name);
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    evidence
+                        .canonical_names_by_stable_id
+                        .entry(symbol.stable_id.clone())
+                        .or_insert_with(|| canonical_name.clone());
+                    next_owner_symbol_id = Some(symbol.stable_id.clone());
+                    if let Some(parameters) = node.child_by_field_name("parameters") {
+                        collect_php_parameter_type_evidence(
+                            source,
+                            parameters,
+                            file_symbols,
+                            context,
+                            next_class_canonical_name.as_deref(),
+                            Some(symbol.stable_id.as_str()),
+                            evidence,
+                        );
+                    }
+                    if let Some(return_type) = node.child_by_field_name("return_type") {
+                        collect_php_type_evidence(
+                            source,
+                            return_type,
+                            context,
+                            next_class_canonical_name.as_deref(),
+                            Some(symbol.stable_id.as_str()),
+                            PhpTypeEvidenceKind::Return,
+                            source_span(node).start_line,
+                            &mut evidence.type_evidence,
+                        );
+                    }
+                }
+            }
+        }
+        "method_declaration" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                if let Some(class_name) = next_class_canonical_name.as_deref() {
+                    let canonical_name = format!("{class_name}::{name}");
+                    if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                        evidence
+                            .canonical_names_by_stable_id
+                            .entry(symbol.stable_id.clone())
+                            .or_insert_with(|| canonical_name.clone());
+                        next_owner_symbol_id = Some(symbol.stable_id.clone());
+                        if let Some(parameters) = node.child_by_field_name("parameters") {
+                            collect_php_parameter_type_evidence(
+                                source,
+                                parameters,
+                                file_symbols,
+                                context,
+                                next_class_canonical_name.as_deref(),
+                                Some(symbol.stable_id.as_str()),
+                                evidence,
+                            );
+                        }
+                        if let Some(return_type) = node.child_by_field_name("return_type") {
+                            collect_php_type_evidence(
+                                source,
+                                return_type,
+                                context,
+                                next_class_canonical_name.as_deref(),
+                                Some(symbol.stable_id.as_str()),
+                                PhpTypeEvidenceKind::Return,
+                                source_span(node).start_line,
+                                &mut evidence.type_evidence,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        "property_declaration" => {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+                    if child.kind() != "property_element" {
+                        continue;
+                    }
+                    let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, child)
+                    else {
+                        continue;
+                    };
+                    let owner_symbol_id = find_symbol_for_node(file_symbols, kind, &name, child)
+                        .map(|symbol| {
+                            if let Some(class_name) = next_class_canonical_name.as_deref() {
+                                evidence
+                                    .canonical_names_by_stable_id
+                                    .entry(symbol.stable_id.clone())
+                                    .or_insert_with(|| format!("{class_name}::{name}"));
+                            }
+                            symbol.stable_id.as_str()
+                        });
+                    collect_php_type_evidence(
+                        source,
+                        type_node,
+                        context,
+                        next_class_canonical_name.as_deref(),
+                        owner_symbol_id,
+                        PhpTypeEvidenceKind::Property,
+                        source_span(child).start_line,
+                        &mut evidence.type_evidence,
+                    );
+                }
+            }
+        }
+        "property_element" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    if let Some(class_name) = next_class_canonical_name.as_deref() {
+                        evidence
+                            .canonical_names_by_stable_id
+                            .entry(symbol.stable_id.clone())
+                            .or_insert_with(|| format!("{class_name}::{name}"));
+                    }
+                }
+            }
+        }
+        "const_element" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    let canonical_name =
+                        if let Some(class_name) = next_class_canonical_name.as_deref() {
+                            format!("{class_name}::{name}")
+                        } else {
+                            php_namespace_qualified_name(next_namespace.as_deref(), &name)
+                        };
+                    evidence
+                        .canonical_names_by_stable_id
+                        .entry(symbol.stable_id.clone())
+                        .or_insert(canonical_name);
+                }
+            }
+        }
+        "enum_case" => {
+            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    if let Some(class_name) = next_class_canonical_name.as_deref() {
+                        evidence
+                            .canonical_names_by_stable_id
+                            .entry(symbol.stable_id.clone())
+                            .or_insert_with(|| format!("{class_name}::{name}"));
+                    }
+                }
+            }
+        }
+        "catch_clause" => {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                collect_php_type_evidence(
+                    source,
+                    type_node,
+                    context,
+                    next_class_canonical_name.as_deref(),
+                    next_owner_symbol_id.as_deref().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.as_str())
+                    }),
+                    PhpTypeEvidenceKind::Catch,
+                    source_span(node).start_line,
+                    &mut evidence.type_evidence,
+                );
+            }
+        }
+        "attribute" => {
+            if let Some(target_name) =
+                php_attribute_target_name(source, node).and_then(|raw_name| {
+                    context.resolve_class_like_name(
+                        raw_name.as_str(),
+                        next_class_canonical_name.as_deref(),
+                    )
+                })
+            {
+                evidence.target_evidence.push(PhpTargetEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    kind: PhpTargetEvidenceKind::Attribute,
+                    target_canonical_name: target_name,
+                    target_member_name: None,
+                    line: source_span(node).start_line,
+                });
+            }
+        }
+        "class_constant_access_expression" => {
+            if let Some(target_name) = php_class_string_target_name(
+                source,
+                node,
+                context,
+                next_class_canonical_name.as_deref(),
+            ) {
+                evidence.target_evidence.push(PhpTargetEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    kind: PhpTargetEvidenceKind::ClassString,
+                    target_canonical_name: target_name,
+                    target_member_name: None,
+                    line: source_span(node).start_line,
+                });
+            }
+        }
+        "object_creation_expression" => {
+            if let Some(target_name) = php_instantiation_target_name(
+                source,
+                node,
+                context,
+                next_class_canonical_name.as_deref(),
+            ) {
+                evidence.target_evidence.push(PhpTargetEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    kind: PhpTargetEvidenceKind::Instantiation,
+                    target_canonical_name: target_name,
+                    target_member_name: None,
+                    line: source_span(node).start_line,
+                });
+            }
+        }
+        "array_creation_expression" => {
+            if let Some((target_canonical_name, target_member_name)) = php_callable_literal_target(
+                source,
+                node,
+                context,
+                next_class_canonical_name.as_deref(),
+            ) {
+                evidence.target_evidence.push(PhpTargetEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    kind: PhpTargetEvidenceKind::CallableLiteral,
+                    target_canonical_name,
+                    target_member_name: Some(target_member_name),
+                    line: source_span(node).start_line,
+                });
+            }
+            if let Some(array_keys) = php_literal_array_keys(source, node) {
+                evidence.literal_evidence.push(PhpLiteralEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    array_keys,
+                    named_arguments: Vec::new(),
+                    line: source_span(node).start_line,
+                });
+            }
+        }
+        "arguments" => {
+            if let Some(named_arguments) = php_named_argument_keys(source, node) {
+                evidence.literal_evidence.push(PhpLiteralEvidence {
+                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
+                        find_innermost_symbol_for_span_in_file(
+                            file_symbols,
+                            SymbolLanguage::Php,
+                            &source_span(node),
+                        )
+                        .map(|symbol| symbol.stable_id.clone())
+                    }),
+                    array_keys: Vec::new(),
+                    named_arguments,
+                    line: source_span(node).start_line,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_php_source_evidence(
+            source,
+            child,
+            file_symbols,
+            context,
+            next_namespace.as_deref(),
+            next_class_canonical_name.as_deref(),
+            next_owner_symbol_id.as_deref(),
+            evidence,
+        );
+    }
+}
+
+fn collect_php_parameter_type_evidence(
+    source: &str,
+    parameters: Node<'_>,
+    file_symbols: &[SymbolDefinition],
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+    owner_symbol_id: Option<&str>,
+    evidence: &mut PhpSourceEvidence,
+) {
+    let mut cursor = parameters.walk();
+    for parameter in parameters
+        .children(&mut cursor)
+        .filter(|child| child.is_named())
+    {
+        let (kind, line) = match parameter.kind() {
+            "simple_parameter" => (
+                PhpTypeEvidenceKind::Parameter,
+                source_span(parameter).start_line,
+            ),
+            "property_promotion_parameter" => (
+                PhpTypeEvidenceKind::PromotedProperty,
+                source_span(parameter).start_line,
+            ),
+            _ => continue,
+        };
+        if let Some(type_node) = parameter.child_by_field_name("type") {
+            collect_php_type_evidence(
+                source,
+                type_node,
+                context,
+                current_class_canonical_name,
+                owner_symbol_id,
+                kind,
+                line,
+                &mut evidence.type_evidence,
+            );
+        }
+        if let Some(attributes) = parameter.child_by_field_name("attributes") {
+            let mut attr_cursor = attributes.walk();
+            for attribute_group in attributes
+                .children(&mut attr_cursor)
+                .filter(|child| child.is_named())
+            {
+                let mut group_cursor = attribute_group.walk();
+                for attribute in attribute_group
+                    .children(&mut group_cursor)
+                    .filter(|child| child.is_named() && child.kind() == "attribute")
+                {
+                    if let Some(target_name) = php_attribute_target_name(source, attribute)
+                        .and_then(|raw_name| {
+                            context.resolve_class_like_name(
+                                raw_name.as_str(),
+                                current_class_canonical_name,
+                            )
+                        })
+                    {
+                        evidence.target_evidence.push(PhpTargetEvidence {
+                            owner_symbol_id: owner_symbol_id.map(ToOwned::to_owned).or_else(|| {
+                                find_innermost_symbol_for_span_in_file(
+                                    file_symbols,
+                                    SymbolLanguage::Php,
+                                    &source_span(attribute),
+                                )
+                                .map(|symbol| symbol.stable_id.clone())
+                            }),
+                            kind: PhpTargetEvidenceKind::Attribute,
+                            target_canonical_name: target_name,
+                            target_member_name: None,
+                            line: source_span(attribute).start_line,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_php_type_evidence(
+    source: &str,
+    type_node: Node<'_>,
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+    owner_symbol_id: Option<&str>,
+    kind: PhpTypeEvidenceKind,
+    line: usize,
+    output: &mut Vec<PhpTypeEvidence>,
+) {
+    let mut targets = BTreeSet::new();
+    collect_php_type_targets(
+        source,
+        type_node,
+        context,
+        current_class_canonical_name,
+        &mut targets,
+    );
+    for target_canonical_name in targets {
+        output.push(PhpTypeEvidence {
+            owner_symbol_id: owner_symbol_id.map(ToOwned::to_owned),
+            kind,
+            target_canonical_name,
+            line,
+        });
+    }
+}
+
+fn collect_php_type_targets(
+    source: &str,
+    node: Node<'_>,
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+    targets: &mut BTreeSet<String>,
+) {
+    match node.kind() {
+        "named_type" | "name" | "qualified_name" | "relative_name" => {
+            if let Ok(raw_name) = node.utf8_text(source.as_bytes()) {
+                if let Some(target) =
+                    context.resolve_class_like_name(raw_name, current_class_canonical_name)
+                {
+                    targets.insert(target);
+                }
+            }
+        }
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+                collect_php_type_targets(
+                    source,
+                    child,
+                    context,
+                    current_class_canonical_name,
+                    targets,
+                );
+            }
+        }
+    }
+}
+
+fn find_symbol_for_node<'a>(
+    file_symbols: &'a [SymbolDefinition],
+    kind: SymbolKind,
+    name: &str,
+    node: Node<'_>,
+) -> Option<&'a SymbolDefinition> {
+    let span = source_span(node);
+    file_symbols.iter().find(|symbol| {
+        symbol.kind == kind
+            && symbol.name == name
+            && symbol.span.start_byte == span.start_byte
+            && symbol.span.end_byte == span.end_byte
+    })
+}
+
+fn find_innermost_symbol_for_span_in_file<'a>(
+    file_symbols: &'a [SymbolDefinition],
+    language: SymbolLanguage,
+    span: &SourceSpan,
+) -> Option<&'a SymbolDefinition> {
+    file_symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.language == language
+                && span.start_byte >= symbol.span.start_byte
+                && span.end_byte <= symbol.span.end_byte
+        })
+        .min_by(|left, right| {
+            let left_width = left.span.end_byte.saturating_sub(left.span.start_byte);
+            let right_width = right.span.end_byte.saturating_sub(right.span.start_byte);
+            left_width
+                .cmp(&right_width)
+                .then(left.span.start_byte.cmp(&right.span.start_byte))
+                .then(left.stable_id.cmp(&right.stable_id))
+        })
+}
+
+fn php_namespace_qualified_name(namespace: Option<&str>, short_name: &str) -> String {
+    let short_name = short_name.trim();
+    if short_name.is_empty() {
+        return String::new();
+    }
+    match namespace
+        .map(str::trim)
+        .filter(|namespace| !namespace.is_empty())
+    {
+        Some(namespace) => format!("{namespace}\\{short_name}"),
+        None => short_name.to_owned(),
+    }
+}
+
+fn php_attribute_target_name(source: &str, node: Node<'_>) -> Option<String> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .filter(|child| child.is_named())
+        .find(|child| matches!(child.kind(), "name" | "qualified_name" | "relative_name"))
+        .and_then(|child| child.utf8_text(source.as_bytes()).ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn php_class_string_target_name(
+    source: &str,
+    node: Node<'_>,
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+) -> Option<String> {
+    let named_children = named_children(node);
+    if named_children.len() != 2 {
+        return None;
+    }
+    let name = named_children[1]
+        .utf8_text(source.as_bytes())
+        .ok()
+        .map(str::trim)?;
+    if !name.eq_ignore_ascii_case("class") {
+        return None;
+    }
+    let raw_scope = named_children[0].utf8_text(source.as_bytes()).ok()?.trim();
+    context.resolve_class_like_name(raw_scope, current_class_canonical_name)
+}
+
+fn php_instantiation_target_name(
+    source: &str,
+    node: Node<'_>,
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+) -> Option<String> {
+    let named_children = named_children(node);
+    let first = named_children.first()?;
+    if first.kind() == "anonymous_class" {
+        return None;
+    }
+    if !matches!(first.kind(), "name" | "qualified_name" | "relative_name") {
+        return None;
+    }
+    let raw_name = first.utf8_text(source.as_bytes()).ok()?.trim();
+    context.resolve_class_like_name(raw_name, current_class_canonical_name)
+}
+
+fn php_callable_literal_target(
+    source: &str,
+    node: Node<'_>,
+    context: &crate::language_support::PhpNameResolutionContext,
+    current_class_canonical_name: Option<&str>,
+) -> Option<(String, String)> {
+    let initializers = named_children(node)
+        .into_iter()
+        .filter(|child| child.kind() == "array_element_initializer")
+        .collect::<Vec<_>>();
+    if initializers.len() != 2 {
+        return None;
+    }
+    let first = named_children(initializers[0]).into_iter().next()?;
+    let second = named_children(initializers[1]).into_iter().next()?;
+    let target_name =
+        php_class_string_target_name(source, first, context, current_class_canonical_name)?;
+    let target_member_name = php_string_literal_value(source, second)?;
+    Some((target_name, target_member_name))
+}
+
+fn php_string_literal_value(source: &str, node: Node<'_>) -> Option<String> {
+    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+    let unquoted = text
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+        .or_else(|| {
+            text.strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .unwrap_or(text)
+        .trim();
+    (!unquoted.is_empty()).then(|| unquoted.to_owned())
+}
+
+fn php_literal_array_keys(source: &str, node: Node<'_>) -> Option<Vec<String>> {
+    let mut keys = BTreeSet::new();
+    for initializer in named_children(node)
+        .into_iter()
+        .filter(|child| child.kind() == "array_element_initializer")
+    {
+        let children = named_children(initializer);
+        if children.len() < 2 {
+            continue;
+        }
+        if let Some(key) = php_literal_key_text(source, children[0]) {
+            keys.insert(key);
+        }
+    }
+    (!keys.is_empty()).then(|| keys.into_iter().collect())
+}
+
+fn php_literal_key_text(source: &str, node: Node<'_>) -> Option<String> {
+    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(unquoted) = text
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+        .or_else(|| {
+            text.strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+        })
+    {
+        let normalized = unquoted.trim();
+        return (!normalized.is_empty()).then(|| normalized.to_owned());
+    }
+    text.chars()
+        .all(|value| value.is_ascii_digit() || value == '-' || value == '+')
+        .then(|| text.to_owned())
+}
+
+fn php_named_argument_keys(source: &str, node: Node<'_>) -> Option<Vec<String>> {
+    let mut keys = BTreeSet::new();
+    for argument in named_children(node)
+        .into_iter()
+        .filter(|child| child.kind() == "argument")
+    {
+        let Some(name) = argument
+            .child_by_field_name("name")
+            .and_then(|field| field.utf8_text(source.as_bytes()).ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        keys.insert(name.to_owned());
+    }
+    (!keys.is_empty()).then(|| keys.into_iter().collect())
+}
+
+fn resolve_php_target_symbol_index(
+    symbols: &[SymbolDefinition],
+    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
+    target: &PhpTargetEvidence,
+) -> Option<usize> {
+    if let Some(member_name) = target.target_member_name.as_deref() {
+        let candidate = format!("{}::{member_name}", target.target_canonical_name);
+        if let Some(index) = resolve_unique_canonical_symbol_index(
+            symbols,
+            symbol_indices_by_canonical_name,
+            symbol_indices_by_lower_canonical_name,
+            &candidate,
+            Some(&[
+                SymbolKind::Method,
+                SymbolKind::Property,
+                SymbolKind::Constant,
+                SymbolKind::EnumCase,
+            ]),
+        ) {
+            return Some(index);
+        }
+    }
+    resolve_unique_canonical_symbol_index(
+        symbols,
+        symbol_indices_by_canonical_name,
+        symbol_indices_by_lower_canonical_name,
+        &target.target_canonical_name,
+        Some(&[
+            SymbolKind::Class,
+            SymbolKind::Interface,
+            SymbolKind::PhpTrait,
+            SymbolKind::PhpEnum,
+        ]),
+    )
+}
+
+fn resolve_blade_relation_target_symbol_index(
+    symbols: &[SymbolDefinition],
+    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
+    relation: &BladeRelationEvidence,
+) -> Option<usize> {
+    resolve_unique_symbol_index_by_name(
+        symbols,
+        symbol_indices_by_name,
+        symbol_indices_by_lower_name,
+        relation.target_name.as_str(),
+        relation.target_symbol_kind,
+    )
+}
+
+fn resolve_unique_canonical_symbol_index(
+    symbols: &[SymbolDefinition],
+    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
+    target_name: &str,
+    allowed_kinds: Option<&[SymbolKind]>,
+) -> Option<usize> {
+    if let Some(indices) = symbol_indices_by_canonical_name.get(target_name) {
+        let matches = indices
+            .iter()
+            .copied()
+            .filter(|index| {
+                allowed_kinds.is_none_or(|allowed| allowed.contains(&symbols[*index].kind))
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return matches.first().copied();
+        }
+        if !matches.is_empty() {
+            return None;
+        }
+    }
+    let lower = target_name.to_ascii_lowercase();
+    let matches = symbol_indices_by_lower_canonical_name
+        .get(&lower)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|index| allowed_kinds.is_none_or(|allowed| allowed.contains(&symbols[*index].kind)))
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        matches.first().copied()
+    } else {
+        None
+    }
+}
+
+fn resolve_unique_symbol_index_by_name(
+    symbols: &[SymbolDefinition],
+    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
+    target_name: &str,
+    required_kind: SymbolKind,
+) -> Option<usize> {
+    if let Some(indices) = symbol_indices_by_name.get(target_name) {
+        let matches = indices
+            .iter()
+            .copied()
+            .filter(|index| symbols[*index].kind == required_kind)
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return matches.first().copied();
+        }
+        if !matches.is_empty() {
+            return None;
+        }
+    }
+    let matches = symbol_indices_by_lower_name
+        .get(&target_name.to_ascii_lowercase())
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|index| symbols[*index].kind == required_kind)
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        matches.first().copied()
+    } else {
+        None
+    }
+}
+
+fn normalize_php_source_evidence(evidence: &mut PhpSourceEvidence) {
+    evidence.type_evidence.sort();
+    evidence.type_evidence.dedup();
+    evidence.target_evidence.sort();
+    evidence.target_evidence.dedup();
+    evidence.literal_evidence.sort();
+    evidence.literal_evidence.dedup();
+}
+
+fn normalize_blade_source_evidence(evidence: &mut BladeSourceEvidence) {
+    evidence.relations.sort();
+    evidence.relations.dedup();
+    evidence.livewire_components.sort();
+    evidence.livewire_components.dedup();
+    evidence.wire_directives.sort();
+    evidence.wire_directives.dedup();
+    evidence.flux_components.sort();
+    evidence.flux_components.dedup();
+    for hint in evidence.flux_hints.values_mut() {
+        hint.props.sort();
+        hint.props.dedup();
+        hint.slots.sort();
+        hint.slots.dedup();
+        hint.variant_values.sort();
+        hint.variant_values.dedup();
+        hint.size_values.sort();
+        hint.size_values.dedup();
+    }
+}
+
+fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .filter(|child| child.is_named())
+        .collect()
+}
+
+fn insert_sorted_unique_owned(values: &mut Vec<String>, value: String) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(index) => values.insert(index, value),
+    }
+}
+
+fn flux_registry_hint(component_name: &str) -> Option<FluxComponentHint> {
+    match component_name {
+        "flux:button" => Some(FluxComponentHint {
+            props: vec!["icon".to_owned(), "size".to_owned(), "variant".to_owned()],
+            slots: vec!["default".to_owned()],
+            variant_values: vec![
+                "danger".to_owned(),
+                "ghost".to_owned(),
+                "primary".to_owned(),
+                "subtle".to_owned(),
+            ],
+            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
+            local_overlay: false,
+        }),
+        "flux:input" => Some(FluxComponentHint {
+            props: vec!["size".to_owned(), "type".to_owned()],
+            slots: Vec::new(),
+            variant_values: Vec::new(),
+            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
+            local_overlay: false,
+        }),
+        "flux:modal" => Some(FluxComponentHint {
+            props: vec!["name".to_owned(), "variant".to_owned()],
+            slots: vec![
+                "default".to_owned(),
+                "footer".to_owned(),
+                "heading".to_owned(),
+            ],
+            variant_values: vec!["danger".to_owned(), "default".to_owned()],
+            size_values: Vec::new(),
+            local_overlay: false,
+        }),
+        "flux:dropdown" => Some(FluxComponentHint {
+            props: vec!["align".to_owned(), "position".to_owned()],
+            slots: vec!["default".to_owned(), "trigger".to_owned()],
+            variant_values: Vec::new(),
+            size_values: Vec::new(),
+            local_overlay: false,
+        }),
+        "flux:select" => Some(FluxComponentHint {
+            props: vec!["multiple".to_owned(), "size".to_owned()],
+            slots: vec!["default".to_owned()],
+            variant_values: Vec::new(),
+            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
+            local_overlay: false,
+        }),
+        _ => None,
+    }
 }
 
 fn collect_symbols_from_tree(
@@ -596,6 +2020,10 @@ fn collect_symbols_from_tree(
     tree: &Tree,
     symbols: &mut Vec<SymbolDefinition>,
 ) {
+    if language == SymbolLanguage::Blade {
+        collect_blade_symbols_from_source(path, source, symbols);
+        return;
+    }
     collect_symbols_from_node(language, path, source, tree.root_node(), symbols);
 }
 
@@ -625,91 +2053,446 @@ fn collect_symbols_from_node(
     }
 }
 
-fn symbol_from_node(
+fn collect_blade_symbols_from_source(
+    path: &Path,
+    source: &str,
+    symbols: &mut Vec<SymbolDefinition>,
+) {
+    let whole_file_span = source_span_from_offsets(source, 0, source.len());
+    let file_anchor = usize::from(!source.is_empty());
+    let module_name = blade_view_name_for_path(path).unwrap_or_else(|| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(strip_blade_suffix)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "blade".to_owned())
+    });
+    push_symbol_definition(
+        symbols,
+        SymbolLanguage::Blade,
+        SymbolKind::Module,
+        path,
+        &module_name,
+        whole_file_span.clone(),
+    );
+
+    if let Some(component_name) = blade_component_name_for_path(path) {
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            SymbolKind::Component,
+            path,
+            &component_name,
+            source_span_from_offsets(source, file_anchor, file_anchor),
+        );
+    }
+
+    for capture in blade_section_regex().captures_iter(source) {
+        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            SymbolKind::Section,
+            path,
+            name.as_str().trim(),
+            source_span_from_offsets(source, name.start(), name.end()),
+        );
+    }
+
+    for capture in blade_livewire_directive_regex().captures_iter(source) {
+        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        let normalized = format!("livewire:{}", name.as_str().trim());
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            SymbolKind::Component,
+            path,
+            &normalized,
+            source_span_from_offsets(
+                source,
+                capture.get(0).unwrap().start(),
+                capture.get(0).unwrap().end(),
+            ),
+        );
+    }
+
+    for capture in blade_tag_regex().captures_iter(source) {
+        let Some(tag_name) = capture.get(1) else {
+            continue;
+        };
+        let Some((kind, normalized_name)) = classify_blade_tag_name(tag_name.as_str()) else {
+            continue;
+        };
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            kind,
+            path,
+            &normalized_name,
+            source_span_from_offsets(source, tag_name.start(), tag_name.end()),
+        );
+    }
+
+    for capture in blade_named_slot_tag_regex().captures_iter(source) {
+        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            SymbolKind::Slot,
+            path,
+            name.as_str().trim(),
+            source_span_from_offsets(source, name.start(), name.end()),
+        );
+    }
+
+    for capture in blade_slot_directive_regex().captures_iter(source) {
+        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
+            continue;
+        };
+        push_symbol_definition(
+            symbols,
+            SymbolLanguage::Blade,
+            SymbolKind::Slot,
+            path,
+            name.as_str().trim(),
+            source_span_from_offsets(source, name.start(), name.end()),
+        );
+    }
+
+    collect_blade_property_symbols(source, path, symbols, "@props");
+    collect_blade_property_symbols(source, path, symbols, "@aware");
+}
+
+fn collect_blade_property_symbols(
+    source: &str,
+    path: &Path,
+    symbols: &mut Vec<SymbolDefinition>,
+    directive: &str,
+) {
+    let bytes = source.as_bytes();
+    let mut cursor = 0usize;
+    while let Some(relative) = source[cursor..].find(directive) {
+        let start = cursor + relative;
+        let mut offset = start + directive.len();
+        while offset < bytes.len() && bytes[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        if offset >= bytes.len() || bytes[offset] != b'(' {
+            cursor = start + directive.len();
+            continue;
+        }
+        let Some((parameter_start, parameter_end)) =
+            blade_directive_parameter_bounds(source, offset)
+        else {
+            cursor = start + directive.len();
+            continue;
+        };
+        let parameter_source = &source[parameter_start..parameter_end];
+        for capture in blade_property_key_regex().captures_iter(parameter_source) {
+            let Some(name_match) = capture.get(1).or_else(|| capture.get(2)) else {
+                continue;
+            };
+            let normalized_name = format!("${}", name_match.as_str().trim());
+            push_symbol_definition(
+                symbols,
+                SymbolLanguage::Blade,
+                SymbolKind::Property,
+                path,
+                &normalized_name,
+                source_span_from_offsets(
+                    source,
+                    parameter_start + name_match.start(),
+                    parameter_start + name_match.end(),
+                ),
+            );
+        }
+        cursor = parameter_end.saturating_add(1);
+    }
+}
+
+fn blade_directive_parameter_bounds(
+    source: &str,
+    open_paren_index: usize,
+) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    if bytes.get(open_paren_index) != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    for (offset, byte) in bytes[open_paren_index..].iter().copied().enumerate() {
+        let index = open_paren_index + offset;
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if in_single_quote || in_double_quote => {
+                escaped = true;
+            }
+            b'\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            b'"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+            }
+            b'(' if !in_single_quote && !in_double_quote => {
+                depth += 1;
+            }
+            b')' if !in_single_quote && !in_double_quote => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some((open_paren_index + 1, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn classify_blade_tag_name(raw_tag_name: &str) -> Option<(SymbolKind, String)> {
+    let normalized = raw_tag_name.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(slot_name) = normalized
+        .strip_prefix("x-slot:")
+        .or_else(|| normalized.strip_prefix("x-slot."))
+    {
+        let slot_name = slot_name.trim();
+        return (!slot_name.is_empty()).then(|| (SymbolKind::Slot, slot_name.to_owned()));
+    }
+    if let Some(component_name) = normalized.strip_prefix("x-") {
+        if component_name == "dynamic-component" {
+            return None;
+        }
+        let component_name = component_name.trim();
+        return (!component_name.is_empty())
+            .then(|| (SymbolKind::Component, component_name.to_owned()));
+    }
+    if normalized.starts_with("livewire:") || normalized.starts_with("flux:") {
+        return Some((SymbolKind::Component, normalized.to_owned()));
+    }
+    None
+}
+
+fn push_symbol_definition(
+    symbols: &mut Vec<SymbolDefinition>,
     language: SymbolLanguage,
+    kind: SymbolKind,
+    path: &Path,
+    name: &str,
+    span: SourceSpan,
+) {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return;
+    }
+    let stable_id = stable_symbol_id(language, kind, path, trimmed_name, &span);
+    if symbols.iter().any(|symbol| symbol.stable_id == stable_id) {
+        return;
+    }
+    symbols.push(SymbolDefinition {
+        stable_id,
+        language,
+        kind,
+        name: trimmed_name.to_owned(),
+        path: path.to_path_buf(),
+        line: span.start_line,
+        span,
+    });
+}
+
+fn blade_section_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"@(?:section|yield)\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
+            .expect("blade section regex must compile")
+    })
+}
+
+fn blade_livewire_directive_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"@livewire\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
+            .expect("blade livewire directive regex must compile")
+    })
+}
+
+fn blade_view_relation_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"@(?P<directive>extends|component|include(?:If|When|Unless|First)?|yield)\s*\(\s*(?:"([^"]+)"|'([^']+)')"#,
+        )
+        .expect("blade view relation regex must compile")
+    })
+}
+
+fn blade_dynamic_component_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"<\s*x-dynamic-component\b[^>]*\b(?::component|component)\s*=\s*(?:"([^"]+)"|'([^']+)')"#,
+        )
+        .expect("blade dynamic component regex must compile")
+    })
+}
+
+fn blade_tag_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"<\s*(x-[A-Za-z0-9_.:-]+|livewire:[A-Za-z0-9_.:-]+|flux:[A-Za-z0-9_.:-]+)(?:[\s>/])"#,
+        )
+        .expect("blade tag regex must compile")
+    })
+}
+
+fn blade_named_slot_tag_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"<\s*x-slot\b[^>]*\bname\s*=\s*(?:"([^"]+)"|'([^']+)')"#)
+            .expect("blade named slot regex must compile")
+    })
+}
+
+fn blade_slot_directive_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"@slot\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
+            .expect("blade slot directive regex must compile")
+    })
+}
+
+fn blade_wire_directive_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"\b(wire:[A-Za-z0-9_.-]+)\s*="#)
+            .expect("blade wire directive regex must compile")
+    })
+}
+
+fn normalize_blade_dynamic_component_target(raw_target: &str) -> String {
+    raw_target
+        .trim()
+        .trim_matches(['"', '\''])
+        .trim()
+        .to_owned()
+}
+
+fn blade_property_key_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"(?x)
+            (?:^|[\[,])\s*"([^"]+)"(?:\s*=>)?
+            |
+            (?:^|[\[,])\s*'([^']+)'(?:\s*=>)?
+        "#,
+        )
+        .expect("blade property key regex must compile")
+    })
+}
+
+fn source_span_from_offsets(source: &str, start_byte: usize, end_byte: usize) -> SourceSpan {
+    let start_byte = start_byte.min(source.len());
+    let end_byte = end_byte.max(start_byte).min(source.len());
+    let (start_line, start_column) = line_column_for_offset(source, start_byte);
+    let (end_line, end_column) = line_column_for_offset(source, end_byte);
+    SourceSpan {
+        start_byte,
+        end_byte,
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+    }
+}
+
+fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
+    let clamped = offset.min(source.len());
+    let bytes = source.as_bytes();
+    let prefix = &bytes[..clamped];
+    let line = prefix.iter().filter(|byte| **byte == b'\n').count() + 1;
+    let line_start = prefix
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let column = clamped.saturating_sub(line_start) + 1;
+    (line, column)
+}
+
+fn strip_blade_suffix(name: &str) -> String {
+    name.strip_suffix(".blade.php")
+        .or_else(|| name.strip_suffix(".php"))
+        .unwrap_or(name)
+        .to_owned()
+}
+
+fn collect_php_declaration_relations(
     source: &str,
     node: Node<'_>,
-) -> Option<(SymbolKind, String)> {
-    match language {
-        SymbolLanguage::Rust => rust_symbol_from_node(source, node),
-        SymbolLanguage::Php => php_symbol_from_node(source, node),
+    relations: &mut Vec<PhpDeclarationRelation>,
+) {
+    if let Some((source_kind, source_name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
+        let relation_kind = match source_kind {
+            SymbolKind::Class | SymbolKind::Interface | SymbolKind::PhpEnum => Some(source_kind),
+            _ => None,
+        };
+        if let Some(source_kind) = relation_kind {
+            let source_line = source_span(node).start_line;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+                let relation = match child.kind() {
+                    "base_clause" => Some(RelationKind::Extends),
+                    "class_interface_clause" => Some(RelationKind::Implements),
+                    _ => None,
+                };
+                let Some(relation) = relation else {
+                    continue;
+                };
+
+                let mut clause_cursor = child.walk();
+                for target in child
+                    .children(&mut clause_cursor)
+                    .filter(|child| child.is_named())
+                {
+                    let Some(target_name) = target
+                        .utf8_text(source.as_bytes())
+                        .ok()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(ToOwned::to_owned)
+                    else {
+                        continue;
+                    };
+                    relations.push(PhpDeclarationRelation {
+                        source_kind,
+                        source_name: source_name.clone(),
+                        source_line,
+                        target_name,
+                        relation,
+                    });
+                }
+            }
+        }
     }
-}
 
-fn rust_symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {
-    match node.kind() {
-        "mod_item" => node_name_text(node, source).map(|name| (SymbolKind::Module, name)),
-        "struct_item" => node_name_text(node, source).map(|name| (SymbolKind::Struct, name)),
-        "enum_item" => node_name_text(node, source).map(|name| (SymbolKind::Enum, name)),
-        "trait_item" => node_name_text(node, source).map(|name| (SymbolKind::Trait, name)),
-        "type_item" => node_name_text(node, source).map(|name| (SymbolKind::TypeAlias, name)),
-        "const_item" => node_name_text(node, source).map(|name| (SymbolKind::Const, name)),
-        "static_item" => node_name_text(node, source).map(|name| (SymbolKind::Static, name)),
-        "function_item" | "function_signature_item" => {
-            let parent_kind = node.parent().map(|parent| parent.kind());
-            let kind = if matches!(parent_kind, Some("impl_item" | "trait_item")) {
-                SymbolKind::Method
-            } else {
-                SymbolKind::Function
-            };
-            node_name_text(node, source).map(|name| (kind, name))
-        }
-        "impl_item" => {
-            let implemented_type = node_field_text(node, source, "type");
-            let implemented_trait = node_field_text(node, source, "trait");
-            let name = match (implemented_trait, implemented_type) {
-                (Some(trait_name), Some(type_name)) => format!("impl {trait_name} for {type_name}"),
-                (None, Some(type_name)) => format!("impl {type_name}"),
-                _ => "impl".to_string(),
-            };
-            Some((SymbolKind::Impl, name))
-        }
-        _ => None,
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_php_declaration_relations(source, child, relations);
     }
-}
-
-fn php_symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {
-    match node.kind() {
-        "function_definition" => {
-            node_name_text(node, source).map(|name| (SymbolKind::Function, name))
-        }
-        "class_declaration" => node_name_text(node, source).map(|name| (SymbolKind::Class, name)),
-        "interface_declaration" => {
-            node_name_text(node, source).map(|name| (SymbolKind::Interface, name))
-        }
-        "trait_declaration" => {
-            node_name_text(node, source).map(|name| (SymbolKind::PhpTrait, name))
-        }
-        "enum_declaration" => node_name_text(node, source).map(|name| (SymbolKind::PhpEnum, name)),
-        "method_declaration" => node_name_text(node, source).map(|name| (SymbolKind::Method, name)),
-        "property_element" => node_name_text(node, source).map(|name| (SymbolKind::Property, name)),
-        "const_element" => node_name_text(node, source).map(|name| (SymbolKind::Constant, name)),
-        _ => None,
-    }
-}
-
-fn node_name_text(node: Node<'_>, source: &str) -> Option<String> {
-    node_field_text(node, source, "name").or_else(|| {
-        let mut cursor = node.walk();
-        node.children(&mut cursor)
-            .filter(|child| child.is_named())
-            .find(|child| matches!(child.kind(), "name" | "identifier" | "variable_name"))
-            .and_then(|child| child.utf8_text(source.as_bytes()).ok())
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn node_field_text(node: Node<'_>, source: &str, field_name: &str) -> Option<String> {
-    node.child_by_field_name(field_name).and_then(|field_node| {
-        field_node
-            .utf8_text(source.as_bytes())
-            .ok()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToOwned::to_owned)
-    })
 }
 
 fn source_span(node: Node<'_>) -> SourceSpan {
@@ -771,6 +2554,32 @@ fn structural_query_match_order(
         .then(left.span.start_line.cmp(&right.span.start_line))
         .then(left.span.start_column.cmp(&right.span.start_column))
         .then(left.excerpt.cmp(&right.excerpt))
+}
+
+fn php_symbol_indices_by_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
+    let mut indices = BTreeMap::new();
+    for (index, symbol) in symbols.iter().enumerate() {
+        if symbol.language == SymbolLanguage::Php {
+            indices
+                .entry(symbol.name.clone())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+    }
+    indices
+}
+
+fn php_symbol_indices_by_lower_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
+    let mut indices = BTreeMap::new();
+    for (index, symbol) in symbols.iter().enumerate() {
+        if symbol.language == SymbolLanguage::Php {
+            indices
+                .entry(symbol.name.to_ascii_lowercase())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+    }
+    indices
 }
 
 fn heuristic_reference_order(
@@ -936,6 +2745,10 @@ impl ManifestStore {
                 })
             })
     }
+
+    pub fn delete_snapshot(&self, snapshot_id: &str) -> FriggResult<()> {
+        self.storage.delete_snapshot(snapshot_id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -979,125 +2792,6 @@ impl ReindexDiagnostics {
             .iter()
             .filter(|diagnostic| diagnostic.kind == kind)
             .count()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SemanticChunkCandidate {
-    chunk_id: String,
-    repository_id: String,
-    snapshot_id: String,
-    path: String,
-    language: String,
-    chunk_index: usize,
-    start_line: usize,
-    end_line: usize,
-    content_hash_blake3: String,
-    content_text: String,
-}
-
-trait SemanticRuntimeEmbeddingExecutor: Sync {
-    fn embed_documents<'a>(
-        &'a self,
-        provider: SemanticRuntimeProvider,
-        model: &'a str,
-        input: Vec<String>,
-        trace_id: Option<String>,
-    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>>;
-}
-
-fn build_semantic_embedding_runtime() -> FriggResult<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to build tokio runtime for semantic embedding requests: {err}"
-            ))
-        })
-}
-
-fn execute_semantic_embedding_batch(
-    executor: &dyn SemanticRuntimeEmbeddingExecutor,
-    provider: SemanticRuntimeProvider,
-    model: &str,
-    input: Vec<String>,
-    trace_id: Option<String>,
-) -> FriggResult<Vec<Vec<f32>>> {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let model = model.to_owned();
-        return std::thread::scope(|scope| {
-            let handle = scope.spawn(|| {
-                let runtime = build_semantic_embedding_runtime()?;
-                runtime.block_on(executor.embed_documents(provider, &model, input, trace_id))
-            });
-            match handle.join() {
-                Ok(result) => result,
-                Err(_) => Err(FriggError::Internal(
-                    "semantic embedding provider thread panicked under an active tokio runtime"
-                        .to_owned(),
-                )),
-            }
-        });
-    }
-
-    let runtime = build_semantic_embedding_runtime()?;
-    runtime.block_on(executor.embed_documents(provider, model, input, trace_id))
-}
-
-#[derive(Debug, Default)]
-struct RuntimeSemanticEmbeddingExecutor {
-    credentials: SemanticRuntimeCredentials,
-}
-
-impl RuntimeSemanticEmbeddingExecutor {
-    fn new(credentials: SemanticRuntimeCredentials) -> Self {
-        Self { credentials }
-    }
-}
-
-impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
-    fn embed_documents<'a>(
-        &'a self,
-        provider: SemanticRuntimeProvider,
-        model: &'a str,
-        input: Vec<String>,
-        trace_id: Option<String>,
-    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>> {
-        let model = model.trim().to_owned();
-        let api_key = self
-            .credentials
-            .api_key_for(provider)
-            .map(str::to_owned)
-            .unwrap_or_default();
-        Box::pin(async move {
-            let request = EmbeddingRequest {
-                model,
-                input,
-                purpose: EmbeddingPurpose::Document,
-                dimensions: None,
-                trace_id,
-            };
-            let response = match provider {
-                SemanticRuntimeProvider::OpenAi => {
-                    let client = OpenAiEmbeddingProvider::new(api_key);
-                    client.embed(request).await
-                }
-                SemanticRuntimeProvider::Google => {
-                    let client = GoogleEmbeddingProvider::new(api_key);
-                    client.embed(request).await
-                }
-            }
-            .map_err(|err| {
-                FriggError::Internal(format!("semantic embedding provider call failed: {err}"))
-            })?;
-
-            Ok(response
-                .vectors
-                .into_iter()
-                .map(|vector| vector.values)
-                .collect::<Vec<_>>())
-        })
     }
 }
 
@@ -1159,6 +2853,9 @@ fn reindex_repository_with_semantic_executor(
         entries: manifest_output.diagnostics,
     };
     let previous_manifest = manifest_store.load_latest_manifest_for_repository(repository_id)?;
+    let previous_snapshot_id = previous_manifest
+        .as_ref()
+        .map(|manifest| manifest.snapshot_id.clone());
     let previous_entries = previous_manifest
         .as_ref()
         .map(|manifest| manifest.entries.clone())
@@ -1190,26 +2887,30 @@ fn reindex_repository_with_semantic_executor(
         manifest_store.persist_snapshot_manifest(repository_id, &snapshot_id, &current_manifest)?;
         snapshot_id
     };
+    let rollback_snapshot_on_semantic_failure = previous_snapshot_id
+        .as_deref()
+        .map(|previous| previous != snapshot_id)
+        .unwrap_or(true);
 
     if semantic_runtime.enabled {
         let storage = Storage::new(db_path);
-        match mode {
-            ReindexMode::Full => {
-                let semantic_records = build_semantic_embedding_records(
-                    repository_id,
-                    workspace_root,
-                    &snapshot_id,
-                    &current_manifest,
-                    semantic_runtime,
-                    credentials,
-                    executor,
-                )?;
+        let semantic_result = match mode {
+            ReindexMode::Full => build_semantic_embedding_records(
+                repository_id,
+                workspace_root,
+                &snapshot_id,
+                &current_manifest,
+                semantic_runtime,
+                credentials,
+                executor,
+            )
+            .and_then(|semantic_records| {
                 storage.replace_semantic_embeddings_for_repository(
                     repository_id,
                     &snapshot_id,
                     &semantic_records,
-                )?;
-            }
+                )
+            }),
             ReindexMode::ChangedOnly => {
                 if files_changed > 0 || files_deleted > 0 || previous_manifest.is_none() {
                     let semantic_manifest = manifest_diff
@@ -1218,7 +2919,7 @@ fn reindex_repository_with_semantic_executor(
                         .chain(manifest_diff.modified.iter())
                         .cloned()
                         .collect::<Vec<_>>();
-                    let semantic_records = build_semantic_embedding_records(
+                    build_semantic_embedding_records(
                         repository_id,
                         workspace_root,
                         &snapshot_id,
@@ -1226,35 +2927,49 @@ fn reindex_repository_with_semantic_executor(
                         semantic_runtime,
                         credentials,
                         executor,
-                    )?;
-                    let changed_paths = manifest_diff
-                        .added
-                        .iter()
-                        .chain(manifest_diff.modified.iter())
-                        .map(|digest| {
-                            normalize_repository_relative_path(workspace_root, &digest.path)
-                        })
-                        .collect::<FriggResult<Vec<_>>>()?;
-                    let deleted_paths = manifest_diff
-                        .deleted
-                        .iter()
-                        .map(|digest| {
-                            normalize_repository_relative_path(workspace_root, &digest.path)
-                        })
-                        .collect::<FriggResult<Vec<_>>>()?;
-                    let previous_snapshot_id = previous_manifest
-                        .as_ref()
-                        .map(|manifest| manifest.snapshot_id.as_str());
-                    storage.advance_semantic_embeddings_for_repository(
-                        repository_id,
-                        previous_snapshot_id,
-                        &snapshot_id,
-                        &changed_paths,
-                        &deleted_paths,
-                        &semantic_records,
-                    )?;
+                    )
+                    .and_then(|semantic_records| {
+                        let changed_paths = manifest_diff
+                            .added
+                            .iter()
+                            .chain(manifest_diff.modified.iter())
+                            .map(|digest| {
+                                normalize_repository_relative_path(workspace_root, &digest.path)
+                            })
+                            .collect::<FriggResult<Vec<_>>>()?;
+                        let deleted_paths = manifest_diff
+                            .deleted
+                            .iter()
+                            .map(|digest| {
+                                normalize_repository_relative_path(workspace_root, &digest.path)
+                            })
+                            .collect::<FriggResult<Vec<_>>>()?;
+                        let previous_snapshot_id = previous_manifest
+                            .as_ref()
+                            .map(|manifest| manifest.snapshot_id.as_str());
+                        storage.advance_semantic_embeddings_for_repository(
+                            repository_id,
+                            previous_snapshot_id,
+                            &snapshot_id,
+                            &changed_paths,
+                            &deleted_paths,
+                            &semantic_records,
+                        )
+                    })
+                } else {
+                    Ok(())
                 }
             }
+        };
+        if let Err(err) = semantic_result {
+            if rollback_snapshot_on_semantic_failure {
+                if let Err(rollback_err) = manifest_store.delete_snapshot(&snapshot_id) {
+                    return Err(FriggError::Internal(format!(
+                        "{err}; failed to roll back snapshot '{snapshot_id}' after semantic reindex failure: {rollback_err}"
+                    )));
+                }
+            }
+            return Err(err);
         }
     }
 
@@ -1267,737 +2982,6 @@ fn reindex_repository_with_semantic_executor(
         diagnostics,
         duration_ms: started_at.elapsed().as_millis(),
     })
-}
-
-fn resolve_semantic_runtime_config_from_env() -> FriggResult<SemanticRuntimeConfig> {
-    let enabled = parse_optional_bool_env(FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV)?.unwrap_or(false);
-    if !enabled {
-        return Ok(SemanticRuntimeConfig::default());
-    }
-    let strict_mode =
-        parse_optional_bool_env(FRIGG_SEMANTIC_RUNTIME_STRICT_MODE_ENV)?.unwrap_or(false);
-    let provider = std::env::var(FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV)
-        .ok()
-        .map(|raw| {
-            SemanticRuntimeProvider::from_str(raw.trim()).map_err(|message| {
-                FriggError::InvalidInput(format!(
-                    "invalid {} value: {message}",
-                    FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV
-                ))
-            })
-        })
-        .transpose()?;
-    let model = std::env::var(FRIGG_SEMANTIC_RUNTIME_MODEL_ENV)
-        .ok()
-        .map(|raw| raw.trim().to_owned());
-
-    Ok(SemanticRuntimeConfig {
-        enabled,
-        provider,
-        model,
-        strict_mode,
-    })
-}
-
-fn parse_optional_bool_env(name: &str) -> FriggResult<Option<bool>> {
-    let Some(raw) = std::env::var(name).ok() else {
-        return Ok(None);
-    };
-    let normalized = raw.trim().to_ascii_lowercase();
-    let value = match normalized.as_str() {
-        "1" | "true" => true,
-        "0" | "false" => false,
-        _ => {
-            return Err(FriggError::InvalidInput(format!(
-                "{name} must be one of: true,false,1,0 (received: {normalized})"
-            )));
-        }
-    };
-    Ok(Some(value))
-}
-
-fn build_semantic_embedding_records(
-    repository_id: &str,
-    workspace_root: &Path,
-    snapshot_id: &str,
-    current_manifest: &[FileDigest],
-    semantic_runtime: &SemanticRuntimeConfig,
-    credentials: &SemanticRuntimeCredentials,
-    executor: &dyn SemanticRuntimeEmbeddingExecutor,
-) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
-    semantic_runtime
-        .validate_startup(&credentials)
-        .map_err(|err| {
-            FriggError::InvalidInput(format!(
-                "semantic runtime validation failed code={}: {err}",
-                err.code()
-            ))
-        })?;
-
-    let provider = semantic_runtime.provider.ok_or_else(|| {
-        FriggError::Internal("semantic runtime provider missing after validation".to_owned())
-    })?;
-    let model = semantic_runtime.normalized_model().ok_or_else(|| {
-        FriggError::Internal("semantic runtime model missing after validation".to_owned())
-    })?;
-    let chunks = build_semantic_chunk_candidates(
-        repository_id,
-        workspace_root,
-        snapshot_id,
-        current_manifest,
-    )?;
-
-    if chunks.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
-    let mut output = Vec::with_capacity(chunks.len());
-    for batch in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE) {
-        let batch_input = batch
-            .iter()
-            .map(|chunk| chunk.content_text.clone())
-            .collect::<Vec<_>>();
-        let vectors = execute_semantic_embedding_batch(
-            executor,
-            provider,
-            model,
-            batch_input,
-            Some(trace_id.clone()),
-        )?;
-        if vectors.len() != batch.len() {
-            return Err(FriggError::Internal(format!(
-                "semantic embedding provider response length mismatch: expected {} vectors, received {}",
-                batch.len(),
-                vectors.len()
-            )));
-        }
-
-        for (chunk, embedding) in batch.iter().zip(vectors.into_iter()) {
-            if embedding.is_empty() {
-                return Err(FriggError::Internal(format!(
-                    "semantic embedding provider returned an empty vector for chunk_id={}",
-                    chunk.chunk_id
-                )));
-            }
-            if embedding.iter().any(|value| !value.is_finite()) {
-                return Err(FriggError::Internal(format!(
-                    "semantic embedding provider returned non-finite vector values for chunk_id={}",
-                    chunk.chunk_id
-                )));
-            }
-
-            output.push(SemanticChunkEmbeddingRecord {
-                chunk_id: chunk.chunk_id.clone(),
-                repository_id: chunk.repository_id.clone(),
-                snapshot_id: chunk.snapshot_id.clone(),
-                path: chunk.path.clone(),
-                language: chunk.language.clone(),
-                chunk_index: chunk.chunk_index,
-                start_line: chunk.start_line,
-                end_line: chunk.end_line,
-                provider: provider.as_str().to_owned(),
-                model: model.to_owned(),
-                trace_id: Some(trace_id.clone()),
-                content_hash_blake3: chunk.content_hash_blake3.clone(),
-                content_text: chunk.content_text.clone(),
-                embedding,
-            });
-        }
-    }
-
-    output.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.chunk_index.cmp(&right.chunk_index))
-            .then(left.chunk_id.cmp(&right.chunk_id))
-    });
-    Ok(output)
-}
-
-fn build_semantic_chunk_candidates(
-    repository_id: &str,
-    workspace_root: &Path,
-    snapshot_id: &str,
-    current_manifest: &[FileDigest],
-) -> FriggResult<Vec<SemanticChunkCandidate>> {
-    let mut output = Vec::new();
-
-    for entry in current_manifest {
-        let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
-            continue;
-        };
-        let source = match fs::read_to_string(&entry.path) {
-            Ok(source) => source,
-            Err(_) => continue,
-        };
-        let repository_relative_path =
-            normalize_repository_relative_path(workspace_root, &entry.path)?;
-        if repository_relative_path.starts_with("playbooks/") {
-            continue;
-        }
-        let source = scrub_playbook_metadata_header(&source);
-        output.extend(build_file_semantic_chunks(
-            repository_id,
-            snapshot_id,
-            &repository_relative_path,
-            language,
-            source.as_ref(),
-        ));
-    }
-
-    output.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.chunk_index.cmp(&right.chunk_index))
-            .then(left.chunk_id.cmp(&right.chunk_id))
-    });
-    Ok(output)
-}
-
-fn build_file_semantic_chunks(
-    repository_id: &str,
-    snapshot_id: &str,
-    path: &str,
-    language: &str,
-    source: &str,
-) -> Vec<SemanticChunkCandidate> {
-    let mut chunks = Vec::new();
-    let mut current_lines: Vec<&str> = Vec::new();
-    let mut current_chars = 0usize;
-    let mut start_line = 1usize;
-    let mut chunk_index = 0usize;
-    let markdown_chunking = language == "markdown";
-
-    for (line_idx, line) in source.lines().enumerate() {
-        let line_number = line_idx + 1;
-        let markdown_heading_boundary =
-            markdown_chunking && !current_lines.is_empty() && is_markdown_heading(line);
-        let projected_chars = current_chars + line.len() + usize::from(!current_lines.is_empty());
-        let should_flush = markdown_heading_boundary
-            || (!current_lines.is_empty()
-                && (current_lines.len() >= SEMANTIC_CHUNK_MAX_LINES
-                    || projected_chars > SEMANTIC_CHUNK_MAX_CHARS));
-
-        if should_flush {
-            if let Some(chunk) = create_semantic_chunk_candidate(
-                repository_id,
-                snapshot_id,
-                path,
-                language,
-                chunk_index,
-                start_line,
-                line_number.saturating_sub(1),
-                &current_lines,
-            ) {
-                chunks.push(chunk);
-                chunk_index += 1;
-            }
-            current_lines.clear();
-            current_chars = 0;
-            start_line = line_number;
-        }
-
-        current_chars += line.len() + usize::from(!current_lines.is_empty());
-        current_lines.push(line);
-    }
-
-    if let Some(chunk) = create_semantic_chunk_candidate(
-        repository_id,
-        snapshot_id,
-        path,
-        language,
-        chunk_index,
-        start_line,
-        source.lines().count().max(start_line),
-        &current_lines,
-    ) {
-        chunks.push(chunk);
-    }
-
-    chunks
-}
-
-fn create_semantic_chunk_candidate(
-    repository_id: &str,
-    snapshot_id: &str,
-    path: &str,
-    language: &str,
-    chunk_index: usize,
-    start_line: usize,
-    end_line: usize,
-    lines: &[&str],
-) -> Option<SemanticChunkCandidate> {
-    if lines.is_empty() {
-        return None;
-    }
-    let content_text = lines.join("\n");
-    if content_text.trim().is_empty() {
-        return None;
-    }
-
-    let mut content_hasher = Hasher::new();
-    content_hasher.update(content_text.as_bytes());
-    let content_hash_blake3 = content_hasher.finalize().to_hex().to_string();
-
-    let mut chunk_id_hasher = Hasher::new();
-    chunk_id_hasher.update(repository_id.as_bytes());
-    chunk_id_hasher.update(&[0]);
-    chunk_id_hasher.update(path.as_bytes());
-    chunk_id_hasher.update(&[0]);
-    chunk_id_hasher.update(chunk_index.to_string().as_bytes());
-    chunk_id_hasher.update(&[0]);
-    chunk_id_hasher.update(start_line.to_string().as_bytes());
-    chunk_id_hasher.update(&[0]);
-    chunk_id_hasher.update(end_line.to_string().as_bytes());
-    chunk_id_hasher.update(&[0]);
-    chunk_id_hasher.update(content_hash_blake3.as_bytes());
-
-    Some(SemanticChunkCandidate {
-        chunk_id: format!("chunk-{}", chunk_id_hasher.finalize().to_hex()),
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
-        path: path.to_owned(),
-        language: language.to_owned(),
-        chunk_index,
-        start_line,
-        end_line,
-        content_hash_blake3,
-        content_text,
-    })
-}
-
-pub(crate) fn semantic_chunk_language_for_path(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("rs") => Some("rust"),
-        Some("php") => Some("php"),
-        Some("md" | "markdown") => Some("markdown"),
-        Some("json") => Some("json"),
-        Some("toml") => Some("toml"),
-        Some("txt") => Some("text"),
-        Some("yaml" | "yml") => Some("yaml"),
-        _ => None,
-    }
-}
-
-fn is_markdown_heading(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    let mut heading_hashes = 0usize;
-    for ch in trimmed.chars() {
-        if ch == '#' {
-            heading_hashes += 1;
-            continue;
-        }
-        return heading_hashes > 0 && heading_hashes <= 6 && ch.is_ascii_whitespace();
-    }
-
-    false
-}
-
-fn normalize_repository_relative_path(workspace_root: &Path, path: &Path) -> FriggResult<String> {
-    if let Ok(relative) = path.strip_prefix(workspace_root) {
-        return Ok(relative.to_string_lossy().replace('\\', "/"));
-    }
-
-    let root_canonical = workspace_root.canonicalize().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to canonicalize semantic workspace root '{}': {err}",
-            workspace_root.display()
-        ))
-    })?;
-    let path_canonical = path.canonicalize().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to canonicalize semantic source path '{}': {err}",
-            path.display()
-        ))
-    })?;
-    let relative = path_canonical
-        .strip_prefix(&root_canonical)
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "semantic chunk path '{}' escapes workspace root '{}': {err}",
-                path.display(),
-                workspace_root.display()
-            ))
-        })?;
-    Ok(relative.to_string_lossy().replace('\\', "/"))
-}
-
-fn deterministic_semantic_trace_id(
-    repository_id: &str,
-    snapshot_id: &str,
-    provider: SemanticRuntimeProvider,
-    model: &str,
-) -> String {
-    let mut hasher = Hasher::new();
-    hasher.update(repository_id.as_bytes());
-    hasher.update(&[0]);
-    hasher.update(snapshot_id.as_bytes());
-    hasher.update(&[0]);
-    hasher.update(provider.as_str().as_bytes());
-    hasher.update(&[0]);
-    hasher.update(model.as_bytes());
-    format!("trace-semantic-{}", hasher.finalize().to_hex())
-}
-
-impl ManifestBuilder {
-    pub fn build(&self, root: &Path) -> FriggResult<Vec<FileDigest>> {
-        if !root.exists() {
-            return Err(FriggError::InvalidInput(format!(
-                "index root does not exist: {}",
-                root.display()
-            )));
-        }
-
-        let mut out = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
-
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-                continue;
-            }
-            let mtime_ns = dent
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(system_time_to_unix_nanos);
-            let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
-
-            out.push(FileDigest {
-                path,
-                size_bytes,
-                mtime_ns,
-                hash_blake3_hex: digest,
-            });
-        }
-        out.sort_by(file_digest_order);
-        out.dedup_by(|left, right| left.path == right.path);
-
-        Ok(out)
-    }
-
-    pub fn build_with_diagnostics(&self, root: &Path) -> FriggResult<ManifestBuildOutput> {
-        if !root.exists() {
-            return Err(FriggError::InvalidInput(format!(
-                "index root does not exist: {}",
-                root.display()
-            )));
-        }
-
-        let mut entries = Vec::new();
-        let mut diagnostics = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
-
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: None,
-                        kind: ManifestDiagnosticKind::Walk,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-                continue;
-            }
-            let mtime_ns = dent
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(system_time_to_unix_nanos);
-            let (size_bytes, digest) = match stream_file_blake3_digest(&path) {
-                Ok(result) => result,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: Some(path),
-                        kind: ManifestDiagnosticKind::Read,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            entries.push(FileDigest {
-                path,
-                size_bytes,
-                mtime_ns,
-                hash_blake3_hex: digest,
-            });
-        }
-        entries.sort_by(file_digest_order);
-        entries.dedup_by(|left, right| left.path == right.path);
-        diagnostics.sort_by(manifest_build_diagnostic_order);
-
-        Ok(ManifestBuildOutput {
-            entries,
-            diagnostics,
-        })
-    }
-
-    pub fn build_metadata_with_diagnostics(
-        &self,
-        root: &Path,
-    ) -> FriggResult<ManifestMetadataBuildOutput> {
-        if !root.exists() {
-            return Err(FriggError::InvalidInput(format!(
-                "index root does not exist: {}",
-                root.display()
-            )));
-        }
-
-        let mut entries = Vec::new();
-        let mut diagnostics = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
-
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: None,
-                        kind: ManifestDiagnosticKind::Walk,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
-                continue;
-            }
-            let metadata = match dent.metadata() {
-                Ok(metadata) => metadata,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: Some(path),
-                        kind: ManifestDiagnosticKind::Read,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let mtime_ns = metadata.modified().ok().and_then(system_time_to_unix_nanos);
-            entries.push(FileMetadataDigest {
-                path,
-                size_bytes: metadata.len(),
-                mtime_ns,
-            });
-        }
-        entries.sort_by(file_metadata_digest_order);
-        entries.dedup_by(|left, right| left.path == right.path);
-        diagnostics.sort_by(manifest_build_diagnostic_order);
-
-        Ok(ManifestMetadataBuildOutput {
-            entries,
-            diagnostics,
-        })
-    }
-}
-
-fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .standard_filters(true)
-        .require_git(false)
-        .follow_links(follow_symlinks);
-    builder
-}
-
-fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
-    let relative = if path.is_absolute() {
-        let Ok(relative) = path.strip_prefix(root) else {
-            return true;
-        };
-        relative
-    } else {
-        path
-    };
-    let Some(component) = relative.components().next() else {
-        return false;
-    };
-    matches!(
-        component.as_os_str().to_string_lossy().as_ref(),
-        ".frigg" | ".git" | "target"
-    )
-}
-
-fn stream_file_blake3_digest(path: &Path) -> std::io::Result<(u64, String)> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = Hasher::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut total_bytes = 0_u64;
-
-    loop {
-        let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-        total_bytes = total_bytes.saturating_add(bytes_read as u64);
-    }
-
-    Ok((total_bytes, hasher.finalize().to_hex().to_string()))
-}
-
-pub fn diff(old: &[FileDigest], new: &[FileDigest]) -> ManifestDiff {
-    let old_by_path = manifest_by_path(old);
-    let new_by_path = manifest_by_path(new);
-
-    let mut added = Vec::new();
-    let mut modified = Vec::new();
-    let mut deleted = Vec::new();
-
-    for (path, new_entry) in &new_by_path {
-        match old_by_path.get(path) {
-            None => added.push(new_entry.clone()),
-            Some(old_entry) if !same_manifest_record(old_entry, new_entry) => {
-                modified.push(new_entry.clone())
-            }
-            Some(_) => {}
-        }
-    }
-
-    for (path, old_entry) in &old_by_path {
-        if !new_by_path.contains_key(path) {
-            deleted.push(old_entry.clone());
-        }
-    }
-
-    ManifestDiff {
-        added,
-        modified,
-        deleted,
-    }
-}
-
-fn file_digest_to_manifest_entry(entry: &FileDigest) -> ManifestEntry {
-    ManifestEntry {
-        path: entry.path.to_string_lossy().to_string(),
-        sha256: entry.hash_blake3_hex.clone(),
-        size_bytes: entry.size_bytes,
-        mtime_ns: entry.mtime_ns,
-    }
-}
-
-fn manifest_entry_to_file_digest(entry: ManifestEntry) -> FileDigest {
-    FileDigest {
-        path: PathBuf::from(entry.path),
-        size_bytes: entry.size_bytes,
-        mtime_ns: entry.mtime_ns,
-        hash_blake3_hex: entry.sha256,
-    }
-}
-
-fn deterministic_snapshot_id(repository_id: &str, entries: &[FileDigest]) -> String {
-    let mut ordered = entries.to_vec();
-    ordered.sort_by(file_digest_order);
-
-    let mut hasher = Hasher::new();
-    hasher.update(repository_id.as_bytes());
-    hasher.update(&[0]);
-
-    for entry in ordered {
-        hasher.update(entry.path.to_string_lossy().as_bytes());
-        hasher.update(&[0]);
-        hasher.update(entry.size_bytes.to_string().as_bytes());
-        hasher.update(&[0]);
-        match entry.mtime_ns {
-            Some(mtime_ns) => {
-                hasher.update(b"1");
-                hasher.update(mtime_ns.to_string().as_bytes());
-            }
-            None => {
-                hasher.update(b"0");
-            }
-        }
-        hasher.update(&[0]);
-        hasher.update(entry.hash_blake3_hex.as_bytes());
-        hasher.update(&[0]);
-    }
-
-    format!("snapshot-{}", hasher.finalize().to_hex())
-}
-
-fn same_manifest_record(left: &FileDigest, right: &FileDigest) -> bool {
-    left.size_bytes == right.size_bytes
-        && left.mtime_ns == right.mtime_ns
-        && left.hash_blake3_hex == right.hash_blake3_hex
-}
-
-fn manifest_by_path(entries: &[FileDigest]) -> BTreeMap<PathBuf, FileDigest> {
-    let mut ordered = entries.to_vec();
-    ordered.sort_by(file_digest_order);
-
-    let mut by_path = BTreeMap::new();
-    for entry in ordered {
-        by_path.insert(entry.path.clone(), entry);
-    }
-
-    by_path
-}
-
-fn file_digest_order(left: &FileDigest, right: &FileDigest) -> std::cmp::Ordering {
-    left.path
-        .cmp(&right.path)
-        .then(left.size_bytes.cmp(&right.size_bytes))
-        .then(left.mtime_ns.cmp(&right.mtime_ns))
-        .then(left.hash_blake3_hex.cmp(&right.hash_blake3_hex))
-}
-
-fn file_metadata_digest_order(
-    left: &FileMetadataDigest,
-    right: &FileMetadataDigest,
-) -> std::cmp::Ordering {
-    left.path
-        .cmp(&right.path)
-        .then(left.size_bytes.cmp(&right.size_bytes))
-        .then(left.mtime_ns.cmp(&right.mtime_ns))
-}
-
-fn manifest_build_diagnostic_order(
-    left: &ManifestBuildDiagnostic,
-    right: &ManifestBuildDiagnostic,
-) -> std::cmp::Ordering {
-    left.path
-        .cmp(&right.path)
-        .then(left.kind.cmp(&right.kind))
-        .then(left.message.cmp(&right.message))
-}
-
-fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
-    system_time
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
 }
 
 #[cfg(test)]
@@ -2015,13 +2999,17 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        FileDigest, HeuristicReferenceConfidence, HeuristicReferenceEvidence, ManifestBuilder,
-        ManifestDiagnosticKind, ManifestStore, ReindexMode, RuntimeSemanticEmbeddingExecutor,
-        SemanticRuntimeEmbeddingExecutor, SymbolKind, SymbolLanguage, build_file_semantic_chunks,
-        build_semantic_chunk_candidates, diff, extract_symbols_for_paths,
-        extract_symbols_from_source, file_digest_order, navigation_symbol_target_rank,
-        register_symbol_definitions, reindex_repository, reindex_repository_with_semantic_executor,
-        resolve_heuristic_references, search_structural_in_source,
+        BladeRelationKind, FileDigest, HeuristicReferenceConfidence, HeuristicReferenceEvidence,
+        ManifestBuilder, ManifestDiagnosticKind, ManifestStore, PhpDeclarationRelation,
+        PhpTargetEvidenceKind, PhpTypeEvidenceKind, ReindexMode, RuntimeSemanticEmbeddingExecutor,
+        SEMANTIC_CHUNK_MAX_CHARS, SemanticRuntimeEmbeddingExecutor, SymbolKind, SymbolLanguage,
+        build_file_semantic_chunks, build_semantic_chunk_candidates, diff,
+        extract_blade_source_evidence_from_source, extract_php_declaration_relations_from_source,
+        extract_php_source_evidence_from_source, extract_symbols_for_paths,
+        extract_symbols_from_source, file_digest_order, mark_local_flux_overlays,
+        navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
+        reindex_repository_with_semantic_executor, resolve_heuristic_references,
+        search_structural_in_source, semantic_chunk_language_for_path,
     };
     use crate::domain::{FriggError, FriggResult};
     use crate::graph::{RelationKind, SymbolGraph};
@@ -2084,6 +3072,25 @@ mod tests {
                     .enumerate()
                     .map(|(index, text)| deterministic_fixture_embedding(&text, index))
                     .collect::<Vec<_>>())
+            })
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct FailingSemanticEmbeddingExecutor;
+
+    impl SemanticRuntimeEmbeddingExecutor for FailingSemanticEmbeddingExecutor {
+        fn embed_documents<'a>(
+            &'a self,
+            _provider: SemanticRuntimeProvider,
+            _model: &'a str,
+            _input: Vec<String>,
+            _trace_id: Option<String>,
+        ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>> {
+            Box::pin(async move {
+                Err(FriggError::Internal(
+                    "synthetic semantic provider failure request_context{model=text-embedding-3-small, inputs=1, input_chars_total=23, max_input_chars=23, body_bytes=96, body_blake3=test-hash, trace_id=trace-test}".to_owned(),
+                ))
             })
         }
     }
@@ -2634,6 +3641,71 @@ mod tests {
     }
 
     #[test]
+    fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<()> {
+        let db_path = temp_db_path("semantic-failure-rolls-back-manifest");
+        let workspace_root = temp_workspace_root("semantic-failure-rolls-back-manifest");
+        prepare_workspace(&workspace_root, &[("src/main.rs", "pub fn stable() {}\n")])?;
+
+        let semantic_runtime = semantic_runtime_enabled_openai();
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let executor = FixtureSemanticEmbeddingExecutor;
+        let first = reindex_repository_with_semantic_executor(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            ReindexMode::Full,
+            &semantic_runtime,
+            &credentials,
+            &executor,
+        )?;
+
+        fs::write(
+            workspace_root.join("src/main.rs"),
+            "pub fn changed_after_failure() {}\n",
+        )
+        .map_err(FriggError::Io)?;
+
+        let error = reindex_repository_with_semantic_executor(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            ReindexMode::Full,
+            &semantic_runtime,
+            &credentials,
+            &FailingSemanticEmbeddingExecutor,
+        )
+        .expect_err("failing semantic executor should abort reindex");
+        assert!(
+            error
+                .to_string()
+                .contains("semantic embedding batch failed batch_index=0 total_batches=1"),
+            "unexpected semantic failure: {error}"
+        );
+
+        let storage = Storage::new(&db_path);
+        let latest = storage
+            .load_latest_manifest_for_repository("repo-001")?
+            .expect("expected previous manifest snapshot to remain active");
+        assert_eq!(
+            latest.snapshot_id, first.snapshot_id,
+            "failed semantic reindex must not advance the latest manifest snapshot"
+        );
+        let semantic_rows = storage
+            .load_semantic_embeddings_for_repository_snapshot("repo-001", &first.snapshot_id)?;
+        assert!(
+            !semantic_rows.is_empty(),
+            "previous semantic rows should remain intact after rollback"
+        );
+
+        cleanup_workspace(&workspace_root);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[test]
     fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()> {
         let db_path = temp_db_path("semantic-changed-only-updates");
         let workspace_root = temp_workspace_root("semantic-changed-only-updates");
@@ -2713,6 +3785,57 @@ mod tests {
                 !(record.path == "src/lib.rs" && record.content_text.contains("stable_lib"))
             }),
             "stale semantic chunks for modified paths should be removed from the advanced snapshot"
+        );
+
+        cleanup_workspace(&workspace_root);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_indexing_reindex_failure_surfaces_batch_context() -> FriggResult<()> {
+        let db_path = temp_db_path("semantic-failure-batch-context");
+        let workspace_root = temp_workspace_root("semantic-failure-batch-context");
+        prepare_workspace(
+            &workspace_root,
+            &[("src/main.rs", "pub fn failing_semantic_case() {}\n")],
+        )?;
+
+        let semantic_runtime = semantic_runtime_enabled_openai();
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+        let error = reindex_repository_with_semantic_executor(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            ReindexMode::Full,
+            &semantic_runtime,
+            &credentials,
+            &FailingSemanticEmbeddingExecutor,
+        )
+        .expect_err("semantic indexing should surface failing batch context");
+        let message = error.to_string();
+        assert!(
+            message.contains("semantic embedding batch failed batch_index=0 total_batches=1"),
+            "semantic failure should include batch index context: {message}"
+        );
+        assert!(
+            message.contains("batch_size=1"),
+            "semantic failure should include batch size: {message}"
+        );
+        assert!(
+            message.contains("first_chunk=src/main.rs:1-1"),
+            "semantic failure should include the first chunk anchor: {message}"
+        );
+        assert!(
+            message.contains("last_chunk=src/main.rs:1-1"),
+            "semantic failure should include the last chunk anchor: {message}"
+        );
+        assert!(
+            message.contains("request_context{model=text-embedding-3-small"),
+            "semantic failure should preserve provider diagnostics: {message}"
         );
 
         cleanup_workspace(&workspace_root);
@@ -2853,6 +3976,47 @@ mod tests {
         assert_eq!(chunks[1].start_line, 5);
     }
 
+    #[test]
+    fn semantic_chunking_splits_oversized_single_line_inputs() {
+        let source = "x".repeat(SEMANTIC_CHUNK_MAX_CHARS * 2 + 17);
+
+        let chunks = build_file_semantic_chunks(
+            "repo-001",
+            "snapshot-001",
+            "fixtures/huge.yaml",
+            "yaml",
+            &source,
+        );
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[0].end_line, 1);
+        assert_eq!(chunks[1].start_line, 1);
+        assert_eq!(chunks[1].end_line, 1);
+        assert_eq!(chunks[2].start_line, 1);
+        assert_eq!(chunks[2].end_line, 1);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.content_text.chars().count() <= SEMANTIC_CHUNK_MAX_CHARS)
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content_text.len())
+                .sum::<usize>(),
+            source.len()
+        );
+    }
+
+    #[test]
+    fn semantic_chunk_language_supports_blade_paths() {
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("resources/views/welcome.blade.php")),
+            Some("blade")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn reindex_continues_with_read_diagnostics_for_unreadable_files() -> FriggResult<()> {
@@ -2970,36 +4134,486 @@ mod tests {
         )?;
 
         assert!(
-            find_symbol(&symbols, SymbolKind::Function, "top_level", 2).is_some(),
+            find_symbol(&symbols, SymbolKind::Module, "App\\Models", 2).is_some(),
+            "expected php namespace module symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "top_level", 3).is_some(),
             "expected php top-level function symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::Class, "User", 3).is_some(),
+            find_symbol(&symbols, SymbolKind::Class, "User", 4).is_some(),
             "expected php class symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::Property, "$name", 4).is_some(),
+            find_symbol(&symbols, SymbolKind::Property, "$name", 5).is_some(),
             "expected php property symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::Method, "save", 5).is_some(),
+            find_symbol(&symbols, SymbolKind::Method, "save", 6).is_some(),
             "expected php method symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::Constant, "LIMIT", 6).is_some(),
+            find_symbol(&symbols, SymbolKind::Constant, "LIMIT", 7).is_some(),
             "expected php constant symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::Interface, "Repo", 8).is_some(),
+            find_symbol(&symbols, SymbolKind::Interface, "Repo", 9).is_some(),
             "expected php interface symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::PhpTrait, "Logs", 9).is_some(),
+            find_symbol(&symbols, SymbolKind::PhpTrait, "Logs", 10).is_some(),
             "expected php trait symbol"
         );
         assert!(
-            find_symbol(&symbols, SymbolKind::PhpEnum, "Status", 10).is_some(),
+            find_symbol(&symbols, SymbolKind::PhpEnum, "Status", 11).is_some(),
             "expected php enum symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::EnumCase, "Active", 12).is_some(),
+            "expected php enum case symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_blade_extracts_view_component_and_template_metadata() -> FriggResult<()> {
+        let path = Path::new("resources/views/components/dashboard/panel.blade.php");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Blade, path, blade_symbols_fixture())?;
+
+        assert!(
+            find_symbol(
+                &symbols,
+                SymbolKind::Module,
+                "components.dashboard.panel",
+                1
+            )
+            .is_some(),
+            "expected blade view module symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Component, "dashboard.panel", 1).is_some(),
+            "expected blade anonymous component symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Section, "hero", 1).is_some(),
+            "expected blade section symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Property, "$title", 2).is_some(),
+            "expected blade props symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Property, "$tone", 3).is_some(),
+            "expected blade aware symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Slot, "icon", 4).is_some(),
+            "expected blade named slot symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Component, "alert.banner", 5).is_some(),
+            "expected x-component symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Component, "livewire:orders.table", 6).is_some(),
+            "expected livewire tag symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Component, "livewire:stats-card", 7).is_some(),
+            "expected @livewire directive symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Component, "flux:button", 8).is_some(),
+            "expected flux tag symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> FriggResult<()>
+    {
+        let path = Path::new("src/OrderListener.php");
+        let source = php_source_evidence_fixture();
+        let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+        let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+        let class_symbol = symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Class && symbol.name == "OrderListener")
+            .expect("expected class symbol for php evidence fixture");
+        let method_symbol = symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Method && symbol.name == "boot")
+            .expect("expected method symbol for php evidence fixture");
+
+        assert_eq!(
+            evidence
+                .canonical_names_by_stable_id
+                .get(&class_symbol.stable_id),
+            Some(&"App\\Listeners\\OrderListener".to_owned())
+        );
+        assert_eq!(
+            evidence
+                .canonical_names_by_stable_id
+                .get(&method_symbol.stable_id),
+            Some(&"App\\Listeners\\OrderListener::boot".to_owned())
+        );
+        assert!(
+            evidence.type_evidence.iter().any(|entry| {
+                entry.kind == PhpTypeEvidenceKind::PromotedProperty
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+            }),
+            "expected promoted-property type evidence for aliased contract handler"
+        );
+        assert!(
+            evidence.type_evidence.iter().any(|entry| {
+                entry.kind == PhpTypeEvidenceKind::Parameter
+                    && entry.target_canonical_name == "App\\Contracts\\Dispatcher"
+            }),
+            "expected parameter type evidence for imported dispatcher type"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == PhpTargetEvidenceKind::Attribute
+                    && entry.target_canonical_name == "App\\Attributes\\AsListener"
+            }),
+            "expected attribute target evidence for class and method attributes"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == PhpTargetEvidenceKind::Instantiation
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+            }),
+            "expected instantiation target evidence"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == PhpTargetEvidenceKind::ClassString
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+            }),
+            "expected class-string target evidence"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == PhpTargetEvidenceKind::CallableLiteral
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+                    && entry.target_member_name.as_deref() == Some("handle")
+            }),
+            "expected callable-literal target evidence"
+        );
+        assert!(
+            evidence.literal_evidence.iter().any(|entry| {
+                entry.array_keys == vec!["queue".to_owned()] && entry.named_arguments.is_empty()
+            }),
+            "expected literal array-key evidence"
+        );
+        assert!(
+            evidence.literal_evidence.iter().any(|entry| {
+                entry.array_keys.is_empty() && entry.named_arguments == vec!["handler".to_owned()]
+            }),
+            "expected named-argument evidence"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blade_source_evidence_extracts_relations_livewire_wire_and_flux_hints() -> FriggResult<()> {
+        let path = Path::new("resources/views/dashboard/show.blade.php");
+        let source = blade_source_evidence_fixture();
+        let symbols = extract_symbols_from_source(SymbolLanguage::Blade, path, source)?;
+        let mut evidence = extract_blade_source_evidence_from_source(path, source, &symbols);
+
+        let overlay_path = Path::new("resources/views/components/flux/button.blade.php");
+        let overlay_symbols = extract_symbols_from_source(SymbolLanguage::Blade, overlay_path, "")?;
+        let mut combined_symbols = symbols.clone();
+        combined_symbols.extend(overlay_symbols);
+        let mut symbol_indices_by_name = BTreeMap::new();
+        for (index, symbol) in combined_symbols.iter().enumerate() {
+            symbol_indices_by_name
+                .entry(symbol.name.clone())
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        mark_local_flux_overlays(&mut evidence, &combined_symbols, &symbol_indices_by_name);
+
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == BladeRelationKind::Extends
+                    && relation.target_name == "layouts.app"
+                    && relation.target_symbol_kind == SymbolKind::Module
+            }),
+            "expected @extends relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == BladeRelationKind::Include
+                    && relation.target_name == "partials.flash"
+                    && relation.target_symbol_kind == SymbolKind::Module
+            }),
+            "expected @include relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == BladeRelationKind::Component
+                    && relation.target_name == "alert.banner"
+                    && relation.target_symbol_kind == SymbolKind::Component
+            }),
+            "expected x-component relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == BladeRelationKind::DynamicComponent
+                    && relation.target_name == "panels.metric"
+                    && relation.target_symbol_kind == SymbolKind::Component
+            }),
+            "expected normalized dynamic-component relation evidence"
+        );
+        assert_eq!(
+            evidence.livewire_components,
+            vec!["orders.table".to_owned(), "stats-card".to_owned()]
+        );
+        assert_eq!(
+            evidence.wire_directives,
+            vec!["wire:click".to_owned(), "wire:model.live".to_owned()]
+        );
+        assert_eq!(evidence.flux_components, vec!["flux:button".to_owned()]);
+        assert!(
+            evidence
+                .flux_hints
+                .get("flux:button")
+                .is_some_and(|hint| hint.local_overlay),
+            "expected local overlay discovery to enrich flux component hints"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn php_declaration_relations_extract_extends_and_implements_deterministically()
+    -> FriggResult<()> {
+        let source = "<?php\n\
+             interface ProviderInterface {}\n\
+             interface ExtendedProviderInterface extends ProviderInterface, BaseProviderInterface {}\n\
+             class ListCompletionProvider implements ProviderInterface {}\n\
+             class EnumCompletionProvider extends ListCompletionProvider implements ProviderInterface {}\n\
+             enum UserIdCompletionProvider implements ProviderInterface {}\n";
+        let relations = extract_php_declaration_relations_from_source(
+            Path::new("fixtures/php_relations.php"),
+            source,
+        )?;
+
+        assert_eq!(
+            relations,
+            vec![
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::Class,
+                    source_name: "EnumCompletionProvider".to_owned(),
+                    source_line: 5,
+                    target_name: "ListCompletionProvider".to_owned(),
+                    relation: RelationKind::Extends,
+                },
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::Class,
+                    source_name: "EnumCompletionProvider".to_owned(),
+                    source_line: 5,
+                    target_name: "ProviderInterface".to_owned(),
+                    relation: RelationKind::Implements,
+                },
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::Class,
+                    source_name: "ListCompletionProvider".to_owned(),
+                    source_line: 4,
+                    target_name: "ProviderInterface".to_owned(),
+                    relation: RelationKind::Implements,
+                },
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::Interface,
+                    source_name: "ExtendedProviderInterface".to_owned(),
+                    source_line: 3,
+                    target_name: "BaseProviderInterface".to_owned(),
+                    relation: RelationKind::Extends,
+                },
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::Interface,
+                    source_name: "ExtendedProviderInterface".to_owned(),
+                    source_line: 3,
+                    target_name: "ProviderInterface".to_owned(),
+                    relation: RelationKind::Extends,
+                },
+                PhpDeclarationRelation {
+                    source_kind: SymbolKind::PhpEnum,
+                    source_name: "UserIdCompletionProvider".to_owned(),
+                    source_line: 6,
+                    target_name: "ProviderInterface".to_owned(),
+                    relation: RelationKind::Implements,
+                },
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn php_source_evidence_extracts_canonical_names_types_targets_and_literals() -> FriggResult<()>
+    {
+        let path = Path::new("src/OrderListener.php");
+        let source = php_source_evidence_fixture();
+        let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+        let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+        let canonical_names = evidence
+            .canonical_names_by_stable_id
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            canonical_names
+                .iter()
+                .any(|name| name == "App\\Listeners\\OrderListener"),
+            "expected canonical class name in php evidence"
+        );
+        assert!(
+            canonical_names
+                .iter()
+                .any(|name| name == "App\\Listeners\\OrderListener::boot"),
+            "expected canonical method name in php evidence"
+        );
+        assert!(
+            canonical_names
+                .iter()
+                .any(|name| name == "App\\Listeners\\OrderListener::$dispatcher"),
+            "expected canonical property name in php evidence"
+        );
+
+        let type_targets = evidence
+            .type_evidence
+            .iter()
+            .map(|entry| entry.target_canonical_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            type_targets.contains(&"App\\Contracts\\Dispatcher"),
+            "expected dispatcher type evidence"
+        );
+        assert!(
+            type_targets.contains(&"App\\Handlers\\OrderHandler"),
+            "expected handler type evidence"
+        );
+        assert!(
+            type_targets.contains(&"App\\Exceptions\\OrderException"),
+            "expected catch type evidence"
+        );
+
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == super::PhpTargetEvidenceKind::Attribute
+                    && entry.target_canonical_name == "App\\Attributes\\AsListener"
+            }),
+            "expected attribute target evidence"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == super::PhpTargetEvidenceKind::ClassString
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+            }),
+            "expected class-string target evidence"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == super::PhpTargetEvidenceKind::Instantiation
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+            }),
+            "expected instantiation target evidence"
+        );
+        assert!(
+            evidence.target_evidence.iter().any(|entry| {
+                entry.kind == super::PhpTargetEvidenceKind::CallableLiteral
+                    && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+                    && entry.target_member_name.as_deref() == Some("handle")
+            }),
+            "expected callable-literal target evidence"
+        );
+
+        assert!(
+            evidence
+                .literal_evidence
+                .iter()
+                .any(|entry| { entry.array_keys == vec!["queue".to_owned()] }),
+            "expected literal array-key evidence"
+        );
+        assert!(
+            evidence
+                .literal_evidence
+                .iter()
+                .any(|entry| { entry.named_arguments == vec!["handler".to_owned()] }),
+            "expected named-argument evidence"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blade_source_evidence_extracts_relations_and_ui_metadata() -> FriggResult<()> {
+        let path = Path::new("resources/views/dashboard/index.blade.php");
+        let source = blade_source_evidence_fixture();
+        let symbols = extract_symbols_from_source(SymbolLanguage::Blade, path, source)?;
+        let evidence = extract_blade_source_evidence_from_source(path, source, &symbols);
+
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == super::BladeRelationKind::Extends
+                    && relation.target_name == "layouts.app"
+                    && relation.target_symbol_kind == SymbolKind::Module
+            }),
+            "expected @extends relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == super::BladeRelationKind::Include
+                    && relation.target_name == "partials.flash"
+            }),
+            "expected @include relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == super::BladeRelationKind::Yield
+                    && relation.target_name == "hero"
+                    && relation.target_symbol_kind == SymbolKind::Section
+            }),
+            "expected @yield relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == super::BladeRelationKind::Component
+                    && relation.target_name == "alert.banner"
+                    && relation.target_symbol_kind == SymbolKind::Component
+            }),
+            "expected x-component relation evidence"
+        );
+        assert!(
+            evidence.relations.iter().any(|relation| {
+                relation.kind == super::BladeRelationKind::DynamicComponent
+                    && relation.target_name == "panels.metric"
+                    && relation.target_symbol_kind == SymbolKind::Component
+            }),
+            "expected x-dynamic-component relation evidence"
+        );
+        assert_eq!(
+            evidence.livewire_components,
+            vec!["orders.table".to_owned(), "stats-card".to_owned()]
+        );
+        assert_eq!(
+            evidence.wire_directives,
+            vec!["wire:click".to_owned(), "wire:model.live".to_owned()]
+        );
+        assert_eq!(evidence.flux_components, vec!["flux:button".to_owned()]);
+        assert!(
+            evidence.flux_hints.contains_key("flux:button"),
+            "expected offline flux registry hints for flux:button"
         );
 
         Ok(())
@@ -3482,6 +5096,7 @@ mod tests {
 
     fn php_symbols_fixture() -> &'static str {
         "<?php\n\
+         namespace App\\Models;\n\
          function top_level(): void {}\n\
          class User {\n\
              public string $name;\n\
@@ -3490,6 +5105,52 @@ mod tests {
          }\n\
          interface Repo { public function find(): ?User; }\n\
          trait Logs { public function logMessage(): void {} }\n\
-         enum Status: string { case Active = 'active'; }\n"
+         enum Status: string {\n\
+             case Active = 'active';\n\
+         }\n"
+    }
+
+    fn blade_symbols_fixture() -> &'static str {
+        "@section('hero')\n\
+         @props(['title' => 'Dashboard'])\n\
+         @aware(['tone'])\n\
+         <x-slot:icon />\n\
+         <x-alert.banner />\n\
+         <livewire:orders.table />\n\
+         @livewire('stats-card')\n\
+         <flux:button variant=\"primary\">Save</flux:button>\n"
+    }
+
+    fn php_source_evidence_fixture() -> &'static str {
+        "<?php\n\
+         namespace App\\Listeners;\n\
+         use App\\Attributes\\AsListener;\n\
+         use App\\Contracts\\Dispatcher;\n\
+         use App\\Exceptions\\OrderException;\n\
+         use App\\Handlers\\OrderHandler as Handler;\n\
+         #[AsListener]\n\
+         class OrderListener {\n\
+             public Dispatcher $dispatcher;\n\
+             public function __construct(public Handler $handler) {}\n\
+             public function boot(Handler $handler, Dispatcher $dispatcher): Handler {\n\
+                 $meta = ['queue' => 'high'];\n\
+                 $dispatcher->map(handler: Handler::class);\n\
+                 $callable = [Handler::class, 'handle'];\n\
+                 $fresh = new Handler();\n\
+                 try {} catch (OrderException $e) {}\n\
+                 return $handler;\n\
+             }\n\
+         }\n"
+    }
+
+    fn blade_source_evidence_fixture() -> &'static str {
+        "@extends('layouts.app')\n\
+         @includeIf('partials.flash')\n\
+         @yield('hero')\n\
+         <x-alert.banner />\n\
+         <x-dynamic-component :component=\"'panels.metric'\" />\n\
+         <livewire:orders.table />\n\
+         @livewire('stats-card')\n\
+         <flux:button wire:click=\"save\" wire:model.live=\"state\" />\n"
     }
 }

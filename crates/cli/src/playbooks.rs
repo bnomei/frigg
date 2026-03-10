@@ -1,9 +1,11 @@
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
-use serde::Deserialize;
+use crate::searcher::{SearchFilters, SearchHybridQuery, TextSearcher};
+use serde::{Deserialize, Serialize};
 
 const PLAYBOOK_METADATA_MARKER: &str = "<!-- frigg-playbook";
 
@@ -36,7 +38,7 @@ pub struct HybridWitnessGroup {
     pub required_when: HybridWitnessRequirement,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HybridWitnessRequirement {
     #[default]
@@ -55,6 +57,75 @@ pub struct LoadedHybridPlaybookRegression {
     pub path: PathBuf,
     pub metadata: PlaybookMetadata,
     pub spec: HybridPlaybookRegression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HybridPlaybookWitnessOutcome {
+    pub group_id: String,
+    pub match_any: Vec<String>,
+    pub required_when: HybridWitnessRequirement,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HybridPlaybookProbeOutcome {
+    pub file_name: String,
+    pub playbook_id: String,
+    pub semantic_status: String,
+    pub semantic_reason: Option<String>,
+    pub status_allowed: bool,
+    pub duration_ms: u128,
+    pub execution_error: Option<String>,
+    pub matched_paths: Vec<String>,
+    pub required_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
+    pub target_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
+}
+
+impl HybridPlaybookProbeOutcome {
+    pub fn required_missing(&self) -> Vec<String> {
+        self.required_witness_groups
+            .iter()
+            .filter(|group| !group.passed)
+            .map(|group| format!("{} -> {:?}", group.group_id, group.match_any))
+            .collect()
+    }
+
+    pub fn target_missing(&self) -> Vec<String> {
+        self.target_witness_groups
+            .iter()
+            .filter(|group| !group.passed)
+            .map(|group| format!("{} -> {:?}", group.group_id, group.match_any))
+            .collect()
+    }
+
+    pub fn passed_required(&self) -> bool {
+        self.execution_error.is_none()
+            && self.status_allowed
+            && self
+                .required_witness_groups
+                .iter()
+                .all(|group| group.passed)
+    }
+
+    pub fn passed_targets(&self) -> bool {
+        self.execution_error.is_none()
+            && self.status_allowed
+            && self.target_witness_groups.iter().all(|group| group.passed)
+    }
+
+    pub fn passed_all(&self, enforce_targets: bool) -> bool {
+        self.passed_required() && (!enforce_targets || self.passed_targets())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HybridPlaybookRunSummary {
+    pub playbooks_root: String,
+    pub enforce_targets: bool,
+    pub playbook_count: usize,
+    pub required_failures: usize,
+    pub target_failures: usize,
+    pub outcomes: Vec<HybridPlaybookProbeOutcome>,
 }
 
 fn default_hybrid_top_k() -> usize {
@@ -291,6 +362,175 @@ pub fn load_hybrid_playbook_regressions(
     Ok(regressions)
 }
 
+fn witness_outcomes(
+    groups: &[HybridWitnessGroup],
+    matched_paths: &[String],
+    semantic_status_ok: bool,
+    target_only: bool,
+) -> Vec<HybridPlaybookWitnessOutcome> {
+    groups
+        .iter()
+        .filter(|group| {
+            !target_only
+                || matches!(group.required_when, HybridWitnessRequirement::Always)
+                || semantic_status_ok
+        })
+        .map(|group| {
+            let required = if target_only {
+                true
+            } else {
+                match group.required_when {
+                    HybridWitnessRequirement::Always => true,
+                    HybridWitnessRequirement::SemanticOk => semantic_status_ok,
+                }
+            };
+            let passed = !required
+                || group
+                    .match_any
+                    .iter()
+                    .any(|path| matched_paths.iter().any(|candidate| candidate == path));
+            HybridPlaybookWitnessOutcome {
+                group_id: group.group_id.clone(),
+                match_any: group.match_any.clone(),
+                required_when: group.required_when,
+                passed,
+            }
+        })
+        .collect()
+}
+
+pub fn run_hybrid_playbook_regression(
+    searcher: &TextSearcher,
+    regression: &LoadedHybridPlaybookRegression,
+) -> HybridPlaybookProbeOutcome {
+    let started = Instant::now();
+    let query = SearchHybridQuery {
+        query: regression.spec.query.clone(),
+        limit: regression.spec.top_k,
+        weights: Default::default(),
+        semantic: Some(true),
+    };
+    let result = searcher.search_hybrid_with_filters(query, SearchFilters::default());
+
+    match result {
+        Ok(output) => {
+            let semantic_status = output.note.semantic_status.as_str().to_owned();
+            let allowed_statuses = regression
+                .spec
+                .allowed_semantic_statuses
+                .iter()
+                .map(|status| status.trim().to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let status_allowed = allowed_statuses.is_empty()
+                || allowed_statuses
+                    .iter()
+                    .any(|status| status == &semantic_status);
+            let matched_paths = output
+                .matches
+                .iter()
+                .map(|entry| entry.document.path.clone())
+                .collect::<Vec<_>>();
+            let semantic_status_ok = output.note.semantic_status.as_str() == "ok";
+            HybridPlaybookProbeOutcome {
+                file_name: regression
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+                playbook_id: regression.metadata.playbook_id.clone(),
+                semantic_status,
+                semantic_reason: output.note.semantic_reason.clone(),
+                status_allowed,
+                duration_ms: started.elapsed().as_millis(),
+                execution_error: None,
+                required_witness_groups: witness_outcomes(
+                    &regression.spec.witness_groups,
+                    &matched_paths,
+                    semantic_status_ok,
+                    false,
+                ),
+                target_witness_groups: witness_outcomes(
+                    &regression.spec.target_witness_groups,
+                    &matched_paths,
+                    semantic_status_ok,
+                    true,
+                ),
+                matched_paths,
+            }
+        }
+        Err(err) => HybridPlaybookProbeOutcome {
+            file_name: regression
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned(),
+            playbook_id: regression.metadata.playbook_id.clone(),
+            semantic_status: "error".to_owned(),
+            semantic_reason: None,
+            status_allowed: false,
+            duration_ms: started.elapsed().as_millis(),
+            execution_error: Some(err.to_string()),
+            matched_paths: Vec::new(),
+            required_witness_groups: regression
+                .spec
+                .witness_groups
+                .iter()
+                .map(|group| HybridPlaybookWitnessOutcome {
+                    group_id: group.group_id.clone(),
+                    match_any: group.match_any.clone(),
+                    required_when: group.required_when,
+                    passed: false,
+                })
+                .collect(),
+            target_witness_groups: regression
+                .spec
+                .target_witness_groups
+                .iter()
+                .map(|group| HybridPlaybookWitnessOutcome {
+                    group_id: group.group_id.clone(),
+                    match_any: group.match_any.clone(),
+                    required_when: group.required_when,
+                    passed: false,
+                })
+                .collect(),
+        },
+    }
+}
+
+pub fn run_hybrid_playbook_regressions(
+    searcher: &TextSearcher,
+    playbooks_root: &Path,
+    enforce_targets: bool,
+) -> FriggResult<HybridPlaybookRunSummary> {
+    let regressions = load_hybrid_playbook_regressions(playbooks_root)?;
+    let outcomes = regressions
+        .iter()
+        .map(|regression| run_hybrid_playbook_regression(searcher, regression))
+        .collect::<Vec<_>>();
+    let required_failures = outcomes
+        .iter()
+        .filter(|outcome| !outcome.passed_required())
+        .count();
+    let target_failures = if enforce_targets {
+        outcomes
+            .iter()
+            .filter(|outcome| !outcome.passed_targets())
+            .count()
+    } else {
+        0
+    };
+    Ok(HybridPlaybookRunSummary {
+        playbooks_root: playbooks_root.display().to_string(),
+        enforce_targets,
+        playbook_count: outcomes.len(),
+        required_failures,
+        target_failures,
+        outcomes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -373,6 +613,150 @@ Body text.
     }
 
     #[test]
+    fn parse_playbook_document_normalizes_nested_hybrid_defaults_and_witness_groups()
+    -> FriggResult<()> {
+        let raw = r#"<!-- frigg-playbook
+{
+  "playbook_schema": "frigg.playbook.hybrid.v1",
+  "playbook_id": "nested-hybrid-defaults",
+  "hybrid_regression": {
+    "query": "trace hybrid witness defaults",
+    "allowed_semantic_statuses": ["ok"],
+    "witness_groups": [
+      {
+        "group_id": "runtime",
+        "match_any": ["src/runtime.rs"]
+      }
+    ],
+    "target_witness_groups": [
+      {
+        "name": "docs",
+        "paths": ["docs/runtime.md"]
+      }
+    ],
+    "target_paths": ["contracts/runtime.md"]
+  }
+}
+-->
+"#;
+
+        let parsed = parse_playbook_document(raw)?;
+        let spec = parsed
+            .metadata
+            .hybrid_regression
+            .expect("hybrid regression metadata must be present");
+        assert_eq!(spec.query, "trace hybrid witness defaults");
+        assert_eq!(spec.top_k, 8);
+        assert_eq!(spec.allowed_semantic_statuses, vec!["ok"]);
+        assert_eq!(spec.witness_groups.len(), 1);
+        assert_eq!(spec.witness_groups[0].group_id, "runtime");
+        assert_eq!(spec.witness_groups[0].match_any, vec!["src/runtime.rs"]);
+        assert_eq!(
+            spec.witness_groups[0].required_when,
+            HybridWitnessRequirement::Always
+        );
+        assert_eq!(spec.target_witness_groups.len(), 2);
+        assert_eq!(spec.target_witness_groups[0].group_id, "docs");
+        assert_eq!(
+            spec.target_witness_groups[0].match_any,
+            vec!["docs/runtime.md"]
+        );
+        assert_eq!(
+            spec.target_witness_groups[0].required_when,
+            HybridWitnessRequirement::Always
+        );
+        assert_eq!(
+            spec.target_witness_groups[1].group_id,
+            "contracts/runtime.md"
+        );
+        assert_eq!(
+            spec.target_witness_groups[1].match_any,
+            vec!["contracts/runtime.md"]
+        );
+        assert_eq!(
+            spec.target_witness_groups[1].required_when,
+            HybridWitnessRequirement::SemanticOk
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_playbook_document_requires_query_for_legacy_hybrid_metadata() {
+        let raw = r#"<!-- frigg-playbook
+{
+  "schema": "frigg.playbook.hybrid.v1",
+  "playbook_id": "missing-query"
+}
+-->
+"#;
+
+        let error =
+            parse_playbook_document(raw).expect_err("hybrid playbooks without a query should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("hybrid playbook metadata must include a query"),
+            "unexpected missing query error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_playbook_document_rejects_witness_groups_without_identity() {
+        let raw = r#"<!-- frigg-playbook
+{
+  "playbook_schema": "frigg.playbook.hybrid.v1",
+  "playbook_id": "missing-group-id",
+  "hybrid_regression": {
+    "query": "trace witness identity validation",
+    "witness_groups": [
+      {
+        "paths": ["src/lib.rs"]
+      }
+    ]
+  }
+}
+-->
+"#;
+
+        let error = parse_playbook_document(raw)
+            .expect_err("witness groups without group_id or name should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("hybrid witness group must include group_id or name"),
+            "unexpected missing witness group identity error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_playbook_document_rejects_witness_groups_without_paths() {
+        let raw = r#"<!-- frigg-playbook
+{
+  "playbook_schema": "frigg.playbook.hybrid.v1",
+  "playbook_id": "missing-group-paths",
+  "hybrid_regression": {
+    "query": "trace witness path validation",
+    "target_witness_groups": [
+      {
+        "name": "docs"
+      }
+    ]
+  }
+}
+-->
+"#;
+
+        let error = parse_playbook_document(raw)
+            .expect_err("witness groups without match_any or paths should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("hybrid witness group 'docs' must include at least one path"),
+            "unexpected missing witness group paths error: {error}"
+        );
+    }
+
+    #[test]
     fn load_hybrid_playbook_regressions_requires_metadata_for_markdown_playbooks() -> FriggResult<()>
     {
         let root = temp_playbook_root("missing-metadata");
@@ -388,6 +772,54 @@ Body text.
                 .to_string()
                 .contains("failed to load playbook metadata"),
             "unexpected playbook metadata error: {error}"
+        );
+
+        cleanup_root(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn load_hybrid_playbook_regressions_requires_hybrid_regression_metadata() -> FriggResult<()> {
+        let root = temp_playbook_root("missing-hybrid-regression");
+        fs::create_dir_all(&root).map_err(crate::domain::FriggError::Io)?;
+        fs::write(
+            root.join("alpha.md"),
+            r#"<!-- frigg-playbook
+{
+  "playbook_schema": "frigg.playbook.v1",
+  "playbook_id": "docs-only"
+}
+-->
+# Alpha
+"#,
+        )
+        .map_err(crate::domain::FriggError::Io)?;
+
+        let error = load_hybrid_playbook_regressions(&root)
+            .expect_err("non-hybrid playbooks should fail executable regression loading");
+        assert!(
+            error
+                .to_string()
+                .contains("missing hybrid_regression metadata"),
+            "unexpected missing hybrid regression error: {error}"
+        );
+
+        cleanup_root(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn load_hybrid_playbook_regressions_rejects_empty_playbook_roots() -> FriggResult<()> {
+        let root = temp_playbook_root("empty-root");
+        fs::create_dir_all(&root).map_err(crate::domain::FriggError::Io)?;
+
+        let error =
+            load_hybrid_playbook_regressions(&root).expect_err("empty playbook roots should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("no executable hybrid playbooks found under"),
+            "unexpected empty playbook root error: {error}"
         );
 
         cleanup_root(&root);
