@@ -62,11 +62,8 @@ fn build_multilang_workspace_fixture(test_name: &str) -> PathBuf {
          type GoService struct{}\n",
     )
     .expect("failed to seed go fixture source file");
-    fs::write(
-        src_dir.join("Main.kt"),
-        "class KotlinService\n",
-    )
-    .expect("failed to seed kotlin fixture source file");
+    fs::write(src_dir.join("Main.kt"), "class KotlinService\n")
+        .expect("failed to seed kotlin fixture source file");
     fs::write(
         src_dir.join("init.lua"),
         "function luaRun()\n\
@@ -80,11 +77,8 @@ fn build_multilang_workspace_fixture(test_name: &str) -> PathBuf {
            \"ok\"\n",
     )
     .expect("failed to seed nim fixture source file");
-    fs::write(
-        src_dir.join("main.roc"),
-        "rocGreet = \\name -> name\n",
-    )
-    .expect("failed to seed roc fixture source file");
+    fs::write(src_dir.join("main.roc"), "rocGreet = \\name -> name\n")
+        .expect("failed to seed roc fixture source file");
     root
 }
 
@@ -374,7 +368,12 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             serde_json::from_str::<Value>(&row.payload_json)
                 .expect("failed to parse search_symbol provenance payload")
         })
-        .map(|payload| payload["params"]["query"].as_str().unwrap_or_default().to_owned())
+        .map(|payload| {
+            payload["params"]["query"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
         .collect::<Vec<_>>();
 
     assert!(

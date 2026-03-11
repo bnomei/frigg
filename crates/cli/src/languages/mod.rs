@@ -256,26 +256,14 @@ mod tests {
             heuristic_implementation_strategy(SymbolLanguage::Python),
             None
         );
-        assert_eq!(
-            heuristic_implementation_strategy(SymbolLanguage::Go),
-            None
-        );
+        assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Go), None);
         assert_eq!(
             heuristic_implementation_strategy(SymbolLanguage::Kotlin),
             None
         );
-        assert_eq!(
-            heuristic_implementation_strategy(SymbolLanguage::Lua),
-            None
-        );
-        assert_eq!(
-            heuristic_implementation_strategy(SymbolLanguage::Roc),
-            None
-        );
-        assert_eq!(
-            heuristic_implementation_strategy(SymbolLanguage::Nim),
-            None
-        );
+        assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Lua), None);
+        assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Roc), None);
+        assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Nim), None);
     }
 
     #[test]

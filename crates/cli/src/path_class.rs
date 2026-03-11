@@ -16,6 +16,8 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         )
     }) {
         PathClass::Support
+    } else if is_roc_platform_source_path(normalized) {
+        PathClass::Runtime
     } else if normalized == "bootstrap/app.php"
         || normalized.starts_with("app/")
         || normalized.starts_with("bootstrap/")
@@ -40,6 +42,11 @@ fn is_repo_root_supported_source_file(relative_path: &str) -> bool {
     !relative_path.contains('/')
         && supported_language_for_path(Path::new(relative_path), LanguageCapability::SymbolCorpus)
             .is_some()
+}
+
+fn is_roc_platform_source_path(relative_path: &str) -> bool {
+    relative_path.ends_with(".roc")
+        && (relative_path.starts_with("platform/") || relative_path.contains("/platform/"))
 }
 
 pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
@@ -111,5 +118,11 @@ mod tests {
         assert_eq!(repository_path_class("init.lua"), "runtime");
         assert_eq!(repository_path_class("Main.roc"), "runtime");
         assert_eq!(repository_path_class("config.nims"), "runtime");
+    }
+
+    #[test]
+    fn repository_path_class_treats_roc_platform_surfaces_as_runtime() {
+        assert_eq!(repository_path_class("platform/main.roc"), "runtime");
+        assert_eq!(repository_path_class("platform/Arg.roc"), "runtime");
     }
 }

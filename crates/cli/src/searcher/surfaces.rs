@@ -1,7 +1,6 @@
-use std::path::Path;
-
 use crate::domain::{PathClass, SourceClass};
 use crate::path_class::classify_repository_path;
+use std::path::Path;
 
 pub(super) type HybridSourceClass = SourceClass;
 
@@ -69,18 +68,26 @@ pub(super) fn is_test_harness_path(path: &str) -> bool {
 }
 
 pub(super) fn is_test_support_path(path: &str) -> bool {
-    path.starts_with("tests/")
-        || path.contains("/tests/")
-        || path.ends_with("_test.rs")
-        || path.ends_with("_tests.rs")
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    normalized.starts_with("tests/")
+        || normalized.contains("/tests/")
+        || normalized.starts_with("test/")
+        || normalized.contains("/test/")
+        || normalized.ends_with("_test.go")
+        || normalized.ends_with("_test.rs")
+        || normalized.ends_with("_tests.rs")
+        || is_python_named_test_module_path(&normalized)
 }
 
 pub(super) fn is_cli_test_support_path(path: &str) -> bool {
-    is_test_support_path(path)
-        && (path.starts_with("tests/cli/")
-            || path.contains("/tests/cli/")
-            || path.ends_with("/cli.rs")
-            || path.contains("/cli/"))
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    is_test_support_path(&normalized)
+        && (normalized.starts_with("tests/cli/")
+            || normalized.contains("/tests/cli/")
+            || normalized.starts_with("test/cli/")
+            || normalized.contains("/test/cli/")
+            || normalized.ends_with("/cli.rs")
+            || normalized.contains("/cli/"))
 }
 
 pub(super) fn has_generic_runtime_anchor_stem(path: &str) -> bool {
@@ -168,7 +175,9 @@ mod tests {
     use crate::domain::SourceClass;
 
     use super::{
-        hybrid_source_class, is_runtime_config_artifact_path, is_rust_workspace_config_path,
+        hybrid_source_class, is_entrypoint_runtime_path, is_go_entrypoint_runtime_path,
+        is_python_test_witness_path, is_runtime_config_artifact_path,
+        is_rust_workspace_config_path, is_test_support_path,
     };
 
     #[test]
@@ -220,6 +229,172 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn typescript_entrypoint_runtime_paths_detect_direct_src_entrypoints() {
+        for path in [
+            "packages/cli/src/server.ts",
+            "packages/cli/src/index.ts",
+            "packages/@n8n/node-cli/src/index.ts",
+            "src/main.ts",
+            "apps/docs/generator/cli.ts",
+            "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+        ] {
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be detected as a runtime entrypoint"
+            );
+        }
+
+        for path in [
+            "packages/core/src/index.ts",
+            "packages/cli/src/config/index.ts",
+            "packages/testing/playwright/tests/e2e/building-blocks/workflow-entry-points.spec.ts",
+            "packages/@n8n/nodes-langchain/nodes/vendors/Anthropic/actions/router.ts",
+        ] {
+            assert!(
+                !is_entrypoint_runtime_path(path),
+                "{path} should not be detected as a runtime entrypoint"
+            );
+        }
+    }
+
+    #[test]
+    fn lua_entrypoint_runtime_paths_detect_cli_dispatch_and_test_support() {
+        for path in [
+            "main.lua",
+            "lua/cli/init.lua",
+            "lua/cli/check.lua",
+            "script/cli/init.lua",
+            "script/cli/doc/export.lua",
+            "script/service/init.lua",
+        ] {
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be detected as a Lua runtime entrypoint"
+            );
+        }
+
+        for path in [
+            "script/config/init.lua",
+            "script/workspace/init.lua",
+            "test/command/init.lua",
+            "tests/command/init.lua",
+        ] {
+            assert!(
+                !is_entrypoint_runtime_path(path),
+                "{path} should not be detected as a Lua runtime entrypoint"
+            );
+        }
+
+        for path in ["test/command/init.lua", "tests/command/init.lua"] {
+            assert!(
+                is_test_support_path(path),
+                "{path} should be treated as test support"
+            );
+            assert_eq!(
+                hybrid_source_class(path),
+                SourceClass::Tests,
+                "{path} should surface through the tests source class"
+            );
+        }
+    }
+
+    #[test]
+    fn go_command_entrypoint_and_test_paths_are_detected() {
+        for path in [
+            "main.go",
+            "cmd/frpc/main.go",
+            "cmd/frps/root.go",
+            "cmd/frpc/sub/root.go",
+        ] {
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be detected as a Go entrypoint witness"
+            );
+        }
+
+        for path in [
+            "pkg/config/source/aggregator_test.go",
+            "pkg/auth/oidc_test.go",
+            "internal/transport/router_test.go",
+        ] {
+            assert!(
+                is_test_support_path(path),
+                "{path} should be treated as Go test support"
+            );
+            assert_eq!(
+                hybrid_source_class(path),
+                SourceClass::Tests,
+                "{path} should surface through the tests source class"
+            );
+        }
+
+        for path in [
+            "pkg/config/source/aggregator.go",
+            "cmd/frps/verify.go",
+            "cmd/frpc/sub/admin.go",
+            "pkg/auth/oidc.go",
+            "test/e2e/v1/basic/server.go",
+            "web/frpc/src/main.ts",
+        ] {
+            assert!(
+                !is_go_entrypoint_runtime_path(path),
+                "{path} should not be detected as a Go entrypoint witness"
+            );
+        }
+    }
+
+    #[test]
+    fn roc_entrypoint_runtime_paths_detect_platform_main_modules() {
+        for path in ["main.roc", "platform/main.roc"] {
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be detected as a Roc entrypoint witness"
+            );
+        }
+
+        for path in [
+            "platform/Arg.roc",
+            "platform/Host.roc",
+            "examples/command.roc",
+            "examples/main.roc",
+            "tests/main.roc",
+        ] {
+            assert!(
+                !is_entrypoint_runtime_path(path),
+                "{path} should not be detected as a Roc entrypoint witness"
+            );
+        }
+    }
+
+    #[test]
+    fn python_test_witness_paths_include_loose_test_modules() {
+        for path in [
+            "autogpt_platform/backend/backend/api/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            "classic/original_autogpt/autogpt/app/helper_test.py",
+        ] {
+            assert!(
+                is_python_test_witness_path(path),
+                "{path} should be treated as a python test witness"
+            );
+            assert!(
+                is_test_support_path(path),
+                "{path} should be treated as test support for source-class ranking"
+            );
+            assert_eq!(
+                hybrid_source_class(path),
+                SourceClass::Tests,
+                "{path} should surface through the tests source class"
+            );
+        }
+
+        assert!(
+            !is_python_test_witness_path("autogpt_platform/backend/backend/api/helpers.py"),
+            "non-test python helpers should not be treated as test witnesses"
+        );
+    }
 }
 
 pub(super) fn is_python_entrypoint_runtime_path(path: &str) -> bool {
@@ -239,6 +414,144 @@ pub(super) fn is_python_entrypoint_runtime_path(path: &str) -> bool {
     .any(|suffix| normalized.ends_with(suffix))
 }
 
+pub(super) fn is_lua_entrypoint_runtime_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if !normalized.ends_with(".lua") || is_test_support_path(&normalized) {
+        return false;
+    }
+
+    let candidate = Path::new(&normalized);
+    let Some(stem) = candidate
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.trim().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    let parts = candidate
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let is_repo_root_file = parts.len() == 1;
+    if is_repo_root_file {
+        return matches!(
+            stem.as_str(),
+            "main" | "init" | "app" | "bootstrap" | "cli" | "run" | "server"
+        );
+    }
+
+    let has_loader_root = parts
+        .iter()
+        .take(parts.len().saturating_sub(1))
+        .any(|part| matches!(*part, "bin" | "cli" | "cmd" | "lua" | "script" | "scripts"));
+    if !has_loader_root {
+        return false;
+    }
+
+    let has_cli_context = parts
+        .iter()
+        .any(|part| matches!(*part, "cli" | "command" | "commands"));
+    if has_cli_context {
+        return true;
+    }
+
+    let has_runtime_context = parts
+        .iter()
+        .any(|part| matches!(*part, "daemon" | "server" | "service" | "worker"));
+    has_runtime_context
+        && matches!(
+            stem.as_str(),
+            "bootstrap" | "cli" | "daemon" | "init" | "main" | "run" | "server" | "service"
+        )
+}
+
+pub(super) fn is_typescript_entrypoint_runtime_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if is_test_support_path(&normalized) {
+        return false;
+    }
+
+    let candidate = Path::new(&normalized);
+    let Some(extension) = candidate.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    if !matches!(
+        extension,
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
+    ) {
+        return false;
+    }
+
+    let Some(stem) = candidate.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let stem = stem.trim().to_ascii_lowercase();
+    if matches!(
+        stem.as_str(),
+        "main" | "server" | "cli" | "app" | "bootstrap"
+    ) {
+        return true;
+    }
+
+    if !matches!(classify_repository_path(&normalized), PathClass::Runtime) {
+        return false;
+    }
+
+    let Some(parent_name) = candidate
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    if parent_name != "src" {
+        return false;
+    }
+    if stem != "index" {
+        return false;
+    }
+
+    hybrid_identifier_tokens(&normalized)
+        .into_iter()
+        .any(|token| {
+            matches!(
+                token.as_str(),
+                "app" | "bootstrap" | "cli" | "daemon" | "server" | "service" | "worker"
+            )
+        })
+}
+
+pub(super) fn is_go_entrypoint_runtime_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if !normalized.ends_with(".go") || normalized.ends_with("_test.go") {
+        return false;
+    }
+    if is_test_support_path(&normalized) {
+        return false;
+    }
+
+    if normalized == "main.go" || normalized.ends_with("/main.go") {
+        return true;
+    }
+
+    (normalized.starts_with("cmd/") || normalized.contains("/cmd/"))
+        && Path::new(&normalized)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("root.go"))
+}
+
+pub(super) fn is_roc_entrypoint_runtime_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if !normalized.ends_with(".roc") || is_test_support_path(&normalized) {
+        return false;
+    }
+
+    normalized == "main.roc"
+        || normalized == "platform/main.roc"
+        || normalized.ends_with("/platform/main.roc")
+}
+
 pub(super) fn is_python_runtime_config_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     matches!(
@@ -247,6 +560,19 @@ pub(super) fn is_python_runtime_config_path(path: &str) -> bool {
             .and_then(|name| name.to_str()),
         Some("pyproject.toml" | "setup.py")
     )
+}
+
+fn is_python_named_test_module_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let Some(file_name) = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+
+    normalized.ends_with(".py")
+        && (file_name.starts_with("test_") || file_name.ends_with("_test.py"))
 }
 
 pub(super) fn is_rust_workspace_config_path(path: &str) -> bool {
@@ -305,21 +631,15 @@ pub(super) fn is_python_test_witness_path(path: &str) -> bool {
     normalized.ends_with(".py")
         && (normalized.contains("/tests/")
             || normalized.starts_with("tests/")
-            || file_name == "conftest.py")
+            || file_name == "conftest.py"
+            || is_python_named_test_module_path(path))
 }
 
 pub(super) fn is_loose_python_test_module_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    let Some(file_name) = Path::new(&normalized)
-        .file_name()
-        .and_then(|name| name.to_str())
-    else {
-        return false;
-    };
-
     normalized.ends_with(".py")
         && !is_python_test_witness_path(path)
-        && (file_name.starts_with("test_") || file_name.ends_with("_test.py"))
+        && (normalized.starts_with("test/") || normalized.contains("/test/"))
 }
 
 pub(super) fn is_non_code_test_doc_path(path: &str) -> bool {
@@ -404,7 +724,11 @@ pub(super) fn is_entrypoint_runtime_path(path: &str) -> bool {
     matches!(normalized, "src/main.rs" | "src/lib.rs")
         || normalized.ends_with("/src/main.rs")
         || normalized.ends_with("/src/lib.rs")
+        || is_go_entrypoint_runtime_path(normalized)
+        || is_roc_entrypoint_runtime_path(normalized)
+        || is_lua_entrypoint_runtime_path(normalized)
         || is_python_entrypoint_runtime_path(normalized)
+        || is_typescript_entrypoint_runtime_path(normalized)
 }
 
 pub(super) fn is_entrypoint_reference_doc_path(path: &str) -> bool {

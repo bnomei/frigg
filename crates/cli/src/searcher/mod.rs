@@ -1441,15 +1441,16 @@ mod tests {
     use regex::Regex;
 
     use crate::searcher::{
-        HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridRankingIntent,
-        HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS,
-        MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind,
-        SearchFilters, SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor,
-        TextSearcher, ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
+        HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridPathWitnessQueryContext,
+        HybridRankingIntent, HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS,
+        MAX_REGEX_GROUPS, MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError,
+        SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
+        SemanticRuntimeQueryEmbeddingExecutor, StoredPathWitnessProjection, TextSearcher,
+        ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
         build_hybrid_lexical_hits_for_query, build_hybrid_lexical_recall_regex,
         build_regex_prefilter_plan, compile_safe_regex, hybrid_lexical_recall_tokens,
-        hybrid_source_class, normalize_search_filters, rank_hybrid_evidence,
-        rank_hybrid_evidence_for_query,
+        hybrid_path_witness_recall_score_for_projection, hybrid_source_class,
+        normalize_search_filters, rank_hybrid_evidence, rank_hybrid_evidence_for_query,
     };
 
     #[test]
@@ -4186,6 +4187,124 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_python_runtime_entrypoint_test_queries_keep_packet_backend_tests_visible()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-runtime-entrypoints-packet-tests");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "autogpt_platform/backend/backend/api/test_helpers.py",
+                    "def build_test_helpers() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                    "def test_e2e_auth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+                    "def load_test_helper_graph() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+                    "def test_server_bootstrap() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/pyproject.toml",
+                    "[project]\nname = \"autogpt-backend\"\n[project.scripts]\nbackend = \"backend.app:app\"\n",
+                ),
+                (
+                    "autogpt_platform/autogpt_libs/pyproject.toml",
+                    "[project]\nname = \"autogpt-libs\"\n",
+                ),
+                (
+                    "classic/original_autogpt/autogpt/app/setup.py",
+                    "from setuptools import setup\nsetup(name=\"classic-autogpt-app\")\n",
+                ),
+                (
+                    "classic/benchmark/pyproject.toml",
+                    "[project]\nname = \"agbenchmark\"\n",
+                ),
+                (
+                    "classic/forge/pyproject.toml",
+                    "[project]\nname = \"forge\"\n",
+                ),
+                (
+                    "classic/original_autogpt/setup.py",
+                    "from setuptools import setup\nsetup(name=\"classic-autogpt\")\n",
+                ),
+                (
+                    "classic/original_autogpt/pyproject.toml",
+                    "[project]\nname = \"classic-autogpt\"\n",
+                ),
+                (
+                    "autogpt_platform/backend/test/sdk/conftest.py",
+                    "def pytest_configure() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/original_autogpt/tests/unit/test_config.py",
+                    "def test_runtime_config() -> None:\n    assert True\n",
+                ),
+            ],
+        )?;
+
+        let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        config.semantic_runtime = semantic_runtime_enabled(false);
+        config.max_search_results = 16;
+        let searcher = TextSearcher::new(config);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests fixtures integration helpers e2e config setup pyproject".to_owned(),
+                limit: 16,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials {
+                openai_api_key: Some("test-openai-key".to_owned()),
+                gemini_api_key: None,
+            },
+            &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let required_witnesses = [
+            "autogpt_platform/backend/backend/api/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+        ];
+
+        let first_required_position = ranked_paths
+            .iter()
+            .position(|path| required_witnesses.iter().any(|required| required == path))
+            .expect("at least one packet test witness should be ranked");
+        let classic_test_config_position = ranked_paths
+            .iter()
+            .position(|path| *path == "classic/original_autogpt/tests/unit/test_config.py")
+            .expect("classic test-config noise should still be ranked");
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(12)
+                .any(|path| required_witnesses.iter().any(|required| required == path)),
+            "at least one required packet test witness should stay visible under runtime-config crowding: {ranked_paths:?}"
+        );
+        assert!(
+            first_required_position < classic_test_config_position,
+            "packet backend test witnesses should outrank generic config-heavy test noise: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_rust_config_queries_rescue_cargo_manifests_from_path_witness_recall()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-rust-config-path-witness");
@@ -5608,6 +5727,114 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_path_witness_recall_uses_live_entrypoint_detection_for_stale_typescript_projections()
+    -> FriggResult<()> {
+        let query = "entry point bootstrap server app cli router main";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = HybridPathWitnessQueryContext::new(query);
+        let mut stale_entrypoint =
+            StoredPathWitnessProjection::from_path("packages/cli/src/server.ts");
+        stale_entrypoint.flags.is_entrypoint_runtime = false;
+        let competing_router = StoredPathWitnessProjection::from_path(
+            "packages/@n8n/nodes-langchain/nodes/vendors/Anthropic/actions/router.ts",
+        );
+
+        let stale_score = hybrid_path_witness_recall_score_for_projection(
+            "packages/cli/src/server.ts",
+            &stale_entrypoint,
+            &intent,
+            &query_context,
+        )
+        .expect("live path detection should recover stale TypeScript entrypoint projections");
+        let router_score = hybrid_path_witness_recall_score_for_projection(
+            "packages/@n8n/nodes-langchain/nodes/vendors/Anthropic/actions/router.ts",
+            &competing_router,
+            &intent,
+            &query_context,
+        )
+        .expect("router path should still receive a score from query overlap");
+
+        assert!(
+            stale_score > router_score,
+            "canonical src/server.ts should outrank non-src router noise even when the stored projection is stale"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_uses_live_roc_entrypoint_detection_for_stale_projections()
+    -> FriggResult<()> {
+        let query = "entry point main app package platform runtime";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = HybridPathWitnessQueryContext::new(query);
+        let mut stale_entrypoint = StoredPathWitnessProjection::from_path("platform/main.roc");
+        stale_entrypoint.flags.is_entrypoint_runtime = false;
+        let competing_host_lib =
+            StoredPathWitnessProjection::from_path("crates/roc_host/src/lib.rs");
+
+        let stale_score = hybrid_path_witness_recall_score_for_projection(
+            "platform/main.roc",
+            &stale_entrypoint,
+            &intent,
+            &query_context,
+        )
+        .expect("live path detection should recover stale Roc platform entrypoints");
+        let host_lib_score = hybrid_path_witness_recall_score_for_projection(
+            "crates/roc_host/src/lib.rs",
+            &competing_host_lib,
+            &intent,
+            &query_context,
+        )
+        .expect("host runtime libraries should still receive a score from query overlap");
+
+        assert!(
+            stale_score > host_lib_score,
+            "platform/main.roc should outrank generic host runtime libraries even when the stored Roc projection is stale"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_uses_live_pytest_detection_for_stale_python_test_projections()
+    -> FriggResult<()> {
+        let query = "tests fixtures integration helpers e2e config setup pyproject";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = HybridPathWitnessQueryContext::new(query);
+        let mut stale_test = StoredPathWitnessProjection::from_path(
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+        );
+        stale_test.flags.is_python_test_witness = false;
+        stale_test.flags.is_test_support = false;
+        stale_test.source_class = HybridSourceClass::Project;
+        let generic_server =
+            StoredPathWitnessProjection::from_path("autogpt_platform/backend/backend/server.py");
+
+        let stale_score = hybrid_path_witness_recall_score_for_projection(
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            &stale_test,
+            &intent,
+            &query_context,
+        )
+        .expect("live path detection should recover stale pytest projections");
+        let generic_server_score = hybrid_path_witness_recall_score_for_projection(
+            "autogpt_platform/backend/backend/server.py",
+            &generic_server,
+            &intent,
+            &query_context,
+        );
+
+        assert!(
+            stale_score > 0.0,
+            "stale pytest projections should still receive a live witness score"
+        );
+        assert!(
+            generic_server_score.is_none(),
+            "non-test runtime helpers without query overlap should not be recalled for the packet query"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_cli_entrypoint_queries_prefer_cli_test_witnesses_over_runtime_noise()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-rust-cli-test-witnesses");
@@ -6111,6 +6338,785 @@ mod tests {
                 )
             }),
             "build-config entrypoint queries should recover a Cargo/workflow witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_go_entrypoint_queries_surface_cmd_command_packages() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-go-cmd-entrypoint-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                ("cmd/frpc/main.go", "package main\nfunc main() {}\n"),
+                ("cmd/frps/main.go", "package main\nfunc main() {}\n"),
+                ("cmd/frps/root.go", "package frps\nfunc Execute() {}\n"),
+                ("cmd/frps/verify.go", "package frps\nfunc Verify() {}\n"),
+                ("cmd/frpc/sub/admin.go", "package sub\nfunc Admin() {}\n"),
+                (
+                    "cmd/frpc/sub/nathole.go",
+                    "package sub\nfunc NatHole() {}\n",
+                ),
+                ("cmd/frpc/sub/proxy.go", "package sub\nfunc Proxy() {}\n"),
+                ("cmd/frpc/sub/root.go", "package sub\nfunc Root() {}\n"),
+                (
+                    ".github/workflows/build-and-push-image.yml",
+                    "name: build and push\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+                ),
+                (
+                    "pkg/config/legacy/server.go",
+                    "package legacy\nfunc Server() {}\n",
+                ),
+                (
+                    "pkg/config/v1/validation/server.go",
+                    "package validation\nfunc Server() {}\n",
+                ),
+                (
+                    "pkg/metrics/mem/server.go",
+                    "package mem\nfunc Server() {}\n",
+                ),
+                (
+                    "web/frpc/src/main.ts",
+                    "export const mount = 'frontend main';\n",
+                ),
+                (
+                    "web/frps/src/main.ts",
+                    "export const mount = 'frontend main';\n",
+                ),
+                (
+                    "web/frps/src/api/server.ts",
+                    "export const api = 'server';\n",
+                ),
+                (
+                    "web/frps/src/types/server.ts",
+                    "export const server = 'type';\n",
+                ),
+                (
+                    "test/e2e/mock/server/httpserver/server.go",
+                    "package httpserver\nfunc Server() {}\n",
+                ),
+                (
+                    "test/e2e/mock/server/streamserver/server.go",
+                    "package streamserver\nfunc Server() {}\n",
+                ),
+                (
+                    "test/e2e/legacy/basic/server.go",
+                    "package basic\nfunc Server() {}\n",
+                ),
+                (
+                    "test/e2e/legacy/plugin/server.go",
+                    "package plugin\nfunc Server() {}\n",
+                ),
+                (
+                    "test/e2e/v1/basic/server.go",
+                    "package basic\nfunc Server() {}\n",
+                ),
+                (
+                    "test/e2e/v1/plugin/server.go",
+                    "package plugin\nfunc Server() {}\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap server api main cli command".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| path.starts_with("cmd/")),
+            "go entrypoint queries should recover a cmd/ command witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_roc_entrypoint_queries_prefer_platform_main_over_host_crates_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-roc-platform-entrypoints");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "platform/main.roc",
+                    "# entry point main app package platform runtime\nplatform \"cli\"\npackages {}\nprovides [main_for_host!]\n",
+                ),
+                ("platform/Arg.roc", "# platform arg runtime package\n"),
+                ("platform/Cmd.roc", "# platform cmd runtime package\n"),
+                ("platform/Host.roc", "# platform host runtime package\n"),
+                (
+                    "examples/command.roc",
+                    "# example command package\napp [main!] { pf: platform \"../platform/main.roc\" }\n",
+                ),
+                (
+                    "crates/roc_host_bin/src/main.rs",
+                    "fn main() { let _ = \"entry point main app package platform runtime\"; }\n",
+                ),
+                (
+                    "crates/roc_host/src/lib.rs",
+                    "pub fn host_runtime() { let _ = \"main app package runtime\"; }\n",
+                ),
+                (
+                    "ci/rust_http_server/src/main.rs",
+                    "fn main() { let _ = \"entry point main app package platform runtime\"; }\n",
+                ),
+                (
+                    ".github/workflows/deploy-docs.yml",
+                    "name: deploy docs\njobs:\n  deploy:\n    steps:\n      - run: cargo doc\n",
+                ),
+                (
+                    ".github/workflows/test_latest_release.yml",
+                    "name: test latest release\njobs:\n  test:\n    steps:\n      - run: cargo test\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point main app package platform runtime".to_owned(),
+                limit: 10,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let platform_main_rank = ranked_paths
+            .iter()
+            .position(|path| *path == "platform/main.roc")
+            .expect("platform/main.roc should be ranked for Roc entrypoint queries");
+        let host_lib_rank = ranked_paths
+            .iter()
+            .position(|path| *path == "crates/roc_host/src/lib.rs")
+            .expect("host runtime lib.rs should be ranked as competing noise");
+
+        assert!(
+            platform_main_rank < 6,
+            "platform/main.roc should stay visible near the top for Roc platform queries: {ranked_paths:?}"
+        );
+        assert!(
+            platform_main_rank < host_lib_rank,
+            "platform/main.roc should outrank generic host runtime library noise for Roc platform queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_go_package_queries_surface_pkg_test_witnesses() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-go-package-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "client/http/controller.go",
+                    "package http\nfunc Controller() {}\n",
+                ),
+                (
+                    "client/http/controller_test.go",
+                    "package http\nfunc TestController() {}\n",
+                ),
+                (
+                    "client/config_manager.go",
+                    "package client\nfunc ConfigManager() {}\n",
+                ),
+                (
+                    "client/config_manager_test.go",
+                    "package client\nfunc TestConfigManager() {}\n",
+                ),
+                (
+                    "client/proxy/proxy_manager.go",
+                    "package proxy\nfunc Manager() {}\n",
+                ),
+                (
+                    "client/visitor/visitor_manager.go",
+                    "package visitor\nfunc Manager() {}\n",
+                ),
+                (
+                    "pkg/config/source/aggregator_test.go",
+                    "package source\nfunc TestAggregator() {}\n",
+                ),
+                (
+                    "pkg/config/source/base_source_test.go",
+                    "package source\nfunc TestBaseSource() {}\n",
+                ),
+                (
+                    "pkg/config/source/config_source_test.go",
+                    "package source\nfunc TestConfigSource() {}\n",
+                ),
+                (
+                    "pkg/auth/oidc_test.go",
+                    "package auth\nfunc TestOIDC() {}\n",
+                ),
+                (
+                    "pkg/config/load_test.go",
+                    "package config\nfunc TestLoad() {}\n",
+                ),
+                (
+                    "pkg/config/source/aggregator.go",
+                    "package source\nfunc NewAggregator() {}\n",
+                ),
+                (
+                    "pkg/config/source/base_source.go",
+                    "package source\nfunc NewBaseSource() {}\n",
+                ),
+                (
+                    "pkg/config/source/clone.go",
+                    "package source\nfunc Clone() {}\n",
+                ),
+                ("pkg/config/flags.go", "package config\nfunc Flags() {}\n"),
+                ("go.mod", "module github.com/example/frp\n"),
+                ("go.sum", "github.com/example/dependency v1.0.0 h1:test\n"),
+                ("web/frpc/tsconfig.json", "{ \"compilerOptions\": {} }\n"),
+                ("web/frps/tsconfig.json", "{ \"compilerOptions\": {} }\n"),
+                (
+                    "web/frpc/src/main.ts",
+                    "export const mount = 'frontend main';\n",
+                ),
+                (
+                    "web/frps/src/main.ts",
+                    "export const mount = 'frontend main';\n",
+                ),
+                ("package.sh", "#!/bin/sh\necho package\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests packages internal library integration config manager controller"
+                    .to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "pkg/config/source/aggregator_test.go"
+                        | "pkg/config/source/base_source_test.go"
+                        | "pkg/config/source/config_source_test.go"
+                        | "pkg/auth/oidc_test.go"
+                        | "pkg/config/load_test.go"
+                        | "pkg/config/source/aggregator.go"
+                        | "pkg/config/source/base_source.go"
+                        | "pkg/config/source/clone.go"
+                )
+            }),
+            "go package/test queries should recover a pkg/ witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_typescript_entrypoint_queries_keep_cli_entrypoints_visible_under_workflow_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-entrypoints-vs-workflow-noise");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "packages/cli/src/server.ts",
+                    "export function startServer() { return \"bootstrap server app\"; }\n",
+                ),
+                (
+                    "packages/cli/src/index.ts",
+                    "export { startServer } from \"./server\";\n",
+                ),
+                (
+                    "packages/@n8n/node-cli/src/index.ts",
+                    "export const runCli = \"cli bootstrap app\";\n",
+                ),
+                (
+                    "packages/frontend/editor-ui/src/main.ts",
+                    "export const mount = \"frontend browser app\";\n",
+                ),
+                (
+                    "packages/@n8n/task-runner-python/src/main.py",
+                    "ENTRYPOINT = 'entry point bootstrap server app cli router main'\n",
+                ),
+                (
+                    "packages/@n8n/nodes-langchain/nodes/vendors/Anthropic/actions/router.ts",
+                    "export const router = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "packages/testing/playwright/tests/e2e/building-blocks/workflow-entry-points.spec.ts",
+                    "test('entry point bootstrap server app cli router main');\n",
+                ),
+                (
+                    "packages/testing/playwright/tests/e2e/capabilities/proxy-server.spec.ts",
+                    "test('entry point bootstrap server app cli router main');\n",
+                ),
+                (
+                    ".github/workflows/build-windows.yml",
+                    "name: Build windows\njobs:\n  build:\n    steps:\n      - run: pnpm build\n",
+                ),
+                (
+                    ".github/workflows/docker-build-push.yml",
+                    "name: Docker build push\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+                ),
+                (
+                    ".github/workflows/docker-build-smoke.yml",
+                    "name: Docker build smoke\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+                ),
+                (
+                    ".github/workflows/release-create-pr.yml",
+                    "name: Release create pr\njobs:\n  release:\n    steps:\n      - run: pnpm release\n",
+                ),
+                (
+                    ".github/workflows/release-merge-tag-to-branch.yml",
+                    "name: Release merge tag to branch\njobs:\n  release:\n    steps:\n      - run: pnpm release\n",
+                ),
+                (
+                    ".github/workflows/sec-publish-fix.yml",
+                    "name: Security publish fix\njobs:\n  publish:\n    steps:\n      - run: pnpm publish\n",
+                ),
+                (
+                    ".github/workflows/create-patch-release-branch.yml",
+                    "name: Create patch release branch\njobs:\n  release:\n    steps:\n      - run: pnpm release\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap server app cli router main".to_owned(),
+                limit: 10,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(10).any(|path| {
+                matches!(
+                    *path,
+                    "packages/cli/src/server.ts"
+                        | "packages/cli/src/index.ts"
+                        | "packages/@n8n/node-cli/src/index.ts"
+                )
+            }),
+            "typescript runtime entrypoints should remain visible under workflow/test crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_runtime_config_queries_keep_typescript_runtime_entrypoints_visible_under_test_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-config-vs-test-noise");
+        prepare_workspace(
+            &root,
+            &[
+                ("package.json", "{ \"name\": \"supabase\" }\n"),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    ".github/workflows/ai-tests.yml",
+                    "name: AI Unit Tests\njobs:\n  test:\n    steps:\n      - run: pnpm run test\n",
+                ),
+                (
+                    "packages/ai-commands/src/sql/index.ts",
+                    "export * from './functions'\n",
+                ),
+                (
+                    "packages/pg-meta/src/index.ts",
+                    "export { config } from './pg-meta-config'\n",
+                ),
+                (
+                    "packages/pg-meta/test/config.test.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "packages/pg-meta/test/functions.test.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "packages/ai-commands/test/extensions.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "packages/ai-commands/test/sql-util.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.test.tsx",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'config package tsconfig github workflow ai tests';\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "config package tsconfig github workflow ai tests".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "runtime-config queries should keep a config artifact visible in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "packages/ai-commands/src/sql/index.ts" | "packages/pg-meta/src/index.ts"
+                )
+            }),
+            "runtime-config queries should still surface a runtime entrypoint sibling in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_queries_recover_typescript_config_artifacts_without_explicit_config_terms()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-entrypoints-with-config-siblings");
+        prepare_workspace(
+            &root,
+            &[
+                ("package.json", "{ \"name\": \"supabase\" }\n"),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "packages/build-icons/src/main.mjs",
+                    "export const build = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    ".github/workflows/braintrust-preview-scorers-deploy.yml",
+                    "name: Deploy preview scorers\njobs:\n  deploy:\n    steps:\n      - run: pnpm deploy\n",
+                ),
+                (
+                    ".github/workflows/publish_image.yml",
+                    "name: Publish image\njobs:\n  publish:\n    steps:\n      - run: docker build .\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap server app cli router main".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                *path
+                    == "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+            }),
+            "entrypoint queries should still surface the runtime entrypoint witness in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "entrypoint queries should recover a config artifact sibling in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_typescript_config_queries_keep_root_manifests_and_runtime_entrypoints_visible()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-config-vs-test-crowding");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "package.json",
+                    "{\n  \"scripts\": {\n    \"test:ui\": \"pnpm turbo run test --filter=ui\",\n    \"authorize-vercel-deploys\": \"tsx scripts/authorizeVercelDeploys.ts\"\n  }\n}\n",
+                ),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                    "export function createServerClient() { return \"supabase server\"; }\n",
+                ),
+                (
+                    "apps/docs/generator/cli.ts",
+                    "export async function runCli() { return \"docs cli\"; }\n",
+                ),
+                (
+                    ".github/workflows/ai-tests.yml",
+                    "name: AI tests\njobs:\n  test:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
+                    ".github/workflows/authorize-vercel-deploys.yml",
+                    "name: Authorize vercel deploys\njobs:\n  release:\n    steps:\n      - run: pnpm authorize-vercel-deploys\n",
+                ),
+                (
+                    "packages/pg-meta/test/config.test.ts",
+                    "describe('config', () => test('package tsconfig github workflow ai tests', () => {}));\n",
+                ),
+                (
+                    "packages/pg-meta/test/sql/studio/get-users-common.test.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.test.tsx",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'config package tsconfig github workflow ai tests';\n",
+                ),
+                (
+                    "apps/studio/tests/config/msw.test.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "packages/ai-commands/test/extensions.ts",
+                    "export const extensionTest = 'config package tsconfig github workflow ai tests';\n",
+                ),
+                (
+                    "packages/ai-commands/test/sql-util.ts",
+                    "export const sqlUtilTest = 'config package tsconfig github workflow ai tests';\n",
+                ),
+                (
+                    "packages/build-icons/src/main.mjs",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/ai/image_search/image_search/main.py",
+                    "ENTRYPOINT = 'entry point bootstrap server app cli router main'\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "config package tsconfig github workflow ai tests".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "typescript config queries should keep a root manifest visible under config-test crowding: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+                        | "apps/docs/generator/cli.ts"
+                )
+            }),
+            "typescript config queries should keep a runtime entrypoint visible under config-test crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_typescript_entrypoint_queries_keep_root_manifests_visible_under_test_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-entrypoints-vs-config-tests");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "package.json",
+                    "{\n  \"scripts\": {\n    \"build\": \"turbo run build\",\n    \"test:ui\": \"turbo run test --filter=ui\"\n  }\n}\n",
+                ),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                    "export function createServerClient() { return \"supabase server\"; }\n",
+                ),
+                (
+                    "apps/docs/generator/cli.ts",
+                    "export async function runCli() { return \"docs cli\"; }\n",
+                ),
+                (
+                    "packages/build-icons/src/main.mjs",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.test.tsx",
+                    "test('entry point bootstrap server app cli router main');\n",
+                ),
+                (
+                    "packages/pg-meta/test/db/server.crt",
+                    "entry point bootstrap server app cli router main\n",
+                ),
+                (
+                    "packages/pg-meta/test/db/server.key",
+                    "entry point bootstrap server app cli router main\n",
+                ),
+                (
+                    "examples/ai/image_search/image_search/main.py",
+                    "ENTRYPOINT = 'entry point bootstrap server app cli router main'\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap server app cli router main".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+                        | "apps/docs/generator/cli.ts"
+                )
+            }),
+            "typescript entrypoint queries should keep a runtime entrypoint visible: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "typescript entrypoint queries should keep a root manifest visible under test crowding: {ranked_paths:?}"
         );
 
         cleanup_workspace(&root);

@@ -113,18 +113,8 @@ pub(super) fn resolve_watch_runtime_config(
     config: &FriggConfig,
     transport_kind: RuntimeTransportKind,
 ) -> io::Result<FriggConfig> {
-    if transport_kind != RuntimeTransportKind::Stdio || !config.workspace_roots.is_empty() {
-        return Ok(config.clone());
-    }
-
-    let mut watch_config = config.clone();
-    watch_config.workspace_roots = vec![resolve_stdio_default_workspace_root()?];
-    Ok(watch_config)
-}
-
-fn resolve_stdio_default_workspace_root() -> io::Result<PathBuf> {
-    let current_dir = std::env::current_dir()?;
-    Ok(find_enclosing_git_root(&current_dir).unwrap_or(current_dir))
+    let _ = transport_kind;
+    Ok(config.clone())
 }
 
 pub(super) fn find_enclosing_git_root(start: &Path) -> Option<PathBuf> {

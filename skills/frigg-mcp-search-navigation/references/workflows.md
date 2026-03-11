@@ -4,11 +4,12 @@ Use shell tools first for cheap local reads and literal scans. The Frigg loops b
 
 ## Bug Trace
 
-1. `list_repositories` or `workspace_attach`
-2. `search_hybrid` for the failure symptom
-3. `search_symbol` for the central API or type
-4. `find_references` or call hierarchy for impact
-5. `read_file` on the strongest witnesses only when you need canonical-path evidence; otherwise confirm with a shell slice
+1. `list_repositories`
+2. If the session is detached or the default repo is wrong, call `workspace_attach` explicitly
+3. `search_hybrid` for the failure symptom
+4. `search_symbol` for the central API or type
+5. `find_references` or call hierarchy for impact
+6. `read_file` on the strongest witnesses only when you need canonical-path evidence; otherwise confirm with a shell slice
 
 ## Refactor Impact
 

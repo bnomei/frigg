@@ -1001,6 +1001,13 @@ fn apply_navigation_fallback_terms(
 }
 
 fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBuilder) -> bool {
+    let runtime_config_query_with_incidental_tests = builder
+        .has_artifact_bias(ArtifactBias::RuntimeConfigArtifact)
+        && !context.has_strong_test_focus_terms();
+    if runtime_config_query_with_incidental_tests {
+        return false;
+    }
+
     let has_test_or_cli_signal = builder.has_goal(SearchGoal::Tests)
         || (context.mentions_cli_context()
             && (builder.has_goal(SearchGoal::EntryPointBuildFlow)
@@ -1272,5 +1279,15 @@ mod tests {
         );
         assert!(!intent.penalize_playbook_self_reference);
         assert!(intent.has_goal(SearchGoal::Fixtures));
+    }
+
+    #[test]
+    fn runtime_config_queries_do_not_overfocus_test_witnesses_for_incidental_test_terms() {
+        let intent = SearchIntent::from_query("config package tsconfig github workflow ai tests");
+
+        assert!(intent.has_goal(SearchGoal::Tests));
+        assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
+        assert!(!intent.has_artifact_bias(ArtifactBias::TestWitness));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
     }
 }

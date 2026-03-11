@@ -11,6 +11,7 @@ Frigg is not the default replacement for local shell inspection.
 
 - Prefer local shell tools such as `rg`, `rg --files`, `git grep`, `sed`, or `cat` for simple file listing, literal search, and short direct reads in the checked-out workspace.
 - Reach for Frigg when repository-aware semantics matter: canonical repository-relative paths, cross-file navigation, symbol lookup, structural search, hybrid doc/runtime discovery, or MCP-backed evidence you want to cite directly.
+- Treat `workspace_attach` as the explicit setup boundary. Frigg sessions can start detached even when the client is launched inside a repo, and Frigg no longer auto-attaches the current directory or MCP client roots for empty sessions.
 - Use `search_text` only when shell search is not enough or when you specifically need `path_regex`, repository scoping, or a result payload tied to canonical paths.
 - Use `read_file` only when you need repository-canonical confirmation or a bounded MCP read; for quick local inspection, a shell slice is cheaper.
 
@@ -18,7 +19,7 @@ Frigg is not the default replacement for local shell inspection.
 
 1. If the task is a simple local read or literal scan, use shell tools first.
 2. Call `list_repositories`.
-3. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach`, then optionally `workspace_current`.
+3. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly, then optionally `workspace_current`.
 4. Start with `search_hybrid` for broad natural-language doc/runtime questions.
 5. Pivot to `search_symbol` when you know an API, type, or function name, or to `search_text` with `path_regex` when exact strings or canonical-path scoping matter.
 6. Use navigation tools for impact and code flow: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
@@ -41,7 +42,7 @@ Treat `search_hybrid` as discovery-first. If `semantic_status != ok` or `warning
 ## Tool Families
 
 - Shell-fast local inspection: `rg`, `rg --files`, `git grep`, `sed`, `cat`
-- Workspace: `list_repositories`, `workspace_attach`, `workspace_current`
+- Workspace setup and status: `list_repositories`, `workspace_attach`, `workspace_current`
 - Discovery: `search_hybrid`, `search_symbol`
 - Targeted text: `search_text`
 - Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`

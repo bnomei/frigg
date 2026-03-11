@@ -171,12 +171,18 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     intent: &HybridRankingIntent,
 ) -> f32 {
     let class = hybrid_source_class(path);
+    let normalized_path = path.trim_start_matches("./");
     let wants_example_or_bench_witnesses = intent.wants_examples || intent.wants_benchmarks;
     let penalize_generic_runtime_docs =
         !intent.wants_docs && !intent.wants_onboarding && !intent.wants_readme;
     let wants_rust_workspace_config = intent.has_framework_hint(FrameworkHint::Rust);
     let wants_python_workspace_config = intent.has_framework_hint(FrameworkHint::Python);
     let wants_python_witnesses = intent.has_framework_hint(FrameworkHint::Python);
+    let is_entrypoint_runtime = is_entrypoint_runtime_path(path);
+    let is_runtime_config_artifact = is_runtime_config_artifact_path(path);
+    let is_repo_root_runtime_config_artifact =
+        is_runtime_config_artifact && !normalized_path.contains('/');
+    let is_test_support = is_test_support_path(path);
     let mut multiplier = if class == HybridSourceClass::Other {
         match Path::new(path).extension().and_then(|ext| ext.to_str()) {
             Some(
@@ -380,7 +386,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     {
         multiplier *= 0.76;
     }
-    if intent.wants_tests && is_test_support_path(path) {
+    if intent.wants_tests && is_test_support {
         multiplier *= 1.10;
     }
     if intent.wants_tests && is_cli_test_support_path(path) {
@@ -522,8 +528,14 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         }
     }
     if intent.wants_runtime_config_artifacts {
-        if is_runtime_config_artifact_path(path) {
+        if is_runtime_config_artifact {
             multiplier *= 1.40;
+        }
+        if is_repo_root_runtime_config_artifact {
+            multiplier *= 1.38;
+        }
+        if is_entrypoint_runtime {
+            multiplier *= 1.22;
         }
         if wants_rust_workspace_config && is_rust_workspace_config_path(path) {
             multiplier *= 1.42;
@@ -541,8 +553,11 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         ) {
             multiplier *= 0.52;
         }
-        if is_repo_metadata && !is_runtime_config_artifact_path(path) {
+        if is_repo_metadata && !is_runtime_config_artifact {
             multiplier *= 0.34;
+        }
+        if is_test_support && !is_runtime_config_artifact {
+            multiplier *= 0.58;
         }
         if is_frontend_runtime_noise_path(path) {
             multiplier *= 0.64;
@@ -557,11 +572,14 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         }
     }
     if intent.wants_entrypoint_build_flow {
-        if is_entrypoint_runtime_path(path) {
+        if is_entrypoint_runtime {
             multiplier *= 1.92;
         }
         if is_entrypoint_build_workflow_path(path) {
             multiplier *= 2.72;
+        }
+        if is_repo_root_runtime_config_artifact {
+            multiplier *= 1.46;
         }
         if is_laravel_core_provider_path(path) {
             multiplier *= 1.94;
@@ -581,7 +599,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
                 0.84
             };
         }
-        if matches!(class, HybridSourceClass::Runtime) && !is_entrypoint_runtime_path(path) {
+        if matches!(class, HybridSourceClass::Runtime) && !is_entrypoint_runtime {
             multiplier *= 0.88;
         }
         if matches!(class, HybridSourceClass::Tests | HybridSourceClass::Specs) {
@@ -771,7 +789,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         hybrid_overlap_count(&projection.path_terms, &query_context.query_overlap_terms);
     let specific_path_overlap =
         hybrid_overlap_count(&projection.path_terms, &query_context.specific_query_terms);
-    let is_entrypoint = projection.flags.is_entrypoint_runtime;
+    let is_entrypoint = projection.flags.is_entrypoint_runtime || is_entrypoint_runtime_path(path);
     let is_entrypoint_build_workflow =
         intent.wants_entrypoint_build_flow && projection.flags.is_entrypoint_build_workflow;
     let is_ci_workflow = intent.wants_ci_workflow_witnesses && projection.flags.is_ci_workflow;
@@ -781,13 +799,22 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     let wants_rust_workspace_config = intent.has_framework_hint(FrameworkHint::Rust);
     let wants_python_workspace_config = intent.has_framework_hint(FrameworkHint::Python);
     let wants_python_witnesses = intent.has_framework_hint(FrameworkHint::Python);
-    let is_python_test = projection.flags.is_python_test_witness;
+    let is_repo_root_runtime_config_artifact =
+        is_config_artifact && !path.trim_start_matches("./").contains('/');
+    let is_python_test =
+        projection.flags.is_python_test_witness || is_python_test_witness_path(path);
     let is_example_support = projection.flags.is_example_support;
     let is_bench_support = projection.flags.is_bench_support;
     let wants_example_or_bench_witnesses = intent.wants_examples || intent.wants_benchmarks;
     let is_cli_test = projection.flags.is_cli_test_support;
     let is_test_harness = projection.flags.is_test_harness;
     let is_scripts_ops = intent.wants_scripts_ops_witnesses && projection.flags.is_scripts_ops;
+    let is_test_support = projection.flags.is_test_support || is_test_support_path(path);
+    let source_class = if is_test_support {
+        HybridSourceClass::Tests
+    } else {
+        projection.source_class
+    };
     let is_laravel_partial_view = path.contains("/parts/") || path.contains("/partials/");
     let is_laravel_top_level_blade_view = projection.flags.is_laravel_non_livewire_blade_view
         && !projection.flags.is_laravel_layout_blade_view
@@ -796,6 +823,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         && !is_entrypoint
         && !is_entrypoint_build_workflow
         && !is_ci_workflow
+        && !(intent.wants_entrypoint_build_flow && is_config_artifact)
         && !(intent.wants_runtime_config_artifacts && is_config_artifact)
         && !(wants_python_workspace_config && is_python_config)
         && !(wants_python_witnesses && is_python_test)
@@ -812,7 +840,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     if specific_path_overlap > 0 {
         score += if intent.wants_entrypoint_build_flow {
             3.0 * specific_path_overlap as f32
-        } else if intent.wants_test_witness_recall && projection.flags.is_test_support {
+        } else if intent.wants_test_witness_recall && is_test_support {
             7.2 * specific_path_overlap as f32
         } else if intent.wants_laravel_ui_witnesses {
             2.2 * specific_path_overlap as f32
@@ -954,6 +982,18 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     if intent.wants_runtime_config_artifacts && is_config_artifact {
         score += 3.2;
     }
+    if intent.wants_runtime_config_artifacts && is_repo_root_runtime_config_artifact {
+        score += 3.0;
+    }
+    if intent.wants_runtime_config_artifacts && is_entrypoint {
+        score += 2.4;
+    }
+    if intent.wants_entrypoint_build_flow && is_config_artifact {
+        score += if path_overlap == 0 { 2.8 } else { 3.4 };
+    }
+    if intent.wants_entrypoint_build_flow && is_repo_root_runtime_config_artifact {
+        score += 4.6;
+    }
     if wants_rust_workspace_config && is_rust_workspace_config {
         score += 3.6;
     }
@@ -989,7 +1029,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     {
         score += 2.8;
     }
-    if intent.wants_test_witness_recall && projection.flags.is_test_support {
+    if intent.wants_test_witness_recall && is_test_support {
         score += 2.6;
         if !is_example_support && !is_bench_support {
             score += match path_overlap {
@@ -1000,7 +1040,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         }
     }
     if wants_example_or_bench_witnesses
-        && projection.flags.is_test_support
+        && is_test_support
         && !is_example_support
         && !is_bench_support
     {
@@ -1010,11 +1050,14 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
             2.4
         };
     }
+    if intent.wants_runtime_config_artifacts && is_test_support && !is_config_artifact {
+        score -= 3.2;
+    }
     if query_context.query_mentions_cli && is_cli_test {
         score += 3.8;
     }
     if matches!(
-        projection.source_class,
+        source_class,
         HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
     ) {
         score += 0.4;

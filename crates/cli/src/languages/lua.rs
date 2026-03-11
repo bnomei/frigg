@@ -19,8 +19,9 @@ pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKi
 
     let name_node = node.child_by_field_name("name")?;
     match name_node.kind() {
-        "method_index_expression" => node_field_text(name_node, source, "method")
-            .map(|name| (SymbolKind::Method, name)),
+        "method_index_expression" => {
+            node_field_text(name_node, source, "method").map(|name| (SymbolKind::Method, name))
+        }
         "dot_index_expression" => {
             node_field_text(name_node, source, "field").map(|name| (SymbolKind::Function, name))
         }

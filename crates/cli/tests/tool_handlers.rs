@@ -1797,27 +1797,17 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
         src_root.join("init.lua"),
-        concat!(
-            "function luaRun()\n",
-            "    return \"ok\"\n",
-            "end\n",
-        ),
+        concat!("function luaRun()\n", "    return \"ok\"\n", "end\n",),
     )
     .expect("failed to seed temporary lua fixture");
     fs::write(
         src_root.join("app.nim"),
-        concat!(
-            "proc nimHelper(): string =\n",
-            "  \"ok\"\n",
-        ),
+        concat!("proc nimHelper(): string =\n", "  \"ok\"\n",),
     )
     .expect("failed to seed temporary nim fixture");
     fs::write(
         src_root.join("main.roc"),
-        concat!(
-            "UserId := U64\n",
-            "rocGreet = \\name -> name\n",
-        ),
+        concat!("UserId := U64\n", "rocGreet = \\name -> name\n",),
     )
     .expect("failed to seed temporary roc fixture");
     let server = server_for_workspace_root(&workspace_root);
@@ -1843,7 +1833,9 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
 
         assert!(
             response.matches.iter().any(|matched| {
-                matched.symbol == query && matched.kind == expected_kind && matched.path == expected_path
+                matched.symbol == query
+                    && matched.kind == expected_kind
+                    && matched.path == expected_path
             }),
             "expected {query} {expected_kind} match in {expected_path}, got {:?}",
             response
@@ -4507,19 +4499,12 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
         src_root.join("init.lua"),
-        concat!(
-            "function Service.run()\n",
-            "    return \"ok\"\n",
-            "end\n",
-        ),
+        concat!("function Service.run()\n", "    return \"ok\"\n", "end\n",),
     )
     .expect("failed to seed temporary lua fixture");
     fs::write(
         src_root.join("main.roc"),
-        concat!(
-            "UserId := U64\n",
-            "greet = \\name -> name\n",
-        ),
+        concat!("UserId := U64\n", "greet = \\name -> name\n",),
     )
     .expect("failed to seed temporary roc fixture");
     fs::write(
@@ -5094,10 +5079,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
     fs::create_dir_all(&src_root).expect("failed to create temporary baseline fixtures");
     fs::write(
         src_root.join("main.go"),
-        concat!(
-            "package main\n",
-            "func helper() string { return \"ok\" }\n",
-        ),
+        concat!("package main\n", "func helper() string { return \"ok\" }\n",),
     )
     .expect("failed to seed temporary go fixture");
     fs::write(
@@ -5112,27 +5094,17 @@ async fn search_structural_returns_additional_baseline_language_matches() {
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
         src_root.join("init.lua"),
-        concat!(
-            "function Service.run()\n",
-            "    return \"ok\"\n",
-            "end\n",
-        ),
+        concat!("function Service.run()\n", "    return \"ok\"\n", "end\n",),
     )
     .expect("failed to seed temporary lua fixture");
     fs::write(
         src_root.join("main.roc"),
-        concat!(
-            "greet = \\name -> name\n",
-            "id = 1\n",
-        ),
+        concat!("greet = \\name -> name\n", "id = 1\n",),
     )
     .expect("failed to seed temporary roc fixture");
     fs::write(
         src_root.join("main.nim"),
-        concat!(
-            "proc helper(): string =\n",
-            "  \"ok\"\n",
-        ),
+        concat!("proc helper(): string =\n", "  \"ok\"\n",),
     )
     .expect("failed to seed temporary nim fixture");
     let server = server_for_workspace_root(&workspace_root);
@@ -5149,7 +5121,10 @@ async fn search_structural_returns_additional_baseline_language_matches() {
         .expect("search_structural should return go matches")
         .0;
     assert_eq!(go_response.matches.len(), 1);
-    assert_eq!(go_response.metadata.as_ref().expect("typed metadata")["language"], "go");
+    assert_eq!(
+        go_response.metadata.as_ref().expect("typed metadata")["language"],
+        "go"
+    );
 
     let kotlin_response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -5180,7 +5155,10 @@ async fn search_structural_returns_additional_baseline_language_matches() {
         .expect("search_structural should return lua matches")
         .0;
     assert_eq!(lua_response.matches.len(), 1);
-    assert_eq!(lua_response.metadata.as_ref().expect("typed metadata")["language"], "lua");
+    assert_eq!(
+        lua_response.metadata.as_ref().expect("typed metadata")["language"],
+        "lua"
+    );
 
     let roc_response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -5194,7 +5172,10 @@ async fn search_structural_returns_additional_baseline_language_matches() {
         .expect("search_structural should return roc matches")
         .0;
     assert_eq!(roc_response.matches.len(), 2);
-    assert_eq!(roc_response.metadata.as_ref().expect("typed metadata")["language"], "roc");
+    assert_eq!(
+        roc_response.metadata.as_ref().expect("typed metadata")["language"],
+        "roc"
+    );
 
     let nim_response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -5208,7 +5189,10 @@ async fn search_structural_returns_additional_baseline_language_matches() {
         .expect("search_structural should return nim matches")
         .0;
     assert_eq!(nim_response.matches.len(), 1);
-    assert_eq!(nim_response.metadata.as_ref().expect("typed metadata")["language"], "nim");
+    assert_eq!(
+        nim_response.metadata.as_ref().expect("typed metadata")["language"],
+        "nim"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }

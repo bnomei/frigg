@@ -99,8 +99,6 @@ use crate::mcp::types::{
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
-use url::Url;
-
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
 #[derive(Clone)]
@@ -4093,17 +4091,6 @@ impl FriggMcpServer {
         )
     }
 
-    pub fn auto_attach_stdio_default_workspace_from_current_dir(&self) -> std::io::Result<()> {
-        if !self.attached_workspaces().is_empty() {
-            return Ok(());
-        }
-
-        let current_dir = std::env::current_dir()?;
-        self.attach_workspace_internal(&current_dir, true, WorkspaceResolveMode::GitRoot)
-            .map(|_| ())
-            .map_err(|error| std::io::Error::other(error.message))
-    }
-
     fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.workspace_registry
             .read()
@@ -4116,78 +4103,6 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
-    }
-
-    fn sync_declared_root_uris(&self, root_uris: &[String], set_default_if_missing: bool) -> usize {
-        let mut attached_count = 0;
-        let mut seen_paths = BTreeSet::new();
-
-        for root_uri in root_uris {
-            let parsed = match Url::parse(root_uri) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    warn!(uri = %root_uri, %error, "ignoring invalid MCP root URI");
-                    continue;
-                }
-            };
-            let path = match parsed.to_file_path() {
-                Ok(path) => path,
-                Err(()) => {
-                    warn!(uri = %root_uri, "ignoring non-file MCP root URI");
-                    continue;
-                }
-            };
-            if !seen_paths.insert(path.clone()) {
-                continue;
-            }
-
-            let make_default = set_default_if_missing && self.current_repository_id().is_none();
-            match self.attach_workspace_internal(&path, make_default, WorkspaceResolveMode::GitRoot)
-            {
-                Ok(_) => attached_count += 1,
-                Err(error) => warn!(
-                    uri = %root_uri,
-                    message = %error.message,
-                    "failed to attach MCP root as workspace"
-                ),
-            }
-        }
-
-        attached_count
-    }
-
-    async fn maybe_sync_client_roots(
-        &self,
-        peer: &rmcp::service::Peer<rmcp::RoleServer>,
-        allow_when_session_has_default: bool,
-    ) {
-        if !self.config.workspace_roots.is_empty() {
-            return;
-        }
-
-        let supports_roots = peer
-            .peer_info()
-            .and_then(|peer_info| peer_info.capabilities.roots.as_ref())
-            .is_some();
-        if !supports_roots {
-            return;
-        }
-
-        if !allow_when_session_has_default && self.current_repository_id().is_some() {
-            return;
-        }
-
-        match peer.list_roots().await {
-            Ok(result) => {
-                let root_uris = result
-                    .roots
-                    .into_iter()
-                    .map(|root| root.uri)
-                    .collect::<Vec<_>>();
-                self.sync_declared_root_uris(&root_uris, self.current_repository_id().is_none());
-            }
-            Err(error) => warn!(%error, "failed to query MCP client roots"),
-        }
     }
 
     fn set_current_repository_id(&self, repository_id: Option<String>) {
@@ -5307,9 +5222,9 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_attach",
-        description = "Attach a workspace and optionally set it as the session default repository.",
+        description = "Explicitly attach a workspace for this session and optionally set it as the session default repository.",
         annotations(
-            read_only_hint = true,
+            read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = true
         )
@@ -9798,20 +9713,18 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Use list_repositories first; if no repository is attached or you want a session-local default repo, call workspace_attach. If the client declares MCP roots and Frigg started without startup roots, Frigg will seed empty sessions from those client roots after initialization before falling back to manual attach. Runtime tool-surface profile is `{tool_surface_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include explore plus deep-search tools). Runtime profile is `{runtime_profile}`; call workspace_current to inspect attached repositories, watch/index health, active or recent runtime tasks, and recent provenance summaries. For simple local file reads or literal scans in the checked-out workspace, shell tools may be faster than read_file or search_text. Use search_hybrid for broad doc/runtime questions, then pivot to search_symbol or scoped search_text.path_regex for concrete anchors. Use explore after discovery when you want bounded single-artifact probe/zoom/refine follow-up. Use read_file to confirm exact source when repository-aware evidence is useful, and treat search_hybrid warnings or non-`ok` semantic_status as weaker evidence. Policy resources are available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                    "Use list_repositories first; if no repository is attached or you want a session-local default repo, call workspace_attach explicitly. Frigg no longer auto-attaches the current directory or MCP-declared client roots for empty sessions, so local storage and provenance stay opt-in. Runtime tool-surface profile is `{tool_surface_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include explore plus deep-search tools). Runtime profile is `{runtime_profile}`; call workspace_current to inspect attached repositories, watch/index health, active or recent runtime tasks, and recent provenance summaries. For simple local file reads or literal scans in the checked-out workspace, shell tools may be faster than read_file or search_text. Use search_hybrid for broad doc/runtime questions, then pivot to search_symbol or scoped search_text.path_regex for concrete anchors. Use explore after discovery when you want bounded single-artifact probe/zoom/refine follow-up. Use read_file to confirm exact source when repository-aware evidence is useful, and treat search_hybrid warnings or non-`ok` semantic_status as weaker evidence. Policy resources are available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
                 ),
             )
     }
 
-    async fn on_initialized(&self, context: rmcp::service::NotificationContext<rmcp::RoleServer>) {
-        self.maybe_sync_client_roots(&context.peer, false).await;
+    async fn on_initialized(&self, _context: rmcp::service::NotificationContext<rmcp::RoleServer>) {
     }
 
     async fn on_roots_list_changed(
         &self,
-        context: rmcp::service::NotificationContext<rmcp::RoleServer>,
+        _context: rmcp::service::NotificationContext<rmcp::RoleServer>,
     ) {
-        self.maybe_sync_client_roots(&context.peer, true).await;
     }
 
     async fn list_resources(
@@ -10065,13 +9978,14 @@ mod runtime_gate_tests {
         let instructions = info
             .instructions
             .expect("server info should publish MCP usage instructions");
-        assert!(instructions.contains("client declares MCP roots"));
+        assert!(instructions.contains("call workspace_attach explicitly"));
+        assert!(instructions.contains("no longer auto-attaches"));
         assert!(instructions.contains(super::SUPPORT_MATRIX_RESOURCE_URI));
         assert!(instructions.contains(super::ROUTING_GUIDE_PROMPT_NAME));
     }
 
     #[test]
-    fn declared_root_uris_attach_when_server_started_without_startup_roots() {
+    fn server_starts_detached_when_started_without_startup_roots() {
         let workspace_root = temp_workspace_root("declared-roots-attach");
         fs::create_dir_all(workspace_root.join("src"))
             .expect("failed to create workspace root fixture");
@@ -10083,29 +9997,6 @@ mod runtime_gate_tests {
         let server = FriggMcpServer::new_with_runtime_options(config, false, false);
         assert!(server.attached_workspaces().is_empty());
         assert!(server.current_repository_id().is_none());
-
-        let file_uri = format!(
-            "file://{}",
-            workspace_root
-                .canonicalize()
-                .expect("workspace root should canonicalize")
-                .display()
-        );
-        let attached = server.sync_declared_root_uris(&[file_uri], true);
-
-        assert_eq!(attached, 1);
-        let attached_workspaces = server.attached_workspaces();
-        assert_eq!(attached_workspaces.len(), 1);
-        assert_eq!(
-            attached_workspaces[0].root,
-            workspace_root
-                .canonicalize()
-                .expect("workspace root should canonicalize")
-        );
-        assert_eq!(
-            server.current_repository_id().as_deref(),
-            Some(attached_workspaces[0].repository_id.as_str())
-        );
 
         let _ = fs::remove_dir_all(workspace_root);
     }

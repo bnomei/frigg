@@ -101,7 +101,12 @@ fn variable_declaration_kind(source: &str, node: Node<'_>) -> Option<VariableDec
 
 fn is_supported_module_scope_variable(node: Node<'_>) -> bool {
     let declaration = match node.parent() {
-        Some(parent) if matches!(parent.kind(), "lexical_declaration" | "variable_declaration") => {
+        Some(parent)
+            if matches!(
+                parent.kind(),
+                "lexical_declaration" | "variable_declaration"
+            ) =>
+        {
             parent
         }
         _ => return false,

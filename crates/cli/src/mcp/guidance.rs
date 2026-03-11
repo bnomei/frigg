@@ -259,7 +259,7 @@ pub(crate) fn read_guidance_prompt(
         text.push_str(task);
         text.push_str("\n\n");
     }
-text.push_str(
+    text.push_str(
         "Routing policy:\n\
 1. Prefer shell tools for trivial local scans, file reads, or git/filesystem inspection.\n\
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\

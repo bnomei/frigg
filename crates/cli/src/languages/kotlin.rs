@@ -21,7 +21,9 @@ pub(crate) fn is_kotlin_path(path: &Path) -> bool {
 
 pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {
     match node.kind() {
-        "package_header" => declaration_name_text(node, source).map(|name| (SymbolKind::Module, name)),
+        "package_header" => {
+            declaration_name_text(node, source).map(|name| (SymbolKind::Module, name))
+        }
         "class_declaration" => {
             declaration_name_text(node, source).map(|name| (class_kind(source, node), name))
         }
@@ -46,7 +48,9 @@ pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKi
                 property_name_text(node, source).map(|name| (SymbolKind::Property, name))
             }
         },
-        "type_alias" => declaration_name_text(node, source).map(|name| (SymbolKind::TypeAlias, name)),
+        "type_alias" => {
+            declaration_name_text(node, source).map(|name| (SymbolKind::TypeAlias, name))
+        }
         _ => None,
     }
 }
@@ -58,7 +62,9 @@ fn enclosing_kotlin_scope(node: Node<'_>) -> KotlinScope {
             "function_declaration" | "anonymous_function" | "lambda_literal" => {
                 return KotlinScope::Function;
             }
-            "class_declaration" | "interface_declaration" | "object_declaration"
+            "class_declaration"
+            | "interface_declaration"
+            | "object_declaration"
             | "companion_object" => {
                 return KotlinScope::ClassLike;
             }

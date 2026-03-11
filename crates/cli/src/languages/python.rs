@@ -21,12 +21,10 @@ pub(crate) fn is_python_path(path: &Path) -> bool {
 
 pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {
     match node.kind() {
-        "class_definition" => {
-            (enclosing_python_scope(node) != PythonScope::Function)
-                .then(|| node_name_text(node, source))
-                .flatten()
-                .map(|name| (SymbolKind::Class, name))
-        }
+        "class_definition" => (enclosing_python_scope(node) != PythonScope::Function)
+            .then(|| node_name_text(node, source))
+            .flatten()
+            .map(|name| (SymbolKind::Class, name)),
         "function_definition" | "async_function_definition" => match enclosing_python_scope(node) {
             PythonScope::Module => {
                 node_name_text(node, source).map(|name| (SymbolKind::Function, name))

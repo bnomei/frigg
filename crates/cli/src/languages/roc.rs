@@ -35,7 +35,8 @@ fn roc_type_name(node: Node<'_>, source: &str) -> Option<String> {
         .filter(|child| child.is_named() && child.kind() == "apply_type")
         .find_map(|child| {
             let mut child_cursor = child.walk();
-            child.children(&mut child_cursor)
+            child
+                .children(&mut child_cursor)
                 .filter(|grandchild| grandchild.is_named())
                 .find(|grandchild| grandchild.kind() == "concrete_type")
                 .and_then(|grandchild| grandchild.utf8_text(source.as_bytes()).ok())
@@ -62,7 +63,8 @@ fn value_declaration_name(node: Node<'_>, source: &str) -> Option<String> {
         .find_map(|child| match child.kind() {
             "decl_left" => node_name_text(child, source).or_else(|| {
                 let mut decl_cursor = child.walk();
-                child.children(&mut decl_cursor)
+                child
+                    .children(&mut decl_cursor)
                     .filter(|grandchild| grandchild.is_named())
                     .find_map(|grandchild| {
                         node_name_text(grandchild, source).or_else(|| {

@@ -233,7 +233,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(runtime) = http_runtime {
         serve_http(runtime, server).await?;
     } else {
-        server.auto_attach_stdio_default_workspace_from_current_dir()?;
         server.serve_stdio().await?;
     }
 
@@ -797,16 +796,12 @@ mod tests {
     }
 
     #[test]
-    fn stdio_watch_runtime_config_uses_current_workspace_when_startup_roots_are_empty() {
+    fn stdio_watch_runtime_config_keeps_empty_startup_roots() {
         let config = FriggConfig::from_optional_workspace_roots(Vec::new())
             .expect("empty serving config should be valid");
         let watch_config = resolve_watch_runtime_config(&config, RuntimeTransportKind::Stdio)
-            .expect("stdio watch runtime config should resolve current workspace");
-        assert_eq!(watch_config.workspace_roots.len(), 1);
-        assert!(
-            watch_config.workspace_roots[0].exists(),
-            "resolved stdio watch workspace root should exist"
-        );
+            .expect("stdio watch runtime config should preserve empty startup roots");
+        assert!(watch_config.workspace_roots.is_empty());
     }
 
     #[test]
