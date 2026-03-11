@@ -73,6 +73,9 @@ bench-mcp:
 bench-search:
   cargo bench -p frigg --bench search_latency -- --noplot
 
+bench-semantic-chunks:
+  cargo bench -p frigg --bench semantic_chunk_hot_paths -- --noplot
+
 bench-index:
   cargo bench -p frigg --bench reindex_latency -- --noplot
 

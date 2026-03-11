@@ -792,6 +792,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
+ "tree-sitter-blade",
  "tree-sitter-php",
  "tree-sitter-rust",
  "tree-sitter-typescript",
@@ -3101,6 +3102,15 @@ dependencies = [
  "regex-syntax",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-blade"
+version = "0.12.0"
+dependencies = [
+ "cc",
+ "tree-sitter",
  "tree-sitter-language",
 ]
 
