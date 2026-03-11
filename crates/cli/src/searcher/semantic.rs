@@ -23,6 +23,7 @@ use super::{
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count,
     hybrid_path_quality_multiplier_with_intent, hybrid_query_exact_terms,
     hybrid_query_overlap_terms, normalize_search_filters, semantic_excerpt,
+    surfaces::{HybridSourceClass, hybrid_source_class},
 };
 
 pub(super) trait SemanticRuntimeQueryEmbeddingExecutor: Sync {
@@ -548,6 +549,7 @@ pub(super) fn retain_semantic_hits_for_query(
         .saturating_mul(HYBRID_SEMANTIC_RETAINED_DOCUMENT_MULTIPLIER)
         .max(HYBRID_SEMANTIC_RETAINED_DOCUMENT_MIN);
     let query_overlap_terms = hybrid_query_overlap_terms(query_text);
+    let ranking_intent = HybridRankingIntent::from_query(query_text);
     let preserve_overlap_hits = query_overlap_terms.len() > query_exact_terms.len();
     let preserve_broad_query_hits = query_overlap_terms.len() >= 4;
     let mut retained_hits = Vec::new();
@@ -562,15 +564,24 @@ pub(super) fn retain_semantic_hits_for_query(
             hit.document.repository_id.clone(),
             hit.document.path.clone(),
         );
+        let source_class = hybrid_source_class(&hit.document.path);
         let path_overlap = hybrid_path_overlap_count(&hit.document.path, query_text);
         let excerpt_overlap = hybrid_overlap_count(
             &hybrid_identifier_tokens(&hit.excerpt),
             &query_overlap_terms,
         );
-        let preserve_below_floor = if preserve_overlap_hits {
+        let preserve_runtime_witness_hit = preserve_broad_query_hits
+            && ranking_intent.wants_runtime_witnesses
+            && matches!(
+                source_class,
+                HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+            );
+        let preserve_below_floor = if preserve_runtime_witness_hit {
+            true
+        } else if preserve_overlap_hits {
             path_overlap + excerpt_overlap > 0
         } else if preserve_broad_query_hits {
-            path_overlap >= 2
+            path_overlap + excerpt_overlap >= 2
         } else {
             false
         };

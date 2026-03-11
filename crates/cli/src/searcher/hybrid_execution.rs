@@ -151,17 +151,19 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             &candidate_universe,
         )?
     };
+    let mut lexical_document_count = distinct_match_document_count(&lexical_output.matches);
     if lexical_seeded_with_terms
         && !std::ptr::eq(lexical_candidate_universe, &candidate_universe)
-        && lexical_output.matches.is_empty()
+        && lexical_document_count < query.limit
     {
         lexical_output = search_case_insensitive_recall_terms_with_universe(
             searcher,
             &lexical_seed_terms,
             lexical_working_limit,
             &candidate_universe,
-            true,
+            false,
         )?;
+        lexical_document_count = distinct_match_document_count(&lexical_output.matches);
     }
 
     let semantic_started_at = Instant::now();
@@ -222,8 +224,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let should_expand_lexical = (lexical_output.matches.len() < query.limit
-        || wants_path_witness_recall)
+    let should_expand_lexical = (lexical_document_count < query.limit || wants_path_witness_recall)
         && (semantic_channel_result.health.status != ChannelHealthStatus::Ok
             || semantic_channel_result.hits.is_empty()
             || wants_path_witness_recall
@@ -816,6 +817,14 @@ fn search_case_insensitive_recall_terms_with_universe(
         path_regex: None,
         limit,
     })
+}
+
+fn distinct_match_document_count(matches: &[TextMatch]) -> usize {
+    matches
+        .iter()
+        .map(|matched| (&matched.repository_id, &matched.path))
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn is_ascii_word_boundary_match(line: &str, start: usize, end: usize) -> bool {

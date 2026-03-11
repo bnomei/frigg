@@ -517,7 +517,13 @@ fn php_hybrid_onboarding_queries_surface_readme_witnesses() {
         ],
     );
     let searcher = searcher_for_workspace_root(&workspace_root);
-    let paths = top_paths(&searcher, "quickstart stdio transport setup install", 3);
+    let output = hybrid_output(&searcher, "quickstart stdio transport setup install", 3);
+    eprintln!("{:#?}", output.matches);
+    let paths = output
+        .matches
+        .iter()
+        .map(|matched| matched.document.path.clone())
+        .collect::<Vec<_>>();
 
     assert!(
         paths.iter().any(|path| path == "README.md"),
