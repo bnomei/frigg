@@ -8,7 +8,7 @@ pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 pub enum ToolSurfaceProfile {
     /// Stable default read-only runtime surface.
     Core,
-    /// Advanced runtime surface that layers deep-search tools on top of the stable profile.
+    /// Advanced-consumer runtime surface that layers deep-search tools on top of the stable profile.
     Extended,
 }
 

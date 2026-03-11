@@ -3,23 +3,26 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use crate::domain::{FriggError, FriggResult};
+use crate::domain::{
+    ChannelDiagnostic, ChannelHealth, ChannelHealthStatus, EvidenceAnchor, EvidenceAnchorKind,
+    EvidenceChannel, FriggError, FriggResult,
+};
 use crate::embeddings::{
     EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
     OpenAiEmbeddingProvider,
 };
 use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{SemanticChunkEmbeddingProjection, Storage, resolve_provenance_db_path};
+use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, resolve_provenance_db_path};
+use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 
 use super::{
     HYBRID_SEMANTIC_CANDIDATE_POOL_MIN, HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER,
     HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR, HYBRID_SEMANTIC_RETAINED_DOCUMENT_MIN,
     HYBRID_SEMANTIC_RETAINED_DOCUMENT_MULTIPLIER, HybridChannelHit, HybridDocumentRef,
     HybridRankingIntent, HybridSemanticStatus, SearchFilters, TextSearcher,
-    hard_excluded_runtime_path, hybrid_identifier_tokens, hybrid_overlap_count,
-    hybrid_path_overlap_count, hybrid_path_quality_multiplier_with_intent,
-    hybrid_query_exact_terms, hybrid_query_overlap_terms, normalize_search_filters,
-    semantic_excerpt,
+    hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count,
+    hybrid_path_quality_multiplier_with_intent, hybrid_query_exact_terms,
+    hybrid_query_overlap_terms, normalize_search_filters, semantic_excerpt,
 };
 
 pub(super) trait SemanticRuntimeQueryEmbeddingExecutor: Sync {
@@ -30,6 +33,8 @@ pub(super) trait SemanticRuntimeQueryEmbeddingExecutor: Sync {
         query: String,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>>;
 }
+
+const SQLITE_VEC_KNN_MAX_K: usize = 4_096;
 
 #[derive(Debug, Default)]
 pub(super) struct RuntimeSemanticQueryEmbeddingExecutor {
@@ -60,7 +65,7 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
                 model,
                 input: vec![query],
                 purpose: EmbeddingPurpose::Query,
-                dimensions: None,
+                dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
                 trace_id: None,
             };
             let response = match provider {
@@ -135,22 +140,6 @@ pub(super) fn block_on_semantic_query_embedding(
     runtime.block_on(semantic_executor.embed_query(provider, model, query))
 }
 
-pub(super) fn semantic_projection_score(
-    query_embedding: &[f32],
-    projection: &SemanticChunkEmbeddingProjection,
-    repository_id: &str,
-) -> FriggResult<f32> {
-    cosine_similarity(query_embedding, &projection.embedding).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "semantic similarity dimension mismatch for repository '{repository_id}' path '{}' chunk_id='{}' (query={}, chunk={})",
-            projection.path,
-            projection.chunk_id,
-            query_embedding.len(),
-            projection.embedding.len()
-        ))
-    })
-}
-
 fn build_semantic_query_runtime() -> FriggResult<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -162,33 +151,22 @@ fn build_semantic_query_runtime() -> FriggResult<tokio::runtime::Runtime> {
         })
 }
 
-fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
-    if left.len() != right.len() {
-        return None;
+fn semantic_distance_score(distance: f32) -> FriggResult<f32> {
+    if !distance.is_finite() {
+        return Err(FriggError::Internal(
+            "semantic vector query produced non-finite distance".to_owned(),
+        ));
     }
 
-    let mut dot = 0.0_f32;
-    let mut left_norm = 0.0_f32;
-    let mut right_norm = 0.0_f32;
-    for (&left_value, &right_value) in left.iter().zip(right.iter()) {
-        dot += left_value * right_value;
-        left_norm += left_value * left_value;
-        right_norm += right_value * right_value;
-    }
-
-    if left_norm <= 0.0 || right_norm <= 0.0 {
-        return Some(0.0);
-    }
-
-    Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
+    Ok((1.0 - distance).clamp(0.0, 1.0))
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct SemanticChannelSearchOutput {
     pub(super) hits: Vec<HybridChannelHit>,
     pub(super) candidate_count: usize,
-    pub(super) status: HybridSemanticStatus,
-    pub(super) reason: Option<String>,
+    pub(super) health: ChannelHealth,
+    pub(super) diagnostics: Vec<ChannelDiagnostic>,
 }
 
 pub(super) fn search_semantic_channel_hits(
@@ -203,9 +181,8 @@ pub(super) fn search_semantic_channel_hits(
     struct PendingSemanticHit {
         repository_id: String,
         snapshot_id: String,
-        path: String,
         chunk_id: String,
-        raw_score: f32,
+        raw_distance: f32,
     }
 
     searcher
@@ -252,6 +229,12 @@ pub(super) fn search_semantic_channel_hits(
 
     let normalized_filters = normalize_search_filters(filters.clone())?;
     let ranking_intent = HybridRankingIntent::from_query(query_text);
+    let semantic_candidate_limit = limit
+        .saturating_mul(HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER)
+        .max(HYBRID_SEMANTIC_CANDIDATE_POOL_MIN);
+    let semantic_vector_query_limit = semantic_candidate_limit
+        .saturating_mul(4)
+        .min(SQLITE_VEC_KNN_MAX_K);
     let mut repositories = searcher.config.repositories();
     repositories.sort_by(|left, right| {
         left.repository_id
@@ -261,6 +244,9 @@ pub(super) fn search_semantic_channel_hits(
 
     let mut pending_hits = Vec::new();
     let mut db_paths_by_repository = BTreeMap::new();
+    let mut roots_by_repository = BTreeMap::new();
+    let mut latest_manifest_paths_by_repository = BTreeMap::new();
+    let mut latest_snapshot_ids_by_repository = BTreeMap::new();
     let mut degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
     for repo in repositories {
@@ -286,6 +272,7 @@ pub(super) fn search_semantic_channel_hits(
             continue;
         }
         db_paths_by_repository.insert(repository_id.clone(), db_path.clone());
+        roots_by_repository.insert(repository_id.clone(), root.to_path_buf());
 
         let storage = Storage::new(db_path);
         let latest = storage
@@ -306,6 +293,9 @@ pub(super) fn search_semantic_channel_hits(
             .iter()
             .map(|entry| entry.path.clone())
             .collect::<BTreeSet<_>>();
+        latest_manifest_paths_by_repository.insert(repository_id.clone(), latest_manifest_paths);
+        latest_snapshot_ids_by_repository
+            .insert(repository_id.clone(), latest_snapshot.snapshot_id.clone());
         let latest_snapshot_has_embeddings = storage
             .has_semantic_embeddings_for_repository_snapshot_model(
                 &repository_id,
@@ -352,66 +342,46 @@ pub(super) fn search_semantic_channel_hits(
             ));
             continue;
         };
-        let using_fallback_snapshot = selected_snapshot_id != latest_snapshot.snapshot_id;
-        let projections = storage
-            .load_semantic_embedding_projections_for_repository_snapshot_model(
+        let topk_matches = storage
+            .load_semantic_vector_topk_for_repository_snapshot_model(
                 &repository_id,
                 &selected_snapshot_id,
-                Some(provider.as_str()),
-                Some(model),
+                provider.as_str(),
+                model,
+                &query_embedding,
+                semantic_vector_query_limit,
+                normalized_filters.language.as_ref().map(|language| language.as_str()),
             )
             .map_err(|err| {
                 FriggError::Internal(format!(
-                    "semantic storage embedding projection load failed for repository '{repository_id}' snapshot '{}': {err}",
+                    "semantic storage vector top-k load failed for repository '{repository_id}' snapshot '{}': {err}",
                     selected_snapshot_id
                 ))
             })?;
 
-        for projection in projections {
-            if using_fallback_snapshot && !latest_manifest_paths.contains(&projection.path) {
-                continue;
-            }
-            if hard_excluded_runtime_path(root, Path::new(&projection.path)) {
-                continue;
-            }
-            if let Some(language) = normalized_filters.language {
-                if !language.matches_path(Path::new(&projection.path)) {
-                    continue;
-                }
-            }
-            let score = semantic_projection_score(&query_embedding, &projection, &repository_id)?
-                * hybrid_path_quality_multiplier_with_intent(&projection.path, &ranking_intent);
-            if !score.is_finite() {
-                return Err(FriggError::Internal(format!(
-                    "semantic similarity produced non-finite score for repository '{repository_id}' path '{}' chunk_id='{}'",
-                    projection.path, projection.chunk_id
-                )));
-            }
-
+        for vector_hit in topk_matches {
             pending_hits.push(PendingSemanticHit {
                 repository_id: repository_id.clone(),
                 snapshot_id: selected_snapshot_id.clone(),
-                path: projection.path,
-                chunk_id: projection.chunk_id,
-                raw_score: score,
+                chunk_id: vector_hit.chunk_id,
+                raw_distance: vector_hit.distance,
             });
         }
     }
 
     pending_hits.sort_by(|left, right| {
-        right
-            .raw_score
-            .total_cmp(&left.raw_score)
+        left.raw_distance
+            .total_cmp(&right.raw_distance)
             .then(left.repository_id.cmp(&right.repository_id))
-            .then(left.path.cmp(&right.path))
             .then(left.chunk_id.cmp(&right.chunk_id))
     });
-    let semantic_candidate_limit = limit
-        .saturating_mul(HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER)
-        .max(HYBRID_SEMANTIC_CANDIDATE_POOL_MIN);
     pending_hits.truncate(semantic_candidate_limit);
+    let root_ignore_matchers = roots_by_repository
+        .iter()
+        .map(|(repository_id, root)| (repository_id.clone(), build_root_ignore_matcher(root)))
+        .collect::<BTreeMap<_, _>>();
 
-    let mut chunk_texts_by_group = BTreeMap::new();
+    let mut chunk_payloads_by_group = BTreeMap::new();
     for ((repository_id, snapshot_id), chunk_ids) in pending_hits.iter().fold(
         BTreeMap::<(String, String), Vec<String>>::new(),
         |mut grouped, hit| {
@@ -426,41 +396,85 @@ pub(super) fn search_semantic_channel_hits(
             continue;
         };
         let storage = Storage::new(db_path.clone());
-        let texts = storage
-            .load_semantic_chunk_texts_for_repository_snapshot(
+        let payloads = storage
+            .load_semantic_chunk_payloads_for_repository_snapshot(
                 &repository_id,
                 &snapshot_id,
                 &chunk_ids,
             )
             .map_err(|err| {
                 FriggError::Internal(format!(
-                    "semantic storage chunk text load failed for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                    "semantic storage chunk payload load failed for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
                 ))
             })?;
-        chunk_texts_by_group.insert((repository_id, snapshot_id), texts);
+        chunk_payloads_by_group.insert((repository_id, snapshot_id), payloads);
     }
 
-    let semantic_hits = pending_hits
+    let mut semantic_hits = pending_hits
         .into_iter()
-        .map(|hit| {
-            let excerpt_source = chunk_texts_by_group
+        .filter_map(|hit| {
+            let payload = chunk_payloads_by_group
                 .get(&(hit.repository_id.clone(), hit.snapshot_id.clone()))
-                .and_then(|texts| texts.get(&hit.chunk_id))
-                .map(|text| semantic_excerpt(text, &hit.path))
-                .unwrap_or_else(|| semantic_excerpt("", &hit.path));
-            HybridChannelHit {
+                .and_then(|payloads| payloads.get(&hit.chunk_id))
+                .cloned()?;
+            let using_fallback_snapshot = latest_snapshot_ids_by_repository
+                .get(&hit.repository_id)
+                .is_some_and(|latest_snapshot_id| latest_snapshot_id != &hit.snapshot_id);
+            if using_fallback_snapshot
+                && !latest_manifest_paths_by_repository
+                    .get(&hit.repository_id)
+                    .is_some_and(|paths| paths.contains(&payload.path))
+            {
+                return None;
+            }
+            let root = roots_by_repository.get(&hit.repository_id)?;
+            if should_ignore_runtime_path(
+                root,
+                Path::new(&payload.path),
+                root_ignore_matchers.get(&hit.repository_id),
+            ) {
+                return None;
+            }
+            let score = semantic_distance_score(hit.raw_distance).ok()?
+                * hybrid_path_quality_multiplier_with_intent(&payload.path, &ranking_intent);
+            if !score.is_finite() {
+                return None;
+            }
+            let excerpt_source = semantic_excerpt(&payload.content_text, &payload.path);
+            Some(HybridChannelHit {
+                channel: EvidenceChannel::Semantic,
                 document: HybridDocumentRef {
                     repository_id: hit.repository_id,
-                    path: hit.path.clone(),
-                    line: 1,
+                    path: payload.path.clone(),
+                    line: payload.start_line,
                     column: 1,
                 },
-                raw_score: hit.raw_score,
+                anchor: EvidenceAnchor::new(
+                    EvidenceAnchorKind::SemanticChunk,
+                    payload.start_line,
+                    1,
+                    payload.end_line,
+                    semantic_chunk_end_column(&payload.content_text),
+                )
+                .with_detail(hit.chunk_id.clone()),
+                raw_score: score,
                 excerpt: excerpt_source,
-                provenance_id: hit.chunk_id,
-            }
+                provenance_ids: vec![hit.chunk_id],
+            })
         })
         .collect::<Vec<_>>();
+    semantic_hits.sort_by(|left, right| {
+        right
+            .raw_score
+            .total_cmp(&left.raw_score)
+            .then(
+                left.document
+                    .repository_id
+                    .cmp(&right.document.repository_id),
+            )
+            .then(left.document.path.cmp(&right.document.path))
+            .then(left.provenance_ids.cmp(&right.provenance_ids))
+    });
     let semantic_candidate_count = semantic_hits.len();
 
     let status = if semantic_hits.is_empty() {
@@ -479,13 +493,36 @@ pub(super) fn search_semantic_channel_hits(
     let mut non_ok_reasons = degraded_reasons;
     non_ok_reasons.extend(unavailable_reasons);
     let reason = (!non_ok_reasons.is_empty()).then(|| non_ok_reasons.join("; "));
+    let health_status = match status {
+        HybridSemanticStatus::Disabled => ChannelHealthStatus::Disabled,
+        HybridSemanticStatus::Unavailable => ChannelHealthStatus::Unavailable,
+        HybridSemanticStatus::Ok => ChannelHealthStatus::Ok,
+        HybridSemanticStatus::Degraded => ChannelHealthStatus::Degraded,
+    };
+    let diagnostics = reason
+        .as_ref()
+        .map(|message| {
+            vec![ChannelDiagnostic {
+                code: health_status.as_str().to_owned(),
+                message: message.clone(),
+            }]
+        })
+        .unwrap_or_default();
 
     Ok(SemanticChannelSearchOutput {
         hits: semantic_hits,
         candidate_count: semantic_candidate_count,
-        status,
-        reason,
+        health: ChannelHealth::new(health_status, reason),
+        diagnostics,
     })
+}
+
+fn semantic_chunk_end_column(chunk_text: &str) -> usize {
+    chunk_text
+        .lines()
+        .last()
+        .map(|line| line.chars().count().max(1))
+        .unwrap_or(1)
 }
 
 pub(super) fn retain_semantic_hits_for_query(
@@ -512,11 +549,15 @@ pub(super) fn retain_semantic_hits_for_query(
         .max(HYBRID_SEMANTIC_RETAINED_DOCUMENT_MIN);
     let query_overlap_terms = hybrid_query_overlap_terms(query_text);
     let preserve_overlap_hits = query_overlap_terms.len() > query_exact_terms.len();
+    let preserve_broad_query_hits = query_overlap_terms.len() >= 4;
     let mut retained_hits = Vec::new();
     let mut retained_documents = BTreeSet::new();
     let mut chunks_per_document = BTreeMap::<(String, String), usize>::new();
 
     for hit in hits {
+        if hit.raw_score <= 0.0 {
+            continue;
+        }
         let document_key = (
             hit.document.repository_id.clone(),
             hit.document.path.clone(),
@@ -526,9 +567,14 @@ pub(super) fn retain_semantic_hits_for_query(
             &hybrid_identifier_tokens(&hit.excerpt),
             &query_overlap_terms,
         );
-        if hit.raw_score < retain_floor
-            && (!preserve_overlap_hits || (path_overlap == 0 && excerpt_overlap == 0))
-        {
+        let preserve_below_floor = if preserve_overlap_hits {
+            path_overlap + excerpt_overlap > 0
+        } else if preserve_broad_query_hits {
+            path_overlap >= 2
+        } else {
+            false
+        };
+        if hit.raw_score < retain_floor && !preserve_below_floor {
             continue;
         }
 

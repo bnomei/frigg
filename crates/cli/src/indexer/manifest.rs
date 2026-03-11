@@ -1,4 +1,7 @@
 use super::*;
+use crate::workspace_ignores::{
+    build_root_ignore_matcher, hard_excluded_runtime_path, should_ignore_runtime_path,
+};
 
 impl ManifestBuilder {
     pub fn build(&self, root: &Path) -> FriggResult<Vec<FileDigest>> {
@@ -10,7 +13,7 @@ impl ManifestBuilder {
         }
 
         let mut out = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
+        let root_ignore_matcher = build_root_ignore_matcher(root);
         let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
@@ -23,7 +26,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
                 continue;
             }
             let mtime_ns = dent
@@ -56,7 +59,7 @@ impl ManifestBuilder {
 
         let mut entries = Vec::new();
         let mut diagnostics = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
+        let root_ignore_matcher = build_root_ignore_matcher(root);
         let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
@@ -76,7 +79,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
                 continue;
             }
             let mtime_ns = dent
@@ -125,7 +128,7 @@ impl ManifestBuilder {
 
         let mut entries = Vec::new();
         let mut diagnostics = Vec::new();
-        let internal_storage_dir = root.join(".frigg");
+        let root_ignore_matcher = build_root_ignore_matcher(root);
         let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
         for dent in walker {
@@ -145,7 +148,7 @@ impl ManifestBuilder {
             }
 
             let path = dent.path().to_path_buf();
-            if path.starts_with(&internal_storage_dir) || hard_excluded_runtime_path(root, &path) {
+            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
                 continue;
             }
             let metadata = match dent.metadata() {
@@ -171,6 +174,67 @@ impl ManifestBuilder {
         diagnostics.sort_by(manifest_build_diagnostic_order);
 
         Ok(ManifestMetadataBuildOutput {
+            entries,
+            diagnostics,
+        })
+    }
+
+    pub fn build_changed_only_with_diagnostics(
+        &self,
+        root: &Path,
+        previous_entries: &[FileDigest],
+    ) -> FriggResult<ManifestBuildOutput> {
+        self.build_changed_only_with_hints_and_diagnostics(root, previous_entries, &[])
+    }
+
+    pub fn build_changed_only_with_hints_and_diagnostics(
+        &self,
+        root: &Path,
+        previous_entries: &[FileDigest],
+        dirty_path_hints: &[PathBuf],
+    ) -> FriggResult<ManifestBuildOutput> {
+        let metadata_output = self.build_metadata_with_diagnostics(root)?;
+        let previous_by_path = manifest_by_path(previous_entries);
+        let hinted_paths = dirty_path_hints
+            .iter()
+            .filter_map(|path| normalize_dirty_hint_path(root, path))
+            .collect::<BTreeSet<_>>();
+        let mut entries = Vec::with_capacity(metadata_output.entries.len());
+        let mut diagnostics = metadata_output.diagnostics;
+
+        for metadata in metadata_output.entries {
+            let is_hinted = hinted_paths.contains(&metadata.path);
+            if let Some(previous) = previous_by_path.get(&metadata.path) {
+                if !is_hinted && metadata_matches_previous_digest(&metadata, previous) {
+                    entries.push(previous.clone());
+                    continue;
+                }
+            }
+
+            let (size_bytes, digest) = match stream_file_blake3_digest(&metadata.path) {
+                Ok(result) => result,
+                Err(err) => {
+                    diagnostics.push(ManifestBuildDiagnostic {
+                        path: Some(metadata.path),
+                        kind: ManifestDiagnosticKind::Read,
+                        message: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            entries.push(FileDigest {
+                path: metadata.path,
+                size_bytes,
+                mtime_ns: metadata.mtime_ns,
+                hash_blake3_hex: digest,
+            });
+        }
+
+        entries.sort_by(file_digest_order);
+        entries.dedup_by(|left, right| left.path == right.path);
+        diagnostics.sort_by(manifest_build_diagnostic_order);
+
+        Ok(ManifestBuildOutput {
             entries,
             diagnostics,
         })
@@ -216,24 +280,6 @@ fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
         .require_git(false)
         .follow_links(follow_symlinks);
     builder
-}
-
-pub(super) fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
-    let relative = if path.is_absolute() {
-        let Ok(relative) = path.strip_prefix(root) else {
-            return true;
-        };
-        relative
-    } else {
-        path
-    };
-    let Some(component) = relative.components().next() else {
-        return false;
-    };
-    matches!(
-        component.as_os_str().to_string_lossy().as_ref(),
-        ".frigg" | ".git" | "target"
-    )
 }
 
 fn stream_file_blake3_digest(path: &Path) -> std::io::Result<(u64, String)> {
@@ -340,13 +386,27 @@ fn same_manifest_record(left: &FileDigest, right: &FileDigest) -> bool {
         && left.hash_blake3_hex == right.hash_blake3_hex
 }
 
-fn manifest_by_path(entries: &[FileDigest]) -> BTreeMap<PathBuf, FileDigest> {
-    let mut ordered = entries.to_vec();
-    ordered.sort_by(file_digest_order);
+fn metadata_matches_previous_digest(left: &FileMetadataDigest, right: &FileDigest) -> bool {
+    left.path == right.path
+        && left.size_bytes == right.size_bytes
+        && left.mtime_ns == right.mtime_ns
+}
 
+fn normalize_dirty_hint_path(root: &Path, path: &Path) -> Option<PathBuf> {
+    let normalized = if path.is_absolute() {
+        path.strip_prefix(root)
+            .ok()
+            .map(|relative| root.join(relative))?
+    } else {
+        root.join(path)
+    };
+    (!hard_excluded_runtime_path(root, &normalized)).then_some(normalized)
+}
+
+fn manifest_by_path(entries: &[FileDigest]) -> BTreeMap<PathBuf, FileDigest> {
     let mut by_path = BTreeMap::new();
-    for entry in ordered {
-        by_path.insert(entry.path.clone(), entry);
+    for entry in entries {
+        by_path.insert(entry.path.clone(), entry.clone());
     }
 
     by_path

@@ -12,6 +12,7 @@ use frigg::mcp::types::{
     PUBLIC_READ_ONLY_TOOL_NAMES, ReadFileParams, SearchPatternType, SearchSymbolParams,
     SearchTextParams, WRITE_CONFIRM_PARAM,
 };
+use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorCode;
@@ -367,6 +368,51 @@ async fn security_extended_explore_enforces_workspace_boundary() {
     assert!(
         error.message.contains("outside workspace roots"),
         "explore should preserve the workspace-boundary denial message"
+    );
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn security_extended_explore_rejects_abusive_regex_patterns() {
+    let workspace = temp_workspace_root("explore-regex-abuse");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create repo root");
+    fs::write(src_root.join("lib.rs"), "pub fn needle() {}\n").expect("failed to seed repo file");
+
+    let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let abusive = "needle+".repeat(MAX_REGEX_QUANTIFIERS + 1);
+    let error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some(abusive),
+            pattern_type: Some(SearchPatternType::Regex),
+            anchor: None,
+            context_lines: Some(1),
+            max_matches: Some(5),
+            resume_from: None,
+        }))
+        .await
+        .err()
+        .expect("explore should reject abusive regex patterns");
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert!(
+        error.message.contains("invalid query regex"),
+        "unexpected explore regex abuse error: {}",
+        error.message
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("regex_error_code"))
+            .and_then(|value| value.as_str()),
+        Some("regex_too_many_quantifiers")
     );
 
     cleanup_workspace(&workspace);

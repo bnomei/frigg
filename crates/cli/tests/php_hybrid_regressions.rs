@@ -1144,6 +1144,54 @@ fn php_hybrid_graph_channel_uses_php_target_evidence_edges() {
     cleanup_workspace_root(&workspace_root);
 }
 
+#[test]
+fn php_hybrid_graph_channel_seeds_from_canonical_runtime_paths_without_exact_symbol_terms() {
+    let workspace_root = temp_workspace_root("canonical-runtime-path-seeds");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "src/Handlers/OrderHandler.php",
+                "<?php\n\
+                 namespace App\\Handlers;\n\
+                 class OrderHandler {\n\
+                     public function handle(): void {}\n\
+                 }\n",
+            ),
+            (
+                "src/Listeners/OrderListener.php",
+                "<?php\n\
+                 namespace App\\Listeners;\n\
+                 use App\\Handlers\\OrderHandler;\n\
+                 class OrderListener {\n\
+                     public function handlers(): array {\n\
+                         return [[OrderHandler::class, 'handle']];\n\
+                     }\n\
+                 }\n",
+            ),
+            (
+                "docs/handlers.md",
+                "# Handlers\nOrder listener wiring overview.\n",
+            ),
+        ],
+    );
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let output = hybrid_output(&searcher, "order listener wiring", 5);
+    let handler_match = output
+        .matches
+        .iter()
+        .find(|entry| entry.document.path == "src/Handlers/OrderHandler.php")
+        .expect("canonical runtime path seed should surface the handler runtime witness");
+
+    assert!(
+        handler_match.graph_score > 0.0,
+        "canonical runtime path seed should contribute graph evidence without exact symbol terms: {:?}",
+        output.matches
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
 #[tokio::test]
 async fn php_find_implementations_interface_falls_back_without_precise_data() {
     let workspace_root = temp_workspace_root("interface-implementations");

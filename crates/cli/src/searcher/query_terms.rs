@@ -31,7 +31,7 @@ pub(super) fn hybrid_query_exact_terms(query_text: &str) -> Vec<String> {
     tokens
 }
 
-pub(super) fn path_has_exact_query_term_match(path: &str, query_text: &str) -> bool {
+pub(super) fn path_has_exact_query_term_match(path: &str, exact_terms: &[String]) -> bool {
     let Some(stem) = Path::new(path).file_stem().and_then(|stem| stem.to_str()) else {
         return false;
     };
@@ -40,9 +40,7 @@ pub(super) fn path_has_exact_query_term_match(path: &str, query_text: &str) -> b
         return false;
     }
 
-    hybrid_query_exact_terms(query_text)
-        .into_iter()
-        .any(|term| term == normalized_stem)
+    exact_terms.iter().any(|term| term == &normalized_stem)
 }
 
 pub(super) fn hybrid_query_overlap_terms(query_text: &str) -> Vec<String> {
@@ -74,12 +72,16 @@ pub(super) fn hybrid_overlap_count(candidate_terms: &[String], query_terms: &[St
 }
 
 pub(super) fn hybrid_path_overlap_count(path: &str, query_text: &str) -> usize {
+    let query_terms = hybrid_query_overlap_terms(query_text);
+    hybrid_path_overlap_count_with_terms(path, &query_terms)
+}
+
+pub(super) fn hybrid_path_overlap_count_with_terms(path: &str, query_terms: &[String]) -> usize {
     let path_tokens = hybrid_path_overlap_tokens(path);
     if path_tokens.is_empty() {
         return 0;
     }
 
-    let query_terms = hybrid_query_overlap_terms(query_text);
     if query_terms.is_empty() {
         return 0;
     }

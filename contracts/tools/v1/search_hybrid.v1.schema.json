@@ -16,13 +16,154 @@
   ],
   "output_fields": [
     "matches",
+    "metadata",
     "semantic_requested",
     "semantic_enabled",
     "semantic_status",
     "semantic_reason",
+    "semantic_hit_count",
+    "semantic_match_count",
+    "warning",
     "note"
   ],
   "output_required": [
     "matches"
-  ]
+  ],
+  "contract_notes": [
+    "Live responses keep the flat metadata.semantic_* compatibility keys during the migration wave but now also expose metadata.channels keyed by canonical evidence-channel names.",
+    "Top-level semantic_* mirrors and note remain compatibility fields in the wrapper type; live responses may omit them when structured metadata is present.",
+    "metadata.channels reports per-channel health, counters, and diagnostics for lexical_manifest, graph_precise, semantic, and path_surface_witness.",
+    "matches[].anchor preserves the strongest retained anchor for the returned document; line, column, and excerpt mirror that winner while blended_score reflects corroborated document scoring before the final diversification pass.",
+    "metadata.stage_attribution is additive diagnostic metadata; when present it reports candidate_intake, freshness_validation, scan, witness_scoring, graph_expansion, semantic_retrieval, anchor_blending, document_aggregation, and final_diversification timings."
+  ],
+  "nested_contracts": {
+    "metadata": {
+      "additive_diagnostic_fields": [
+        "stage_attribution"
+      ],
+      "channels": {
+        "key_space": [
+          "lexical_manifest",
+          "graph_precise",
+          "semantic",
+          "path_surface_witness"
+        ],
+        "channel_fields": [
+          "status",
+          "reason",
+          "candidate_count",
+          "hit_count",
+          "match_count",
+          "diagnostic_count",
+          "diagnostics"
+        ],
+        "diagnostic_fields": [
+          "code",
+          "message"
+        ]
+      },
+      "semantic_compatibility_fields": [
+        "semantic_requested",
+        "semantic_enabled",
+        "semantic_status",
+        "semantic_reason",
+        "semantic_candidate_count",
+        "semantic_hit_count",
+        "semantic_match_count",
+        "warning"
+      ],
+      "stage_attribution_fields": [
+        "candidate_intake",
+        "freshness_validation",
+        "scan",
+        "witness_scoring",
+        "graph_expansion",
+        "semantic_retrieval",
+        "anchor_blending",
+        "document_aggregation",
+        "final_diversification"
+      ]
+    }
+  },
+  "output_example": {
+    "matches": [
+      {
+        "repository_id": "repo-001",
+        "path": "src/lib.rs",
+        "line": 2,
+        "column": 6,
+        "excerpt": "hello from fixture",
+        "anchor": {
+          "kind": "text_span",
+          "start_line": 2,
+          "start_column": 6,
+          "end_line": 2,
+          "end_column": 6
+        },
+        "blended_score": 1.0,
+        "lexical_score": 1.0,
+        "graph_score": 0.0,
+        "semantic_score": 0.0,
+        "lexical_sources": [
+          "text:src/lib.rs:1:1"
+        ],
+        "graph_sources": [],
+        "semantic_sources": []
+      }
+    ],
+    "metadata": {
+      "channels": {
+        "lexical_manifest": {
+          "status": "ok",
+          "reason": null,
+          "candidate_count": 1,
+          "hit_count": 1,
+          "match_count": 1,
+          "diagnostic_count": 0,
+          "diagnostics": []
+        },
+        "graph_precise": {
+          "status": "filtered",
+          "reason": "graph channel requires exact query anchor terms",
+          "candidate_count": 0,
+          "hit_count": 0,
+          "match_count": 0,
+          "diagnostic_count": 0,
+          "diagnostics": []
+        },
+        "semantic": {
+          "status": "disabled",
+          "reason": "semantic channel disabled by request toggle",
+          "candidate_count": 0,
+          "hit_count": 0,
+          "match_count": 0,
+          "diagnostic_count": 0,
+          "diagnostics": []
+        },
+        "path_surface_witness": {
+          "status": "filtered",
+          "reason": "path/surface witness recall not requested for query intent",
+          "candidate_count": 0,
+          "hit_count": 0,
+          "match_count": 0,
+          "diagnostic_count": 0,
+          "diagnostics": []
+        }
+      },
+      "semantic_requested": false,
+      "semantic_enabled": false,
+      "semantic_status": "disabled",
+      "semantic_reason": "semantic channel disabled by request toggle",
+      "semantic_candidate_count": 0,
+      "semantic_hit_count": 0,
+      "semantic_match_count": 0,
+      "warning": "semantic retrieval is disabled; results are ranked from lexical and graph signals only (semantic channel disabled by request toggle)",
+      "diagnostics_count": 0,
+      "diagnostics": {
+        "walk": 0,
+        "read": 0,
+        "total": 0
+      }
+    }
+  }
 }

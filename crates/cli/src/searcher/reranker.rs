@@ -16,9 +16,10 @@ use super::laravel::{
     laravel_ui_surface_novelty_bonus, laravel_ui_surface_repeat_penalty,
 };
 use super::query_terms::{
-    hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_test_double_anchor,
-    hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count,
-    hybrid_query_exact_terms, hybrid_query_overlap_terms, path_has_exact_query_term_match,
+    hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
+    hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
+    hybrid_path_overlap_count_with_terms, hybrid_query_exact_terms, hybrid_query_overlap_terms,
+    path_has_exact_query_term_match,
 };
 use super::surfaces::{
     HybridSourceClass, has_generic_runtime_anchor_stem, hybrid_source_class, is_bench_support_path,
@@ -37,53 +38,187 @@ pub(super) fn diversify_hybrid_ranked_evidence(
     query_text: &str,
 ) -> Vec<HybridRankedEvidence> {
     let intent = HybridRankingIntent::from_query(query_text);
+    let query_context = HybridSelectionQueryContext::new(&intent, query_text);
     let mut seen_classes = BTreeMap::<HybridSourceClass, usize>::new();
     let mut seen_laravel_ui_surfaces = BTreeMap::<LaravelUiSurfaceClass, usize>::new();
-    let mut remaining = ranked;
+    let mut remaining = ranked
+        .into_iter()
+        .map(|evidence| HybridSelectionCandidate::new(evidence, &intent, &query_context))
+        .collect::<Vec<_>>();
     let mut selected = Vec::with_capacity(limit.min(remaining.len()));
 
     while selected.len() < limit && !remaining.is_empty() {
-        let best_index = remaining
-            .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| {
-                hybrid_selection_score(
-                    left,
-                    &intent,
-                    &seen_classes,
-                    &seen_laravel_ui_surfaces,
-                    query_text,
-                )
-                .total_cmp(&hybrid_selection_score(
-                    right,
-                    &intent,
-                    &seen_classes,
-                    &seen_laravel_ui_surfaces,
-                    query_text,
-                ))
-                .then_with(|| hybrid_ranked_evidence_order(right, left))
-            })
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        let chosen = remaining.remove(best_index);
-        let class = hybrid_source_class(&chosen.document.path);
-        *seen_classes.entry(class).or_insert(0) += 1;
-        if let Some(surface) = laravel_ui_surface_class(&chosen.document.path) {
+        let mut best_index = 0usize;
+        let mut best_score = hybrid_selection_score(
+            &remaining[0],
+            &intent,
+            &query_context,
+            &seen_classes,
+            &seen_laravel_ui_surfaces,
+        );
+
+        for (index, candidate) in remaining.iter().enumerate().skip(1) {
+            let score = hybrid_selection_score(
+                candidate,
+                &intent,
+                &query_context,
+                &seen_classes,
+                &seen_laravel_ui_surfaces,
+            );
+            if score.total_cmp(&best_score).is_gt()
+                || (score.total_cmp(&best_score).is_eq()
+                    && hybrid_ranked_evidence_order(
+                        &candidate.evidence,
+                        &remaining[best_index].evidence,
+                    )
+                    .is_lt())
+            {
+                best_index = index;
+                best_score = score;
+            }
+        }
+
+        let chosen = remaining.swap_remove(best_index);
+        *seen_classes
+            .entry(chosen.static_features.class)
+            .or_insert(0) += 1;
+        if let Some(surface) = laravel_ui_surface_class(&chosen.evidence.document.path) {
             *seen_laravel_ui_surfaces.entry(surface).or_insert(0) += 1;
         }
-        selected.push(chosen);
+        selected.push(chosen.evidence);
     }
 
     selected
 }
 
-fn hybrid_runtime_witness_path_overlap_multiplier(
-    path: &str,
-    class: HybridSourceClass,
-    query_text: &str,
-) -> f32 {
-    let overlap = hybrid_path_overlap_count(path, query_text);
+struct HybridSelectionQueryContext {
+    exact_terms: Vec<String>,
+    query_overlap_terms: Vec<String>,
+    blade_component_specific_terms: Vec<String>,
+    query_mentions_cli: bool,
+    query_has_identifier_anchor: bool,
+    query_has_specific_blade_anchors: bool,
+    wants_example_or_bench_witnesses: bool,
+    penalize_generic_runtime_docs: bool,
+}
 
+impl HybridSelectionQueryContext {
+    fn new(intent: &HybridRankingIntent, query_text: &str) -> Self {
+        let exact_terms = hybrid_query_exact_terms(query_text);
+        let query_overlap_terms = hybrid_query_overlap_terms(query_text);
+        let blade_component_specific_terms = blade_component_specific_query_terms(query_text);
+        let query_mentions_cli =
+            query_overlap_terms.iter().any(|token| token == "cli") || query_text.contains("cli");
+        let query_has_identifier_anchor = query_overlap_terms.len() > exact_terms.len();
+        let query_has_specific_blade_anchors =
+            intent.wants_blade_component_witnesses && !blade_component_specific_terms.is_empty();
+        let wants_example_or_bench_witnesses = intent.wants_examples || intent.wants_benchmarks;
+        let penalize_generic_runtime_docs =
+            !intent.wants_docs && !intent.wants_onboarding && !intent.wants_readme;
+
+        Self {
+            exact_terms,
+            query_overlap_terms,
+            blade_component_specific_terms,
+            query_mentions_cli,
+            query_has_identifier_anchor,
+            query_has_specific_blade_anchors,
+            wants_example_or_bench_witnesses,
+            penalize_generic_runtime_docs,
+        }
+    }
+}
+
+struct HybridSelectionStaticFeatures {
+    class: HybridSourceClass,
+    path_overlap: usize,
+    blade_specific_path_overlap: usize,
+    canonical_match_multiplier: f32,
+    runtime_witness_path_overlap_multiplier: f32,
+    has_exact_query_term_match: bool,
+    excerpt_overlap: usize,
+    excerpt_has_exact_identifier_anchor: bool,
+    excerpt_has_build_flow_anchor: bool,
+    excerpt_has_test_double_anchor: bool,
+}
+
+struct HybridSelectionCandidate {
+    evidence: HybridRankedEvidence,
+    static_features: HybridSelectionStaticFeatures,
+}
+
+impl HybridSelectionCandidate {
+    fn new(
+        evidence: HybridRankedEvidence,
+        intent: &HybridRankingIntent,
+        query_context: &HybridSelectionQueryContext,
+    ) -> Self {
+        let class = hybrid_source_class(&evidence.document.path);
+        let path_overlap = hybrid_path_overlap_count_with_terms(
+            &evidence.document.path,
+            &query_context.query_overlap_terms,
+        );
+        let blade_specific_path_overlap = blade_component_specific_path_overlap_count(
+            &evidence.document.path,
+            &query_context.blade_component_specific_terms,
+        );
+        let canonical_match_multiplier =
+            hybrid_canonical_match_multiplier(&evidence.document.path, &query_context.exact_terms);
+        let runtime_witness_path_overlap_multiplier = if intent.wants_runtime_witnesses {
+            hybrid_runtime_witness_path_overlap_multiplier(path_overlap, class)
+        } else {
+            1.0
+        };
+        let has_exact_query_term_match =
+            path_has_exact_query_term_match(&evidence.document.path, &query_context.exact_terms);
+        let excerpt_overlap = if query_context.query_has_identifier_anchor
+            && (intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow)
+        {
+            hybrid_overlap_count(
+                &hybrid_identifier_tokens(&evidence.excerpt),
+                &query_context.query_overlap_terms,
+            )
+        } else {
+            0
+        };
+        let excerpt_has_exact_identifier_anchor = !query_context.exact_terms.is_empty()
+            && hybrid_excerpt_has_exact_identifier_anchor(
+                &evidence.excerpt,
+                &query_context.exact_terms.join(" "),
+            );
+        let excerpt_has_build_flow_anchor = if intent.wants_entrypoint_build_flow {
+            hybrid_excerpt_has_build_flow_anchor(
+                &evidence.excerpt,
+                &query_context.query_overlap_terms,
+            )
+        } else {
+            false
+        };
+        let excerpt_has_test_double_anchor = if intent.wants_entrypoint_build_flow {
+            hybrid_excerpt_has_test_double_anchor(&evidence.excerpt)
+        } else {
+            false
+        };
+
+        Self {
+            evidence,
+            static_features: HybridSelectionStaticFeatures {
+                class,
+                path_overlap,
+                blade_specific_path_overlap,
+                canonical_match_multiplier,
+                runtime_witness_path_overlap_multiplier,
+                has_exact_query_term_match,
+                excerpt_overlap,
+                excerpt_has_exact_identifier_anchor,
+                excerpt_has_build_flow_anchor,
+                excerpt_has_test_double_anchor,
+            },
+        }
+    }
+}
+
+fn hybrid_runtime_witness_path_overlap_multiplier(overlap: usize, class: HybridSourceClass) -> f32 {
     match class {
         HybridSourceClass::Runtime => match overlap {
             0 => 1.0,
@@ -140,8 +275,7 @@ fn blade_component_specific_query_terms(query_text: &str) -> Vec<String> {
         .collect()
 }
 
-fn blade_component_specific_path_overlap_count(path: &str, query_text: &str) -> usize {
-    let specific_terms = blade_component_specific_query_terms(query_text);
+fn blade_component_specific_path_overlap_count(path: &str, specific_terms: &[String]) -> usize {
     if specific_terms.is_empty() {
         return 0;
     }
@@ -154,26 +288,16 @@ fn blade_component_specific_path_overlap_count(path: &str, query_text: &str) -> 
 }
 
 fn hybrid_selection_score(
-    evidence: &HybridRankedEvidence,
+    candidate: &HybridSelectionCandidate,
     intent: &HybridRankingIntent,
+    query_context: &HybridSelectionQueryContext,
     seen_classes: &BTreeMap<HybridSourceClass, usize>,
     seen_laravel_ui_surfaces: &BTreeMap<LaravelUiSurfaceClass, usize>,
-    query_text: &str,
 ) -> f32 {
-    let class = hybrid_source_class(&evidence.document.path);
-    let wants_example_or_bench_witnesses = intent.wants_examples || intent.wants_benchmarks;
-    let penalize_generic_runtime_docs =
-        !intent.wants_docs && !intent.wants_onboarding && !intent.wants_readme;
-    let exact_terms = hybrid_query_exact_terms(query_text);
-    let query_overlap_terms = hybrid_query_overlap_terms(query_text);
-    let query_mentions_cli =
-        query_overlap_terms.iter().any(|token| token == "cli") || query_text.contains("cli");
-    let query_has_identifier_anchor = query_overlap_terms.len() > exact_terms.len();
-    let path_overlap = hybrid_path_overlap_count(&evidence.document.path, query_text);
-    let blade_specific_path_overlap =
-        blade_component_specific_path_overlap_count(&evidence.document.path, query_text);
-    let query_has_specific_blade_anchors = intent.wants_blade_component_witnesses
-        && !blade_component_specific_query_terms(query_text).is_empty();
+    let evidence = &candidate.evidence;
+    let class = candidate.static_features.class;
+    let path_overlap = candidate.static_features.path_overlap;
+    let blade_specific_path_overlap = candidate.static_features.blade_specific_path_overlap;
     let seen_count = seen_classes.get(&class).copied().unwrap_or(0);
     let runtime_seen = seen_classes
         .get(&HybridSourceClass::Runtime)
@@ -181,18 +305,41 @@ fn hybrid_selection_score(
         .unwrap_or(0);
     let mut score = evidence.blended_score
         * hybrid_path_quality_multiplier_with_intent(&evidence.document.path, intent);
-    score *= hybrid_canonical_match_multiplier(&evidence.document.path, query_text);
+    score *= candidate.static_features.canonical_match_multiplier;
     if intent.wants_runtime_witnesses {
-        score *= hybrid_runtime_witness_path_overlap_multiplier(
-            &evidence.document.path,
-            class,
-            query_text,
-        );
+        score *= candidate
+            .static_features
+            .runtime_witness_path_overlap_multiplier;
     }
-    if intent.wants_entrypoint_build_flow
-        && hybrid_excerpt_has_build_flow_anchor(&evidence.excerpt, &query_overlap_terms)
-    {
+    if candidate.static_features.excerpt_has_build_flow_anchor {
         score *= 1.12;
+    }
+    if !query_context.exact_terms.is_empty()
+        && (intent.wants_contracts || intent.wants_error_taxonomy || intent.wants_tool_contracts)
+    {
+        if candidate
+            .static_features
+            .excerpt_has_exact_identifier_anchor
+        {
+            score += if seen_count == 0 { 0.78 } else { 0.38 };
+            if matches!(
+                class,
+                HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+            ) {
+                score += if seen_count == 0 { 0.18 } else { 0.08 };
+            }
+        } else if matches!(
+            class,
+            HybridSourceClass::Runtime
+                | HybridSourceClass::Support
+                | HybridSourceClass::Tests
+                | HybridSourceClass::Documentation
+                | HybridSourceClass::Readme
+                | HybridSourceClass::Fixtures
+                | HybridSourceClass::Playbooks
+        ) {
+            score -= if seen_count == 0 { 0.46 } else { 0.24 };
+        }
     }
 
     if intent.wants_class(class) && seen_count == 0 {
@@ -225,6 +372,22 @@ fn hybrid_selection_score(
         {
             score += 0.10;
         }
+        if candidate
+            .static_features
+            .excerpt_has_exact_identifier_anchor
+            && matches!(
+                class,
+                HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+            )
+        {
+            score += if seen_count == 0 { 0.30 } else { 0.16 };
+        }
+        if matches!(
+            class,
+            HybridSourceClass::Playbooks | HybridSourceClass::Fixtures
+        ) {
+            score -= if seen_count == 0 { 0.42 } else { 0.24 };
+        }
         if is_python_entrypoint_runtime_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.26 } else { 0.14 };
         }
@@ -251,19 +414,19 @@ fn hybrid_selection_score(
                 _ => {}
             }
         }
-        if penalize_generic_runtime_docs
+        if query_context.penalize_generic_runtime_docs
             && is_generic_runtime_witness_doc_path(&evidence.document.path)
             && seen_count > 0
         {
             score -= 0.16 * seen_count as f32;
         }
-        if penalize_generic_runtime_docs
+        if query_context.penalize_generic_runtime_docs
             && is_generic_runtime_witness_doc_path(&evidence.document.path)
             && runtime_seen == 0
         {
             score -= 0.18;
         }
-        if penalize_generic_runtime_docs
+        if query_context.penalize_generic_runtime_docs
             && matches!(
                 class,
                 HybridSourceClass::Documentation | HybridSourceClass::Readme
@@ -287,6 +450,33 @@ fn hybrid_selection_score(
         {
             score -= if seen_count == 0 { 0.12 } else { 0.18 };
         }
+        if !candidate
+            .static_features
+            .excerpt_has_exact_identifier_anchor
+            && !candidate.static_features.has_exact_query_term_match
+            && matches!(
+                class,
+                HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+            )
+        {
+            score -= match path_overlap {
+                0 => {
+                    if seen_count == 0 {
+                        0.24
+                    } else {
+                        0.14
+                    }
+                }
+                1 => {
+                    if class == HybridSourceClass::Runtime {
+                        0.18
+                    } else {
+                        0.10
+                    }
+                }
+                _ => 0.0,
+            };
+        }
         if is_frontend_runtime_noise_path(&evidence.document.path) {
             score -= if runtime_seen == 0 { 0.28 } else { 0.18 };
         }
@@ -296,21 +486,21 @@ fn hybrid_selection_score(
         if intent.wants_benchmarks && is_bench_support_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.44 } else { 0.24 };
         }
-        if wants_example_or_bench_witnesses
+        if query_context.wants_example_or_bench_witnesses
             && class == HybridSourceClass::Tests
             && !is_example_support_path(&evidence.document.path)
             && !is_bench_support_path(&evidence.document.path)
         {
             score -= if seen_count == 0 { 0.34 } else { 0.18 };
         }
-        if wants_example_or_bench_witnesses
+        if query_context.wants_example_or_bench_witnesses
             && class == HybridSourceClass::Runtime
             && !is_example_support_path(&evidence.document.path)
             && !is_bench_support_path(&evidence.document.path)
         {
             score -= if seen_count == 0 { 0.30 } else { 0.16 };
         }
-        if wants_example_or_bench_witnesses
+        if query_context.wants_example_or_bench_witnesses
             && is_test_support_path(&evidence.document.path)
             && Path::new(&evidence.document.path)
                 .file_name()
@@ -353,7 +543,7 @@ fn hybrid_selection_score(
                     2 => 0.74,
                     _ => 1.16,
                 };
-            } else if query_has_specific_blade_anchors
+            } else if query_context.query_has_specific_blade_anchors
                 && is_laravel_blade_component_path(&evidence.document.path)
                 && !intent.wants_laravel_layout_witnesses
             {
@@ -530,14 +720,16 @@ fn hybrid_selection_score(
         }
     }
     if intent.wants_test_witness_recall {
-        if path_has_exact_query_term_match(&evidence.document.path, query_text) {
+        if candidate.static_features.has_exact_query_term_match {
             score += if seen_count == 0 { 2.2 } else { 1.2 };
         }
-        if !wants_example_or_bench_witnesses && is_test_support_path(&evidence.document.path) {
+        if !query_context.wants_example_or_bench_witnesses
+            && is_test_support_path(&evidence.document.path)
+        {
             score += if seen_count == 0 { 0.18 } else { 0.10 };
         }
-        if !wants_example_or_bench_witnesses
-            && query_mentions_cli
+        if !query_context.wants_example_or_bench_witnesses
+            && query_context.query_mentions_cli
             && is_cli_test_support_path(&evidence.document.path)
         {
             score += if seen_count == 0 { 0.84 } else { 0.46 };
@@ -557,13 +749,13 @@ fn hybrid_selection_score(
         if is_frontend_runtime_noise_path(&evidence.document.path) {
             score -= if seen_count == 0 { 0.28 } else { 0.16 };
         }
-        if query_mentions_cli
+        if query_context.query_mentions_cli
             && class == HybridSourceClass::Runtime
             && !is_cli_test_support_path(&evidence.document.path)
         {
             score -= if seen_count == 0 { 0.34 } else { 0.20 };
         }
-        if query_mentions_cli
+        if query_context.query_mentions_cli
             && class == HybridSourceClass::Tests
             && !is_cli_test_support_path(&evidence.document.path)
         {
@@ -573,9 +765,6 @@ fn hybrid_selection_score(
     if intent.wants_navigation_fallbacks {
         if is_navigation_runtime_path(&evidence.document.path) && seen_count == 0 {
             score += 0.14;
-        }
-        if evidence.document.path == "crates/cli/src/mcp/server.rs" {
-            score += 0.08;
         }
         if is_navigation_reference_doc_path(&evidence.document.path) && runtime_seen == 0 {
             score -= 0.18;
@@ -600,7 +789,7 @@ fn hybrid_selection_score(
         if is_scripts_ops_path(&evidence.document.path) {
             score += if seen_count == 0 { 1.24 } else { 0.68 };
         }
-        if path_has_exact_query_term_match(&evidence.document.path, query_text) {
+        if candidate.static_features.has_exact_query_term_match {
             score += if seen_count == 0 { 0.76 } else { 0.40 };
         }
         if matches!(
@@ -635,16 +824,16 @@ fn hybrid_selection_score(
         if is_python_runtime_config_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.16 } else { 0.08 };
         }
-        if query_mentions_cli && is_cli_test_support_path(&evidence.document.path) {
+        if query_context.query_mentions_cli && is_cli_test_support_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.78 } else { 0.42 };
         }
-        if hybrid_excerpt_has_build_flow_anchor(&evidence.excerpt, &query_overlap_terms) {
+        if candidate.static_features.excerpt_has_build_flow_anchor {
             score += 0.16;
         }
-        if hybrid_excerpt_has_test_double_anchor(&evidence.excerpt) {
+        if candidate.static_features.excerpt_has_test_double_anchor {
             score -= 0.24;
         }
-        if query_mentions_cli
+        if query_context.query_mentions_cli
             && class == HybridSourceClass::Runtime
             && !is_cli_test_support_path(&evidence.document.path)
         {
@@ -659,7 +848,8 @@ fn hybrid_selection_score(
         }
         if matches!(class, HybridSourceClass::Tests | HybridSourceClass::Specs)
             && runtime_seen == 0
-            && !(query_mentions_cli && is_cli_test_support_path(&evidence.document.path))
+            && !(query_context.query_mentions_cli
+                && is_cli_test_support_path(&evidence.document.path))
         {
             score -= 0.18;
         }
@@ -673,14 +863,10 @@ fn hybrid_selection_score(
             score -= if runtime_seen == 0 { 0.18 } else { 0.10 };
         }
     }
-    if query_has_identifier_anchor
+    if query_context.query_has_identifier_anchor
         && (intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow)
     {
-        let excerpt_overlap = hybrid_overlap_count(
-            &hybrid_identifier_tokens(&evidence.excerpt),
-            &query_overlap_terms,
-        );
-        let best_overlap = path_overlap.max(excerpt_overlap);
+        let best_overlap = path_overlap.max(candidate.static_features.excerpt_overlap);
         if best_overlap >= 2 {
             score += 0.18;
         } else if best_overlap == 1 {

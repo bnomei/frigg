@@ -6,17 +6,19 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    DocumentSymbolsParams, ExploreOperation, ExploreParams, FindDeclarationsParams,
-    FindImplementationsParams, FindReferencesParams, GoToDefinitionParams, IncomingCallsParams,
-    ListRepositoriesParams, OutgoingCallsParams, ReadFileParams, SearchHybridParams,
-    SearchPatternType, SearchStructuralParams, SearchSymbolParams, SearchSymbolPathClass,
-    SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceIndexComponentState,
-    WorkspaceResolveMode, WorkspaceStorageIndexState,
+    DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
+    FindDeclarationsParams, FindImplementationsParams, FindReferencesParams, GoToDefinitionParams,
+    IncomingCallsParams, ListRepositoriesParams, OutgoingCallsParams, ReadFileParams,
+    SearchHybridParams, SearchPatternType, SearchStructuralParams, SearchSymbolParams,
+    SearchSymbolPathClass, SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceIndexComponentState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
-use frigg::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
+use frigg::settings::{
+    FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
+};
 use frigg::storage::{
-    ManifestEntry, SemanticChunkEmbeddingRecord, Storage, ensure_provenance_db_parent_dir,
-    resolve_provenance_db_path,
+    DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, Storage,
+    ensure_provenance_db_parent_dir, resolve_provenance_db_path,
 };
 use protobuf::{EnumOrUnknown, Message};
 use rmcp::handler::server::wrapper::Parameters;
@@ -173,6 +175,8 @@ fn semantic_record(
     chunk_index: usize,
     embedding: Vec<f32>,
 ) -> SemanticChunkEmbeddingRecord {
+    let mut embedding = embedding;
+    embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
     SemanticChunkEmbeddingRecord {
         chunk_id: format!("chunk-{}-{chunk_index}", path.replace('/', "_")),
         repository_id: repository_id.to_owned(),
@@ -360,6 +364,23 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         .expect("workspace_current should return attached repository");
     assert_eq!(current_repository.repository_id, "repo-001");
     assert!(current_repository.health.is_some());
+    assert_eq!(current.repositories.len(), 1);
+    assert_eq!(current.repositories[0].repository_id, "repo-001");
+    let runtime = current
+        .runtime
+        .as_ref()
+        .expect("workspace_current should expose runtime status");
+    assert_eq!(runtime.profile, RuntimeProfile::StdioEphemeral);
+    assert!(!runtime.persistent_state_available);
+    assert!(!runtime.watch_active);
+    assert_eq!(runtime.status_tool, "workspace_current");
+    assert!(
+        runtime
+            .recent_provenance
+            .iter()
+            .any(|event| event.tool_name == "workspace_attach"),
+        "workspace_current should surface recent provenance from prior attach"
+    );
 }
 
 #[tokio::test]
@@ -913,6 +934,22 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
     assert_eq!(first.matches.len(), 1);
     assert_eq!(first.matches[0].repository_id, "repo-001");
     assert_eq!(first.matches[0].path, "src/lib.rs");
+    assert_eq!(first.matches[0].line, 2);
+    assert_eq!(first.matches[0].column, 6);
+    assert_eq!(
+        first.matches[0]
+            .anchor
+            .as_ref()
+            .map(|anchor| anchor.start_line),
+        Some(2)
+    );
+    assert_eq!(
+        first.matches[0]
+            .anchor
+            .as_ref()
+            .map(|anchor| anchor.start_column),
+        Some(6)
+    );
     assert_eq!(first.semantic_requested, None);
     assert_eq!(first.semantic_enabled, None);
     assert_eq!(first.semantic_status, None);
@@ -928,6 +965,33 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
 
     let structured: serde_json::Value =
         serde_json::to_value(&first).expect("search_hybrid response should serialize");
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("channels"))
+            .and_then(|value| value.get("lexical_manifest"))
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str()),
+        Some("ok")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("channels"))
+            .and_then(|value| value.get("path_surface_witness"))
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str()),
+        Some("filtered")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("channels"))
+            .and_then(|value| value.get("semantic"))
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str()),
+        Some("disabled")
+    );
     assert_eq!(
         structured
             .get("metadata")
@@ -1001,6 +1065,35 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             "search_hybrid should omit duplicate top-level field `{field}` when metadata is present"
         );
     }
+    assert!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("stage_attribution"))
+            .and_then(|value| value.get("candidate_intake"))
+            .and_then(|value| value.get("output_count"))
+            .and_then(|value| value.as_u64())
+            .is_some_and(|value| value >= 1),
+        "search_hybrid metadata should expose candidate intake counts"
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("stage_attribution"))
+            .and_then(|value| value.get("semantic_retrieval"))
+            .and_then(|value| value.get("output_count"))
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("stage_attribution"))
+            .and_then(|value| value.get("scan"))
+            .and_then(|value| value.get("elapsed_us"))
+            .and_then(|value| value.as_u64())
+            .is_some(),
+        "search_hybrid metadata should expose additive stage attribution"
+    );
     assert_eq!(
         structured
             .get("metadata")
@@ -1012,6 +1105,16 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             .and_then(|value| value.get("semantic_status"))
             .and_then(|value| value.as_str()),
         "metadata-only semantic status should remain deterministic"
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("stage_attribution")),
+        second
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("stage_attribution")),
+        "cached search_hybrid responses should keep stage attribution stable within the session"
     );
 }
 
@@ -1077,6 +1180,14 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         .metadata
         .as_ref()
         .expect("search_hybrid should emit structured metadata");
+    assert_eq!(
+        metadata
+            .get("channels")
+            .and_then(|value| value.get("semantic"))
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str()),
+        Some("degraded")
+    );
     assert_eq!(
         metadata
             .get("semantic_status")
@@ -1427,6 +1538,33 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
     assert_eq!(zoom_error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&zoom_error), Some("invalid_params"));
     assert_eq!(zoom_error.message, "query is not allowed for zoom");
+
+    let refine_error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Refine,
+            query: Some("demo".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: Some(ExploreAnchor {
+                start_line: 1,
+                start_column: 8,
+                end_line: 1,
+                end_column: 12,
+            }),
+            context_lines: Some(0),
+            max_matches: Some(1),
+            resume_from: Some(ExploreCursor { line: 2, column: 1 }),
+        }))
+        .await
+        .err()
+        .expect("refine with resume_from outside scan scope should fail");
+    assert_eq!(refine_error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&refine_error), Some("invalid_params"));
+    assert_eq!(
+        refine_error.message,
+        "resume_from must stay within the refine scan scope"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }

@@ -22,8 +22,16 @@ pub(super) fn ensure_sqlite_vec_auto_extension_registered() -> FriggResult<()> {
 }
 
 pub(super) fn ensure_sqlite_vec_registration_readiness(conn: &Connection) -> FriggResult<()> {
-    let _ = detect_sqlite_vec_version(conn)?;
-    Ok(())
+    cached_sqlite_vec_version(conn).map(|_| ())
+}
+
+fn cached_sqlite_vec_version(conn: &Connection) -> FriggResult<String> {
+    let readiness = SQLITE_VEC_CONNECTION_READINESS
+        .get_or_init(|| detect_sqlite_vec_version(conn).map_err(|err| err.to_string()));
+    readiness
+        .as_ref()
+        .cloned()
+        .map_err(|message| FriggError::Internal(message.clone()))
 }
 
 pub(super) fn validate_semantic_chunk_embedding_record(
@@ -202,7 +210,7 @@ pub(crate) fn ensure_sqlite_vec_pinned_version(runtime_version: &str) -> FriggRe
 
 fn create_sqlite_vec_table(conn: &Connection, expected_dimensions: usize) -> FriggResult<()> {
     let statement = format!(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS {VECTOR_TABLE_NAME} USING vec0(embedding float[{expected_dimensions}]);"
+        "CREATE VIRTUAL TABLE IF NOT EXISTS {VECTOR_TABLE_NAME} USING vec0(embedding float[{expected_dimensions}] distance_metric=cosine, repository_id text partition key, snapshot_id text partition key, provider text partition key, model text partition key, language text, +chunk_id text);"
     );
 
     conn.execute_batch(&statement).map_err(|err| {
@@ -212,6 +220,43 @@ fn create_sqlite_vec_table(conn: &Connection, expected_dimensions: usize) -> Fri
     })?;
 
     Ok(())
+}
+
+fn drop_sqlite_vec_table(conn: &Connection) -> FriggResult<()> {
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "vector subsystem not ready: failed to drop vector table '{VECTOR_TABLE_NAME}': {err}"
+            ))
+        })?;
+    Ok(())
+}
+
+fn sqlite_vec_table_has_expected_projection_schema(
+    conn: &Connection,
+    expected_dimensions: usize,
+) -> FriggResult<bool> {
+    if !table_exists(conn, VECTOR_TABLE_NAME)? {
+        return Ok(false);
+    }
+
+    let schema_sql = read_vector_table_schema_sql(conn)?;
+    let normalized = schema_sql.to_ascii_lowercase();
+    let expected_dimensions_fragment =
+        format!("embedding float[{expected_dimensions}] distance_metric=cosine");
+    let required_fragments = [
+        expected_dimensions_fragment.as_str(),
+        "repository_id text partition key",
+        "snapshot_id text partition key",
+        "provider text partition key",
+        "model text partition key",
+        "language text",
+        "+chunk_id text",
+    ];
+
+    Ok(required_fragments
+        .into_iter()
+        .all(|fragment| normalized.contains(fragment)))
 }
 
 fn verify_sqlite_vec_table_schema(
@@ -225,11 +270,9 @@ fn verify_sqlite_vec_table_schema(
     }
 
     let schema_sql = read_vector_table_schema_sql(conn)?;
-
-    let expected = format!("float[{expected_dimensions}]");
-    if !schema_sql.to_lowercase().contains(&expected) {
+    if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: vector table dimensions mismatch (found schema '{schema_sql}', expected fragment '{expected}')"
+            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/snapshot/provider/model partition keys and language/chunk_id metadata)"
         )));
     }
 
@@ -310,6 +353,10 @@ pub(crate) fn initialize_vector_store_on_connection_with_detected_capability(
             Ok(sqlite_vec_status(extension_version, expected_dimensions))
         }
         ExistingVectorStoreBackend::SqliteVec => {
+            if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
+                drop_sqlite_vec_table(conn)?;
+                create_sqlite_vec_table(conn, expected_dimensions)?;
+            }
             verify_sqlite_vec_table_schema(conn, expected_dimensions)?;
             Ok(sqlite_vec_status(extension_version, expected_dimensions))
         }
@@ -341,7 +388,7 @@ pub(super) fn initialize_vector_store_on_connection(
     conn: &Connection,
     expected_dimensions: usize,
 ) -> FriggResult<VectorStoreStatus> {
-    let sqlite_vec_version = detect_sqlite_vec_version(conn)?;
+    let sqlite_vec_version = cached_sqlite_vec_version(conn)?;
     initialize_vector_store_on_connection_with_detected_capability(
         conn,
         expected_dimensions,
@@ -353,7 +400,7 @@ pub(super) fn verify_vector_store_on_connection(
     conn: &Connection,
     expected_dimensions: usize,
 ) -> FriggResult<VectorStoreStatus> {
-    let sqlite_vec_version = detect_sqlite_vec_version(conn)?;
+    let sqlite_vec_version = cached_sqlite_vec_version(conn)?;
     verify_vector_store_on_connection_with_detected_capability(
         conn,
         expected_dimensions,

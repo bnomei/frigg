@@ -5,7 +5,7 @@
 This benchmark plan tracks MCP tool-call latency for:
 
 - core read-only MCP runtime tools
-- feature-gated deep-search MCP runtime tools (`extended` profile)
+- feature-gated extended MCP runtime tools (`extended` profile)
 
 - `list_repositories`
 - `read_file`
@@ -20,6 +20,7 @@ This benchmark plan tracks MCP tool-call latency for:
 - `outgoing_calls`
 - `document_symbols`
 - `search_structural`
+- `explore` (`extended` profile only)
 - `deep_search_run` (`extended` profile only)
 - `deep_search_replay` (`extended` profile only)
 - `deep_search_compose_citations` (`extended` profile only)
@@ -57,52 +58,61 @@ The harness is deterministic by construction:
 3. `search_text/literal-scoped`
 - purpose: text search latency through MCP wrapper
 
-4. `search_symbol/tree-sitter`
+4. `explore/probe`
+- purpose: single-artifact streaming probe latency via MCP
+
+5. `explore/zoom`
+- purpose: single-artifact bounded window extraction latency via MCP
+
+6. `explore/refine`
+- purpose: single-artifact anchor-scoped search latency via MCP
+
+7. `search_symbol/tree-sitter`
 - purpose: symbol extraction + indexed exact/prefix ranking latency via MCP, with bounded infix fallback only when higher-ranked buckets underfill the limit
 
-5. `find_references/heuristic`
+8. `find_references/heuristic`
 - purpose: heuristic reference resolution latency via MCP
 
-6. `find_references/precise`
+9. `find_references/precise`
 - purpose: precise SCIP-backed reference resolution latency via MCP
 
-7. `go_to_definition/precise-symbol`
+10. `go_to_definition/precise-symbol`
 - purpose: precise symbol definition resolution latency via MCP
 
-8. `find_declarations/precise-symbol`
+11. `find_declarations/precise-symbol`
 - purpose: precise declaration-anchor (v1 definition-anchor) latency via MCP
 
-9. `find_implementations/precise-relationships`
+12. `find_implementations/precise-relationships`
 - purpose: precise implementation relationship traversal latency via MCP
 
-10. `incoming_calls/precise-relationships`
+13. `incoming_calls/precise-relationships`
 - purpose: precise incoming call-hierarchy traversal latency via MCP
 
-11. `outgoing_calls/precise-relationships`
+14. `outgoing_calls/precise-relationships`
 - purpose: precise outgoing call-hierarchy traversal latency via MCP
 
-12. `document_symbols/single-rust-file`
+15. `document_symbols/single-rust-file`
 - purpose: deterministic per-file symbol-outline extraction latency via MCP for in-budget Rust/PHP files; over-budget requests are excluded because they now fail before whole-file reads
 
-13. `search_structural/rust-function-scoped`
+16. `search_structural/rust-function-scoped`
 - purpose: deterministic Rust tree-sitter structural search latency via MCP
 
-14. `deep_search_run/basic-playbook`
+17. `deep_search_run/basic-playbook`
 - purpose: deterministic deep-search playbook execution latency through MCP runtime handler
 
-15. `search_hybrid/semantic-toggle-off`
+18. `search_hybrid/semantic-toggle-off`
 - purpose: deterministic MCP hybrid retrieval path with semantic channel explicitly disabled by request toggle
 
-16. `search_hybrid/semantic-degraded-missing-credentials`
+19. `search_hybrid/semantic-degraded-missing-credentials`
 - purpose: deterministic MCP hybrid retrieval fallback path where semantic channel degrades from semantic startup-validation failure in non-strict mode
 
-17. `deep_search_replay/basic-playbook`
+20. `deep_search_replay/basic-playbook`
 - purpose: deterministic deep-search replay + diff latency through MCP runtime handler
 
-18. `deep_search_compose_citations/basic-playbook`
+21. `deep_search_compose_citations/basic-playbook`
 - purpose: deterministic deep-search citation payload composition latency through MCP runtime handler
 
-19. `provenance_write_overhead/read-file-repeated-16x`
+22. `provenance_write_overhead/read-file-repeated-16x`
 - purpose: repeated `read_file` path including deterministic provenance write overhead
 
 ## Budget Targets
@@ -116,6 +126,9 @@ Current MCP targets (ms):
 - `list_repositories/default`: p50 <= 5, p95 <= 15, p99 <= 25
 - `read_file/single-rust-file`: p50 <= 10, p95 <= 30, p99 <= 45
 - `search_text/literal-scoped`: p50 <= 20, p95 <= 50, p99 <= 80
+- `explore/probe`: p50 <= 25, p95 <= 60, p99 <= 90
+- `explore/zoom`: p50 <= 20, p95 <= 45, p99 <= 70
+- `explore/refine`: p50 <= 25, p95 <= 60, p99 <= 90
 - `search_symbol/tree-sitter`: p50 <= 80, p95 <= 180, p99 <= 260
 - `find_references/heuristic`: p50 <= 120, p95 <= 260, p99 <= 360
 - `find_references/precise`: p50 <= 150, p95 <= 300, p99 <= 420

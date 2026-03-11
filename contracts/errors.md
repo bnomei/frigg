@@ -52,6 +52,8 @@ Use this template to pin deterministic mappings for each public tool.
 | `search_text` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
 | `search_hybrid` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
 | `search_symbol` | no repositories attached and no session default available | `resource_not_found` | `false` | `-32004` | `attached_repositories`, `action`, `hint` |
+| `find_references` | invalid symbol/location payload (`symbol` empty OR missing both symbol and (`path`,`line`) OR empty `path` OR location missing `line`) | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
+| `find_references` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
 | `go_to_definition` | `symbol` empty OR missing both symbol and (`path`,`line`) | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
 | `go_to_definition` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
 | `find_declarations` | invalid symbol/location payload | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
@@ -62,7 +64,7 @@ Use this template to pin deterministic mappings for each public tool.
 | `incoming_calls` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
 | `outgoing_calls` | invalid symbol/location payload | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
 | `outgoing_calls` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
-| `document_symbols` | unsupported file extension (non-Rust/PHP) | `invalid_params` | `false` | `-32602` | `path`, `supported_extensions` |
+| `document_symbols` | unsupported file extension (non-Rust/PHP/Blade) | `invalid_params` | `false` | `-32602` | `path`, `supported_extensions` |
 | `document_symbols` | source file exceeds configured byte budget | `invalid_params` | `false` | `-32602` | `path`, `bytes`, `max_bytes`, `config_max_file_bytes` |
 | `document_symbols` | file path/repository not found | `resource_not_found` | `false` | `-32004` | `repository_id`, `path` |
 | `search_structural` | empty/oversized query, unsupported language, invalid `path_regex`, invalid tree-sitter query | `invalid_params` | `false` | `-32602` | `query` and/or `language` and/or `path_regex` |

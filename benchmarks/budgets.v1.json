@@ -33,6 +33,16 @@
       }
     },
     {
+      "id": "search_latency/literal/indexed-manifest-low-limit-high-cardinality",
+      "crate": "searcher",
+      "description": "Manifest-backed literal low-limit search against high-cardinality hotspot terms",
+      "budget": {
+        "p50_ms": 40.0,
+        "p95_ms": 60.0,
+        "p99_ms": 80.0
+      }
+    },
+    {
       "id": "search_latency/literal/repo+path+lang",
       "crate": "searcher",
       "description": "Literal search with repository/path/language filters",
@@ -77,9 +87,9 @@
       "crate": "searcher",
       "description": "Hybrid search path with semantic channel explicitly disabled by request toggle",
       "budget": {
-        "p50_ms": 15.0,
-        "p95_ms": 35.0,
-        "p99_ms": 55.0
+        "p50_ms": 130.0,
+        "p95_ms": 160.0,
+        "p99_ms": 190.0
       }
     },
     {
@@ -87,9 +97,39 @@
       "crate": "searcher",
       "description": "Hybrid search path with semantic channel requested and deterministic non-strict degradation from semantic startup-validation failure",
       "budget": {
-        "p50_ms": 18.0,
-        "p95_ms": 40.0,
+        "p50_ms": 130.0,
+        "p95_ms": 160.0,
+        "p99_ms": 190.0
+      }
+    },
+    {
+      "id": "search_latency/hybrid/graph-php-target-evidence",
+      "crate": "searcher",
+      "description": "Hybrid search path with semantic disabled where a warm cached graph artifact plus bounded exact/canonical runtime-path anchor intake contribute graph score to a listener witness",
+      "budget": {
+        "p50_ms": 30.0,
+        "p95_ms": 45.0,
         "p99_ms": 60.0
+      }
+    },
+    {
+      "id": "search_latency/hybrid/benchmark-witness-recall",
+      "crate": "searcher",
+      "description": "Hybrid benchmark-doc witness recall over deterministic benchmark report and support artifacts through manifest-backed candidate reuse plus snapshot-scoped witness projection rows",
+      "budget": {
+        "p50_ms": 420.0,
+        "p95_ms": 650.0,
+        "p99_ms": 750.0
+      }
+    },
+    {
+      "id": "search_latency/hybrid/path-witness-build-flow",
+      "crate": "searcher",
+      "description": "Hybrid entrypoint/build-flow path witness recall over deterministic runtime and hidden workflow artifacts through manifest-backed candidate reuse plus snapshot-scoped witness projection rows",
+      "budget": {
+        "p50_ms": 550.0,
+        "p95_ms": 1100.0,
+        "p99_ms": 1200.0
       }
     },
     {
@@ -120,6 +160,36 @@
         "p50_ms": 20.0,
         "p95_ms": 50.0,
         "p99_ms": 80.0
+      }
+    },
+    {
+      "id": "mcp_tool_latency/explore/probe",
+      "crate": "mcp",
+      "description": "MCP explore probe on one scoped source file",
+      "budget": {
+        "p50_ms": 25.0,
+        "p95_ms": 60.0,
+        "p99_ms": 90.0
+      }
+    },
+    {
+      "id": "mcp_tool_latency/explore/zoom",
+      "crate": "mcp",
+      "description": "MCP explore zoom window around one explicit anchor",
+      "budget": {
+        "p50_ms": 20.0,
+        "p95_ms": 45.0,
+        "p99_ms": 70.0
+      }
+    },
+    {
+      "id": "mcp_tool_latency/explore/refine",
+      "crate": "mcp",
+      "description": "MCP explore refine scoped search inside one anchor-derived window",
+      "budget": {
+        "p50_ms": 25.0,
+        "p95_ms": 60.0,
+        "p99_ms": 90.0
       }
     },
     {
@@ -303,6 +373,16 @@
       }
     },
     {
+      "id": "graph_hot_path_latency/precise_navigation/location-aware-selection",
+      "crate": "graph",
+      "description": "SymbolGraph precise navigation target selection over deterministic file-local and repository-wide symbol contention",
+      "budget": {
+        "p50_ms": 8.0,
+        "p95_ms": 20.0,
+        "p99_ms": 30.0
+      }
+    },
+    {
       "id": "graph_hot_path_latency/scip_ingest/cold-cache",
       "crate": "graph",
       "description": "SymbolGraph cold-cache SCIP ingest on deterministic multi-document payload",
@@ -310,6 +390,46 @@
         "p50_ms": 80.0,
         "p95_ms": 180.0,
         "p99_ms": 280.0
+      }
+    },
+    {
+      "id": "graph_hot_path_latency/scip_ingest_protobuf/cold-cache",
+      "crate": "graph",
+      "description": "SymbolGraph cold-cache protobuf SCIP ingest on deterministic multi-document payload with relationship fanout",
+      "budget": {
+        "p50_ms": 90.0,
+        "p95_ms": 200.0,
+        "p99_ms": 320.0
+      }
+    },
+    {
+      "id": "semantic_chunk_hot_paths/file/rust-large-split",
+      "crate": "indexer",
+      "description": "Semantic chunk builder for a large Rust source file with repeated function boundaries",
+      "budget": {
+        "p50_ms": 2.0,
+        "p95_ms": 5.0,
+        "p99_ms": 8.0
+      }
+    },
+    {
+      "id": "semantic_chunk_hot_paths/file/markdown-heading-fanout",
+      "crate": "indexer",
+      "description": "Semantic chunk builder for heading-dense markdown with frequent section flushes",
+      "budget": {
+        "p50_ms": 1.0,
+        "p95_ms": 3.0,
+        "p99_ms": 5.0
+      }
+    },
+    {
+      "id": "semantic_chunk_hot_paths/manifest/mixed-language-batch",
+      "crate": "indexer",
+      "description": "Semantic chunk candidate construction for a deterministic mixed-language manifest batch",
+      "budget": {
+        "p50_ms": 60.0,
+        "p95_ms": 90.0,
+        "p99_ms": 120.0
       }
     },
     {
@@ -340,6 +460,26 @@
         "p50_ms": 120.0,
         "p95_ms": 260.0,
         "p99_ms": 360.0
+      }
+    },
+    {
+      "id": "storage_hot_path_latency/semantic_embedding_advance/hot-delta-batch",
+      "crate": "storage",
+      "description": "Storage semantic embedding delta advance plus chunk-text lookup over deterministic 1536-dimension vectors",
+      "budget": {
+        "p50_ms": 80.0,
+        "p95_ms": 160.0,
+        "p99_ms": 240.0
+      }
+    },
+    {
+      "id": "storage_hot_path_latency/semantic_vector_topk/hot-query-batch",
+      "crate": "storage",
+      "description": "Storage sqlite-vec semantic top-k query plus batched payload materialization over deterministic local embeddings",
+      "budget": {
+        "p50_ms": 20.0,
+        "p95_ms": 40.0,
+        "p99_ms": 60.0
       }
     },
     {

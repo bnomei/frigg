@@ -1,0 +1,255 @@
+{
+  "report_version": "v1",
+  "workloads": [
+    {
+      "id": "search_latency/hybrid/semantic-toggle-off",
+      "stage_attribution": {
+        "candidate_intake": {
+          "elapsed_us": 769,
+          "input_count": 2,
+          "output_count": 123
+        },
+        "freshness_validation": {
+          "elapsed_us": 0,
+          "input_count": 2,
+          "output_count": 0
+        },
+        "scan": {
+          "elapsed_us": 89,
+          "input_count": 123,
+          "output_count": 12
+        },
+        "witness_scoring": {
+          "elapsed_us": 0,
+          "input_count": 123,
+          "output_count": 0
+        },
+        "graph_expansion": {
+          "elapsed_us": 0,
+          "input_count": 12,
+          "output_count": 0
+        },
+        "semantic_retrieval": {
+          "elapsed_us": 0,
+          "input_count": 200,
+          "output_count": 0
+        },
+        "anchor_blending": {
+          "elapsed_us": 5,
+          "input_count": 12,
+          "output_count": 12
+        },
+        "document_aggregation": {
+          "elapsed_us": 3,
+          "input_count": 12,
+          "output_count": 1
+        },
+        "final_diversification": {
+          "elapsed_us": 15,
+          "input_count": 1,
+          "output_count": 1
+        }
+      }
+    },
+    {
+      "id": "search_latency/hybrid/semantic-degraded-missing-credentials",
+      "stage_attribution": {
+        "candidate_intake": {
+          "elapsed_us": 734,
+          "input_count": 2,
+          "output_count": 123
+        },
+        "freshness_validation": {
+          "elapsed_us": 0,
+          "input_count": 2,
+          "output_count": 0
+        },
+        "scan": {
+          "elapsed_us": 92,
+          "input_count": 123,
+          "output_count": 12
+        },
+        "witness_scoring": {
+          "elapsed_us": 0,
+          "input_count": 123,
+          "output_count": 0
+        },
+        "graph_expansion": {
+          "elapsed_us": 0,
+          "input_count": 12,
+          "output_count": 0
+        },
+        "semantic_retrieval": {
+          "elapsed_us": 0,
+          "input_count": 200,
+          "output_count": 0
+        },
+        "anchor_blending": {
+          "elapsed_us": 5,
+          "input_count": 12,
+          "output_count": 12
+        },
+        "document_aggregation": {
+          "elapsed_us": 3,
+          "input_count": 12,
+          "output_count": 1
+        },
+        "final_diversification": {
+          "elapsed_us": 14,
+          "input_count": 1,
+          "output_count": 1
+        }
+      }
+    },
+    {
+      "id": "search_latency/hybrid/graph-php-target-evidence",
+      "stage_attribution": {
+        "candidate_intake": {
+          "elapsed_us": 758,
+          "input_count": 2,
+          "output_count": 123
+        },
+        "freshness_validation": {
+          "elapsed_us": 0,
+          "input_count": 2,
+          "output_count": 0
+        },
+        "scan": {
+          "elapsed_us": 718,
+          "input_count": 123,
+          "output_count": 3
+        },
+        "witness_scoring": {
+          "elapsed_us": 452,
+          "input_count": 123,
+          "output_count": 3
+        },
+        "graph_expansion": {
+          "elapsed_us": 200,
+          "input_count": 4,
+          "output_count": 5
+        },
+        "semantic_retrieval": {
+          "elapsed_us": 0,
+          "input_count": 200,
+          "output_count": 0
+        },
+        "anchor_blending": {
+          "elapsed_us": 10,
+          "input_count": 11,
+          "output_count": 10
+        },
+        "document_aggregation": {
+          "elapsed_us": 4,
+          "input_count": 10,
+          "output_count": 3
+        },
+        "final_diversification": {
+          "elapsed_us": 49,
+          "input_count": 3,
+          "output_count": 3
+        }
+      }
+    },
+    {
+      "id": "search_latency/hybrid/benchmark-witness-recall",
+      "stage_attribution": {
+        "candidate_intake": {
+          "elapsed_us": 104,
+          "input_count": 2,
+          "output_count": 133
+        },
+        "freshness_validation": {
+          "elapsed_us": 1751,
+          "input_count": 2,
+          "output_count": 2
+        },
+        "scan": {
+          "elapsed_us": 881,
+          "input_count": 133,
+          "output_count": 16
+        },
+        "witness_scoring": {
+          "elapsed_us": 601,
+          "input_count": 133,
+          "output_count": 6
+        },
+        "graph_expansion": {
+          "elapsed_us": 0,
+          "input_count": 16,
+          "output_count": 0
+        },
+        "semantic_retrieval": {
+          "elapsed_us": 0,
+          "input_count": 200,
+          "output_count": 0
+        },
+        "anchor_blending": {
+          "elapsed_us": 13,
+          "input_count": 16,
+          "output_count": 16
+        },
+        "document_aggregation": {
+          "elapsed_us": 5,
+          "input_count": 16,
+          "output_count": 6
+        },
+        "final_diversification": {
+          "elapsed_us": 104,
+          "input_count": 6,
+          "output_count": 6
+        }
+      }
+    },
+    {
+      "id": "search_latency/hybrid/path-witness-build-flow",
+      "stage_attribution": {
+        "candidate_intake": {
+          "elapsed_us": 120,
+          "input_count": 2,
+          "output_count": 133
+        },
+        "freshness_validation": {
+          "elapsed_us": 1933,
+          "input_count": 2,
+          "output_count": 2
+        },
+        "scan": {
+          "elapsed_us": 1372,
+          "input_count": 133,
+          "output_count": 48
+        },
+        "witness_scoring": {
+          "elapsed_us": 1003,
+          "input_count": 133,
+          "output_count": 8
+        },
+        "graph_expansion": {
+          "elapsed_us": 61,
+          "input_count": 16,
+          "output_count": 0
+        },
+        "semantic_retrieval": {
+          "elapsed_us": 0,
+          "input_count": 200,
+          "output_count": 0
+        },
+        "anchor_blending": {
+          "elapsed_us": 13,
+          "input_count": 16,
+          "output_count": 16
+        },
+        "document_aggregation": {
+          "elapsed_us": 5,
+          "input_count": 16,
+          "output_count": 8
+        },
+        "final_diversification": {
+          "elapsed_us": 252,
+          "input_count": 8,
+          "output_count": 8
+        }
+      }
+    }
+  ]
+}

@@ -1,9 +1,13 @@
-use crate::domain::model::{ReferenceMatch, SymbolMatch, TextMatch};
+use crate::domain::{
+    EvidenceAnchor,
+    model::{ReferenceMatch, SymbolMatch, TextMatch},
+};
+use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::mcp::deep_search::{
+use crate::mcp::advanced::deep_search::{
     DeepSearchCitation as InternalDeepSearchCitation,
     DeepSearchCitationPayload as InternalDeepSearchCitationPayload,
     DeepSearchClaim as InternalDeepSearchClaim, DeepSearchFileSpan as InternalDeepSearchFileSpan,
@@ -144,6 +148,64 @@ pub struct WorkspaceCurrentParams {}
 pub struct WorkspaceCurrentResponse {
     pub repository: Option<RepositorySummary>,
     pub session_default: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepositorySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeStatusSummary>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTaskKind {
+    ChangedReindex,
+    SemanticRefresh,
+    PrecisePrewarm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTaskStatus {
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeTaskSummary {
+    pub task_id: String,
+    pub kind: RuntimeTaskKind,
+    pub status: RuntimeTaskStatus,
+    pub repository_id: String,
+    pub phase: String,
+    pub created_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RecentProvenanceSummary {
+    pub trace_id: String,
+    pub tool_name: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeStatusSummary {
+    pub profile: RuntimeProfile,
+    pub persistent_state_available: bool,
+    pub watch_active: bool,
+    pub tool_surface_profile: String,
+    pub status_tool: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_tasks: Vec<RuntimeTaskSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tasks: Vec<RuntimeTaskSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_provenance: Vec<RecentProvenanceSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -320,6 +382,8 @@ pub struct SearchHybridMatch {
     pub line: usize,
     pub column: usize,
     pub excerpt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<EvidenceAnchor>,
     pub blended_score: f32,
     pub lexical_score: f32,
     pub graph_score: f32,
@@ -353,7 +417,7 @@ pub struct SearchHybridResponse {
     /// Legacy top-level compatibility mirror of `metadata.warning`; live responses may omit this when structured metadata is present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
-    /// Canonical structured semantic diagnostics payload for live responses.
+    /// Canonical structured multi-channel diagnostics payload for live responses; includes `channels` plus flat semantic compatibility mirrors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
     /// Legacy JSON-encoded compatibility metadata; live responses may omit this when structured metadata is present.

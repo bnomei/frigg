@@ -14,9 +14,11 @@
     "query"
   ],
   "output_fields": [
+    "total_matches",
     "matches"
   ],
   "output_required": [
+    "total_matches",
     "matches"
   ]
 }

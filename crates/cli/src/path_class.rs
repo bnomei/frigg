@@ -1,4 +1,6 @@
-pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
+use crate::domain::PathClass;
+
+pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let normalized = relative_path.trim_start_matches("./");
     let components = normalized
         .split('/')
@@ -10,34 +12,37 @@ pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
             "benches" | "bench" | "examples" | "example" | "tests" | "test"
         )
     }) {
-        "support"
+        PathClass::Support
     } else if normalized == "bootstrap/app.php"
         || normalized.starts_with("app/")
         || normalized.starts_with("bootstrap/")
         || normalized.starts_with("routes/")
     {
-        "runtime"
+        PathClass::Runtime
     } else if normalized.starts_with("resources/views/") {
-        "support"
+        PathClass::Support
     } else if components.iter().any(|component| *component == "src") {
-        "runtime"
+        PathClass::Runtime
     } else {
-        "project"
+        PathClass::Project
     }
 }
 
+pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
+    classify_repository_path(relative_path).as_str()
+}
+
 pub(crate) fn repository_path_class_rank(path_class: &str) -> u8 {
-    match path_class {
-        "runtime" => 0,
-        "project" => 1,
-        "support" => 2,
-        _ => 3,
-    }
+    PathClass::from_str(path_class)
+        .map(PathClass::rank)
+        .unwrap_or(3)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::repository_path_class;
+    use crate::domain::PathClass;
+
+    use super::{classify_repository_path, repository_path_class};
 
     #[test]
     fn repository_path_class_treats_laravel_runtime_surfaces_as_runtime() {
@@ -47,6 +52,19 @@ mod tests {
         );
         assert_eq!(repository_path_class("bootstrap/app.php"), "runtime");
         assert_eq!(repository_path_class("routes/web.php"), "runtime");
+    }
+
+    #[test]
+    fn classify_repository_path_returns_typed_classes() {
+        assert_eq!(
+            classify_repository_path("crates/cli/src/mcp/server.rs"),
+            PathClass::Runtime
+        );
+        assert_eq!(
+            classify_repository_path("crates/cli/examples/server.rs"),
+            PathClass::Support
+        );
+        assert_eq!(classify_repository_path("Cargo.toml"), PathClass::Project);
     }
 
     #[test]

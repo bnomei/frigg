@@ -7,29 +7,47 @@ use frigg::graph::{
     PreciseGraphCounts, RelationKind, ScipIngestError, ScipInvalidInputCode, SymbolGraph,
     SymbolNode,
 };
+use protobuf::{EnumOrUnknown, Message};
+use scip::types::{
+    Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
+    Relationship as ScipRelationshipProto, SymbolInformation as ScipSymbolInformationProto,
+};
 use serde_json::json;
 
 const BENCH_REPOSITORY_ID: &str = "repo-001";
 const BENCH_ROOT_SYMBOL_ID: &str = "sym-root-hotpath";
 const BENCH_TARGET_SYMBOL_ID: &str = "sym-target-hotspot";
 const BENCH_PRECISE_SYMBOL_ID: &str = "scip-rust pkg bench#HotType";
+const BENCH_NAVIGATION_FILE_PATH: &str = "src/navigation_hotspot.rs";
+const BENCH_NAVIGATION_TARGET_INDEX: usize = 153;
+const BENCH_NAVIGATION_TARGET_SYMBOL_ID: &str = "scip-rust pkg bench#ServiceHot153";
+const BENCH_NAVIGATION_TARGET_DISPLAY_NAME: &str = "ServiceHot153";
+const BENCH_NAVIGATION_TARGET_LINE: usize = BENCH_NAVIGATION_TARGET_INDEX * 2 + 1;
 const BENCH_OUTPUT_ROOT: &str = "target/criterion";
 
 const WORKLOAD_RELATION_TRAVERSAL: &str = "graph_hot_path_latency/relation_traversal/hot-fanout";
 const WORKLOAD_PRECISE_REFERENCES: &str =
     "graph_hot_path_latency/precise_references/hot-symbol-contention";
+const WORKLOAD_PRECISE_NAVIGATION: &str =
+    "graph_hot_path_latency/precise_navigation/location-aware-selection";
 const WORKLOAD_SCIP_INGEST_COLD_CACHE: &str = "graph_hot_path_latency/scip_ingest/cold-cache";
+const WORKLOAD_SCIP_INGEST_PROTOBUF_COLD_CACHE: &str =
+    "graph_hot_path_latency/scip_ingest_protobuf/cold-cache";
 
 const BENCH_RELATION_SOURCES: usize = 192;
+const BENCH_NAVIGATION_SYMBOLS: usize = 256;
 const BENCH_SCIP_DOCUMENTS: usize = 48;
 const BENCH_SCIP_OCCURRENCES_PER_DOCUMENT: usize = 6;
+const BENCH_SCIP_PROTOBUF_RELATIONSHIPS_PER_DOCUMENT: usize = 2;
 const BENCH_PRECISE_REFERENCE_DOCUMENTS: usize = 96;
 const BENCH_SAMPLE_COUNT: usize = 30;
 const BENCH_WARMUP_SAMPLES: usize = 5;
 
 static RELATION_GRAPH: OnceLock<SymbolGraph> = OnceLock::new();
 static PRECISE_REFERENCE_GRAPH: OnceLock<SymbolGraph> = OnceLock::new();
+static PRECISE_NAVIGATION_GRAPH: OnceLock<SymbolGraph> = OnceLock::new();
 static SCIP_COLD_CACHE_PAYLOAD: OnceLock<Vec<u8>> = OnceLock::new();
+static SCIP_COLD_CACHE_PROTOBUF_PAYLOAD: OnceLock<Vec<u8>> = OnceLock::new();
 
 fn main() {
     graph_hot_path_benchmarks();
@@ -39,10 +57,15 @@ fn graph_hot_path_benchmarks() {
     let relation_graph = RELATION_GRAPH.get_or_init(build_relation_graph_fixture);
     let precise_reference_graph =
         PRECISE_REFERENCE_GRAPH.get_or_init(build_precise_reference_graph_fixture);
+    let precise_navigation_graph =
+        PRECISE_NAVIGATION_GRAPH.get_or_init(build_precise_navigation_graph_fixture);
     let cold_cache_payload = SCIP_COLD_CACHE_PAYLOAD.get_or_init(build_cold_cache_scip_payload);
+    let cold_cache_protobuf_payload =
+        SCIP_COLD_CACHE_PROTOBUF_PAYLOAD.get_or_init(build_cold_cache_scip_protobuf_payload);
 
     assert_relation_traversal_is_deterministic(relation_graph);
     assert_precise_reference_query_is_deterministic(precise_reference_graph);
+    assert_precise_navigation_queries_are_deterministic(precise_navigation_graph);
     assert_typed_invalid_input_is_preserved();
 
     run_workload(WORKLOAD_RELATION_TRAVERSAL, BENCH_SAMPLE_COUNT, 4, || {
@@ -56,6 +79,25 @@ fn graph_hot_path_benchmarks() {
         let references = precise_reference_graph
             .precise_references_for_symbol(BENCH_REPOSITORY_ID, BENCH_PRECISE_SYMBOL_ID);
         std::hint::black_box(references);
+    });
+
+    run_workload(WORKLOAD_PRECISE_NAVIGATION, BENCH_SAMPLE_COUNT, 6, || {
+        let by_location = precise_navigation_graph
+            .select_precise_symbol_for_location(
+                BENCH_REPOSITORY_ID,
+                BENCH_NAVIGATION_FILE_PATH,
+                BENCH_NAVIGATION_TARGET_LINE,
+                Some(10),
+            )
+            .expect("precise navigation location-aware benchmark should resolve a target symbol");
+        let by_navigation = precise_navigation_graph
+            .select_precise_symbol_for_navigation(
+                BENCH_REPOSITORY_ID,
+                BENCH_NAVIGATION_TARGET_SYMBOL_ID,
+                BENCH_NAVIGATION_TARGET_DISPLAY_NAME,
+            )
+            .expect("precise navigation symbol benchmark should resolve a target symbol");
+        std::hint::black_box((by_location, by_navigation));
     });
 
     run_workload(
@@ -79,6 +121,37 @@ fn graph_hot_path_benchmarks() {
                 summary.occurrences_upserted,
                 BENCH_SCIP_DOCUMENTS * BENCH_SCIP_OCCURRENCES_PER_DOCUMENT,
                 "cold-cache fixture must upsert all deterministic occurrences"
+            );
+            std::hint::black_box((summary, graph.precise_counts()));
+        },
+    );
+
+    run_workload(
+        WORKLOAD_SCIP_INGEST_PROTOBUF_COLD_CACHE,
+        BENCH_SAMPLE_COUNT,
+        1,
+        || {
+            let mut graph = SymbolGraph::default();
+            let summary = graph
+                .ingest_scip_protobuf(
+                    BENCH_REPOSITORY_ID,
+                    "bench:scip-protobuf-cold-cache",
+                    cold_cache_protobuf_payload,
+                )
+                .expect("cold-cache protobuf SCIP ingest benchmark should succeed");
+            assert_eq!(
+                summary.documents_ingested, BENCH_SCIP_DOCUMENTS,
+                "cold-cache protobuf fixture must ingest every deterministic document"
+            );
+            assert_eq!(
+                summary.occurrences_upserted,
+                BENCH_SCIP_DOCUMENTS * BENCH_SCIP_OCCURRENCES_PER_DOCUMENT,
+                "cold-cache protobuf fixture must upsert all deterministic occurrences"
+            );
+            assert_eq!(
+                summary.relationships_upserted,
+                BENCH_SCIP_DOCUMENTS * BENCH_SCIP_PROTOBUF_RELATIONSHIPS_PER_DOCUMENT,
+                "cold-cache protobuf fixture must map the deterministic relationship fanout"
             );
             std::hint::black_box((summary, graph.precise_counts()));
         },
@@ -209,6 +282,19 @@ fn build_precise_reference_graph_fixture() -> SymbolGraph {
     graph
 }
 
+fn build_precise_navigation_graph_fixture() -> SymbolGraph {
+    let mut graph = SymbolGraph::default();
+    let payload = build_precise_navigation_payload();
+    graph
+        .ingest_scip_json(
+            BENCH_REPOSITORY_ID,
+            "bench:precise-navigation-location-aware",
+            &payload,
+        )
+        .expect("precise navigation benchmark fixture should ingest");
+    graph
+}
+
 fn build_precise_reference_payload() -> Vec<u8> {
     let mut documents = Vec::with_capacity(BENCH_PRECISE_REFERENCE_DOCUMENTS);
     for doc_idx in 0..BENCH_PRECISE_REFERENCE_DOCUMENTS {
@@ -281,6 +367,91 @@ fn build_cold_cache_scip_payload() -> Vec<u8> {
         .expect("benchmark cold-cache payload should serialize")
 }
 
+fn build_cold_cache_scip_protobuf_payload() -> Vec<u8> {
+    let mut index = ScipIndexProto::new();
+    for doc_idx in 0..BENCH_SCIP_DOCUMENTS {
+        let symbol = format!("scip-rust pkg bench#ColdProto{doc_idx:03}");
+        let mut document = ScipDocumentProto::new();
+        document.relative_path = format!("src/cold_proto_{doc_idx:03}.rs");
+
+        let mut definition = ScipOccurrenceProto::new();
+        definition.symbol = symbol.clone();
+        definition.range = vec![0, 4, 12];
+        definition.symbol_roles = 1;
+        document.occurrences.push(definition);
+
+        for occurrence_idx in 1..BENCH_SCIP_OCCURRENCES_PER_DOCUMENT {
+            let mut reference = ScipOccurrenceProto::new();
+            reference.symbol = symbol.clone();
+            reference.range = vec![
+                occurrence_idx as i32,
+                (occurrence_idx + 4) as i32,
+                (occurrence_idx + 11) as i32,
+            ];
+            reference.symbol_roles = 8;
+            document.occurrences.push(reference);
+        }
+
+        let mut symbol_info = ScipSymbolInformationProto::new();
+        symbol_info.symbol = symbol;
+        symbol_info.display_name = format!("ColdProto{doc_idx:03}");
+        symbol_info.kind = EnumOrUnknown::from_i32(7);
+
+        let mut reference_relationship = ScipRelationshipProto::new();
+        reference_relationship.symbol = "scip-rust pkg bench#SharedBase".to_owned();
+        reference_relationship.is_reference = true;
+        symbol_info.relationships.push(reference_relationship);
+
+        let mut implementation_relationship = ScipRelationshipProto::new();
+        implementation_relationship.symbol = "scip-rust pkg bench#SharedBase".to_owned();
+        implementation_relationship.is_implementation = true;
+        symbol_info.relationships.push(implementation_relationship);
+
+        document.symbols.push(symbol_info);
+        index.documents.push(document);
+    }
+
+    index
+        .write_to_bytes()
+        .expect("benchmark cold-cache protobuf payload should serialize")
+}
+
+fn build_precise_navigation_payload() -> Vec<u8> {
+    let mut occurrences = Vec::with_capacity(BENCH_NAVIGATION_SYMBOLS * 2);
+    let mut symbols = Vec::with_capacity(BENCH_NAVIGATION_SYMBOLS);
+
+    for symbol_idx in 0..BENCH_NAVIGATION_SYMBOLS {
+        let symbol = format!("scip-rust pkg bench#ServiceHot{symbol_idx:03}");
+        let display_name = format!("ServiceHot{symbol_idx:03}");
+        let definition_line = symbol_idx * 2;
+        occurrences.push(json!({
+            "symbol": symbol.clone(),
+            "range": [definition_line, 4, 16],
+            "symbol_roles": 1
+        }));
+        occurrences.push(json!({
+            "symbol": symbol.clone(),
+            "range": [definition_line, 24, 36],
+            "symbol_roles": 8
+        }));
+        symbols.push(json!({
+            "symbol": symbol,
+            "display_name": display_name,
+            "kind": "function",
+            "relationships": []
+        }));
+    }
+
+    serde_json::to_vec(&json!({
+        "documents": [{
+            "relative_path": BENCH_NAVIGATION_FILE_PATH,
+            "occurrences": occurrences,
+            "symbols": symbols
+        }]
+    }))
+    .expect("benchmark precise navigation payload should serialize")
+}
+
 fn assert_relation_traversal_is_deterministic(graph: &SymbolGraph) {
     let first_outgoing = graph.outgoing_relations(BENCH_ROOT_SYMBOL_ID);
     let second_outgoing = graph.outgoing_relations(BENCH_ROOT_SYMBOL_ID);
@@ -318,6 +489,56 @@ fn assert_precise_reference_query_is_deterministic(graph: &SymbolGraph) {
         first.len(),
         (BENCH_PRECISE_REFERENCE_DOCUMENTS * 2),
         "contention fixture should include two references per document"
+    );
+}
+
+fn assert_precise_navigation_queries_are_deterministic(graph: &SymbolGraph) {
+    let first_by_location = graph
+        .select_precise_symbol_for_location(
+            BENCH_REPOSITORY_ID,
+            BENCH_NAVIGATION_FILE_PATH,
+            BENCH_NAVIGATION_TARGET_LINE,
+            Some(10),
+        )
+        .expect("precise navigation location-aware fixture should resolve a target symbol");
+    let second_by_location = graph
+        .select_precise_symbol_for_location(
+            BENCH_REPOSITORY_ID,
+            BENCH_NAVIGATION_FILE_PATH,
+            BENCH_NAVIGATION_TARGET_LINE,
+            Some(10),
+        )
+        .expect("precise navigation location-aware fixture should be deterministic");
+    assert_eq!(
+        first_by_location, second_by_location,
+        "location-aware precise navigation should preserve deterministic ordering"
+    );
+    assert_eq!(
+        first_by_location.symbol, BENCH_NAVIGATION_TARGET_SYMBOL_ID,
+        "location-aware precise navigation should resolve the hotspot symbol"
+    );
+
+    let first_by_navigation = graph
+        .select_precise_symbol_for_navigation(
+            BENCH_REPOSITORY_ID,
+            BENCH_NAVIGATION_TARGET_SYMBOL_ID,
+            BENCH_NAVIGATION_TARGET_DISPLAY_NAME,
+        )
+        .expect("precise navigation symbol fixture should resolve a target symbol");
+    let second_by_navigation = graph
+        .select_precise_symbol_for_navigation(
+            BENCH_REPOSITORY_ID,
+            BENCH_NAVIGATION_TARGET_SYMBOL_ID,
+            BENCH_NAVIGATION_TARGET_DISPLAY_NAME,
+        )
+        .expect("precise navigation symbol fixture should be deterministic");
+    assert_eq!(
+        first_by_navigation, second_by_navigation,
+        "symbol-query precise navigation should preserve deterministic ordering"
+    );
+    assert_eq!(
+        first_by_navigation.symbol, BENCH_NAVIGATION_TARGET_SYMBOL_ID,
+        "symbol-query precise navigation should resolve the hotspot symbol"
     );
 }
 

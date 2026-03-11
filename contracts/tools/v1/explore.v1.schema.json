@@ -1,0 +1,184 @@
+{
+  "schema_id": "frigg.tools.explore.v1",
+  "tool_name": "explore",
+  "input_wrapper": "ExploreParams",
+  "output_wrapper": "ExploreResponse",
+  "input_fields": [
+    "path",
+    "repository_id",
+    "operation",
+    "query",
+    "pattern_type",
+    "anchor",
+    "context_lines",
+    "max_matches",
+    "resume_from"
+  ],
+  "input_required": [
+    "path",
+    "operation"
+  ],
+  "output_fields": [
+    "repository_id",
+    "path",
+    "operation",
+    "query",
+    "pattern_type",
+    "total_lines",
+    "scan_scope",
+    "window",
+    "total_matches",
+    "matches",
+    "truncated",
+    "resume_from",
+    "metadata"
+  ],
+  "output_required": [
+    "repository_id",
+    "path",
+    "operation",
+    "total_lines",
+    "scan_scope",
+    "total_matches",
+    "matches",
+    "truncated",
+    "metadata"
+  ],
+  "contract_notes": [
+    "Expose this tool by starting the runtime with FRIGG_MCP_TOOL_SURFACE_PROFILE=extended.",
+    "The capability is Explorer, but the canonical MCP action name stays explore so follow-up calls read like probe, zoom, and refine operations on one artifact.",
+    "Path resolution, repository scoping, typed invalid_params failures, and workspace-boundary enforcement stay aligned with read_file.",
+    "v1 stays line-oriented and stateless: follow-up calls must send explicit anchor or resume_from values rather than relying on server-side explorer session state.",
+    "For simple local scans in the checked-out workspace, shell tools such as rg may still be faster; use explore when you want bounded repository-aware follow-up after discovery."
+  ],
+  "nested_contracts": {
+    "operations": {
+      "probe": {
+        "requires": [
+          "query"
+        ],
+        "allows": [
+          "pattern_type",
+          "resume_from"
+        ],
+        "rejects": [
+          "anchor"
+        ],
+        "scope_note": "Scans the resolved artifact from line 1 or resume_from.line through EOF and returns bounded match rows plus the first omitted cursor when truncated."
+      },
+      "zoom": {
+        "requires": [
+          "anchor"
+        ],
+        "rejects": [
+          "query",
+          "pattern_type",
+          "resume_from"
+        ],
+        "scope_note": "Returns one bounded line window around anchor without executing a query."
+      },
+      "refine": {
+        "requires": [
+          "anchor",
+          "query"
+        ],
+        "allows": [
+          "pattern_type",
+          "resume_from"
+        ],
+        "scope_note": "Searches only inside the anchor-derived line window and returns bounded match rows for that scope."
+      }
+    },
+    "anchors_and_windows": {
+      "anchor_required": [
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column"
+      ],
+      "cursor_required": [
+        "line",
+        "column"
+      ],
+      "line_window_required": [
+        "start_line",
+        "end_line"
+      ],
+      "window_required": [
+        "start_line",
+        "end_line",
+        "bytes",
+        "content"
+      ],
+      "match_required": [
+        "match_id",
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column",
+        "excerpt",
+        "window",
+        "anchor"
+      ],
+      "metadata_required": [
+        "lossy_utf8",
+        "effective_context_lines",
+        "effective_max_matches"
+      ]
+    }
+  },
+  "input_example": {
+    "path": "src/lib.rs",
+    "repository_id": "repo-001",
+    "operation": "probe",
+    "query": "needle",
+    "pattern_type": "literal",
+    "context_lines": 2,
+    "max_matches": 3
+  },
+  "output_example": {
+    "repository_id": "repo-001",
+    "path": "src/lib.rs",
+    "operation": "probe",
+    "query": "needle",
+    "pattern_type": "literal",
+    "total_lines": 12,
+    "scan_scope": {
+      "start_line": 1,
+      "end_line": 12
+    },
+    "total_matches": 4,
+    "matches": [
+      {
+        "match_id": "match-0000",
+        "start_line": 4,
+        "start_column": 9,
+        "end_line": 4,
+        "end_column": 15,
+        "excerpt": "    let needle_alpha = 1;",
+        "window": {
+          "start_line": 2,
+          "end_line": 6,
+          "bytes": 96,
+          "content": "pub fn demo() {\n    let needle_alpha = 1;\n    let helper = needle_alpha;\n    let needle_beta = 2;\n}"
+        },
+        "anchor": {
+          "start_line": 4,
+          "start_column": 9,
+          "end_line": 4,
+          "end_column": 15
+        }
+      }
+    ],
+    "truncated": true,
+    "resume_from": {
+      "line": 10,
+      "column": 9
+    },
+    "metadata": {
+      "lossy_utf8": false,
+      "effective_context_lines": 2,
+      "effective_max_matches": 3
+    }
+  }
+}

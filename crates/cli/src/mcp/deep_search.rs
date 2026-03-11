@@ -499,6 +499,37 @@ fn collect_step_evidence(
             }
             Ok(evidences)
         }
+        "search_hybrid" => {
+            let matches = required_matches_array(response, step)?;
+            let mut evidences = Vec::with_capacity(matches.len());
+            for (index, matched) in matches.iter().enumerate() {
+                let context = format!(
+                    "tool {} step {} match {}",
+                    step.tool_name, step.step_id, index
+                );
+                let repository_id = required_string_field(matched, "repository_id", &context)?;
+                let path = required_string_field(matched, "path", &context)?;
+                let line = required_usize_field(matched, "line", &context)?;
+                let column = required_usize_field(matched, "column", &context)?;
+                let excerpt = optional_non_empty_string_field(matched, "excerpt")
+                    .or_else(|| optional_non_empty_string_field(matched, "snippet"))
+                    .map(truncate_claim_fragment)
+                    .unwrap_or_else(|| "hybrid match".to_owned());
+                evidences.push(StepEvidence {
+                    claim_text: format!(
+                        "Hybrid evidence from tool call {} at {}:{}:{}:{} ({excerpt}).",
+                        step.step_id, repository_id, path, line, column
+                    ),
+                    repository_id,
+                    path,
+                    span: matched
+                        .get("anchor")
+                        .and_then(parse_anchor_span)
+                        .unwrap_or_else(|| point_span(line, column)),
+                });
+            }
+            Ok(evidences)
+        }
         "search_symbol" => {
             let matches = required_matches_array(response, step)?;
             let mut evidences = Vec::with_capacity(matches.len());
@@ -619,6 +650,15 @@ fn point_span(line: usize, column: usize) -> DeepSearchFileSpan {
         end_line: line.max(1),
         end_column: column.max(1),
     }
+}
+
+fn parse_anchor_span(value: &Value) -> Option<DeepSearchFileSpan> {
+    Some(DeepSearchFileSpan {
+        start_line: usize::try_from(value.get("start_line")?.as_u64()?).ok()?,
+        start_column: usize::try_from(value.get("start_column")?.as_u64()?).ok()?,
+        end_line: usize::try_from(value.get("end_line")?.as_u64()?).ok()?,
+        end_column: usize::try_from(value.get("end_column")?.as_u64()?).ok()?,
+    })
 }
 
 fn truncate_claim_fragment(raw: &str) -> String {

@@ -6,16 +6,20 @@
   "input_fields": [
     "symbol",
     "repository_id",
+    "path",
+    "line",
+    "column",
     "limit"
   ],
-  "input_required": [
-    "symbol"
-  ],
+  "input_required": [],
   "output_fields": [
+    "total_matches",
     "matches",
+    "metadata",
     "note"
   ],
   "output_required": [
+    "total_matches",
     "matches"
   ]
 }

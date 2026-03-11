@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frigg::mcp::types::{
     DeepSearchComposeCitationsParams, DeepSearchPlaybookContract, DeepSearchPlaybookStepContract,
     DeepSearchReplayParams, DeepSearchRunParams, ExploreOperation, ExploreParams,
-    FindReferencesParams, ListRepositoriesParams, ReadFileParams, SearchPatternType,
-    SearchSymbolParams, SearchTextParams,
+    FindReferencesParams, ListRepositoriesParams, ReadFileParams, SearchHybridParams,
+    SearchPatternType, SearchSymbolParams, SearchTextParams,
 };
 use frigg::mcp::{DeepSearchHarness, FriggMcpServer};
 use frigg::settings::FriggConfig;
@@ -534,6 +534,48 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
     );
     assert_eq!(payload["source_refs"]["total_matches"].as_u64(), Some(1));
     assert_eq!(payload["source_refs"]["truncated"].as_bool(), Some(false));
+
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test]
+async fn provenance_search_hybrid_invocations_include_winning_anchor_metadata() {
+    let workspace_root = build_workspace_fixture("search-hybrid-anchor-provenance");
+    let server = server_for_workspace(&workspace_root);
+
+    server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello provenance".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(5),
+            weights: None,
+            semantic: Some(false),
+        }))
+        .await
+        .expect("search_hybrid should succeed");
+
+    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
+    let rows = storage
+        .load_provenance_events_for_tool("search_hybrid", 1)
+        .expect("expected search_hybrid provenance rows");
+    assert_eq!(rows.len(), 1);
+
+    let payload = serde_json::from_str::<Value>(&rows[0].payload_json)
+        .expect("failed to parse search_hybrid provenance payload");
+    assert_eq!(payload["outcome"]["status"].as_str(), Some("ok"));
+    assert_eq!(
+        payload["source_refs"]["matches"]["top_matches"][0]["path"].as_str(),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        payload["source_refs"]["matches"]["top_matches"][0]["anchor"]["kind"].as_str(),
+        Some("text_span")
+    );
+    assert_eq!(
+        payload["source_refs"]["matches"]["top_matches"][0]["anchor"]["start_line"].as_u64(),
+        Some(1)
+    );
 
     cleanup_workspace(&workspace_root);
 }

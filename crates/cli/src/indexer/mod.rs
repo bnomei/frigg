@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
@@ -12,19 +11,26 @@ use crate::embeddings::{
     EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
     OpenAiEmbeddingProvider,
 };
-use crate::graph::{HeuristicConfidence, RelationKind, SymbolGraph, SymbolNode};
-pub use crate::language_support::SymbolLanguage;
-use crate::language_support::{
-    PhpSymbolLookup, blade_component_name_for_path, blade_view_name_for_path, is_blade_path,
-    parser_for_language, php_name_resolution_context_from_root, php_relation_targets_symbol_name,
-    resolve_php_declaration_relation_indices, symbol_from_node, tree_sitter_language,
+use crate::graph::{HeuristicConfidence, SymbolGraph, SymbolNode};
+#[allow(unused_imports)]
+pub(crate) use crate::languages::{
+    BladeRelationKind, PhpDeclarationRelation, PhpGraphSourceAnalysis, PhpLiteralEvidence,
+    PhpSourceEvidence, PhpTargetEvidence, PhpTargetEvidenceKind, PhpTypeEvidence,
+    PhpTypeEvidenceKind, SymbolLanguage, extract_blade_source_evidence_from_source,
+    extract_php_declaration_relations_from_source, extract_php_graph_analysis_from_source,
+    extract_php_source_evidence_from_source, mark_local_flux_overlays,
+    php_declaration_relation_edges_for_file, php_declaration_relation_edges_for_relations,
+    php_declaration_relation_edges_for_source, php_heuristic_implementation_candidates_for_target,
+    resolve_blade_relation_evidence_edges, resolve_php_target_evidence_edges,
 };
-use crate::playbooks::scrub_playbook_metadata_header;
+use crate::languages::{
+    collect_blade_symbols_from_source, parser_for_language, semantic_chunk_language_for_path,
+    symbol_from_node, tree_sitter_language,
+};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
 use blake3::Hasher;
 use ignore::WalkBuilder;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -36,13 +42,11 @@ use manifest::{
     deterministic_snapshot_id, diff, file_digest_to_manifest_entry, manifest_entry_to_file_digest,
     normalize_repository_relative_path,
 };
-pub(crate) use semantic::semantic_chunk_language_for_path;
 use semantic::{
-    RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor,
-    build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
+    RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor, build_file_semantic_chunks,
+    build_semantic_chunk_candidates, build_semantic_embedding_records,
+    resolve_semantic_runtime_config_from_env,
 };
-#[cfg(test)]
-pub(crate) use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
 
 const FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_ENABLED";
 const FRIGG_SEMANTIC_RUNTIME_PROVIDER_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_PROVIDER";
@@ -67,6 +71,13 @@ pub struct FileMetadataDigest {
     pub mtime_ns: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticChunkBenchmarkSummary {
+    pub chunk_count: usize,
+    pub total_content_bytes: usize,
+    pub max_chunk_bytes: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestDiff {
     pub added: Vec<FileDigest>,
@@ -77,6 +88,54 @@ pub struct ManifestDiff {
 #[derive(Debug, Clone, Default)]
 pub struct ManifestBuilder {
     pub follow_symlinks: bool,
+}
+
+#[doc(hidden)]
+pub fn benchmark_build_file_semantic_chunks(
+    repository_id: &str,
+    snapshot_id: &str,
+    path: &str,
+    language: &str,
+    source: &str,
+) -> SemanticChunkBenchmarkSummary {
+    summarize_semantic_chunk_candidates(build_file_semantic_chunks(
+        repository_id,
+        snapshot_id,
+        path,
+        language,
+        source,
+    ))
+}
+
+#[doc(hidden)]
+pub fn benchmark_build_semantic_chunk_candidates(
+    repository_id: &str,
+    workspace_root: &Path,
+    snapshot_id: &str,
+    current_manifest: &[FileDigest],
+) -> FriggResult<SemanticChunkBenchmarkSummary> {
+    build_semantic_chunk_candidates(repository_id, workspace_root, snapshot_id, current_manifest)
+        .map(summarize_semantic_chunk_candidates)
+}
+
+fn summarize_semantic_chunk_candidates(
+    chunks: Vec<semantic::SemanticChunkCandidate>,
+) -> SemanticChunkBenchmarkSummary {
+    let chunk_count = chunks.len();
+    let mut total_content_bytes = 0usize;
+    let mut max_chunk_bytes = 0usize;
+
+    for chunk in chunks {
+        let chunk_len = chunk.content_text.len();
+        total_content_bytes += chunk_len;
+        max_chunk_bytes = max_chunk_bytes.max(chunk_len);
+    }
+
+    SemanticChunkBenchmarkSummary {
+        chunk_count,
+        total_content_bytes,
+        max_chunk_bytes,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -193,115 +252,6 @@ pub struct SymbolDefinition {
     pub line: usize,
     pub span: SourceSpan,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PhpDeclarationRelation {
-    pub source_kind: SymbolKind,
-    pub source_name: String,
-    pub source_line: usize,
-    pub target_name: String,
-    pub relation: RelationKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PhpTypeEvidenceKind {
-    Parameter,
-    Return,
-    Property,
-    PromotedProperty,
-    Catch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PhpTypeEvidence {
-    pub owner_symbol_id: Option<String>,
-    pub kind: PhpTypeEvidenceKind,
-    pub target_canonical_name: String,
-    pub line: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PhpTargetEvidenceKind {
-    Attribute,
-    ClassString,
-    Instantiation,
-    CallableLiteral,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PhpTargetEvidence {
-    pub owner_symbol_id: Option<String>,
-    pub kind: PhpTargetEvidenceKind,
-    pub target_canonical_name: String,
-    pub target_member_name: Option<String>,
-    pub line: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PhpLiteralEvidence {
-    pub owner_symbol_id: Option<String>,
-    pub array_keys: Vec<String>,
-    pub named_arguments: Vec<String>,
-    pub line: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PhpSourceEvidence {
-    pub canonical_names_by_stable_id: BTreeMap<String, String>,
-    pub type_evidence: Vec<PhpTypeEvidence>,
-    pub target_evidence: Vec<PhpTargetEvidence>,
-    pub literal_evidence: Vec<PhpLiteralEvidence>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BladeRelationKind {
-    Extends,
-    Include,
-    Component,
-    Yield,
-    DynamicComponent,
-}
-
-impl BladeRelationKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Extends => "extends",
-            Self::Include => "include",
-            Self::Component => "component",
-            Self::Yield => "yield",
-            Self::DynamicComponent => "dynamic_component",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct BladeRelationEvidence {
-    pub owner_symbol_id: Option<String>,
-    pub kind: BladeRelationKind,
-    pub target_name: String,
-    pub target_symbol_kind: SymbolKind,
-    pub line: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FluxComponentHint {
-    pub props: Vec<String>,
-    pub slots: Vec<String>,
-    pub variant_values: Vec<String>,
-    pub size_values: Vec<String>,
-    pub local_overlay: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BladeSourceEvidence {
-    pub relations: Vec<BladeRelationEvidence>,
-    pub livewire_components: Vec<String>,
-    pub wire_directives: Vec<String>,
-    pub flux_components: Vec<String>,
-    pub flux_hints: BTreeMap<String, FluxComponentHint>,
-}
-
-pub const FLUX_REGISTRY_VERSION: &str = "2026-03-08-mvp";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolExtractionDiagnostic {
@@ -582,24 +532,6 @@ pub fn extract_symbols_from_source(
     Ok(symbols)
 }
 
-pub fn extract_php_declaration_relations_from_source(
-    path: &Path,
-    source: &str,
-) -> FriggResult<Vec<PhpDeclarationRelation>> {
-    let mut parser = parser_for_language(SymbolLanguage::Php)?;
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "failed to parse source for php declaration relations: {}",
-            path.display()
-        ))
-    })?;
-    let mut relations = Vec::new();
-    collect_php_declaration_relations(source, tree.root_node(), &mut relations);
-    relations.sort();
-    relations.dedup();
-    Ok(relations)
-}
-
 pub fn search_structural_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -707,1312 +639,6 @@ pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
     output
 }
 
-pub fn php_declaration_relation_edges_for_file(
-    relative_path: &str,
-    absolute_path: &Path,
-    symbols: &[SymbolDefinition],
-    symbols_by_relative_path: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_name: Option<&BTreeMap<String, Vec<usize>>>,
-    symbol_indices_by_lower_name: Option<&BTreeMap<String, Vec<usize>>>,
-) -> FriggResult<Vec<(usize, usize, RelationKind)>> {
-    if SymbolLanguage::from_path(absolute_path) != Some(SymbolLanguage::Php) {
-        return Ok(Vec::new());
-    }
-
-    let source = fs::read_to_string(absolute_path).map_err(FriggError::Io)?;
-    let relations = extract_php_declaration_relations_from_source(absolute_path, &source)?;
-    let owned_name_index;
-    let name_index = match symbol_indices_by_name {
-        Some(index) => index,
-        None => {
-            owned_name_index = php_symbol_indices_by_name(symbols);
-            &owned_name_index
-        }
-    };
-    let owned_lower_name_index;
-    let lower_name_index = match symbol_indices_by_lower_name {
-        Some(index) => index,
-        None => {
-            owned_lower_name_index = php_symbol_indices_by_lower_name(symbols);
-            &owned_lower_name_index
-        }
-    };
-    let lookup = PhpSymbolLookup {
-        symbols,
-        symbols_by_relative_path,
-        symbol_indices_by_name: name_index,
-        symbol_indices_by_lower_name: lower_name_index,
-    };
-
-    let mut edges = Vec::new();
-    for relation in relations {
-        if let Some((source_symbol_index, target_symbol_index)) =
-            resolve_php_declaration_relation_indices(&lookup, relative_path, &relation)
-        {
-            edges.push((source_symbol_index, target_symbol_index, relation.relation));
-        }
-    }
-    edges.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then(left.1.cmp(&right.1))
-            .then(left.2.cmp(&right.2))
-    });
-    edges.dedup();
-    Ok(edges)
-}
-
-pub fn php_heuristic_implementation_candidates_for_target(
-    target_symbol: &SymbolDefinition,
-    candidate_files: &[(String, PathBuf)],
-    symbols: &[SymbolDefinition],
-    symbols_by_relative_path: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_name: Option<&BTreeMap<String, Vec<usize>>>,
-    symbol_indices_by_lower_name: Option<&BTreeMap<String, Vec<usize>>>,
-) -> Vec<(usize, RelationKind)> {
-    let target_name = target_symbol.name.trim();
-    if target_name.is_empty() {
-        return Vec::new();
-    }
-    if !matches!(
-        target_symbol.kind,
-        SymbolKind::Interface | SymbolKind::Class
-    ) {
-        return Vec::new();
-    }
-    let Some(target_symbol_index) = symbols
-        .iter()
-        .position(|symbol| symbol.stable_id == target_symbol.stable_id)
-    else {
-        return Vec::new();
-    };
-
-    let owned_name_index;
-    let name_index = match symbol_indices_by_name {
-        Some(index) => index,
-        None => {
-            owned_name_index = php_symbol_indices_by_name(symbols);
-            &owned_name_index
-        }
-    };
-    let owned_lower_name_index;
-    let lower_name_index = match symbol_indices_by_lower_name {
-        Some(index) => index,
-        None => {
-            owned_lower_name_index = php_symbol_indices_by_lower_name(symbols);
-            &owned_lower_name_index
-        }
-    };
-    let lookup = PhpSymbolLookup {
-        symbols,
-        symbols_by_relative_path,
-        symbol_indices_by_name: name_index,
-        symbol_indices_by_lower_name: lower_name_index,
-    };
-
-    let mut matches = Vec::new();
-    for (relative_path, absolute_path) in candidate_files {
-        if SymbolLanguage::from_path(absolute_path) != Some(SymbolLanguage::Php) {
-            continue;
-        }
-        let Ok(source) = fs::read_to_string(absolute_path) else {
-            continue;
-        };
-        let Ok(relations) = extract_php_declaration_relations_from_source(absolute_path, &source)
-        else {
-            continue;
-        };
-
-        for relation in relations {
-            if !php_relation_targets_symbol_name(&relation, target_symbol) {
-                continue;
-            }
-            let Some((source_symbol_index, resolved_target_index)) =
-                resolve_php_declaration_relation_indices(&lookup, relative_path, &relation)
-            else {
-                continue;
-            };
-            if resolved_target_index != target_symbol_index {
-                continue;
-            }
-            matches.push((source_symbol_index, relation.relation));
-        }
-    }
-    matches.sort_by(|left, right| {
-        let left_symbol = &symbols[left.0];
-        let right_symbol = &symbols[right.0];
-        left_symbol
-            .path
-            .cmp(&right_symbol.path)
-            .then(left_symbol.line.cmp(&right_symbol.line))
-            .then(left_symbol.stable_id.cmp(&right_symbol.stable_id))
-            .then(left.1.cmp(&right.1))
-    });
-    matches.dedup();
-    matches
-}
-
-pub(crate) fn extract_php_source_evidence_from_source(
-    path: &Path,
-    source: &str,
-    file_symbols: &[SymbolDefinition],
-) -> FriggResult<PhpSourceEvidence> {
-    let mut parser = parser_for_language(SymbolLanguage::Php)?;
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "failed to parse source for php evidence extraction: {}",
-            path.display()
-        ))
-    })?;
-    let context = php_name_resolution_context_from_root(source, tree.root_node());
-    let mut evidence = PhpSourceEvidence::default();
-    collect_php_source_evidence(
-        source,
-        tree.root_node(),
-        file_symbols,
-        &context,
-        context.namespace.as_deref(),
-        None,
-        None,
-        &mut evidence,
-    );
-    normalize_php_source_evidence(&mut evidence);
-    Ok(evidence)
-}
-
-pub(crate) fn extract_blade_source_evidence_from_source(
-    _path: &Path,
-    source: &str,
-    file_symbols: &[SymbolDefinition],
-) -> BladeSourceEvidence {
-    let owner_symbol_id = file_symbols
-        .iter()
-        .find(|symbol| {
-            symbol.language == SymbolLanguage::Blade && symbol.kind == SymbolKind::Module
-        })
-        .map(|symbol| symbol.stable_id.clone());
-    let mut evidence = BladeSourceEvidence::default();
-
-    for capture in blade_view_relation_regex().captures_iter(source) {
-        let Some(directive) = capture.name("directive").map(|value| value.as_str()) else {
-            continue;
-        };
-        let Some(target) = capture.get(2).or_else(|| capture.get(3)) else {
-            continue;
-        };
-        let target_name = target.as_str().trim();
-        if target_name.is_empty() {
-            continue;
-        }
-        let (kind, target_symbol_kind) = match directive {
-            "extends" => (BladeRelationKind::Extends, SymbolKind::Module),
-            "component" => (BladeRelationKind::Component, SymbolKind::Module),
-            "yield" => (BladeRelationKind::Yield, SymbolKind::Section),
-            _ => (BladeRelationKind::Include, SymbolKind::Module),
-        };
-        evidence.relations.push(BladeRelationEvidence {
-            owner_symbol_id: owner_symbol_id.clone(),
-            kind,
-            target_name: target_name.to_owned(),
-            target_symbol_kind,
-            line: line_column_for_offset(source, target.start()).0,
-        });
-    }
-
-    for capture in blade_dynamic_component_regex().captures_iter(source) {
-        let Some(target) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        let target_name = normalize_blade_dynamic_component_target(target.as_str());
-        if target_name.is_empty() {
-            continue;
-        }
-        evidence.relations.push(BladeRelationEvidence {
-            owner_symbol_id: owner_symbol_id.clone(),
-            kind: BladeRelationKind::DynamicComponent,
-            target_name,
-            target_symbol_kind: SymbolKind::Component,
-            line: line_column_for_offset(source, target.start()).0,
-        });
-    }
-
-    for capture in blade_tag_regex().captures_iter(source) {
-        let Some(tag_name) = capture.get(1) else {
-            continue;
-        };
-        let normalized = tag_name.as_str().trim();
-        if let Some(component_name) = normalized.strip_prefix("livewire:") {
-            insert_sorted_unique_owned(
-                &mut evidence.livewire_components,
-                component_name.to_owned(),
-            );
-            continue;
-        }
-        if normalized.starts_with("flux:") {
-            insert_sorted_unique_owned(&mut evidence.flux_components, normalized.to_owned());
-            if let Some(hint) = flux_registry_hint(normalized) {
-                evidence
-                    .flux_hints
-                    .entry(normalized.to_owned())
-                    .or_insert(hint);
-            }
-            continue;
-        }
-        if let Some((SymbolKind::Component, component_name)) = classify_blade_tag_name(normalized) {
-            evidence.relations.push(BladeRelationEvidence {
-                owner_symbol_id: owner_symbol_id.clone(),
-                kind: BladeRelationKind::Component,
-                target_name: component_name,
-                target_symbol_kind: SymbolKind::Component,
-                line: line_column_for_offset(source, tag_name.start()).0,
-            });
-        }
-    }
-
-    for capture in blade_livewire_directive_regex().captures_iter(source) {
-        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        insert_sorted_unique_owned(
-            &mut evidence.livewire_components,
-            name.as_str().trim().to_owned(),
-        );
-    }
-
-    for capture in blade_wire_directive_regex().captures_iter(source) {
-        let Some(name) = capture.get(1) else {
-            continue;
-        };
-        insert_sorted_unique_owned(
-            &mut evidence.wire_directives,
-            name.as_str().trim().to_owned(),
-        );
-    }
-
-    normalize_blade_source_evidence(&mut evidence);
-    evidence
-}
-
-pub(crate) fn mark_local_flux_overlays(
-    evidence: &mut BladeSourceEvidence,
-    symbols: &[SymbolDefinition],
-    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
-) {
-    for component_name in &evidence.flux_components {
-        let local_component_name = component_name.replacen("flux:", "flux.", 1);
-        let local_overlay = symbol_indices_by_name
-            .get(&local_component_name)
-            .into_iter()
-            .flatten()
-            .any(|index| {
-                let symbol = &symbols[*index];
-                symbol.language == SymbolLanguage::Blade && symbol.kind == SymbolKind::Component
-            });
-        if !local_overlay {
-            continue;
-        }
-        evidence
-            .flux_hints
-            .entry(component_name.clone())
-            .or_default()
-            .local_overlay = true;
-    }
-}
-
-pub(crate) fn resolve_php_target_evidence_edges(
-    symbols: &[SymbolDefinition],
-    symbol_index_by_stable_id: &BTreeMap<String, usize>,
-    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
-    evidence: &PhpSourceEvidence,
-) -> Vec<(usize, usize, RelationKind)> {
-    let mut edges = Vec::new();
-    for target in &evidence.target_evidence {
-        let Some(source_symbol_id) = target.owner_symbol_id.as_ref() else {
-            continue;
-        };
-        let Some(source_symbol_index) = symbol_index_by_stable_id.get(source_symbol_id).copied()
-        else {
-            continue;
-        };
-        let Some(target_symbol_index) = resolve_php_target_symbol_index(
-            symbols,
-            symbol_indices_by_canonical_name,
-            symbol_indices_by_lower_canonical_name,
-            target,
-        ) else {
-            continue;
-        };
-        if source_symbol_index == target_symbol_index {
-            continue;
-        }
-        edges.push((
-            source_symbol_index,
-            target_symbol_index,
-            RelationKind::RefersTo,
-        ));
-    }
-    edges.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then(left.1.cmp(&right.1))
-            .then(left.2.cmp(&right.2))
-    });
-    edges.dedup();
-    edges
-}
-
-pub(crate) fn resolve_blade_relation_evidence_edges(
-    symbols: &[SymbolDefinition],
-    symbol_index_by_stable_id: &BTreeMap<String, usize>,
-    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
-    evidence: &BladeSourceEvidence,
-) -> Vec<(usize, usize, RelationKind)> {
-    let mut edges = Vec::new();
-    for relation in &evidence.relations {
-        let Some(source_symbol_id) = relation.owner_symbol_id.as_ref() else {
-            continue;
-        };
-        let Some(source_symbol_index) = symbol_index_by_stable_id.get(source_symbol_id).copied()
-        else {
-            continue;
-        };
-        let Some(target_symbol_index) = resolve_blade_relation_target_symbol_index(
-            symbols,
-            symbol_indices_by_name,
-            symbol_indices_by_lower_name,
-            relation,
-        ) else {
-            continue;
-        };
-        if source_symbol_index == target_symbol_index {
-            continue;
-        }
-        edges.push((
-            source_symbol_index,
-            target_symbol_index,
-            RelationKind::RefersTo,
-        ));
-    }
-    edges.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then(left.1.cmp(&right.1))
-            .then(left.2.cmp(&right.2))
-    });
-    edges.dedup();
-    edges
-}
-
-fn collect_php_source_evidence(
-    source: &str,
-    node: Node<'_>,
-    file_symbols: &[SymbolDefinition],
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_namespace: Option<&str>,
-    current_class_canonical_name: Option<&str>,
-    current_owner_symbol_id: Option<&str>,
-    evidence: &mut PhpSourceEvidence,
-) {
-    let mut next_namespace = current_namespace.map(ToOwned::to_owned);
-    let mut next_class_canonical_name = current_class_canonical_name.map(ToOwned::to_owned);
-    let mut next_owner_symbol_id = current_owner_symbol_id.map(ToOwned::to_owned);
-
-    match node.kind() {
-        "namespace_definition" => {
-            if let Some(namespace_name) = node
-                .child_by_field_name("name")
-                .and_then(|field| field.utf8_text(source.as_bytes()).ok())
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-            {
-                next_namespace = Some(namespace_name.to_owned());
-                if let Some(symbol) =
-                    find_symbol_for_node(file_symbols, SymbolKind::Module, namespace_name, node)
-                {
-                    evidence
-                        .canonical_names_by_stable_id
-                        .entry(symbol.stable_id.clone())
-                        .or_insert_with(|| namespace_name.to_owned());
-                    next_owner_symbol_id = Some(symbol.stable_id.clone());
-                }
-            }
-        }
-        "class_declaration"
-        | "interface_declaration"
-        | "trait_declaration"
-        | "enum_declaration" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                let canonical_name = php_namespace_qualified_name(next_namespace.as_deref(), &name);
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    evidence
-                        .canonical_names_by_stable_id
-                        .entry(symbol.stable_id.clone())
-                        .or_insert_with(|| canonical_name.clone());
-                    next_owner_symbol_id = Some(symbol.stable_id.clone());
-                }
-                next_class_canonical_name = Some(canonical_name);
-            }
-        }
-        "function_definition" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                let canonical_name = php_namespace_qualified_name(next_namespace.as_deref(), &name);
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    evidence
-                        .canonical_names_by_stable_id
-                        .entry(symbol.stable_id.clone())
-                        .or_insert_with(|| canonical_name.clone());
-                    next_owner_symbol_id = Some(symbol.stable_id.clone());
-                    if let Some(parameters) = node.child_by_field_name("parameters") {
-                        collect_php_parameter_type_evidence(
-                            source,
-                            parameters,
-                            file_symbols,
-                            context,
-                            next_class_canonical_name.as_deref(),
-                            Some(symbol.stable_id.as_str()),
-                            evidence,
-                        );
-                    }
-                    if let Some(return_type) = node.child_by_field_name("return_type") {
-                        collect_php_type_evidence(
-                            source,
-                            return_type,
-                            context,
-                            next_class_canonical_name.as_deref(),
-                            Some(symbol.stable_id.as_str()),
-                            PhpTypeEvidenceKind::Return,
-                            source_span(node).start_line,
-                            &mut evidence.type_evidence,
-                        );
-                    }
-                }
-            }
-        }
-        "method_declaration" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                if let Some(class_name) = next_class_canonical_name.as_deref() {
-                    let canonical_name = format!("{class_name}::{name}");
-                    if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| canonical_name.clone());
-                        next_owner_symbol_id = Some(symbol.stable_id.clone());
-                        if let Some(parameters) = node.child_by_field_name("parameters") {
-                            collect_php_parameter_type_evidence(
-                                source,
-                                parameters,
-                                file_symbols,
-                                context,
-                                next_class_canonical_name.as_deref(),
-                                Some(symbol.stable_id.as_str()),
-                                evidence,
-                            );
-                        }
-                        if let Some(return_type) = node.child_by_field_name("return_type") {
-                            collect_php_type_evidence(
-                                source,
-                                return_type,
-                                context,
-                                next_class_canonical_name.as_deref(),
-                                Some(symbol.stable_id.as_str()),
-                                PhpTypeEvidenceKind::Return,
-                                source_span(node).start_line,
-                                &mut evidence.type_evidence,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        "property_declaration" => {
-            if let Some(type_node) = node.child_by_field_name("type") {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor).filter(|child| child.is_named()) {
-                    if child.kind() != "property_element" {
-                        continue;
-                    }
-                    let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, child)
-                    else {
-                        continue;
-                    };
-                    let owner_symbol_id = find_symbol_for_node(file_symbols, kind, &name, child)
-                        .map(|symbol| {
-                            if let Some(class_name) = next_class_canonical_name.as_deref() {
-                                evidence
-                                    .canonical_names_by_stable_id
-                                    .entry(symbol.stable_id.clone())
-                                    .or_insert_with(|| format!("{class_name}::{name}"));
-                            }
-                            symbol.stable_id.as_str()
-                        });
-                    collect_php_type_evidence(
-                        source,
-                        type_node,
-                        context,
-                        next_class_canonical_name.as_deref(),
-                        owner_symbol_id,
-                        PhpTypeEvidenceKind::Property,
-                        source_span(child).start_line,
-                        &mut evidence.type_evidence,
-                    );
-                }
-            }
-        }
-        "property_element" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    if let Some(class_name) = next_class_canonical_name.as_deref() {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| format!("{class_name}::{name}"));
-                    }
-                }
-            }
-        }
-        "const_element" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    let canonical_name =
-                        if let Some(class_name) = next_class_canonical_name.as_deref() {
-                            format!("{class_name}::{name}")
-                        } else {
-                            php_namespace_qualified_name(next_namespace.as_deref(), &name)
-                        };
-                    evidence
-                        .canonical_names_by_stable_id
-                        .entry(symbol.stable_id.clone())
-                        .or_insert(canonical_name);
-                }
-            }
-        }
-        "enum_case" => {
-            if let Some((kind, name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    if let Some(class_name) = next_class_canonical_name.as_deref() {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| format!("{class_name}::{name}"));
-                    }
-                }
-            }
-        }
-        "catch_clause" => {
-            if let Some(type_node) = node.child_by_field_name("type") {
-                collect_php_type_evidence(
-                    source,
-                    type_node,
-                    context,
-                    next_class_canonical_name.as_deref(),
-                    next_owner_symbol_id.as_deref().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.as_str())
-                    }),
-                    PhpTypeEvidenceKind::Catch,
-                    source_span(node).start_line,
-                    &mut evidence.type_evidence,
-                );
-            }
-        }
-        "attribute" => {
-            if let Some(target_name) =
-                php_attribute_target_name(source, node).and_then(|raw_name| {
-                    context.resolve_class_like_name(
-                        raw_name.as_str(),
-                        next_class_canonical_name.as_deref(),
-                    )
-                })
-            {
-                evidence.target_evidence.push(PhpTargetEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    kind: PhpTargetEvidenceKind::Attribute,
-                    target_canonical_name: target_name,
-                    target_member_name: None,
-                    line: source_span(node).start_line,
-                });
-            }
-        }
-        "class_constant_access_expression" => {
-            if let Some(target_name) = php_class_string_target_name(
-                source,
-                node,
-                context,
-                next_class_canonical_name.as_deref(),
-            ) {
-                evidence.target_evidence.push(PhpTargetEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    kind: PhpTargetEvidenceKind::ClassString,
-                    target_canonical_name: target_name,
-                    target_member_name: None,
-                    line: source_span(node).start_line,
-                });
-            }
-        }
-        "object_creation_expression" => {
-            if let Some(target_name) = php_instantiation_target_name(
-                source,
-                node,
-                context,
-                next_class_canonical_name.as_deref(),
-            ) {
-                evidence.target_evidence.push(PhpTargetEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    kind: PhpTargetEvidenceKind::Instantiation,
-                    target_canonical_name: target_name,
-                    target_member_name: None,
-                    line: source_span(node).start_line,
-                });
-            }
-        }
-        "array_creation_expression" => {
-            if let Some((target_canonical_name, target_member_name)) = php_callable_literal_target(
-                source,
-                node,
-                context,
-                next_class_canonical_name.as_deref(),
-            ) {
-                evidence.target_evidence.push(PhpTargetEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    kind: PhpTargetEvidenceKind::CallableLiteral,
-                    target_canonical_name,
-                    target_member_name: Some(target_member_name),
-                    line: source_span(node).start_line,
-                });
-            }
-            if let Some(array_keys) = php_literal_array_keys(source, node) {
-                evidence.literal_evidence.push(PhpLiteralEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    array_keys,
-                    named_arguments: Vec::new(),
-                    line: source_span(node).start_line,
-                });
-            }
-        }
-        "arguments" => {
-            if let Some(named_arguments) = php_named_argument_keys(source, node) {
-                evidence.literal_evidence.push(PhpLiteralEvidence {
-                    owner_symbol_id: next_owner_symbol_id.clone().or_else(|| {
-                        find_innermost_symbol_for_span_in_file(
-                            file_symbols,
-                            SymbolLanguage::Php,
-                            &source_span(node),
-                        )
-                        .map(|symbol| symbol.stable_id.clone())
-                    }),
-                    array_keys: Vec::new(),
-                    named_arguments,
-                    line: source_span(node).start_line,
-                });
-            }
-        }
-        _ => {}
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_php_source_evidence(
-            source,
-            child,
-            file_symbols,
-            context,
-            next_namespace.as_deref(),
-            next_class_canonical_name.as_deref(),
-            next_owner_symbol_id.as_deref(),
-            evidence,
-        );
-    }
-}
-
-fn collect_php_parameter_type_evidence(
-    source: &str,
-    parameters: Node<'_>,
-    file_symbols: &[SymbolDefinition],
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-    owner_symbol_id: Option<&str>,
-    evidence: &mut PhpSourceEvidence,
-) {
-    let mut cursor = parameters.walk();
-    for parameter in parameters
-        .children(&mut cursor)
-        .filter(|child| child.is_named())
-    {
-        let (kind, line) = match parameter.kind() {
-            "simple_parameter" => (
-                PhpTypeEvidenceKind::Parameter,
-                source_span(parameter).start_line,
-            ),
-            "property_promotion_parameter" => (
-                PhpTypeEvidenceKind::PromotedProperty,
-                source_span(parameter).start_line,
-            ),
-            _ => continue,
-        };
-        if let Some(type_node) = parameter.child_by_field_name("type") {
-            collect_php_type_evidence(
-                source,
-                type_node,
-                context,
-                current_class_canonical_name,
-                owner_symbol_id,
-                kind,
-                line,
-                &mut evidence.type_evidence,
-            );
-        }
-        if let Some(attributes) = parameter.child_by_field_name("attributes") {
-            let mut attr_cursor = attributes.walk();
-            for attribute_group in attributes
-                .children(&mut attr_cursor)
-                .filter(|child| child.is_named())
-            {
-                let mut group_cursor = attribute_group.walk();
-                for attribute in attribute_group
-                    .children(&mut group_cursor)
-                    .filter(|child| child.is_named() && child.kind() == "attribute")
-                {
-                    if let Some(target_name) = php_attribute_target_name(source, attribute)
-                        .and_then(|raw_name| {
-                            context.resolve_class_like_name(
-                                raw_name.as_str(),
-                                current_class_canonical_name,
-                            )
-                        })
-                    {
-                        evidence.target_evidence.push(PhpTargetEvidence {
-                            owner_symbol_id: owner_symbol_id.map(ToOwned::to_owned).or_else(|| {
-                                find_innermost_symbol_for_span_in_file(
-                                    file_symbols,
-                                    SymbolLanguage::Php,
-                                    &source_span(attribute),
-                                )
-                                .map(|symbol| symbol.stable_id.clone())
-                            }),
-                            kind: PhpTargetEvidenceKind::Attribute,
-                            target_canonical_name: target_name,
-                            target_member_name: None,
-                            line: source_span(attribute).start_line,
-                        });
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn collect_php_type_evidence(
-    source: &str,
-    type_node: Node<'_>,
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-    owner_symbol_id: Option<&str>,
-    kind: PhpTypeEvidenceKind,
-    line: usize,
-    output: &mut Vec<PhpTypeEvidence>,
-) {
-    let mut targets = BTreeSet::new();
-    collect_php_type_targets(
-        source,
-        type_node,
-        context,
-        current_class_canonical_name,
-        &mut targets,
-    );
-    for target_canonical_name in targets {
-        output.push(PhpTypeEvidence {
-            owner_symbol_id: owner_symbol_id.map(ToOwned::to_owned),
-            kind,
-            target_canonical_name,
-            line,
-        });
-    }
-}
-
-fn collect_php_type_targets(
-    source: &str,
-    node: Node<'_>,
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-    targets: &mut BTreeSet<String>,
-) {
-    match node.kind() {
-        "named_type" | "name" | "qualified_name" | "relative_name" => {
-            if let Ok(raw_name) = node.utf8_text(source.as_bytes()) {
-                if let Some(target) =
-                    context.resolve_class_like_name(raw_name, current_class_canonical_name)
-                {
-                    targets.insert(target);
-                }
-            }
-        }
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor).filter(|child| child.is_named()) {
-                collect_php_type_targets(
-                    source,
-                    child,
-                    context,
-                    current_class_canonical_name,
-                    targets,
-                );
-            }
-        }
-    }
-}
-
-fn find_symbol_for_node<'a>(
-    file_symbols: &'a [SymbolDefinition],
-    kind: SymbolKind,
-    name: &str,
-    node: Node<'_>,
-) -> Option<&'a SymbolDefinition> {
-    let span = source_span(node);
-    file_symbols.iter().find(|symbol| {
-        symbol.kind == kind
-            && symbol.name == name
-            && symbol.span.start_byte == span.start_byte
-            && symbol.span.end_byte == span.end_byte
-    })
-}
-
-fn find_innermost_symbol_for_span_in_file<'a>(
-    file_symbols: &'a [SymbolDefinition],
-    language: SymbolLanguage,
-    span: &SourceSpan,
-) -> Option<&'a SymbolDefinition> {
-    file_symbols
-        .iter()
-        .filter(|symbol| {
-            symbol.language == language
-                && span.start_byte >= symbol.span.start_byte
-                && span.end_byte <= symbol.span.end_byte
-        })
-        .min_by(|left, right| {
-            let left_width = left.span.end_byte.saturating_sub(left.span.start_byte);
-            let right_width = right.span.end_byte.saturating_sub(right.span.start_byte);
-            left_width
-                .cmp(&right_width)
-                .then(left.span.start_byte.cmp(&right.span.start_byte))
-                .then(left.stable_id.cmp(&right.stable_id))
-        })
-}
-
-fn php_namespace_qualified_name(namespace: Option<&str>, short_name: &str) -> String {
-    let short_name = short_name.trim();
-    if short_name.is_empty() {
-        return String::new();
-    }
-    match namespace
-        .map(str::trim)
-        .filter(|namespace| !namespace.is_empty())
-    {
-        Some(namespace) => format!("{namespace}\\{short_name}"),
-        None => short_name.to_owned(),
-    }
-}
-
-fn php_attribute_target_name(source: &str, node: Node<'_>) -> Option<String> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .filter(|child| child.is_named())
-        .find(|child| matches!(child.kind(), "name" | "qualified_name" | "relative_name"))
-        .and_then(|child| child.utf8_text(source.as_bytes()).ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn php_class_string_target_name(
-    source: &str,
-    node: Node<'_>,
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-) -> Option<String> {
-    let named_children = named_children(node);
-    if named_children.len() != 2 {
-        return None;
-    }
-    let name = named_children[1]
-        .utf8_text(source.as_bytes())
-        .ok()
-        .map(str::trim)?;
-    if !name.eq_ignore_ascii_case("class") {
-        return None;
-    }
-    let raw_scope = named_children[0].utf8_text(source.as_bytes()).ok()?.trim();
-    context.resolve_class_like_name(raw_scope, current_class_canonical_name)
-}
-
-fn php_instantiation_target_name(
-    source: &str,
-    node: Node<'_>,
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-) -> Option<String> {
-    let named_children = named_children(node);
-    let first = named_children.first()?;
-    if first.kind() == "anonymous_class" {
-        return None;
-    }
-    if !matches!(first.kind(), "name" | "qualified_name" | "relative_name") {
-        return None;
-    }
-    let raw_name = first.utf8_text(source.as_bytes()).ok()?.trim();
-    context.resolve_class_like_name(raw_name, current_class_canonical_name)
-}
-
-fn php_callable_literal_target(
-    source: &str,
-    node: Node<'_>,
-    context: &crate::language_support::PhpNameResolutionContext,
-    current_class_canonical_name: Option<&str>,
-) -> Option<(String, String)> {
-    let initializers = named_children(node)
-        .into_iter()
-        .filter(|child| child.kind() == "array_element_initializer")
-        .collect::<Vec<_>>();
-    if initializers.len() != 2 {
-        return None;
-    }
-    let first = named_children(initializers[0]).into_iter().next()?;
-    let second = named_children(initializers[1]).into_iter().next()?;
-    let target_name =
-        php_class_string_target_name(source, first, context, current_class_canonical_name)?;
-    let target_member_name = php_string_literal_value(source, second)?;
-    Some((target_name, target_member_name))
-}
-
-fn php_string_literal_value(source: &str, node: Node<'_>) -> Option<String> {
-    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
-    let unquoted = text
-        .strip_prefix('\'')
-        .and_then(|value| value.strip_suffix('\''))
-        .or_else(|| {
-            text.strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-        })
-        .unwrap_or(text)
-        .trim();
-    (!unquoted.is_empty()).then(|| unquoted.to_owned())
-}
-
-fn php_literal_array_keys(source: &str, node: Node<'_>) -> Option<Vec<String>> {
-    let mut keys = BTreeSet::new();
-    for initializer in named_children(node)
-        .into_iter()
-        .filter(|child| child.kind() == "array_element_initializer")
-    {
-        let children = named_children(initializer);
-        if children.len() < 2 {
-            continue;
-        }
-        if let Some(key) = php_literal_key_text(source, children[0]) {
-            keys.insert(key);
-        }
-    }
-    (!keys.is_empty()).then(|| keys.into_iter().collect())
-}
-
-fn php_literal_key_text(source: &str, node: Node<'_>) -> Option<String> {
-    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    if let Some(unquoted) = text
-        .strip_prefix('\'')
-        .and_then(|value| value.strip_suffix('\''))
-        .or_else(|| {
-            text.strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-        })
-    {
-        let normalized = unquoted.trim();
-        return (!normalized.is_empty()).then(|| normalized.to_owned());
-    }
-    text.chars()
-        .all(|value| value.is_ascii_digit() || value == '-' || value == '+')
-        .then(|| text.to_owned())
-}
-
-fn php_named_argument_keys(source: &str, node: Node<'_>) -> Option<Vec<String>> {
-    let mut keys = BTreeSet::new();
-    for argument in named_children(node)
-        .into_iter()
-        .filter(|child| child.kind() == "argument")
-    {
-        let Some(name) = argument
-            .child_by_field_name("name")
-            .and_then(|field| field.utf8_text(source.as_bytes()).ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        keys.insert(name.to_owned());
-    }
-    (!keys.is_empty()).then(|| keys.into_iter().collect())
-}
-
-fn resolve_php_target_symbol_index(
-    symbols: &[SymbolDefinition],
-    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
-    target: &PhpTargetEvidence,
-) -> Option<usize> {
-    if let Some(member_name) = target.target_member_name.as_deref() {
-        let candidate = format!("{}::{member_name}", target.target_canonical_name);
-        if let Some(index) = resolve_unique_canonical_symbol_index(
-            symbols,
-            symbol_indices_by_canonical_name,
-            symbol_indices_by_lower_canonical_name,
-            &candidate,
-            Some(&[
-                SymbolKind::Method,
-                SymbolKind::Property,
-                SymbolKind::Constant,
-                SymbolKind::EnumCase,
-            ]),
-        ) {
-            return Some(index);
-        }
-    }
-    resolve_unique_canonical_symbol_index(
-        symbols,
-        symbol_indices_by_canonical_name,
-        symbol_indices_by_lower_canonical_name,
-        &target.target_canonical_name,
-        Some(&[
-            SymbolKind::Class,
-            SymbolKind::Interface,
-            SymbolKind::PhpTrait,
-            SymbolKind::PhpEnum,
-        ]),
-    )
-}
-
-fn resolve_blade_relation_target_symbol_index(
-    symbols: &[SymbolDefinition],
-    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
-    relation: &BladeRelationEvidence,
-) -> Option<usize> {
-    resolve_unique_symbol_index_by_name(
-        symbols,
-        symbol_indices_by_name,
-        symbol_indices_by_lower_name,
-        relation.target_name.as_str(),
-        relation.target_symbol_kind,
-    )
-}
-
-fn resolve_unique_canonical_symbol_index(
-    symbols: &[SymbolDefinition],
-    symbol_indices_by_canonical_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_canonical_name: &BTreeMap<String, Vec<usize>>,
-    target_name: &str,
-    allowed_kinds: Option<&[SymbolKind]>,
-) -> Option<usize> {
-    if let Some(indices) = symbol_indices_by_canonical_name.get(target_name) {
-        let matches = indices
-            .iter()
-            .copied()
-            .filter(|index| {
-                allowed_kinds.is_none_or(|allowed| allowed.contains(&symbols[*index].kind))
-            })
-            .collect::<Vec<_>>();
-        if matches.len() == 1 {
-            return matches.first().copied();
-        }
-        if !matches.is_empty() {
-            return None;
-        }
-    }
-    let lower = target_name.to_ascii_lowercase();
-    let matches = symbol_indices_by_lower_canonical_name
-        .get(&lower)
-        .into_iter()
-        .flatten()
-        .copied()
-        .filter(|index| allowed_kinds.is_none_or(|allowed| allowed.contains(&symbols[*index].kind)))
-        .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        matches.first().copied()
-    } else {
-        None
-    }
-}
-
-fn resolve_unique_symbol_index_by_name(
-    symbols: &[SymbolDefinition],
-    symbol_indices_by_name: &BTreeMap<String, Vec<usize>>,
-    symbol_indices_by_lower_name: &BTreeMap<String, Vec<usize>>,
-    target_name: &str,
-    required_kind: SymbolKind,
-) -> Option<usize> {
-    if let Some(indices) = symbol_indices_by_name.get(target_name) {
-        let matches = indices
-            .iter()
-            .copied()
-            .filter(|index| symbols[*index].kind == required_kind)
-            .collect::<Vec<_>>();
-        if matches.len() == 1 {
-            return matches.first().copied();
-        }
-        if !matches.is_empty() {
-            return None;
-        }
-    }
-    let matches = symbol_indices_by_lower_name
-        .get(&target_name.to_ascii_lowercase())
-        .into_iter()
-        .flatten()
-        .copied()
-        .filter(|index| symbols[*index].kind == required_kind)
-        .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        matches.first().copied()
-    } else {
-        None
-    }
-}
-
-fn normalize_php_source_evidence(evidence: &mut PhpSourceEvidence) {
-    evidence.type_evidence.sort();
-    evidence.type_evidence.dedup();
-    evidence.target_evidence.sort();
-    evidence.target_evidence.dedup();
-    evidence.literal_evidence.sort();
-    evidence.literal_evidence.dedup();
-}
-
-fn normalize_blade_source_evidence(evidence: &mut BladeSourceEvidence) {
-    evidence.relations.sort();
-    evidence.relations.dedup();
-    evidence.livewire_components.sort();
-    evidence.livewire_components.dedup();
-    evidence.wire_directives.sort();
-    evidence.wire_directives.dedup();
-    evidence.flux_components.sort();
-    evidence.flux_components.dedup();
-    for hint in evidence.flux_hints.values_mut() {
-        hint.props.sort();
-        hint.props.dedup();
-        hint.slots.sort();
-        hint.slots.dedup();
-        hint.variant_values.sort();
-        hint.variant_values.dedup();
-        hint.size_values.sort();
-        hint.size_values.dedup();
-    }
-}
-
-fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .filter(|child| child.is_named())
-        .collect()
-}
-
-fn insert_sorted_unique_owned(values: &mut Vec<String>, value: String) {
-    match values.binary_search(&value) {
-        Ok(_) => {}
-        Err(index) => values.insert(index, value),
-    }
-}
-
-fn flux_registry_hint(component_name: &str) -> Option<FluxComponentHint> {
-    match component_name {
-        "flux:button" => Some(FluxComponentHint {
-            props: vec!["icon".to_owned(), "size".to_owned(), "variant".to_owned()],
-            slots: vec!["default".to_owned()],
-            variant_values: vec![
-                "danger".to_owned(),
-                "ghost".to_owned(),
-                "primary".to_owned(),
-                "subtle".to_owned(),
-            ],
-            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
-            local_overlay: false,
-        }),
-        "flux:input" => Some(FluxComponentHint {
-            props: vec!["size".to_owned(), "type".to_owned()],
-            slots: Vec::new(),
-            variant_values: Vec::new(),
-            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
-            local_overlay: false,
-        }),
-        "flux:modal" => Some(FluxComponentHint {
-            props: vec!["name".to_owned(), "variant".to_owned()],
-            slots: vec![
-                "default".to_owned(),
-                "footer".to_owned(),
-                "heading".to_owned(),
-            ],
-            variant_values: vec!["danger".to_owned(), "default".to_owned()],
-            size_values: Vec::new(),
-            local_overlay: false,
-        }),
-        "flux:dropdown" => Some(FluxComponentHint {
-            props: vec!["align".to_owned(), "position".to_owned()],
-            slots: vec!["default".to_owned(), "trigger".to_owned()],
-            variant_values: Vec::new(),
-            size_values: Vec::new(),
-            local_overlay: false,
-        }),
-        "flux:select" => Some(FluxComponentHint {
-            props: vec!["multiple".to_owned(), "size".to_owned()],
-            slots: vec!["default".to_owned()],
-            variant_values: Vec::new(),
-            size_values: vec!["sm".to_owned(), "base".to_owned(), "lg".to_owned()],
-            local_overlay: false,
-        }),
-        _ => None,
-    }
-}
-
 fn collect_symbols_from_tree(
     language: SymbolLanguage,
     path: &Path,
@@ -2053,239 +679,7 @@ fn collect_symbols_from_node(
     }
 }
 
-fn collect_blade_symbols_from_source(
-    path: &Path,
-    source: &str,
-    symbols: &mut Vec<SymbolDefinition>,
-) {
-    let whole_file_span = source_span_from_offsets(source, 0, source.len());
-    let file_anchor = usize::from(!source.is_empty());
-    let module_name = blade_view_name_for_path(path).unwrap_or_else(|| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(strip_blade_suffix)
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "blade".to_owned())
-    });
-    push_symbol_definition(
-        symbols,
-        SymbolLanguage::Blade,
-        SymbolKind::Module,
-        path,
-        &module_name,
-        whole_file_span.clone(),
-    );
-
-    if let Some(component_name) = blade_component_name_for_path(path) {
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            SymbolKind::Component,
-            path,
-            &component_name,
-            source_span_from_offsets(source, file_anchor, file_anchor),
-        );
-    }
-
-    for capture in blade_section_regex().captures_iter(source) {
-        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            SymbolKind::Section,
-            path,
-            name.as_str().trim(),
-            source_span_from_offsets(source, name.start(), name.end()),
-        );
-    }
-
-    for capture in blade_livewire_directive_regex().captures_iter(source) {
-        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        let normalized = format!("livewire:{}", name.as_str().trim());
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            SymbolKind::Component,
-            path,
-            &normalized,
-            source_span_from_offsets(
-                source,
-                capture.get(0).unwrap().start(),
-                capture.get(0).unwrap().end(),
-            ),
-        );
-    }
-
-    for capture in blade_tag_regex().captures_iter(source) {
-        let Some(tag_name) = capture.get(1) else {
-            continue;
-        };
-        let Some((kind, normalized_name)) = classify_blade_tag_name(tag_name.as_str()) else {
-            continue;
-        };
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            kind,
-            path,
-            &normalized_name,
-            source_span_from_offsets(source, tag_name.start(), tag_name.end()),
-        );
-    }
-
-    for capture in blade_named_slot_tag_regex().captures_iter(source) {
-        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            SymbolKind::Slot,
-            path,
-            name.as_str().trim(),
-            source_span_from_offsets(source, name.start(), name.end()),
-        );
-    }
-
-    for capture in blade_slot_directive_regex().captures_iter(source) {
-        let Some(name) = capture.get(1).or_else(|| capture.get(2)) else {
-            continue;
-        };
-        push_symbol_definition(
-            symbols,
-            SymbolLanguage::Blade,
-            SymbolKind::Slot,
-            path,
-            name.as_str().trim(),
-            source_span_from_offsets(source, name.start(), name.end()),
-        );
-    }
-
-    collect_blade_property_symbols(source, path, symbols, "@props");
-    collect_blade_property_symbols(source, path, symbols, "@aware");
-}
-
-fn collect_blade_property_symbols(
-    source: &str,
-    path: &Path,
-    symbols: &mut Vec<SymbolDefinition>,
-    directive: &str,
-) {
-    let bytes = source.as_bytes();
-    let mut cursor = 0usize;
-    while let Some(relative) = source[cursor..].find(directive) {
-        let start = cursor + relative;
-        let mut offset = start + directive.len();
-        while offset < bytes.len() && bytes[offset].is_ascii_whitespace() {
-            offset += 1;
-        }
-        if offset >= bytes.len() || bytes[offset] != b'(' {
-            cursor = start + directive.len();
-            continue;
-        }
-        let Some((parameter_start, parameter_end)) =
-            blade_directive_parameter_bounds(source, offset)
-        else {
-            cursor = start + directive.len();
-            continue;
-        };
-        let parameter_source = &source[parameter_start..parameter_end];
-        for capture in blade_property_key_regex().captures_iter(parameter_source) {
-            let Some(name_match) = capture.get(1).or_else(|| capture.get(2)) else {
-                continue;
-            };
-            let normalized_name = format!("${}", name_match.as_str().trim());
-            push_symbol_definition(
-                symbols,
-                SymbolLanguage::Blade,
-                SymbolKind::Property,
-                path,
-                &normalized_name,
-                source_span_from_offsets(
-                    source,
-                    parameter_start + name_match.start(),
-                    parameter_start + name_match.end(),
-                ),
-            );
-        }
-        cursor = parameter_end.saturating_add(1);
-    }
-}
-
-fn blade_directive_parameter_bounds(
-    source: &str,
-    open_paren_index: usize,
-) -> Option<(usize, usize)> {
-    let bytes = source.as_bytes();
-    if bytes.get(open_paren_index) != Some(&b'(') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut escaped = false;
-    for (offset, byte) in bytes[open_paren_index..].iter().copied().enumerate() {
-        let index = open_paren_index + offset;
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match byte {
-            b'\\' if in_single_quote || in_double_quote => {
-                escaped = true;
-            }
-            b'\'' if !in_double_quote => {
-                in_single_quote = !in_single_quote;
-            }
-            b'"' if !in_single_quote => {
-                in_double_quote = !in_double_quote;
-            }
-            b'(' if !in_single_quote && !in_double_quote => {
-                depth += 1;
-            }
-            b')' if !in_single_quote && !in_double_quote => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some((open_paren_index + 1, index));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn classify_blade_tag_name(raw_tag_name: &str) -> Option<(SymbolKind, String)> {
-    let normalized = raw_tag_name.trim();
-    if normalized.is_empty() {
-        return None;
-    }
-    if let Some(slot_name) = normalized
-        .strip_prefix("x-slot:")
-        .or_else(|| normalized.strip_prefix("x-slot."))
-    {
-        let slot_name = slot_name.trim();
-        return (!slot_name.is_empty()).then(|| (SymbolKind::Slot, slot_name.to_owned()));
-    }
-    if let Some(component_name) = normalized.strip_prefix("x-") {
-        if component_name == "dynamic-component" {
-            return None;
-        }
-        let component_name = component_name.trim();
-        return (!component_name.is_empty())
-            .then(|| (SymbolKind::Component, component_name.to_owned()));
-    }
-    if normalized.starts_with("livewire:") || normalized.starts_with("flux:") {
-        return Some((SymbolKind::Component, normalized.to_owned()));
-    }
-    None
-}
-
-fn push_symbol_definition(
+pub(crate) fn push_symbol_definition(
     symbols: &mut Vec<SymbolDefinition>,
     language: SymbolLanguage,
     kind: SymbolKind,
@@ -2312,99 +706,11 @@ fn push_symbol_definition(
     });
 }
 
-fn blade_section_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r#"@(?:section|yield)\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
-            .expect("blade section regex must compile")
-    })
-}
-
-fn blade_livewire_directive_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r#"@livewire\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
-            .expect("blade livewire directive regex must compile")
-    })
-}
-
-fn blade_view_relation_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(
-            r#"@(?P<directive>extends|component|include(?:If|When|Unless|First)?|yield)\s*\(\s*(?:"([^"]+)"|'([^']+)')"#,
-        )
-        .expect("blade view relation regex must compile")
-    })
-}
-
-fn blade_dynamic_component_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(
-            r#"<\s*x-dynamic-component\b[^>]*\b(?::component|component)\s*=\s*(?:"([^"]+)"|'([^']+)')"#,
-        )
-        .expect("blade dynamic component regex must compile")
-    })
-}
-
-fn blade_tag_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(
-            r#"<\s*(x-[A-Za-z0-9_.:-]+|livewire:[A-Za-z0-9_.:-]+|flux:[A-Za-z0-9_.:-]+)(?:[\s>/])"#,
-        )
-        .expect("blade tag regex must compile")
-    })
-}
-
-fn blade_named_slot_tag_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r#"<\s*x-slot\b[^>]*\bname\s*=\s*(?:"([^"]+)"|'([^']+)')"#)
-            .expect("blade named slot regex must compile")
-    })
-}
-
-fn blade_slot_directive_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r#"@slot\s*\(\s*(?:"([^"]+)"|'([^']+)')"#)
-            .expect("blade slot directive regex must compile")
-    })
-}
-
-fn blade_wire_directive_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r#"\b(wire:[A-Za-z0-9_.-]+)\s*="#)
-            .expect("blade wire directive regex must compile")
-    })
-}
-
-fn normalize_blade_dynamic_component_target(raw_target: &str) -> String {
-    raw_target
-        .trim()
-        .trim_matches(['"', '\''])
-        .trim()
-        .to_owned()
-}
-
-fn blade_property_key_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(
-            r#"(?x)
-            (?:^|[\[,])\s*"([^"]+)"(?:\s*=>)?
-            |
-            (?:^|[\[,])\s*'([^']+)'(?:\s*=>)?
-        "#,
-        )
-        .expect("blade property key regex must compile")
-    })
-}
-
-fn source_span_from_offsets(source: &str, start_byte: usize, end_byte: usize) -> SourceSpan {
+pub(crate) fn source_span_from_offsets(
+    source: &str,
+    start_byte: usize,
+    end_byte: usize,
+) -> SourceSpan {
     let start_byte = start_byte.min(source.len());
     let end_byte = end_byte.max(start_byte).min(source.len());
     let (start_line, start_column) = line_column_for_offset(source, start_byte);
@@ -2419,7 +725,7 @@ fn source_span_from_offsets(source: &str, start_byte: usize, end_byte: usize) ->
     }
 }
 
-fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
+pub(crate) fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
     let clamped = offset.min(source.len());
     let bytes = source.as_bytes();
     let prefix = &bytes[..clamped];
@@ -2433,69 +739,7 @@ fn line_column_for_offset(source: &str, offset: usize) -> (usize, usize) {
     (line, column)
 }
 
-fn strip_blade_suffix(name: &str) -> String {
-    name.strip_suffix(".blade.php")
-        .or_else(|| name.strip_suffix(".php"))
-        .unwrap_or(name)
-        .to_owned()
-}
-
-fn collect_php_declaration_relations(
-    source: &str,
-    node: Node<'_>,
-    relations: &mut Vec<PhpDeclarationRelation>,
-) {
-    if let Some((source_kind, source_name)) = symbol_from_node(SymbolLanguage::Php, source, node) {
-        let relation_kind = match source_kind {
-            SymbolKind::Class | SymbolKind::Interface | SymbolKind::PhpEnum => Some(source_kind),
-            _ => None,
-        };
-        if let Some(source_kind) = relation_kind {
-            let source_line = source_span(node).start_line;
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor).filter(|child| child.is_named()) {
-                let relation = match child.kind() {
-                    "base_clause" => Some(RelationKind::Extends),
-                    "class_interface_clause" => Some(RelationKind::Implements),
-                    _ => None,
-                };
-                let Some(relation) = relation else {
-                    continue;
-                };
-
-                let mut clause_cursor = child.walk();
-                for target in child
-                    .children(&mut clause_cursor)
-                    .filter(|child| child.is_named())
-                {
-                    let Some(target_name) = target
-                        .utf8_text(source.as_bytes())
-                        .ok()
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                        .map(ToOwned::to_owned)
-                    else {
-                        continue;
-                    };
-                    relations.push(PhpDeclarationRelation {
-                        source_kind,
-                        source_name: source_name.clone(),
-                        source_line,
-                        target_name,
-                        relation,
-                    });
-                }
-            }
-        }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_php_declaration_relations(source, child, relations);
-    }
-}
-
-fn source_span(node: Node<'_>) -> SourceSpan {
+pub(crate) fn source_span(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
     SourceSpan {
@@ -2554,32 +798,6 @@ fn structural_query_match_order(
         .then(left.span.start_line.cmp(&right.span.start_line))
         .then(left.span.start_column.cmp(&right.span.start_column))
         .then(left.excerpt.cmp(&right.excerpt))
-}
-
-fn php_symbol_indices_by_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
-    let mut indices = BTreeMap::new();
-    for (index, symbol) in symbols.iter().enumerate() {
-        if symbol.language == SymbolLanguage::Php {
-            indices
-                .entry(symbol.name.clone())
-                .or_insert_with(Vec::new)
-                .push(index);
-        }
-    }
-    indices
-}
-
-fn php_symbol_indices_by_lower_name(symbols: &[SymbolDefinition]) -> BTreeMap<String, Vec<usize>> {
-    let mut indices = BTreeMap::new();
-    for (index, symbol) in symbols.iter().enumerate() {
-        if symbol.language == SymbolLanguage::Php {
-            indices
-                .entry(symbol.name.to_ascii_lowercase())
-                .or_insert_with(Vec::new)
-                .push(index);
-        }
-    }
-    indices
 }
 
 fn heuristic_reference_order(
@@ -2702,6 +920,14 @@ impl ManifestStore {
         self.storage.initialize()
     }
 
+    pub(crate) fn initialize_for_reindex(&self, semantic_enabled: bool) -> FriggResult<()> {
+        if semantic_enabled {
+            self.storage.initialize()
+        } else {
+            self.storage.initialize_without_vector_store()
+        }
+    }
+
     pub fn persist_snapshot_manifest(
         &self,
         repository_id: &str,
@@ -2821,18 +1047,40 @@ pub fn reindex_repository_with_runtime_config(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
 ) -> FriggResult<ReindexSummary> {
-    let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
-    reindex_repository_with_semantic_executor(
+    reindex_repository_with_runtime_config_and_dirty_paths(
         repository_id,
         workspace_root,
         db_path,
         mode,
         semantic_runtime,
         credentials,
+        &[],
+    )
+}
+
+pub fn reindex_repository_with_runtime_config_and_dirty_paths(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: ReindexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    dirty_path_hints: &[PathBuf],
+) -> FriggResult<ReindexSummary> {
+    let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
+    reindex_repository_with_semantic_executor_and_dirty_paths(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        dirty_path_hints,
         &executor,
     )
 }
 
+#[cfg(test)]
 fn reindex_repository_with_semantic_executor(
     repository_id: &str,
     workspace_root: &Path,
@@ -2842,25 +1090,65 @@ fn reindex_repository_with_semantic_executor(
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
 ) -> FriggResult<ReindexSummary> {
-    let started_at = Instant::now();
-    let manifest_store = ManifestStore::new(db_path);
-    manifest_store.initialize()?;
+    reindex_repository_with_semantic_executor_and_dirty_paths(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        &[],
+        executor,
+    )
+}
 
-    let manifest_builder = ManifestBuilder::default();
-    let manifest_output = manifest_builder.build_with_diagnostics(workspace_root)?;
-    let current_manifest = manifest_output.entries;
-    let diagnostics = ReindexDiagnostics {
-        entries: manifest_output.diagnostics,
+fn reindex_repository_with_semantic_executor_and_dirty_paths(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: ReindexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    dirty_path_hints: &[PathBuf],
+    executor: &dyn SemanticRuntimeEmbeddingExecutor,
+) -> FriggResult<ReindexSummary> {
+    let started_at = Instant::now();
+    let db_preexisted = db_path.exists();
+    let manifest_store = ManifestStore::new(db_path);
+    manifest_store.initialize_for_reindex(semantic_runtime.enabled)?;
+    let previous_manifest = if mode == ReindexMode::Full && !db_preexisted {
+        None
+    } else {
+        manifest_store.load_latest_manifest_for_repository(repository_id)?
     };
-    let previous_manifest = manifest_store.load_latest_manifest_for_repository(repository_id)?;
     let previous_snapshot_id = previous_manifest
         .as_ref()
         .map(|manifest| manifest.snapshot_id.clone());
     let previous_entries = previous_manifest
         .as_ref()
-        .map(|manifest| manifest.entries.clone())
-        .unwrap_or_default();
-    let manifest_diff = diff(&previous_entries, &current_manifest);
+        .map(|manifest| manifest.entries.as_slice())
+        .unwrap_or(&[]);
+
+    let manifest_builder = ManifestBuilder::default();
+    let manifest_output = match mode {
+        ReindexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
+        ReindexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
+            .build_changed_only_with_hints_and_diagnostics(
+                workspace_root,
+                previous_entries,
+                dirty_path_hints,
+            )?,
+        ReindexMode::ChangedOnly => manifest_builder.build_with_diagnostics(workspace_root)?,
+    };
+    let current_manifest = manifest_output.entries;
+    let diagnostics = ReindexDiagnostics {
+        entries: manifest_output.diagnostics,
+    };
+    let manifest_diff = if mode == ReindexMode::Full && previous_entries.is_empty() {
+        ManifestDiff::default()
+    } else {
+        diff(previous_entries, &current_manifest)
+    };
     let files_scanned = current_manifest.len();
     let files_changed = match mode {
         ReindexMode::Full => files_scanned,
@@ -3101,7 +1389,7 @@ mod tests {
         hasher.update(&[0]);
         hasher.update(text.as_bytes());
         let digest = hasher.finalize();
-        digest
+        let mut embedding = digest
             .as_bytes()
             .chunks_exact(4)
             .take(8)
@@ -3109,7 +1397,9 @@ mod tests {
                 let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                 (value as f32) / (u32::MAX as f32)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        embedding.resize(crate::storage::DEFAULT_VECTOR_DIMENSIONS, 0.0);
+        embedding
     }
 
     #[test]
@@ -3279,6 +1569,31 @@ mod tests {
                 .iter()
                 .any(|path| path.starts_with(Path::new("target"))),
             "target artifacts must stay excluded from manifest discovery: {relative_paths:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_builder_respects_root_ignore_file_for_auxiliary_trees() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("manifest-builder-root-ignore");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("src/main.rs", "fn main() {}\n"),
+                ("auxiliary/embedded-repo/src/lib.rs", "pub fn leaked() {}\n"),
+            ],
+        )?;
+        fs::write(workspace_root.join(".ignore"), "auxiliary/\n").map_err(FriggError::Io)?;
+
+        let manifest = ManifestBuilder::default().build(&workspace_root)?;
+        let relative_paths = manifest_relative_paths(&manifest, &workspace_root)?;
+
+        assert!(
+            !relative_paths
+                .iter()
+                .any(|path| path.starts_with(Path::new("auxiliary"))),
+            "root ignore files must exclude auxiliary trees from manifest discovery: {relative_paths:?}"
         );
 
         Ok(())
@@ -3871,28 +2186,29 @@ mod tests {
         )?;
 
         assert!(
-            chunks
-                .iter()
-                .any(|chunk| chunk.path == "README.md" && chunk.language == "markdown"),
+            chunks.iter().any(|chunk| {
+                chunk.path.as_ref() == "README.md" && chunk.language.as_ref() == "markdown"
+            }),
             "README.md should participate in semantic chunking"
         );
         assert!(
             chunks.iter().any(|chunk| {
-                chunk.path == "contracts/errors.md" && chunk.language == "markdown"
+                chunk.path.as_ref() == "contracts/errors.md"
+                    && chunk.language.as_ref() == "markdown"
             }),
             "contract markdown should participate in semantic chunking"
         );
         assert!(
             chunks.iter().any(|chunk| {
-                chunk.path == "fixtures/playbooks/deep-search-suite-core.playbook.json"
-                    && chunk.language == "json"
+                chunk.path.as_ref() == "fixtures/playbooks/deep-search-suite-core.playbook.json"
+                    && chunk.language.as_ref() == "json"
             }),
             "fixture json should participate in semantic chunking"
         );
         assert!(
-            chunks
-                .iter()
-                .any(|chunk| chunk.path == "src/lib.rs" && chunk.language == "rust"),
+            chunks.iter().any(|chunk| {
+                chunk.path.as_ref() == "src/lib.rs" && chunk.language.as_ref() == "rust"
+            }),
             "source files should remain in semantic chunking"
         );
 
@@ -3901,7 +2217,8 @@ mod tests {
     }
 
     #[test]
-    fn semantic_chunk_candidates_skip_playbook_markdown_self_references() -> FriggResult<()> {
+    fn semantic_chunk_candidates_include_playbook_markdown_under_generic_policy() -> FriggResult<()>
+    {
         let workspace_root = temp_workspace_root("semantic-chunk-skip-playbooks");
         prepare_workspace(
             &workspace_root,
@@ -3925,13 +2242,13 @@ mod tests {
         assert!(
             chunks
                 .iter()
-                .all(|chunk| chunk.path != "playbooks/hybrid-search-context-retrieval.md"),
-            "playbook markdown should be excluded from semantic chunking to avoid self-reference"
+                .any(|chunk| chunk.path.as_ref() == "playbooks/hybrid-search-context-retrieval.md"),
+            "playbook markdown should no longer receive a repo-specific semantic exclusion"
         );
         assert!(
             chunks
                 .iter()
-                .any(|chunk| chunk.path == "contracts/errors.md"),
+                .any(|chunk| chunk.path.as_ref() == "contracts/errors.md"),
             "docs markdown should still remain eligible for semantic chunking"
         );
 
@@ -4066,6 +2383,42 @@ mod tests {
             !first.diagnostics.entries[0].message.is_empty(),
             "read diagnostics should include an error message"
         );
+
+        set_file_mode(&unreadable_path, 0o644)?;
+        cleanup_workspace(&workspace_root);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changed_only_reuses_previous_digests_for_unchanged_unreadable_files() -> FriggResult<()> {
+        let db_path = temp_db_path("incremental-changed-unreadable-db");
+        let workspace_root = temp_workspace_root("incremental-changed-unreadable-workspace");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("src/main.rs", "fn main() {}\n"),
+                ("src/private.rs", "pub fn hidden() {}\n"),
+            ],
+        )?;
+
+        let first = reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+        let unreadable_path = workspace_root.join("src/private.rs");
+        set_file_mode(&unreadable_path, 0o000)?;
+
+        let second = reindex_repository(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            ReindexMode::ChangedOnly,
+        )?;
+
+        assert_eq!(second.snapshot_id, first.snapshot_id);
+        assert_eq!(second.files_scanned, 2);
+        assert_eq!(second.files_changed, 0);
+        assert_eq!(second.files_deleted, 0);
+        assert_eq!(second.diagnostics.total_count(), 0);
 
         set_file_mode(&unreadable_path, 0o644)?;
         cleanup_workspace(&workspace_root);
@@ -4326,7 +2679,7 @@ mod tests {
         let path = Path::new("resources/views/dashboard/show.blade.php");
         let source = blade_source_evidence_fixture();
         let symbols = extract_symbols_from_source(SymbolLanguage::Blade, path, source)?;
-        let mut evidence = extract_blade_source_evidence_from_source(path, source, &symbols);
+        let mut evidence = extract_blade_source_evidence_from_source(source, &symbols);
 
         let overlay_path = Path::new("resources/views/components/flux/button.blade.php");
         let overlay_symbols = extract_symbols_from_source(SymbolLanguage::Blade, overlay_path, "")?;
@@ -4561,7 +2914,7 @@ mod tests {
         let path = Path::new("resources/views/dashboard/index.blade.php");
         let source = blade_source_evidence_fixture();
         let symbols = extract_symbols_from_source(SymbolLanguage::Blade, path, source)?;
-        let evidence = extract_blade_source_evidence_from_source(path, source, &symbols);
+        let evidence = extract_blade_source_evidence_from_source(source, &symbols);
 
         assert!(
             evidence.relations.iter().any(|relation| {

@@ -12,6 +12,7 @@
   ],
   "output_fields": [
     "symbols",
+    "metadata",
     "note"
   ],
   "output_required": [

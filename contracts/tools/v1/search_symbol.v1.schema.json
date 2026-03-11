@@ -6,6 +6,8 @@
   "input_fields": [
     "query",
     "repository_id",
+    "path_class",
+    "path_regex",
     "limit"
   ],
   "input_required": [
@@ -13,6 +15,7 @@
   ],
   "output_fields": [
     "matches",
+    "metadata",
     "note"
   ],
   "output_required": [

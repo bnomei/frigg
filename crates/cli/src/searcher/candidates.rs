@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::workspace_ignores::hard_excluded_runtime_path;
 use ignore::WalkBuilder;
 
 use super::surfaces::{is_ci_workflow_path, is_entrypoint_build_workflow_path};
@@ -142,24 +143,6 @@ pub(super) fn hidden_workflow_candidates_for_repository(
     file_candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
     file_candidates
-}
-
-pub(super) fn hard_excluded_runtime_path(root: &Path, path: &Path) -> bool {
-    let relative = if path.is_absolute() {
-        let Ok(relative) = path.strip_prefix(root) else {
-            return true;
-        };
-        relative
-    } else {
-        path
-    };
-    let Some(component) = relative.components().next() else {
-        return false;
-    };
-    matches!(
-        component.as_os_str().to_string_lossy().as_ref(),
-        ".frigg" | ".git" | "target"
-    )
 }
 
 pub(super) fn normalize_repository_relative_path(root: &Path, path: &Path) -> String {

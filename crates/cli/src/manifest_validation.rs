@@ -1,8 +1,14 @@
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::domain::{FriggError, FriggResult};
 use crate::indexer::FileMetadataDigest;
+use crate::languages::semantic_chunk_language_for_path;
+use crate::settings::SemanticRuntimeConfig;
+use crate::storage::{ManifestEntry, ManifestMetadataEntry, RepositoryManifestSnapshot, Storage};
 
 pub(crate) fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
     system_time
@@ -44,4 +50,377 @@ pub(crate) fn validate_manifest_digests_for_root(
     }
 
     Some(validated)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ValidatedManifestCandidateCacheEntry {
+    Dirty,
+    Ready {
+        snapshot_id: String,
+        digests: Vec<FileMetadataDigest>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ValidatedManifestCandidateCacheKey {
+    root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ValidatedManifestCandidateCacheStats {
+    pub hits: usize,
+    pub misses: usize,
+    pub dirty_bypasses: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValidatedManifestCandidateCacheLookup {
+    Hit(Vec<FileMetadataDigest>),
+    Miss,
+    Dirty,
+}
+
+#[derive(Debug, Default)]
+pub struct ValidatedManifestCandidateCache {
+    entries: BTreeMap<ValidatedManifestCandidateCacheKey, ValidatedManifestCandidateCacheEntry>,
+    stats: ValidatedManifestCandidateCacheStats,
+}
+
+impl ValidatedManifestCandidateCache {
+    pub(crate) fn lookup(
+        &mut self,
+        root: &Path,
+        snapshot_id: &str,
+    ) -> ValidatedManifestCandidateCacheLookup {
+        let key = Self::cache_key(root);
+        match self.entries.get(&key) {
+            Some(ValidatedManifestCandidateCacheEntry::Ready {
+                snapshot_id: cached_snapshot_id,
+                digests,
+            }) if cached_snapshot_id == snapshot_id => {
+                self.stats.hits += 1;
+                ValidatedManifestCandidateCacheLookup::Hit(digests.clone())
+            }
+            Some(ValidatedManifestCandidateCacheEntry::Dirty) => {
+                self.stats.dirty_bypasses += 1;
+                ValidatedManifestCandidateCacheLookup::Dirty
+            }
+            Some(ValidatedManifestCandidateCacheEntry::Ready { .. }) => {
+                self.entries.remove(&key);
+                self.stats.misses += 1;
+                ValidatedManifestCandidateCacheLookup::Miss
+            }
+            None => {
+                self.stats.misses += 1;
+                ValidatedManifestCandidateCacheLookup::Miss
+            }
+        }
+    }
+
+    pub(crate) fn store_validated(
+        &mut self,
+        root: &Path,
+        snapshot_id: &str,
+        digests: &[FileMetadataDigest],
+    ) {
+        self.entries.insert(
+            Self::cache_key(root),
+            ValidatedManifestCandidateCacheEntry::Ready {
+                snapshot_id: snapshot_id.to_owned(),
+                digests: digests.to_vec(),
+            },
+        );
+    }
+
+    pub(crate) fn invalidate_root(&mut self, root: &Path) {
+        self.entries.remove(&Self::cache_key(root));
+    }
+
+    pub(crate) fn mark_dirty_root(&mut self, root: &Path) {
+        self.entries.insert(
+            Self::cache_key(root),
+            ValidatedManifestCandidateCacheEntry::Dirty,
+        );
+    }
+
+    fn cache_key(root: &Path) -> ValidatedManifestCandidateCacheKey {
+        ValidatedManifestCandidateCacheKey {
+            root: root.to_path_buf(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> ValidatedManifestCandidateCacheStats {
+        self.stats
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_entry_for_root(&self, root: &Path) -> bool {
+        self.entries.contains_key(&Self::cache_key(root))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedManifestSnapshot {
+    pub snapshot_id: String,
+    pub digests: Vec<FileMetadataDigest>,
+}
+
+pub(crate) fn latest_validated_manifest_snapshot(
+    storage: &Storage,
+    repository_id: &str,
+    root: &Path,
+    cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
+) -> Option<ValidatedManifestSnapshot> {
+    let latest = storage
+        .load_latest_manifest_metadata_for_repository(repository_id)
+        .ok()??;
+    let snapshot_id = latest.snapshot_id.clone();
+
+    if let Some(cache) = cache {
+        let lookup = cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lookup(root, &snapshot_id);
+        match lookup {
+            ValidatedManifestCandidateCacheLookup::Hit(digests) => {
+                if let Some(validated_digests) = validate_manifest_digests_for_root(root, &digests)
+                {
+                    cache
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .store_validated(root, &snapshot_id, &validated_digests);
+                    return Some(ValidatedManifestSnapshot {
+                        snapshot_id,
+                        digests: validated_digests,
+                    });
+                }
+
+                cache
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .invalidate_root(root);
+                return None;
+            }
+            ValidatedManifestCandidateCacheLookup::Dirty => return None,
+            ValidatedManifestCandidateCacheLookup::Miss => {}
+        }
+    }
+
+    let snapshot_digests = manifest_digests_from_metadata_entries(&latest.entries);
+    let validated_digests = validate_manifest_digests_for_root(root, &snapshot_digests)?;
+
+    if let Some(cache) = cache {
+        cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .store_validated(root, &snapshot_id, &validated_digests);
+    }
+
+    Some(ValidatedManifestSnapshot {
+        snapshot_id,
+        digests: validated_digests,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RepositoryManifestFreshness {
+    MissingSnapshot,
+    StaleSnapshot,
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RepositorySemanticFreshness {
+    Disabled,
+    MissingManifestSnapshot,
+    StaleManifestSnapshot,
+    NoEligibleEntries,
+    MissingForActiveModel,
+    Ready,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositorySemanticTarget {
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositoryFreshnessStatus {
+    pub snapshot_id: Option<String>,
+    pub manifest_entry_count: Option<usize>,
+    pub manifest: RepositoryManifestFreshness,
+    pub semantic: RepositorySemanticFreshness,
+    pub validated_manifest_digests: Option<Vec<FileMetadataDigest>>,
+    pub semantic_target: Option<RepositorySemanticTarget>,
+}
+
+impl RepositoryFreshnessStatus {
+    pub(crate) fn should_refresh_watch(&self) -> bool {
+        matches!(
+            self.manifest,
+            RepositoryManifestFreshness::MissingSnapshot
+                | RepositoryManifestFreshness::StaleSnapshot
+        ) || matches!(
+            self.semantic,
+            RepositorySemanticFreshness::MissingForActiveModel
+        )
+    }
+
+    pub(crate) fn watch_reason(&self) -> &'static str {
+        match self.manifest {
+            RepositoryManifestFreshness::MissingSnapshot => "missing_manifest_snapshot",
+            RepositoryManifestFreshness::StaleSnapshot => "stale_manifest_snapshot",
+            RepositoryManifestFreshness::Ready => match self.semantic {
+                RepositorySemanticFreshness::Disabled => "manifest_valid",
+                RepositorySemanticFreshness::MissingManifestSnapshot => "missing_manifest_snapshot",
+                RepositorySemanticFreshness::StaleManifestSnapshot => "stale_manifest_snapshot",
+                RepositorySemanticFreshness::NoEligibleEntries => {
+                    "manifest_valid_no_semantic_eligible_entries"
+                }
+                RepositorySemanticFreshness::MissingForActiveModel => {
+                    "semantic_snapshot_missing_for_active_model"
+                }
+                RepositorySemanticFreshness::Ready => "manifest_and_semantic_snapshot_valid",
+            },
+        }
+    }
+}
+
+pub(crate) fn manifest_digests_from_entries(entries: &[ManifestEntry]) -> Vec<FileMetadataDigest> {
+    entries
+        .iter()
+        .map(|entry| FileMetadataDigest {
+            path: entry.path.clone().into(),
+            size_bytes: entry.size_bytes,
+            mtime_ns: entry.mtime_ns,
+        })
+        .collect()
+}
+
+fn manifest_digests_from_metadata_entries(
+    entries: &[ManifestMetadataEntry],
+) -> Vec<FileMetadataDigest> {
+    entries
+        .iter()
+        .map(|entry| FileMetadataDigest {
+            path: entry.path.clone().into(),
+            size_bytes: entry.size_bytes,
+            mtime_ns: entry.mtime_ns,
+        })
+        .collect()
+}
+
+pub(crate) fn validate_manifest_snapshot_for_root(
+    root: &Path,
+    snapshot: &RepositoryManifestSnapshot,
+) -> Option<Vec<FileMetadataDigest>> {
+    let digests = manifest_digests_from_entries(&snapshot.entries);
+    validate_manifest_digests_for_root(root, &digests)
+}
+
+pub(crate) fn repository_freshness_status<F>(
+    storage: &Storage,
+    repository_id: &str,
+    root: &Path,
+    semantic_runtime: &SemanticRuntimeConfig,
+    should_ignore_path: F,
+) -> FriggResult<RepositoryFreshnessStatus>
+where
+    F: Fn(&Path) -> bool,
+{
+    let latest = storage.load_latest_manifest_for_repository(repository_id)?;
+    let Some(snapshot) = latest else {
+        return Ok(RepositoryFreshnessStatus {
+            snapshot_id: None,
+            manifest_entry_count: None,
+            manifest: RepositoryManifestFreshness::MissingSnapshot,
+            semantic: if semantic_runtime.enabled {
+                RepositorySemanticFreshness::MissingManifestSnapshot
+            } else {
+                RepositorySemanticFreshness::Disabled
+            },
+            validated_manifest_digests: None,
+            semantic_target: None,
+        });
+    };
+
+    let snapshot_id = snapshot.snapshot_id.clone();
+    let manifest_entry_count = Some(snapshot.entries.len());
+    let Some(validated_manifest_digests) = validate_manifest_snapshot_for_root(root, &snapshot)
+    else {
+        return Ok(RepositoryFreshnessStatus {
+            snapshot_id: Some(snapshot_id),
+            manifest_entry_count,
+            manifest: RepositoryManifestFreshness::StaleSnapshot,
+            semantic: if semantic_runtime.enabled {
+                RepositorySemanticFreshness::StaleManifestSnapshot
+            } else {
+                RepositorySemanticFreshness::Disabled
+            },
+            validated_manifest_digests: None,
+            semantic_target: None,
+        });
+    };
+
+    if !semantic_runtime.enabled {
+        return Ok(RepositoryFreshnessStatus {
+            snapshot_id: Some(snapshot_id),
+            manifest_entry_count,
+            manifest: RepositoryManifestFreshness::Ready,
+            semantic: RepositorySemanticFreshness::Disabled,
+            validated_manifest_digests: Some(validated_manifest_digests),
+            semantic_target: None,
+        });
+    }
+
+    semantic_runtime
+        .validate()
+        .map_err(|err| FriggError::InvalidInput(format!("{err}")))?;
+    let provider = semantic_runtime.provider.ok_or_else(|| {
+        FriggError::Internal("semantic runtime provider missing after validation".to_owned())
+    })?;
+    let model = semantic_runtime.normalized_model().ok_or_else(|| {
+        FriggError::Internal("semantic runtime model missing after validation".to_owned())
+    })?;
+    let semantic_target = RepositorySemanticTarget {
+        provider: provider.as_str().to_owned(),
+        model: model.to_owned(),
+    };
+
+    let has_semantic_eligible_entries = snapshot.entries.iter().any(|entry| {
+        let path = Path::new(&entry.path);
+        !should_ignore_path(path) && semantic_chunk_language_for_path(path).is_some()
+    });
+    if !has_semantic_eligible_entries {
+        return Ok(RepositoryFreshnessStatus {
+            snapshot_id: Some(snapshot_id),
+            manifest_entry_count,
+            manifest: RepositoryManifestFreshness::Ready,
+            semantic: RepositorySemanticFreshness::NoEligibleEntries,
+            validated_manifest_digests: Some(validated_manifest_digests),
+            semantic_target: Some(semantic_target),
+        });
+    }
+
+    let has_rows = storage.has_semantic_embeddings_for_repository_snapshot_model(
+        repository_id,
+        &snapshot.snapshot_id,
+        &semantic_target.provider,
+        &semantic_target.model,
+    )?;
+
+    Ok(RepositoryFreshnessStatus {
+        snapshot_id: Some(snapshot.snapshot_id),
+        manifest_entry_count,
+        manifest: RepositoryManifestFreshness::Ready,
+        semantic: if has_rows {
+            RepositorySemanticFreshness::Ready
+        } else {
+            RepositorySemanticFreshness::MissingForActiveModel
+        },
+        validated_manifest_digests: Some(validated_manifest_digests),
+        semantic_target: Some(semantic_target),
+    })
 }

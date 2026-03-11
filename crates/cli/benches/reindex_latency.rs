@@ -64,7 +64,7 @@ fn reindex_latency_benchmarks(c: &mut Criterion) {
                     .expect("changed-only no-op benchmark should not fail");
                     assert_eq!(
                         summary.files_scanned, BENCH_FILE_COUNT,
-                        "changed-only no-op benchmark should still scan the fixture"
+                        "changed-only no-op benchmark should still metadata-scan the fixture"
                     );
                     assert_eq!(
                         summary.files_changed, 0,
@@ -96,7 +96,7 @@ fn reindex_latency_benchmarks(c: &mut Criterion) {
                     .expect("changed-only delta benchmark should not fail");
                     assert_eq!(
                         summary.files_scanned, BENCH_FILE_COUNT,
-                        "changed-only delta benchmark should scan the deterministic fixture size"
+                        "changed-only delta benchmark should metadata-scan the deterministic fixture size"
                     );
                     assert_eq!(
                         summary.files_changed,

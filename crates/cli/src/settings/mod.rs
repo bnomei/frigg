@@ -5,6 +5,7 @@ use crate::domain::{
     FriggError, FriggResult,
     model::{RepositoryId, RepositoryRecord},
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -70,6 +71,45 @@ pub enum RuntimeTransportKind {
     Stdio,
     LoopbackHttp,
     RemoteHttp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeProfile {
+    StdioEphemeral,
+    StdioAttached,
+    HttpLoopbackService,
+    HttpRemoteService,
+}
+
+impl RuntimeProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StdioEphemeral => "stdio_ephemeral",
+            Self::StdioAttached => "stdio_attached",
+            Self::HttpLoopbackService => "http_loopback_service",
+            Self::HttpRemoteService => "http_remote_service",
+        }
+    }
+
+    pub fn persistent_state_available(self) -> bool {
+        matches!(
+            self,
+            Self::StdioAttached | Self::HttpLoopbackService | Self::HttpRemoteService
+        )
+    }
+}
+
+pub fn runtime_profile_for_transport(
+    transport: RuntimeTransportKind,
+    watch_enabled: bool,
+) -> RuntimeProfile {
+    match transport {
+        RuntimeTransportKind::Stdio if watch_enabled => RuntimeProfile::StdioAttached,
+        RuntimeTransportKind::Stdio => RuntimeProfile::StdioEphemeral,
+        RuntimeTransportKind::LoopbackHttp => RuntimeProfile::HttpLoopbackService,
+        RuntimeTransportKind::RemoteHttp => RuntimeProfile::HttpRemoteService,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,6 +558,26 @@ mod tests {
 
         let http = WatchConfig::default_for_transport(RuntimeTransportKind::LoopbackHttp);
         assert_eq!(http.mode, WatchMode::Auto);
+    }
+
+    #[test]
+    fn runtime_profile_resolution_distinguishes_ephemeral_and_persistent_modes() {
+        assert_eq!(
+            runtime_profile_for_transport(RuntimeTransportKind::Stdio, false),
+            RuntimeProfile::StdioEphemeral
+        );
+        assert_eq!(
+            runtime_profile_for_transport(RuntimeTransportKind::Stdio, true),
+            RuntimeProfile::StdioAttached
+        );
+        assert_eq!(
+            runtime_profile_for_transport(RuntimeTransportKind::LoopbackHttp, true),
+            RuntimeProfile::HttpLoopbackService
+        );
+        assert_eq!(
+            runtime_profile_for_transport(RuntimeTransportKind::RemoteHttp, true),
+            RuntimeProfile::HttpRemoteService
+        );
     }
 
     #[test]

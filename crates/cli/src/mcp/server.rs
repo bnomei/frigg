@@ -4,35 +4,39 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::domain::FriggError;
 use crate::domain::model::{ReferenceMatch, SymbolMatch};
+use crate::domain::{ChannelResult, EvidenceChannel, FriggError};
 use crate::graph::{
     PreciseRelationshipKind, RelationKind, ScipIngestError, ScipResourceBudgets, SymbolGraph,
 };
 use crate::indexer::{
-    FLUX_REGISTRY_VERSION, FileMetadataDigest, HeuristicReferenceConfidence,
+    FileMetadataDigest, HeuristicReference, HeuristicReferenceConfidence,
     HeuristicReferenceEvidence, HeuristicReferenceResolver, ManifestBuilder,
     ManifestDiagnosticKind, ReindexMode, SourceSpan, SymbolDefinition, SymbolExtractionOutput,
-    extract_blade_source_evidence_from_source, extract_php_source_evidence_from_source,
-    extract_symbols_for_paths, extract_symbols_from_source, mark_local_flux_overlays,
-    navigation_symbol_target_rank, php_declaration_relation_edges_for_file,
-    php_heuristic_implementation_candidates_for_target, register_symbol_definitions,
-    reindex_repository_with_runtime_config, resolve_blade_relation_evidence_edges,
+    extract_php_source_evidence_from_source, extract_symbols_for_paths,
+    extract_symbols_from_source, navigation_symbol_target_rank,
+    php_declaration_relation_edges_for_file, php_heuristic_implementation_candidates_for_target,
+    register_symbol_definitions, reindex_repository_with_runtime_config,
     resolve_php_target_evidence_edges, search_structural_in_source,
-    semantic_chunk_language_for_path,
 };
-use crate::language_support::{
-    HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
-    heuristic_implementation_strategy, parse_supported_language, supported_language_for_path,
+use crate::languages::{
+    FLUX_REGISTRY_VERSION, HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
+    extract_blade_source_evidence_from_source, heuristic_implementation_strategy,
+    heuristic_rust_implementation_candidates, mark_local_flux_overlays, parse_rust_impl_signature,
+    parse_supported_language, resolve_blade_relation_evidence_edges,
+    rust_source_suffix_looks_like_call, supported_language_for_path,
 };
-use crate::manifest_validation::validate_manifest_digests_for_root;
+use crate::manifest_validation::{
+    RepositoryManifestFreshness, RepositorySemanticFreshness, repository_freshness_status,
+    validate_manifest_digests_for_root,
+};
 use crate::path_class::{repository_path_class, repository_path_class_rank};
 use crate::searcher::{
     HybridChannelWeights, SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
-    TextSearcher, compile_safe_regex,
+    TextSearcher, ValidatedManifestCandidateCache, compile_safe_regex,
 };
-use crate::settings::FriggConfig;
 use crate::settings::SemanticRuntimeCredentials;
+use crate::settings::{FriggConfig, SemanticRuntimeConfig};
 use crate::storage::{Storage, ensure_provenance_db_parent_dir, resolve_provenance_db_path};
 use protobuf::Enum;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -48,7 +52,7 @@ use serde_json::{Value, json};
 use tokio::task;
 use tracing::warn;
 
-use crate::mcp::deep_search::{
+use crate::mcp::advanced::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
 };
 use crate::mcp::explorer::{
@@ -56,15 +60,20 @@ use crate::mcp::explorer::{
     LossyLineSliceError, MAX_CONTEXT_LINES, line_window_around_anchor, read_line_slice_lossy,
     scan_file_scope_lossy, validate_anchor, validate_cursor,
 };
+use crate::mcp::guidance::{
+    ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
+    TOOL_SURFACE_RESOURCE_URI, guidance_prompts, policy_resources, read_guidance_prompt,
+    read_policy_resource,
+};
 use crate::mcp::provenance_cache::{ProvenancePersistenceStage, ProvenanceStorageCacheKey};
 use crate::mcp::server_state::{
     CachedPreciseGraph, DeterministicSignatureHasher, ExploreExecution, FindReferencesExecution,
     FindReferencesResourceBudgets, NavigationToolExecution, PreciseArtifactFailureSample,
     PreciseCoverageMode, PreciseGraphCacheKey, PreciseIngestStats, RankedSymbolMatch,
     ReadFileExecution, RepositoryDiagnosticsSummary, RepositorySymbolCorpus,
-    ResolvedNavigationTarget, ResolvedSymbolTarget, ScipArtifactDigest, ScipArtifactDiscovery,
-    ScipArtifactFormat, ScipCandidateDirectoryDigest, SearchHybridExecution, SearchSymbolExecution,
-    SearchTextExecution, SymbolCandidate, SymbolCorpusCacheKey,
+    ResolvedNavigationTarget, ResolvedSymbolTarget, RuntimeTaskRegistry, ScipArtifactDigest,
+    ScipArtifactDiscovery, ScipArtifactFormat, ScipCandidateDirectoryDigest, SearchHybridExecution,
+    SearchSymbolExecution, SearchTextExecution, SymbolCandidate, SymbolCorpusCacheKey,
 };
 use crate::mcp::tool_surface::{
     TOOL_SURFACE_PROFILE_ENV, ToolSurfaceParityDiff, ToolSurfaceProfile,
@@ -79,15 +88,18 @@ use crate::mcp::types::{
     FindReferencesParams, FindReferencesResponse, GoToDefinitionParams, GoToDefinitionResponse,
     ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, ListRepositoriesParams,
     ListRepositoriesResponse, NavigationLocation, OutgoingCallsParams, OutgoingCallsResponse,
-    ReadFileParams, ReadFileResponse, RepositorySummary, SearchHybridChannelWeightsParams,
-    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, SearchTextResponse, WorkspaceAttachParams,
-    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
-    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    ReadFileParams, ReadFileResponse, RecentProvenanceSummary, RepositorySummary,
+    RuntimeStatusSummary, SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams,
+    SearchHybridResponse, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
+    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
+    SearchTextResponse, WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
+    WorkspaceCurrentResponse, WorkspaceIndexComponentState, WorkspaceIndexComponentSummary,
+    WorkspaceIndexHealthSummary, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
+use crate::settings::RuntimeProfile;
+use url::Url;
 
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
@@ -95,13 +107,33 @@ pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionMan
 pub struct FriggMcpServer {
     config: Arc<FriggConfig>,
     tool_router: ToolRouter<Self>,
+    tool_surface_profile: ToolSurfaceProfile,
+    runtime_profile: RuntimeProfile,
+    runtime_watch_active: bool,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     session_default_repository_id: Arc<RwLock<Option<String>>>,
+    validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     symbol_corpus_cache: Arc<RwLock<BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>>>,
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
     provenance_storage_cache: Arc<RwLock<BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>>>,
+    repository_summary_cache: Arc<RwLock<BTreeMap<String, CachedRepositorySummary>>>,
+    search_text_response_cache:
+        Arc<RwLock<BTreeMap<SearchTextResponseCacheKey, CachedSearchTextResponse>>>,
+    search_hybrid_response_cache:
+        Arc<RwLock<BTreeMap<SearchHybridResponseCacheKey, CachedSearchHybridResponse>>>,
+    search_symbol_response_cache:
+        Arc<RwLock<BTreeMap<SearchSymbolResponseCacheKey, CachedSearchSymbolResponse>>>,
+    go_to_definition_response_cache:
+        Arc<RwLock<BTreeMap<GoToDefinitionResponseCacheKey, CachedGoToDefinitionResponse>>>,
+    find_declarations_response_cache:
+        Arc<RwLock<BTreeMap<FindDeclarationsResponseCacheKey, CachedFindDeclarationsResponse>>>,
+    heuristic_reference_cache:
+        Arc<RwLock<BTreeMap<HeuristicReferenceCacheKey, CachedHeuristicReferences>>>,
+    compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
+    runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     provenance_best_effort: bool,
+    provenance_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +141,135 @@ struct WorkspaceSemanticRefreshPlan {
     latest_snapshot_id: String,
     compatible_snapshot_id: String,
     reason: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRepositorySummary {
+    summary: RepositorySummary,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchTextResponseCacheKey {
+    scoped_repository_ids: Vec<String>,
+    query: String,
+    pattern_type: &'static str,
+    path_regex: Option<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSearchTextResponse {
+    response: SearchTextResponse,
+    source_refs: Value,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchHybridResponseCacheKey {
+    scoped_repository_ids: Vec<String>,
+    query: String,
+    language: Option<String>,
+    limit: usize,
+    semantic: Option<bool>,
+    lexical_weight_bits: u32,
+    graph_weight_bits: u32,
+    semantic_weight_bits: u32,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSearchHybridResponse {
+    response: SearchHybridResponse,
+    source_refs: Value,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchSymbolResponseCacheKey {
+    scoped_repository_ids: Vec<String>,
+    query: String,
+    path_class: Option<String>,
+    path_regex: Option<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSearchSymbolResponse {
+    response: SearchSymbolResponse,
+    scoped_repository_ids: Vec<String>,
+    diagnostics_count: usize,
+    manifest_walk_diagnostics_count: usize,
+    manifest_read_diagnostics_count: usize,
+    symbol_extraction_diagnostics_count: usize,
+    effective_limit: usize,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct GoToDefinitionResponseCacheKey {
+    repository_id: Option<String>,
+    symbol: Option<String>,
+    path: Option<String>,
+    line: Option<usize>,
+    column: Option<usize>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedGoToDefinitionResponse {
+    response: GoToDefinitionResponse,
+    scoped_repository_ids: Vec<String>,
+    selected_symbol_id: Option<String>,
+    selected_precise_symbol: Option<String>,
+    resolution_precision: Option<String>,
+    resolution_source: Option<String>,
+    effective_limit: usize,
+    precise_artifacts_ingested: usize,
+    precise_artifacts_failed: usize,
+    match_count: usize,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FindDeclarationsResponseCacheKey {
+    repository_id: Option<String>,
+    symbol: Option<String>,
+    path: Option<String>,
+    line: Option<usize>,
+    column: Option<usize>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedFindDeclarationsResponse {
+    response: FindDeclarationsResponse,
+    scoped_repository_ids: Vec<String>,
+    selected_symbol_id: Option<String>,
+    selected_precise_symbol: Option<String>,
+    resolution_precision: Option<String>,
+    resolution_source: Option<String>,
+    effective_limit: usize,
+    precise_artifacts_ingested: usize,
+    precise_artifacts_failed: usize,
+    match_count: usize,
+    generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct HeuristicReferenceCacheKey {
+    repository_id: String,
+    symbol_id: String,
+    corpus_signature: String,
+    scip_signature: String,
+}
+
+#[derive(Debug, Clone)]
+struct CachedHeuristicReferences {
+    references: Arc<Vec<HeuristicReference>>,
+    source_read_diagnostics_count: usize,
+    source_files_loaded: usize,
+    source_bytes_loaded: u64,
+    generated_at: Instant,
 }
 
 impl FriggMcpServer {
@@ -132,6 +293,11 @@ impl FriggMcpServer {
     const PRECISE_FAILURE_SAMPLE_LIMIT: usize = 8;
     const PRECISE_DISCOVERY_SAMPLE_LIMIT: usize = 16;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
+    const SAFE_REGEX_CACHE_LIMIT: usize = 128;
+    const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
+    const RUNTIME_RECENT_PROVENANCE_LIMIT: usize = 8;
+    const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
+    const SEARCH_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(1);
 
     fn filtered_tool_router(enable_extended_tools: bool) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
@@ -837,7 +1003,7 @@ impl FriggMcpServer {
         })
     }
 
-    fn try_cached_precise_definition_fast_path(
+    fn try_precise_definition_fast_path(
         &self,
         repository_id_hint: Option<&str>,
         raw_path: &str,
@@ -854,9 +1020,11 @@ impl FriggMcpServer {
         scoped_roots.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
 
         for (repository_id, root) in scoped_roots {
-            let Some(cached_precise_graph) =
-                self.try_reuse_latest_precise_graph_for_repository(&repository_id, &root)
-            else {
+            let Ok(cached_precise_graph) = self.precise_graph_for_repository_root(
+                &repository_id,
+                &root,
+                self.find_references_resource_budgets(),
+            ) else {
                 continue;
             };
             let relative_path = Self::canonicalize_navigation_path(&root, raw_path);
@@ -884,7 +1052,7 @@ impl FriggMcpServer {
                     path: Self::canonicalize_navigation_path(&root, &occurrence.path),
                     line: occurrence.range.start_line,
                     column: occurrence.range.start_column,
-                    kind: Some(Self::display_symbol_kind(&precise_target.kind)),
+                    kind: Self::display_symbol_kind(&precise_target.kind),
                     precision: Some(
                         Self::precise_match_precision(cached_precise_graph.coverage_mode)
                             .to_owned(),
@@ -1197,7 +1365,7 @@ impl FriggMcpServer {
                 }
 
                 let (implemented_trait, implementing_type) =
-                    Self::parse_rust_impl_signature(enclosing_symbol.name.as_str())?;
+                    parse_rust_impl_signature(enclosing_symbol.name.as_str())?;
                 let (symbol, kind, path, line, column, relation) =
                     if let Some(implemented_trait) = implemented_trait {
                         if implemented_trait.eq_ignore_ascii_case(target_name) {
@@ -1494,7 +1662,7 @@ impl FriggMcpServer {
         line.match_indices(target_name).any(|(index, _)| {
             let suffix_start = index.saturating_add(target_name.len()).min(line.len());
             line.get(suffix_start..)
-                .map(Self::source_suffix_looks_like_rust_call)
+                .map(rust_source_suffix_looks_like_call)
                 .unwrap_or(false)
         })
     }
@@ -1518,45 +1686,6 @@ impl FriggMcpServer {
         range: &crate::graph::PreciseRange,
     ) -> Option<&'a str> {
         source.lines().nth(range.start_line.saturating_sub(1))
-    }
-
-    fn source_suffix_looks_like_rust_call(mut suffix: &str) -> bool {
-        suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
-        suffix = suffix.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_');
-        suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
-        if suffix.starts_with('(') {
-            return true;
-        }
-        if !suffix.starts_with("::") {
-            return false;
-        }
-
-        suffix = suffix[2..].trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
-        if !suffix.starts_with('<') {
-            return false;
-        }
-
-        let mut depth = 0usize;
-        let mut end_index = None;
-        for (index, ch) in suffix.char_indices() {
-            match ch {
-                '<' => depth = depth.saturating_add(1),
-                '>' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        end_index = Some(index + ch.len_utf8());
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(end_index) = end_index else {
-            return false;
-        };
-        suffix[end_index..]
-            .trim_start_matches(|ch: char| ch == ' ' || ch == '\t')
-            .starts_with('(')
     }
 
     fn precise_outgoing_matches_from_occurrences(
@@ -1904,21 +2033,42 @@ impl FriggMcpServer {
         }
     }
 
-    fn parse_rust_impl_signature(symbol_name: &str) -> Option<(Option<&str>, &str)> {
-        let body = symbol_name.strip_prefix("impl ")?;
-        if let Some((implemented_trait, implementing_type)) = body.split_once(" for ") {
-            let implemented_trait = implemented_trait.trim();
-            let implementing_type = implementing_type.trim();
-            if implemented_trait.is_empty() || implementing_type.is_empty() {
-                return None;
-            }
-            return Some((Some(implemented_trait), implementing_type));
+    fn search_hybrid_channel_result(
+        channel_results: &[ChannelResult],
+        channel: EvidenceChannel,
+    ) -> Option<&ChannelResult> {
+        channel_results
+            .iter()
+            .find(|result| result.channel == channel)
+    }
+
+    fn search_hybrid_channels_metadata(channel_results: &[ChannelResult]) -> Value {
+        let mut channels = serde_json::Map::new();
+        for result in channel_results {
+            let diagnostics = result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| {
+                    json!({
+                        "code": diagnostic.code,
+                        "message": Self::bounded_text(&diagnostic.message),
+                    })
+                })
+                .collect::<Vec<_>>();
+            channels.insert(
+                result.channel.as_str().to_owned(),
+                json!({
+                    "status": result.health.status.as_str(),
+                    "reason": result.health.reason.as_ref().map(|reason| Self::bounded_text(reason)),
+                    "candidate_count": result.stats.candidate_count,
+                    "hit_count": result.stats.hit_count,
+                    "match_count": result.stats.match_count,
+                    "diagnostic_count": result.diagnostics.len(),
+                    "diagnostics": diagnostics,
+                }),
+            );
         }
-        let implementing_type = body.trim();
-        if implementing_type.is_empty() {
-            return None;
-        }
-        Some((None, implementing_type))
+        Value::Object(channels)
     }
 
     fn navigation_target_selection_note(
@@ -2096,56 +2246,21 @@ impl FriggMcpServer {
         target_corpus: &RepositorySymbolCorpus,
         target_root: &Path,
     ) -> Vec<ImplementationMatch> {
-        let target_name = target_symbol.name.trim();
-        if target_name.is_empty() {
-            return Vec::new();
-        }
-
-        let mut matches = Vec::new();
-        for symbol in &target_corpus.symbols {
-            if symbol.kind.as_str() != "impl" {
-                continue;
-            }
-
-            let impl_symbol_name = symbol.name.trim();
-            if impl_symbol_name.is_empty() {
-                continue;
-            }
-
-            let mut relation = Some("implementation".to_owned());
-            let matched_display_name = if let Some((implemented_trait, implementing_type)) =
-                Self::parse_rust_impl_signature(impl_symbol_name)
-            {
-                if let Some(implemented_trait) = implemented_trait {
-                    if implemented_trait.eq_ignore_ascii_case(target_name) {
-                        relation = Some("implements".to_owned());
-                        implementing_type.to_owned()
-                    } else if implementing_type.eq_ignore_ascii_case(target_name) {
-                        impl_symbol_name.to_owned()
-                    } else {
-                        continue;
-                    }
-                } else if implementing_type.eq_ignore_ascii_case(target_name) {
-                    impl_symbol_name.to_owned()
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            };
-
-            matches.push(ImplementationMatch {
-                symbol: matched_display_name,
-                kind: Self::display_symbol_kind(symbol.kind.as_str()),
-                repository_id: target_corpus.repository_id.clone(),
-                path: Self::relative_display_path(target_root, &symbol.path),
-                line: symbol.line,
-                column: 1,
-                relation,
-                precision: Some("heuristic".to_owned()),
-                fallback_reason: Some("precise_absent".to_owned()),
-            });
-        }
+        let matches =
+            heuristic_rust_implementation_candidates(target_symbol, &target_corpus.symbols)
+                .into_iter()
+                .map(|candidate| ImplementationMatch {
+                    symbol: candidate.symbol,
+                    kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
+                    repository_id: target_corpus.repository_id.clone(),
+                    path: Self::relative_display_path(target_root, &candidate.source_symbol.path),
+                    line: candidate.source_symbol.line,
+                    column: 1,
+                    relation: Some(candidate.relation.to_owned()),
+                    precision: Some("heuristic".to_owned()),
+                    fallback_reason: Some("precise_absent".to_owned()),
+                })
+                .collect::<Vec<_>>();
 
         Self::dedup_sorted_implementation_matches(matches)
     }
@@ -2181,7 +2296,7 @@ impl FriggMcpServer {
                 path: Self::relative_display_path(target_root, &source_symbol.path),
                 line: source_symbol.line,
                 column: 1,
-                relation: Some(relation.as_str().to_owned()),
+                relation: Some(RelationKind::as_str(relation).to_owned()),
                 precision: Some("heuristic".to_owned()),
                 fallback_reason: Some("precise_absent".to_owned()),
             });
@@ -2741,7 +2856,7 @@ impl FriggMcpServer {
                 }
                 Some(SymbolLanguage::Blade) => {
                     let mut evidence =
-                        extract_blade_source_evidence_from_source(path, &source, &file_symbols);
+                        extract_blade_source_evidence_from_source(&source, &file_symbols);
                     mark_local_flux_overlays(&mut evidence, &symbols, &symbol_indices_by_name);
                     blade_evidence_by_relative_path.insert(relative_path, evidence);
                 }
@@ -3097,6 +3212,85 @@ impl FriggMcpServer {
         Ok((*cached_graph).clone())
     }
 
+    fn precise_graph_for_repository_root(
+        &self,
+        repository_id: &str,
+        root: &Path,
+        budgets: FindReferencesResourceBudgets,
+    ) -> Result<CachedPreciseGraph, ErrorData> {
+        if let Some(cached) =
+            self.try_reuse_latest_precise_graph_for_repository(repository_id, root)
+        {
+            return Ok(cached);
+        }
+
+        let discovery = Self::collect_scip_artifact_digests(root);
+        let current_root_signature =
+            Self::current_root_signature_for_repository(root, repository_id).ok_or_else(|| {
+                Self::internal(
+                    "failed to compute current root signature for precise graph",
+                    Some(json!({
+                        "repository_id": repository_id,
+                        "root": root.display().to_string(),
+                    })),
+                )
+            })?;
+        let scip_signature = Self::scip_signature(&discovery.artifact_digests);
+        let cache_key = PreciseGraphCacheKey {
+            repository_id: repository_id.to_owned(),
+            scip_signature: scip_signature.clone(),
+            corpus_signature: current_root_signature.clone(),
+        };
+
+        if let Some(cached) = self
+            .precise_graph_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&cache_key)
+            .cloned()
+        {
+            self.latest_precise_graph_cache
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(repository_id.to_owned(), cached.clone());
+            return Ok((*cached).clone());
+        }
+
+        let mut graph = SymbolGraph::default();
+        let ingest_stats = Self::ingest_precise_artifacts_for_repository(
+            &mut graph,
+            repository_id,
+            &discovery,
+            budgets,
+        )?;
+        let coverage_mode = Self::precise_coverage_mode(&ingest_stats);
+        let cached_graph = CachedPreciseGraph {
+            graph: Arc::new(graph),
+            ingest_stats,
+            corpus_signature: current_root_signature,
+            discovery: discovery.clone(),
+            coverage_mode,
+        };
+
+        let mut cache = self
+            .precise_graph_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.retain(|key, _| {
+            key.repository_id != repository_id
+                || (key.scip_signature == scip_signature
+                    && key.corpus_signature == cached_graph.corpus_signature)
+        });
+        let cached_graph = Arc::new(cached_graph);
+        cache.insert(cache_key, cached_graph.clone());
+        self.latest_precise_graph_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(repository_id.to_owned(), cached_graph.clone());
+
+        Ok((*cached_graph).clone())
+    }
+
     fn register_php_declaration_relations(
         graph: &mut SymbolGraph,
         corpus: &RepositorySymbolCorpus,
@@ -3218,6 +3412,323 @@ impl FriggMcpServer {
         bounded
     }
 
+    fn compile_cached_safe_regex(
+        &self,
+        raw: &str,
+    ) -> Result<regex::Regex, crate::searcher::RegexSearchError> {
+        if let Some(cached) = self
+            .compiled_safe_regex_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(raw)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let compiled = compile_safe_regex(raw)?;
+        let mut cache = self
+            .compiled_safe_regex_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(raw).cloned() {
+            return Ok(cached);
+        }
+        while cache.len() >= Self::SAFE_REGEX_CACHE_LIMIT {
+            let _ = cache.pop_first();
+        }
+        cache.insert(raw.to_owned(), compiled.clone());
+        Ok(compiled)
+    }
+
+    fn search_hybrid_provenance_match_summary(matches: &[SearchHybridMatch]) -> Value {
+        json!({
+            "total_matches": matches.len(),
+            "top_matches": matches
+                .iter()
+                .take(Self::PROVENANCE_MATCH_SAMPLE_LIMIT)
+                .map(|matched| {
+                    json!({
+                        "repository_id": matched.repository_id,
+                        "path": matched.path,
+                        "line": matched.line,
+                        "column": matched.column,
+                        "anchor": matched.anchor,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn search_pattern_type_cache_key(pattern_type: &SearchPatternType) -> &'static str {
+        match pattern_type {
+            SearchPatternType::Literal => "literal",
+            SearchPatternType::Regex => "regex",
+        }
+    }
+
+    fn cached_search_text_response(
+        &self,
+        cache_key: &SearchTextResponseCacheKey,
+    ) -> Option<CachedSearchTextResponse> {
+        let mut cache = self
+            .search_text_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_search_text_response(
+        &self,
+        cache_key: SearchTextResponseCacheKey,
+        response: &SearchTextResponse,
+        source_refs: &Value,
+    ) {
+        self.search_text_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedSearchTextResponse {
+                    response: response.clone(),
+                    source_refs: source_refs.clone(),
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
+    fn cached_search_hybrid_response(
+        &self,
+        cache_key: &SearchHybridResponseCacheKey,
+    ) -> Option<CachedSearchHybridResponse> {
+        let mut cache = self
+            .search_hybrid_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_search_hybrid_response(
+        &self,
+        cache_key: SearchHybridResponseCacheKey,
+        response: &SearchHybridResponse,
+        source_refs: &Value,
+    ) {
+        self.search_hybrid_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedSearchHybridResponse {
+                    response: response.clone(),
+                    source_refs: source_refs.clone(),
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
+    fn cached_search_symbol_response(
+        &self,
+        cache_key: &SearchSymbolResponseCacheKey,
+    ) -> Option<CachedSearchSymbolResponse> {
+        let mut cache = self
+            .search_symbol_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_search_symbol_response(
+        &self,
+        cache_key: SearchSymbolResponseCacheKey,
+        response: &SearchSymbolResponse,
+        scoped_repository_ids: &[String],
+        diagnostics_count: usize,
+        manifest_walk_diagnostics_count: usize,
+        manifest_read_diagnostics_count: usize,
+        symbol_extraction_diagnostics_count: usize,
+        effective_limit: usize,
+    ) {
+        self.search_symbol_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedSearchSymbolResponse {
+                    response: response.clone(),
+                    scoped_repository_ids: scoped_repository_ids.to_owned(),
+                    diagnostics_count,
+                    manifest_walk_diagnostics_count,
+                    manifest_read_diagnostics_count,
+                    symbol_extraction_diagnostics_count,
+                    effective_limit,
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
+    fn cached_go_to_definition_response(
+        &self,
+        cache_key: &GoToDefinitionResponseCacheKey,
+    ) -> Option<CachedGoToDefinitionResponse> {
+        let mut cache = self
+            .go_to_definition_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_go_to_definition_response(
+        &self,
+        cache_key: GoToDefinitionResponseCacheKey,
+        response: &GoToDefinitionResponse,
+        scoped_repository_ids: &[String],
+        selected_symbol_id: Option<&str>,
+        selected_precise_symbol: Option<&str>,
+        resolution_precision: Option<&str>,
+        resolution_source: Option<&str>,
+        effective_limit: usize,
+        precise_artifacts_ingested: usize,
+        precise_artifacts_failed: usize,
+        match_count: usize,
+    ) {
+        self.go_to_definition_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedGoToDefinitionResponse {
+                    response: response.clone(),
+                    scoped_repository_ids: scoped_repository_ids.to_owned(),
+                    selected_symbol_id: selected_symbol_id.map(str::to_owned),
+                    selected_precise_symbol: selected_precise_symbol.map(str::to_owned),
+                    resolution_precision: resolution_precision.map(str::to_owned),
+                    resolution_source: resolution_source.map(str::to_owned),
+                    effective_limit,
+                    precise_artifacts_ingested,
+                    precise_artifacts_failed,
+                    match_count,
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
+    fn cached_find_declarations_response(
+        &self,
+        cache_key: &FindDeclarationsResponseCacheKey,
+    ) -> Option<CachedFindDeclarationsResponse> {
+        let mut cache = self
+            .find_declarations_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_find_declarations_response(
+        &self,
+        cache_key: FindDeclarationsResponseCacheKey,
+        response: &FindDeclarationsResponse,
+        scoped_repository_ids: &[String],
+        selected_symbol_id: Option<&str>,
+        selected_precise_symbol: Option<&str>,
+        resolution_precision: Option<&str>,
+        resolution_source: Option<&str>,
+        effective_limit: usize,
+        precise_artifacts_ingested: usize,
+        precise_artifacts_failed: usize,
+        match_count: usize,
+    ) {
+        self.find_declarations_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedFindDeclarationsResponse {
+                    response: response.clone(),
+                    scoped_repository_ids: scoped_repository_ids.to_owned(),
+                    selected_symbol_id: selected_symbol_id.map(str::to_owned),
+                    selected_precise_symbol: selected_precise_symbol.map(str::to_owned),
+                    resolution_precision: resolution_precision.map(str::to_owned),
+                    resolution_source: resolution_source.map(str::to_owned),
+                    effective_limit,
+                    precise_artifacts_ingested,
+                    precise_artifacts_failed,
+                    match_count,
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
+    fn cached_heuristic_references(
+        &self,
+        cache_key: &HeuristicReferenceCacheKey,
+    ) -> Option<CachedHeuristicReferences> {
+        let mut cache = self
+            .heuristic_reference_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get_mut(cache_key)?;
+        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
+            cache.remove(cache_key);
+            return None;
+        }
+        entry.generated_at = Instant::now();
+        Some(entry.clone())
+    }
+
+    fn cache_heuristic_references(
+        &self,
+        cache_key: HeuristicReferenceCacheKey,
+        references: Vec<HeuristicReference>,
+        source_read_diagnostics_count: usize,
+        source_files_loaded: usize,
+        source_bytes_loaded: u64,
+    ) {
+        self.heuristic_reference_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                cache_key,
+                CachedHeuristicReferences {
+                    references: Arc::new(references),
+                    source_read_diagnostics_count,
+                    source_files_loaded,
+                    source_bytes_loaded,
+                    generated_at: Instant::now(),
+                },
+            );
+    }
+
     fn default_provenance_target(&self) -> Option<(String, PathBuf)> {
         self.current_workspace()
             .into_iter()
@@ -3313,6 +3824,9 @@ impl FriggMcpServer {
         source_refs: Value,
         outcome: Value,
     ) -> Result<(), ErrorData> {
+        if !self.provenance_enabled {
+            return Ok(());
+        }
         let Some((target_repository_id, target_root)) =
             self.provenance_target_for_repository(repository_hint)
         else {
@@ -3364,6 +3878,9 @@ impl FriggMcpServer {
         source_refs: Value,
         result: &Result<Json<T>, ErrorData>,
     ) -> Result<(), ErrorData> {
+        if !self.provenance_enabled {
+            return Ok(());
+        }
         let server = self.clone();
         let repository_hint = repository_hint.map(str::to_owned);
         let outcome = Self::provenance_outcome(result);
@@ -3410,14 +3927,45 @@ impl FriggMcpServer {
         }
     }
 
+    fn with_provenance_enabled(&self, provenance_enabled: bool) -> Self {
+        let mut cloned = self.clone();
+        cloned.provenance_enabled = provenance_enabled;
+        cloned
+    }
+
     pub fn new(config: FriggConfig) -> Self {
         Self::new_with_provenance_best_effort(config, Self::provenance_best_effort_from_env())
     }
 
-    pub fn new_with_runtime_options(
+    pub fn new_with_runtime(
+        config: FriggConfig,
+        runtime_profile: RuntimeProfile,
+        runtime_watch_active: bool,
+        runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
+        validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    ) -> Self {
+        let provenance_best_effort = Self::provenance_best_effort_from_env();
+        let enable_extended_tools =
+            active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
+        Self::new_with_runtime_context(
+            config,
+            provenance_best_effort,
+            enable_extended_tools,
+            runtime_profile,
+            runtime_watch_active,
+            runtime_task_registry,
+            validated_manifest_candidate_cache,
+        )
+    }
+
+    pub fn new_with_runtime_context(
         config: FriggConfig,
         provenance_best_effort: bool,
         enable_extended_tools: bool,
+        runtime_profile: RuntimeProfile,
+        runtime_watch_active: bool,
+        runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
+        validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     ) -> Self {
         let workspace_registry = WorkspaceRegistry::from_startup_repositories(
             config.repositories().into_iter().map(|repository| {
@@ -3428,17 +3976,52 @@ impl FriggMcpServer {
                 )
             }),
         );
+        let tool_surface_profile = if enable_extended_tools {
+            ToolSurfaceProfile::Extended
+        } else {
+            ToolSurfaceProfile::Core
+        };
         Self {
             config: Arc::new(config),
             tool_router: Self::filtered_tool_router(enable_extended_tools),
+            tool_surface_profile,
+            runtime_profile,
+            runtime_watch_active,
             workspace_registry: Arc::new(RwLock::new(workspace_registry)),
             session_default_repository_id: Arc::new(RwLock::new(None)),
+            validated_manifest_candidate_cache,
             symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
             precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
             latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
             provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            search_hybrid_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            search_symbol_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            go_to_definition_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            find_declarations_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            runtime_task_registry,
             provenance_best_effort,
+            provenance_enabled: true,
         }
+    }
+
+    pub fn new_with_runtime_options(
+        config: FriggConfig,
+        provenance_best_effort: bool,
+        enable_extended_tools: bool,
+    ) -> Self {
+        Self::new_with_runtime_context(
+            config,
+            provenance_best_effort,
+            enable_extended_tools,
+            RuntimeProfile::StdioEphemeral,
+            false,
+            Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
+            Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+        )
     }
 
     pub fn new_with_provenance_best_effort(
@@ -3470,13 +4053,29 @@ impl FriggMcpServer {
         Self {
             config: Arc::clone(&self.config),
             tool_router: self.tool_router.clone(),
+            tool_surface_profile: self.tool_surface_profile,
+            runtime_profile: self.runtime_profile,
+            runtime_watch_active: self.runtime_watch_active,
             workspace_registry: Arc::clone(&self.workspace_registry),
             session_default_repository_id: Arc::new(RwLock::new(None)),
+            validated_manifest_candidate_cache: Arc::clone(
+                &self.validated_manifest_candidate_cache,
+            ),
             symbol_corpus_cache: Arc::clone(&self.symbol_corpus_cache),
             precise_graph_cache: Arc::clone(&self.precise_graph_cache),
             latest_precise_graph_cache: Arc::clone(&self.latest_precise_graph_cache),
             provenance_storage_cache: Arc::clone(&self.provenance_storage_cache),
+            repository_summary_cache: Arc::clone(&self.repository_summary_cache),
+            search_text_response_cache: Arc::clone(&self.search_text_response_cache),
+            search_hybrid_response_cache: Arc::clone(&self.search_hybrid_response_cache),
+            search_symbol_response_cache: Arc::clone(&self.search_symbol_response_cache),
+            go_to_definition_response_cache: Arc::clone(&self.go_to_definition_response_cache),
+            find_declarations_response_cache: Arc::clone(&self.find_declarations_response_cache),
+            heuristic_reference_cache: Arc::clone(&self.heuristic_reference_cache),
+            compiled_safe_regex_cache: Arc::clone(&self.compiled_safe_regex_cache),
+            runtime_task_registry: Arc::clone(&self.runtime_task_registry),
             provenance_best_effort: self.provenance_best_effort,
+            provenance_enabled: self.provenance_enabled,
         }
     }
 
@@ -3517,6 +4116,78 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    fn sync_declared_root_uris(&self, root_uris: &[String], set_default_if_missing: bool) -> usize {
+        let mut attached_count = 0;
+        let mut seen_paths = BTreeSet::new();
+
+        for root_uri in root_uris {
+            let parsed = match Url::parse(root_uri) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    warn!(uri = %root_uri, %error, "ignoring invalid MCP root URI");
+                    continue;
+                }
+            };
+            let path = match parsed.to_file_path() {
+                Ok(path) => path,
+                Err(()) => {
+                    warn!(uri = %root_uri, "ignoring non-file MCP root URI");
+                    continue;
+                }
+            };
+            if !seen_paths.insert(path.clone()) {
+                continue;
+            }
+
+            let make_default = set_default_if_missing && self.current_repository_id().is_none();
+            match self.attach_workspace_internal(&path, make_default, WorkspaceResolveMode::GitRoot)
+            {
+                Ok(_) => attached_count += 1,
+                Err(error) => warn!(
+                    uri = %root_uri,
+                    message = %error.message,
+                    "failed to attach MCP root as workspace"
+                ),
+            }
+        }
+
+        attached_count
+    }
+
+    async fn maybe_sync_client_roots(
+        &self,
+        peer: &rmcp::service::Peer<rmcp::RoleServer>,
+        allow_when_session_has_default: bool,
+    ) {
+        if !self.config.workspace_roots.is_empty() {
+            return;
+        }
+
+        let supports_roots = peer
+            .peer_info()
+            .and_then(|peer_info| peer_info.capabilities.roots.as_ref())
+            .is_some();
+        if !supports_roots {
+            return;
+        }
+
+        if !allow_when_session_has_default && self.current_repository_id().is_some() {
+            return;
+        }
+
+        match peer.list_roots().await {
+            Ok(result) => {
+                let root_uris = result
+                    .roots
+                    .into_iter()
+                    .map(|root| root.uri)
+                    .collect::<Vec<_>>();
+                self.sync_declared_root_uris(&root_uris, self.current_repository_id().is_none());
+            }
+            Err(error) => warn!(%error, "failed to query MCP client roots"),
+        }
     }
 
     fn set_current_repository_id(&self, repository_id: Option<String>) {
@@ -3700,16 +4371,53 @@ impl FriggMcpServer {
         }
     }
 
+    fn cached_repository_summary(&self, repository_id: &str) -> Option<RepositorySummary> {
+        let cache = self
+            .repository_summary_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get(repository_id)?;
+        (entry.generated_at.elapsed() <= Self::REPOSITORY_SUMMARY_CACHE_TTL)
+            .then(|| entry.summary.clone())
+    }
+
+    fn cache_repository_summary(&self, repository_id: &str, summary: &RepositorySummary) {
+        let mut cache = self
+            .repository_summary_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            repository_id.to_owned(),
+            CachedRepositorySummary {
+                summary: summary.clone(),
+                generated_at: Instant::now(),
+            },
+        );
+    }
+
+    fn invalidate_repository_summary_cache(&self, repository_id: &str) {
+        self.repository_summary_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(repository_id);
+    }
+
     fn repository_summary(&self, workspace: &AttachedWorkspace) -> RepositorySummary {
+        if let Some(summary) = self.cached_repository_summary(&workspace.repository_id) {
+            return summary;
+        }
+
         let storage = Self::workspace_storage_summary(workspace);
         let health = self.workspace_index_health_summary(workspace, &storage);
-        RepositorySummary {
+        let summary = RepositorySummary {
             repository_id: workspace.repository_id.clone(),
             display_name: workspace.display_name.clone(),
             root_path: workspace.root.display().to_string(),
             storage: Some(storage),
             health: Some(health),
-        }
+        };
+        self.cache_repository_summary(&workspace.repository_id, &summary);
+        summary
     }
 
     fn workspace_index_health_summary(
@@ -3724,6 +4432,27 @@ impl FriggMcpServer {
         }
     }
 
+    fn workspace_repository_freshness_status(
+        &self,
+        workspace: &AttachedWorkspace,
+        semantic_runtime: &SemanticRuntimeConfig,
+    ) -> Result<crate::manifest_validation::RepositoryFreshnessStatus, String> {
+        let storage = Storage::new(&workspace.db_path);
+        repository_freshness_status(
+            &storage,
+            &workspace.repository_id,
+            &workspace.root,
+            semantic_runtime,
+            |_| false,
+        )
+        .map_err(|err| err.to_string())
+    }
+
+    fn workspace_manifest_entry_count(workspace: &AttachedWorkspace) -> Option<usize> {
+        Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
+            .map(|snapshot| snapshot.entries.len())
+    }
+
     fn workspace_lexical_index_summary(
         &self,
         workspace: &AttachedWorkspace,
@@ -3733,48 +4462,49 @@ impl FriggMcpServer {
             return summary;
         }
 
-        let Some(snapshot) =
-            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
-        else {
-            return WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Missing,
-                reason: Some("missing_manifest_snapshot".to_owned()),
-                snapshot_id: None,
-                compatible_snapshot_id: None,
-                provider: None,
-                model: None,
-                artifact_count: None,
+        let mut manifest_only_runtime = self.config.semantic_runtime.clone();
+        manifest_only_runtime.enabled = false;
+        let freshness =
+            match self.workspace_repository_freshness_status(workspace, &manifest_only_runtime) {
+                Ok(freshness) => freshness,
+                Err(err) => {
+                    return WorkspaceIndexComponentSummary {
+                        state: WorkspaceIndexComponentState::Error,
+                        reason: Some(err),
+                        snapshot_id: None,
+                        compatible_snapshot_id: None,
+                        provider: None,
+                        model: None,
+                        artifact_count: None,
+                    };
+                }
             };
-        };
-        let snapshot_id = snapshot.snapshot_id.clone();
-        let snapshot_digests = snapshot
-            .entries
-            .iter()
-            .map(|entry| FileMetadataDigest {
-                path: PathBuf::from(&entry.path),
-                size_bytes: entry.size_bytes,
-                mtime_ns: entry.mtime_ns,
-            })
-            .collect::<Vec<_>>();
-        let state =
-            if validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_some() {
-                WorkspaceIndexComponentState::Ready
-            } else {
-                WorkspaceIndexComponentState::Stale
-            };
-        let reason = match state {
-            WorkspaceIndexComponentState::Ready => None,
-            WorkspaceIndexComponentState::Stale => Some("stale_manifest_snapshot".to_owned()),
-            _ => None,
+        let manifest_entry_count = Self::workspace_manifest_entry_count(workspace);
+        let manifest_state = freshness.manifest.clone();
+        let (state, reason) = match manifest_state {
+            RepositoryManifestFreshness::MissingSnapshot => (
+                WorkspaceIndexComponentState::Missing,
+                Some("missing_manifest_snapshot".to_owned()),
+            ),
+            RepositoryManifestFreshness::StaleSnapshot => (
+                WorkspaceIndexComponentState::Stale,
+                Some("stale_manifest_snapshot".to_owned()),
+            ),
+            RepositoryManifestFreshness::Ready => (WorkspaceIndexComponentState::Ready, None),
         };
         WorkspaceIndexComponentSummary {
             state,
             reason,
-            snapshot_id: Some(snapshot_id),
+            snapshot_id: freshness.snapshot_id,
             compatible_snapshot_id: None,
             provider: None,
             model: None,
-            artifact_count: Some(snapshot.entries.len()),
+            artifact_count: match freshness.manifest {
+                RepositoryManifestFreshness::MissingSnapshot => None,
+                RepositoryManifestFreshness::StaleSnapshot => manifest_entry_count,
+                RepositoryManifestFreshness::Ready => manifest_entry_count
+                    .or_else(|| freshness.validated_manifest_digests.as_ref().map(Vec::len)),
+            },
         }
     }
 
@@ -3805,7 +4535,8 @@ impl FriggMcpServer {
             .semantic_runtime
             .normalized_model()
             .map(ToOwned::to_owned);
-        if provider.is_none() || model.is_none() {
+        if self.config.semantic_runtime.validate().is_err() || provider.is_none() || model.is_none()
+        {
             return WorkspaceIndexComponentSummary {
                 state: WorkspaceIndexComponentState::Error,
                 reason: Some("semantic_runtime_invalid_config".to_owned()),
@@ -3824,56 +4555,22 @@ impl FriggMcpServer {
             };
         }
 
-        let Some(snapshot) =
-            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
-        else {
-            return WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Missing,
-                reason: Some("missing_manifest_snapshot".to_owned()),
-                snapshot_id: None,
-                compatible_snapshot_id: None,
-                provider,
-                model,
-                artifact_count: None,
-            };
+        let freshness = match self
+            .workspace_repository_freshness_status(workspace, &self.config.semantic_runtime)
+        {
+            Ok(freshness) => freshness,
+            Err(err) => {
+                return WorkspaceIndexComponentSummary {
+                    state: WorkspaceIndexComponentState::Error,
+                    reason: Some(err),
+                    snapshot_id: None,
+                    compatible_snapshot_id: None,
+                    provider,
+                    model,
+                    artifact_count: None,
+                };
+            }
         };
-        let snapshot_id = snapshot.snapshot_id.clone();
-        let snapshot_digests = snapshot
-            .entries
-            .iter()
-            .map(|entry| FileMetadataDigest {
-                path: PathBuf::from(&entry.path),
-                size_bytes: entry.size_bytes,
-                mtime_ns: entry.mtime_ns,
-            })
-            .collect::<Vec<_>>();
-        if validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_none() {
-            return WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Stale,
-                reason: Some("stale_manifest_snapshot".to_owned()),
-                snapshot_id: Some(snapshot_id),
-                compatible_snapshot_id: None,
-                provider,
-                model,
-                artifact_count: None,
-            };
-        }
-        let has_semantic_eligible_entries = snapshot
-            .entries
-            .iter()
-            .any(|entry| semantic_chunk_language_for_path(Path::new(&entry.path)).is_some());
-        if !has_semantic_eligible_entries {
-            return WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Ready,
-                reason: Some("manifest_valid_no_semantic_eligible_entries".to_owned()),
-                snapshot_id: Some(snapshot_id),
-                compatible_snapshot_id: None,
-                provider,
-                model,
-                artifact_count: Some(0),
-            };
-        }
-
         let storage_reader = Storage::new(&workspace.db_path);
         let provider_ref = provider
             .as_deref()
@@ -3881,29 +4578,60 @@ impl FriggMcpServer {
         let model_ref = model
             .as_deref()
             .expect("semantic model should exist after config validation");
-        match storage_reader.has_semantic_embeddings_for_repository_snapshot_model(
-            &workspace.repository_id,
-            &snapshot_id,
-            provider_ref,
-            model_ref,
-        ) {
-            Ok(true) => WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Ready,
-                reason: None,
-                snapshot_id: Some(snapshot_id.clone()),
+        let semantic_state = freshness.semantic.clone();
+        match semantic_state {
+            RepositorySemanticFreshness::MissingManifestSnapshot => {
+                WorkspaceIndexComponentSummary {
+                    state: WorkspaceIndexComponentState::Missing,
+                    reason: Some("missing_manifest_snapshot".to_owned()),
+                    snapshot_id: None,
+                    compatible_snapshot_id: None,
+                    provider,
+                    model,
+                    artifact_count: None,
+                }
+            }
+            RepositorySemanticFreshness::StaleManifestSnapshot => WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Stale,
+                reason: Some("stale_manifest_snapshot".to_owned()),
+                snapshot_id: freshness.snapshot_id,
                 compatible_snapshot_id: None,
-                provider: provider.clone(),
-                model: model.clone(),
-                artifact_count: storage_reader
-                    .count_semantic_embeddings_for_repository_snapshot_model(
-                        &workspace.repository_id,
-                        &snapshot_id,
-                        provider_ref,
-                        model_ref,
-                    )
-                    .ok(),
+                provider,
+                model,
+                artifact_count: None,
             },
-            Ok(false) => {
+            RepositorySemanticFreshness::NoEligibleEntries => WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Ready,
+                reason: Some("manifest_valid_no_semantic_eligible_entries".to_owned()),
+                snapshot_id: freshness.snapshot_id,
+                compatible_snapshot_id: None,
+                provider,
+                model,
+                artifact_count: Some(0),
+            },
+            RepositorySemanticFreshness::Ready => {
+                let snapshot_id = freshness
+                    .snapshot_id
+                    .expect("ready semantic freshness should carry a snapshot id");
+                WorkspaceIndexComponentSummary {
+                    state: WorkspaceIndexComponentState::Ready,
+                    reason: None,
+                    snapshot_id: Some(snapshot_id.clone()),
+                    compatible_snapshot_id: None,
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    artifact_count: storage_reader
+                        .count_semantic_embeddings_for_repository_snapshot_model(
+                            &workspace.repository_id,
+                            &snapshot_id,
+                            provider_ref,
+                            model_ref,
+                        )
+                        .ok(),
+                }
+            }
+            RepositorySemanticFreshness::MissingForActiveModel => {
+                let snapshot_id = freshness.snapshot_id.clone();
                 let compatible_snapshot_id = storage_reader
                     .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
                         &workspace.repository_id,
@@ -3919,7 +4647,7 @@ impl FriggMcpServer {
                         WorkspaceIndexComponentState::Missing
                     },
                     reason: Some("semantic_snapshot_missing_for_active_model".to_owned()),
-                    snapshot_id: Some(snapshot_id),
+                    snapshot_id,
                     compatible_snapshot_id: compatible_snapshot_id.clone(),
                     provider: provider.clone(),
                     model: model.clone(),
@@ -3937,10 +4665,10 @@ impl FriggMcpServer {
                     ),
                 }
             }
-            Err(err) => WorkspaceIndexComponentSummary {
-                state: WorkspaceIndexComponentState::Error,
-                reason: Some(err.to_string()),
-                snapshot_id: Some(snapshot_id),
+            RepositorySemanticFreshness::Disabled => WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Disabled,
+                reason: Some("semantic_runtime_disabled".to_owned()),
+                snapshot_id: None,
                 compatible_snapshot_id: None,
                 provider,
                 model,
@@ -3984,28 +4712,12 @@ impl FriggMcpServer {
 
         let provider = self.config.semantic_runtime.provider?;
         let model = self.config.semantic_runtime.normalized_model()?;
-        let snapshot =
-            Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)?;
-        let snapshot_digests = snapshot
-            .entries
-            .iter()
-            .map(|entry| FileMetadataDigest {
-                path: PathBuf::from(&entry.path),
-                size_bytes: entry.size_bytes,
-                mtime_ns: entry.mtime_ns,
-            })
-            .collect::<Vec<_>>();
-        let lexical_ready =
-            validate_manifest_digests_for_root(&workspace.root, &snapshot_digests).is_some();
-        let storage = Storage::new(&workspace.db_path);
-        let latest_has_semantic = storage
-            .has_semantic_embeddings_for_repository_snapshot_model(
-                &workspace.repository_id,
-                &snapshot.snapshot_id,
-                provider.as_str(),
-                model,
-            )
+        self.config.semantic_runtime.validate().ok()?;
+        let freshness = self
+            .workspace_repository_freshness_status(workspace, &self.config.semantic_runtime)
             .ok()?;
+        let latest_snapshot_id = freshness.snapshot_id?;
+        let storage = Storage::new(&workspace.db_path);
         let compatible_snapshot_id = storage
             .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
                 &workspace.repository_id,
@@ -4014,57 +4726,45 @@ impl FriggMcpServer {
             )
             .ok()
             .flatten()?;
-
-        if lexical_ready && latest_has_semantic {
-            return None;
+        match (freshness.manifest.clone(), freshness.semantic.clone()) {
+            (RepositoryManifestFreshness::StaleSnapshot, _) => Some(WorkspaceSemanticRefreshPlan {
+                latest_snapshot_id,
+                compatible_snapshot_id,
+                reason: "stale_manifest_snapshot",
+            }),
+            (
+                RepositoryManifestFreshness::Ready,
+                RepositorySemanticFreshness::MissingForActiveModel,
+            ) => Some(WorkspaceSemanticRefreshPlan {
+                latest_snapshot_id,
+                compatible_snapshot_id,
+                reason: "semantic_snapshot_missing_for_active_model",
+            }),
+            _ => None,
         }
-
-        Some(WorkspaceSemanticRefreshPlan {
-            latest_snapshot_id: snapshot.snapshot_id,
-            compatible_snapshot_id,
-            reason: if !lexical_ready {
-                "stale_manifest_snapshot"
-            } else {
-                "semantic_snapshot_missing_for_active_model"
-            },
-        })
     }
 
     fn refresh_workspace_semantic_snapshot_with_plan(
         &self,
         workspace: &AttachedWorkspace,
-        plan: &WorkspaceSemanticRefreshPlan,
-    ) {
+        _plan: &WorkspaceSemanticRefreshPlan,
+    ) -> Result<(), String> {
         let credentials = SemanticRuntimeCredentials::from_process_env();
-        if let Err(err) = self.config.semantic_runtime.validate_startup(&credentials) {
-            warn!(
-                repository_id = workspace.repository_id,
-                snapshot_id = %plan.latest_snapshot_id,
-                compatible_snapshot_id = %plan.compatible_snapshot_id,
-                reason = plan.reason,
-                error = %err,
-                "skipping semantic snapshot refresh because runtime startup validation failed"
-            );
-            return;
-        }
+        self.config
+            .semantic_runtime
+            .validate_startup(&credentials)
+            .map_err(|err| err.to_string())?;
 
-        if let Err(err) = reindex_repository_with_runtime_config(
+        reindex_repository_with_runtime_config(
             &workspace.repository_id,
             &workspace.root,
             &workspace.db_path,
             ReindexMode::ChangedOnly,
             &self.config.semantic_runtime,
             &credentials,
-        ) {
-            warn!(
-                repository_id = workspace.repository_id,
-                snapshot_id = %plan.latest_snapshot_id,
-                compatible_snapshot_id = %plan.compatible_snapshot_id,
-                reason = plan.reason,
-                error = %err,
-                "workspace semantic refresh failed during attach"
-            );
-        }
+        )
+        .map(|_| ())
+        .map_err(|err| err.to_string())
     }
 
     fn maybe_refresh_workspace_semantic_snapshot(&self, workspace: &AttachedWorkspace) {
@@ -4074,7 +4774,16 @@ impl FriggMcpServer {
         if plan.reason != "semantic_snapshot_missing_for_active_model" {
             return;
         }
-        self.refresh_workspace_semantic_snapshot_with_plan(workspace, &plan);
+        if let Err(err) = self.refresh_workspace_semantic_snapshot_with_plan(workspace, &plan) {
+            warn!(
+                repository_id = workspace.repository_id,
+                snapshot_id = %plan.latest_snapshot_id,
+                compatible_snapshot_id = %plan.compatible_snapshot_id,
+                reason = plan.reason,
+                error = %err,
+                "workspace semantic refresh failed during attach"
+            );
+        }
     }
 
     fn maybe_spawn_workspace_runtime_prewarm(&self, workspace: &AttachedWorkspace) {
@@ -4093,33 +4802,119 @@ impl FriggMcpServer {
             let server = self.clone();
             let workspace = workspace.clone();
             let semantic_plan = semantic_plan.clone();
-            let _ = std::thread::Builder::new()
+            let task_id = self
+                .runtime_task_registry
+                .write()
+                .expect("runtime task registry poisoned")
+                .start_task(
+                    crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
+                    workspace.repository_id.clone(),
+                    "semantic_attach_refresh",
+                    semantic_plan.as_ref().map(|plan| {
+                        format!(
+                            "attach root {} reason {}",
+                            workspace.root.display(),
+                            plan.reason
+                        )
+                    }),
+                );
+            let task_registry = Arc::clone(&self.runtime_task_registry);
+            let task_id_for_thread = task_id.clone();
+            let spawn_result = std::thread::Builder::new()
                 .name(format!(
                     "frigg-semantic-refresh-{}",
                     workspace.repository_id
                 ))
                 .spawn(move || {
-                    if let Some(plan) = semantic_plan.as_ref() {
-                        server.refresh_workspace_semantic_snapshot_with_plan(&workspace, plan);
-                    }
+                    let result = semantic_plan
+                        .as_ref()
+                        .ok_or_else(|| "missing semantic refresh plan".to_owned())
+                        .and_then(|plan| {
+                            server.refresh_workspace_semantic_snapshot_with_plan(&workspace, plan)
+                        });
+                    let (status, detail) = match result {
+                        Ok(()) => (crate::mcp::types::RuntimeTaskStatus::Succeeded, None),
+                        Err(err) => {
+                            warn!(
+                                repository_id = workspace.repository_id,
+                                error = %err,
+                                "workspace semantic refresh failed during runtime prewarm"
+                            );
+                            (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
+                        }
+                    };
+                    task_registry
+                        .write()
+                        .expect("runtime task registry poisoned")
+                        .finish_task(&task_id_for_thread, status, detail);
                 });
+            if let Err(err) = spawn_result {
+                self.runtime_task_registry
+                    .write()
+                    .expect("runtime task registry poisoned")
+                    .finish_task(
+                        &task_id,
+                        crate::mcp::types::RuntimeTaskStatus::Failed,
+                        Some(format!("failed to spawn semantic prewarm thread: {err}")),
+                    );
+            }
         }
 
         if should_prewarm_precise {
             let server = self.clone();
             let workspace = workspace.clone();
-            let _ = std::thread::Builder::new()
+            let task_id = self
+                .runtime_task_registry
+                .write()
+                .expect("runtime task registry poisoned")
+                .start_task(
+                    crate::mcp::types::RuntimeTaskKind::PrecisePrewarm,
+                    workspace.repository_id.clone(),
+                    "precise_attach_prewarm",
+                    Some(format!("attach root {}", workspace.root.display())),
+                );
+            let task_registry = Arc::clone(&self.runtime_task_registry);
+            let task_id_for_thread = task_id.clone();
+            let spawn_result = std::thread::Builder::new()
                 .name(format!("frigg-precise-prewarm-{}", workspace.repository_id))
                 .spawn(move || {
-                    server.prewarm_precise_graph_for_workspace(&workspace);
+                    let result = server.prewarm_precise_graph_for_workspace(&workspace);
+                    let (status, detail) = match result {
+                        Ok(()) => (crate::mcp::types::RuntimeTaskStatus::Succeeded, None),
+                        Err(err) => {
+                            warn!(
+                                repository_id = workspace.repository_id,
+                                error = %err,
+                                "failed to prewarm precise graph during workspace attach"
+                            );
+                            (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
+                        }
+                    };
+                    task_registry
+                        .write()
+                        .expect("runtime task registry poisoned")
+                        .finish_task(&task_id_for_thread, status, detail);
                 });
+            if let Err(err) = spawn_result {
+                self.runtime_task_registry
+                    .write()
+                    .expect("runtime task registry poisoned")
+                    .finish_task(
+                        &task_id,
+                        crate::mcp::types::RuntimeTaskStatus::Failed,
+                        Some(format!("failed to spawn precise prewarm thread: {err}")),
+                    );
+            }
         }
     }
 
-    fn prewarm_precise_graph_for_workspace(&self, workspace: &AttachedWorkspace) {
+    fn prewarm_precise_graph_for_workspace(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> Result<(), String> {
         let discovery = Self::collect_scip_artifact_digests(&workspace.root);
         if discovery.artifact_digests.is_empty() {
-            return;
+            return Ok(());
         }
         if self
             .try_reuse_latest_precise_graph_for_repository(
@@ -4128,32 +4923,94 @@ impl FriggMcpServer {
             )
             .is_some()
         {
-            return;
+            return Ok(());
         }
 
-        let corpus = match self.collect_repository_symbol_corpus(
-            workspace.repository_id.clone(),
-            workspace.root.clone(),
-        ) {
-            Ok(corpus) => corpus,
+        self.precise_graph_for_repository_root(
+            &workspace.repository_id,
+            &workspace.root,
+            self.find_references_resource_budgets(),
+        )
+        .map(|_| ())
+        .map_err(|err| err.message.to_string())
+    }
+
+    fn runtime_status_workspace(&self) -> Option<AttachedWorkspace> {
+        self.current_workspace().or_else(|| {
+            self.attached_workspaces()
+                .into_iter()
+                .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
+        })
+    }
+
+    fn runtime_recent_provenance_repository_id(payload_json: &str) -> Option<String> {
+        let payload = serde_json::from_str::<Value>(payload_json).ok()?;
+        payload
+            .get("target_repository_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                payload
+                    .get("source_refs")
+                    .and_then(|source_refs| source_refs.get("repository_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                payload
+                    .get("source_refs")
+                    .and_then(|source_refs| source_refs.get("repository_ids"))
+                    .and_then(Value::as_array)
+                    .and_then(|ids| ids.first())
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+    }
+
+    fn runtime_recent_provenance_summaries(&self) -> Vec<RecentProvenanceSummary> {
+        let Some(workspace) = self.runtime_status_workspace() else {
+            return Vec::new();
+        };
+        let storage = Storage::new(&workspace.db_path);
+        match storage.load_recent_provenance_events(Self::RUNTIME_RECENT_PROVENANCE_LIMIT) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| RecentProvenanceSummary {
+                    trace_id: row.trace_id,
+                    tool_name: row.tool_name,
+                    created_at: row.created_at,
+                    repository_id: Self::runtime_recent_provenance_repository_id(&row.payload_json),
+                })
+                .collect(),
             Err(err) => {
                 warn!(
                     repository_id = workspace.repository_id,
                     error = %err,
-                    "failed to prewarm repository symbol corpus during workspace attach"
+                    "failed to load recent runtime provenance summaries"
                 );
-                return;
+                Vec::new()
             }
+        }
+    }
+
+    fn runtime_status_summary(&self) -> RuntimeStatusSummary {
+        let (active_tasks, recent_tasks) = {
+            let registry = self
+                .runtime_task_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (registry.active_tasks(), registry.recent_tasks())
         };
 
-        if let Err(err) =
-            self.precise_graph_for_corpus(corpus.as_ref(), self.find_references_resource_budgets())
-        {
-            warn!(
-                repository_id = workspace.repository_id,
-                error = %err,
-                "failed to prewarm precise graph during workspace attach"
-            );
+        RuntimeStatusSummary {
+            profile: self.runtime_profile,
+            persistent_state_available: self.runtime_profile.persistent_state_available(),
+            watch_active: self.runtime_watch_active,
+            tool_surface_profile: self.tool_surface_profile.as_str().to_owned(),
+            status_tool: "workspace_current".to_owned(),
+            active_tasks,
+            recent_tasks,
+            recent_provenance: self.runtime_recent_provenance_summaries(),
         }
     }
 
@@ -4227,6 +5084,35 @@ impl FriggMcpServer {
             self.set_current_repository_id(Some(workspace.repository_id.clone()));
         }
 
+        self.validated_manifest_candidate_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate_root(&workspace.root);
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.search_text_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.search_hybrid_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.search_symbol_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.go_to_definition_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.find_declarations_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.heuristic_reference_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.maybe_refresh_workspace_semantic_snapshot(&workspace);
 
         let mut repository = self.repository_summary(&workspace);
@@ -4389,24 +5275,33 @@ impl FriggMcpServer {
         params: Parameters<ListRepositoriesParams>,
     ) -> Result<Json<ListRepositoriesResponse>, ErrorData> {
         let _params = params.0;
-        let repositories = self
-            .attached_workspaces()
-            .into_iter()
-            .map(|workspace| self.repository_summary(&workspace))
-            .collect::<Vec<_>>();
+        let server = self.clone();
+        let (result, provenance_result) = Self::run_blocking_task("list_repositories", move || {
+            let repositories = server
+                .attached_workspaces()
+                .into_iter()
+                .map(|workspace| server.repository_summary(&workspace))
+                .collect::<Vec<_>>();
 
-        let response = ListRepositoriesResponse { repositories };
-        let source_refs = json!({
-            "repository_ids": response
-                .repositories
-                .iter()
-                .map(|repo| repo.repository_id.clone())
-                .collect::<Vec<_>>(),
-        });
-        let result = Ok(Json(response));
-        let provenance_result = self
-            .record_provenance_blocking("list_repositories", None, json!({}), source_refs, &result)
-            .await;
+            let response = ListRepositoriesResponse { repositories };
+            let source_refs = json!({
+                "repository_ids": response
+                    .repositories
+                    .iter()
+                    .map(|repo| repo.repository_id.clone())
+                    .collect::<Vec<_>>(),
+            });
+            let result = Ok(Json(response));
+            let provenance_result = server.record_provenance_with_outcome(
+                "list_repositories",
+                None,
+                json!({}),
+                source_refs,
+                Self::provenance_outcome(&result),
+            );
+            (result, provenance_result)
+        })
+        .await?;
         self.finalize_with_provenance("list_repositories", result, provenance_result)
     }
 
@@ -4460,7 +5355,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_current",
-        description = "Return the session default repository, if any.",
+        description = "Return the current session repository, attached repositories, and runtime status, if any.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -4473,17 +5368,48 @@ impl FriggMcpServer {
     ) -> Result<Json<WorkspaceCurrentResponse>, ErrorData> {
         let _params = params.0;
         let current_workspace = self.current_workspace();
+        let repositories = self
+            .attached_workspaces()
+            .into_iter()
+            .map(|workspace| self.repository_summary(&workspace))
+            .collect::<Vec<_>>();
+        let runtime = self.runtime_status_summary();
         let response = WorkspaceCurrentResponse {
             repository: current_workspace
                 .as_ref()
                 .map(|workspace| self.repository_summary(workspace)),
             session_default: current_workspace.is_some(),
+            repositories,
+            runtime: Some(runtime),
         };
+        let repository_ids = response
+            .repositories
+            .iter()
+            .map(|repository| repository.repository_id.clone())
+            .collect::<Vec<_>>();
         let source_refs = json!({
             "repository_id": response
                 .repository
                 .as_ref()
                 .map(|repository| repository.repository_id.clone()),
+            "repository_ids": repository_ids,
+            "runtime_profile": response
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.profile.as_str().to_owned()),
+            "watch_active": response.runtime.as_ref().map(|runtime| runtime.watch_active),
+            "active_task_count": response
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.active_tasks.len()),
+            "recent_task_count": response
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.recent_tasks.len()),
+            "recent_provenance_count": response
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.recent_provenance.len()),
         });
         let result = Ok(Json(response));
         let provenance_result = self
@@ -4516,6 +5442,7 @@ impl FriggMcpServer {
             let mut effective_max_bytes: Option<usize> = None;
             let mut effective_line_start: Option<usize> = None;
             let mut effective_line_end: Option<usize> = None;
+            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<ReadFileResponse>, ErrorData> {
                 let requested_max_bytes = params_for_blocking
                     .max_bytes
@@ -4659,47 +5586,40 @@ impl FriggMcpServer {
                     content: sliced_content,
                 }))
             })();
+            let provenance_result = server.record_provenance_with_outcome(
+                "read_file",
+                repository_hint.as_deref(),
+                json!({
+                    "repository_id": repository_hint,
+                    "path": Self::bounded_text(&params_for_blocking.path),
+                    "max_bytes": params_for_blocking.max_bytes,
+                    "line_start": params_for_blocking.line_start,
+                    "line_end": params_for_blocking.line_end,
+                    "effective_max_bytes": effective_max_bytes,
+                    "effective_line_start": effective_line_start,
+                    "effective_line_end": effective_line_end,
+                }),
+                json!({
+                    "resolved_repository_id": resolved_repository_id.clone(),
+                    "resolved_path": resolved_path
+                        .clone()
+                        .map(|path| Self::bounded_text(&path)),
+                    "resolved_absolute_path": resolved_absolute_path
+                        .clone()
+                        .map(|path| Self::bounded_text(&path)),
+                }),
+                Self::provenance_outcome(&result),
+            );
 
             ReadFileExecution {
                 result,
-                resolved_repository_id,
-                resolved_path,
-                resolved_absolute_path,
-                effective_max_bytes,
-                effective_line_start,
-                effective_line_end,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "read_file",
-                repository_hint.as_deref(),
-                json!({
-                    "repository_id": repository_hint,
-                    "path": Self::bounded_text(&params.path),
-                    "max_bytes": params.max_bytes,
-                    "line_start": params.line_start,
-                    "line_end": params.line_end,
-                    "effective_max_bytes": execution.effective_max_bytes,
-                    "effective_line_start": execution.effective_line_start,
-                    "effective_line_end": execution.effective_line_end,
-                }),
-                json!({
-                    "resolved_repository_id": execution.resolved_repository_id,
-                    "resolved_path": execution
-                        .resolved_path
-                        .map(|path| Self::bounded_text(&path)),
-                    "resolved_absolute_path": execution
-                        .resolved_absolute_path
-                        .map(|path| Self::bounded_text(&path)),
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("read_file", result, provenance_result)
+        self.finalize_with_provenance("read_file", result, execution.provenance_result)
     }
 
     #[tool(
@@ -5156,6 +6076,8 @@ impl FriggMcpServer {
             let mut diagnostics_count = 0usize;
             let mut walk_diagnostics_count = 0usize;
             let mut read_diagnostics_count = 0usize;
+            let mut response_source_refs = json!({});
+            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
                 if query.is_empty() {
@@ -5163,7 +6085,7 @@ impl FriggMcpServer {
                 }
 
                 let path_regex = match params_for_blocking.path_regex.clone() {
-                    Some(raw) => Some(compile_safe_regex(&raw).map_err(|err| {
+                    Some(raw) => Some(server.compile_cached_safe_regex(&raw).map_err(|err| {
                         Self::invalid_params(
                             format!("invalid path_regex: {err}"),
                             Some(serde_json::json!({
@@ -5194,10 +6116,41 @@ impl FriggMcpServer {
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
+                let cache_key = SearchTextResponseCacheKey {
+                    scoped_repository_ids: scoped_repository_ids.clone(),
+                    query: query.clone(),
+                    pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
+                    path_regex: params_for_blocking.path_regex.clone(),
+                    limit,
+                };
+                if let Some(cached) = server.cached_search_text_response(&cache_key) {
+                    response_source_refs = cached.source_refs.clone();
+                    diagnostics_count = cached
+                        .source_refs
+                        .get("diagnostics_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize;
+                    walk_diagnostics_count = cached
+                        .source_refs
+                        .get("diagnostics")
+                        .and_then(|value| value.get("walk"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize;
+                    read_diagnostics_count = cached
+                        .source_refs
+                        .get("diagnostics")
+                        .and_then(|value| value.get("read"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize;
+                    return Ok(Json(cached.response));
+                }
                 let (scoped_config, repository_id_map) =
                     server.scoped_search_config(&scoped_workspaces);
 
-                let searcher = TextSearcher::new(scoped_config);
+                let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+                    scoped_config,
+                    Arc::clone(&server.validated_manifest_candidate_cache),
+                );
                 let search_output = match pattern_type {
                     SearchPatternType::Literal => searcher.search_literal_with_filters_diagnostics(
                         SearchTextQuery {
@@ -5232,20 +6185,50 @@ impl FriggMcpServer {
                         found.repository_id = actual_repository_id.clone();
                     }
                 }
-
-                Ok(Json(SearchTextResponse {
+                let response = SearchTextResponse {
                     total_matches,
                     matches,
-                }))
+                };
+                response_source_refs = json!({
+                    "scoped_repository_ids": scoped_repository_ids.clone(),
+                    "total_matches": response.total_matches,
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "walk": walk_diagnostics_count,
+                        "read": read_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                });
+                server.cache_search_text_response(cache_key, &response, &response_source_refs);
+
+                Ok(Json(response))
             })();
 
             let total_matches = result
                 .as_ref()
                 .map(|response| response.0.total_matches)
                 .unwrap_or(0);
+            let provenance_result = server.record_provenance_with_outcome(
+                "search_text",
+                repository_hint.as_deref(),
+                json!({
+                    "repository_id": repository_hint,
+                    "query": Self::bounded_text(&params_for_blocking.query),
+                    "pattern_type": effective_pattern_type.clone(),
+                    "path_regex": params_for_blocking
+                        .path_regex
+                        .as_ref()
+                        .map(|raw| Self::bounded_text(raw)),
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                response_source_refs.clone(),
+                Self::provenance_outcome(&result),
+            );
 
             SearchTextExecution {
                 result,
+                provenance_result,
                 scoped_repository_ids,
                 total_matches,
                 effective_limit,
@@ -5258,32 +6241,7 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "search_text",
-                repository_hint.as_deref(),
-                json!({
-                    "repository_id": repository_hint,
-                    "query": Self::bounded_text(&params.query),
-                    "pattern_type": execution.effective_pattern_type,
-                    "path_regex": params.path_regex.map(|raw| Self::bounded_text(&raw)),
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "total_matches": execution.total_matches,
-                    "diagnostics_count": execution.diagnostics_count,
-                    "diagnostics": {
-                        "walk": execution.walk_diagnostics_count,
-                        "read": execution.read_diagnostics_count,
-                        "total": execution.diagnostics_count,
-                    },
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("search_text", result, provenance_result)
+        self.finalize_with_provenance("search_text", result, execution.provenance_result)
     }
 
     #[tool(
@@ -5318,6 +6276,11 @@ impl FriggMcpServer {
             let mut semantic_hit_count: Option<usize> = None;
             let mut semantic_match_count: Option<usize> = None;
             let mut warning: Option<String> = None;
+            let mut channel_metadata: Option<Value> = None;
+            let mut stage_attribution: Option<Value> = None;
+            let mut match_anchors: Option<Value> = None;
+            let mut response_source_refs = json!({});
+            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
                 if query.is_empty() {
@@ -5360,8 +6323,25 @@ impl FriggMcpServer {
                     });
                     weights
                 };
+                let cache_key = SearchHybridResponseCacheKey {
+                    scoped_repository_ids: scoped_repository_ids.clone(),
+                    query: query.clone(),
+                    language: params_for_blocking.language.clone(),
+                    limit,
+                    semantic: params_for_blocking.semantic,
+                    lexical_weight_bits: weights.lexical.to_bits(),
+                    graph_weight_bits: weights.graph.to_bits(),
+                    semantic_weight_bits: weights.semantic.to_bits(),
+                };
+                if let Some(cached) = server.cached_search_hybrid_response(&cache_key) {
+                    response_source_refs = cached.source_refs.clone();
+                    return Ok(Json(cached.response));
+                }
 
-                let searcher = TextSearcher::new(scoped_config);
+                let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+                    scoped_config,
+                    Arc::clone(&server.validated_manifest_candidate_cache),
+                );
                 let search_output = searcher
                     .search_hybrid_with_filters(
                         SearchHybridQuery {
@@ -5384,19 +6364,37 @@ impl FriggMcpServer {
                 read_diagnostics_count = search_output
                     .diagnostics
                     .count_by_kind(SearchDiagnosticKind::Read);
-                semantic_requested = Some(search_output.note.semantic_requested);
-                semantic_enabled = Some(search_output.note.semantic_enabled);
-                semantic_status = Some(search_output.note.semantic_status.as_str().to_owned());
-                semantic_reason = search_output.note.semantic_reason.clone();
-                semantic_candidate_count = Some(search_output.note.semantic_candidate_count);
-                semantic_hit_count = Some(search_output.note.semantic_hit_count);
-                semantic_match_count = Some(search_output.note.semantic_match_count);
+                semantic_requested = Some(
+                    params_for_blocking
+                        .semantic
+                        .unwrap_or(server.config.semantic_runtime.enabled),
+                );
+                let semantic_channel = Self::search_hybrid_channel_result(
+                    &search_output.channel_results,
+                    EvidenceChannel::Semantic,
+                );
+                semantic_enabled =
+                    Some(semantic_channel.is_some_and(|result| result.stats.match_count > 0));
+                semantic_status =
+                    semantic_channel.map(|result| result.health.status.as_str().to_owned());
+                semantic_reason = semantic_channel.and_then(|result| result.health.reason.clone());
+                semantic_candidate_count =
+                    semantic_channel.map(|result| result.stats.candidate_count);
+                semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
+                semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
                 warning = Self::search_hybrid_warning(
                     semantic_status.as_deref(),
                     semantic_reason.as_deref(),
                     semantic_hit_count,
                     semantic_match_count,
                 );
+                channel_metadata = Some(Self::search_hybrid_channels_metadata(
+                    &search_output.channel_results,
+                ));
+                stage_attribution = search_output
+                    .stage_attribution
+                    .as_ref()
+                    .and_then(|attribution| serde_json::to_value(attribution).ok());
 
                 let mut matches = search_output
                     .matches
@@ -5404,9 +6402,10 @@ impl FriggMcpServer {
                     .map(|evidence| SearchHybridMatch {
                         repository_id: evidence.document.repository_id,
                         path: evidence.document.path,
-                        line: evidence.document.line,
-                        column: evidence.document.column,
+                        line: evidence.anchor.start_line,
+                        column: evidence.anchor.start_column,
                         excerpt: evidence.excerpt,
+                        anchor: Some(evidence.anchor),
                         blended_score: evidence.blended_score,
                         lexical_score: evidence.lexical_score,
                         graph_score: evidence.graph_score,
@@ -5422,8 +6421,10 @@ impl FriggMcpServer {
                         found.repository_id = actual_repository_id.clone();
                     }
                 }
+                match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
 
-                let metadata = Some(json!({
+                let mut metadata_payload = json!({
+                    "channels": channel_metadata.clone(),
                     "semantic_requested": semantic_requested,
                     "semantic_enabled": semantic_enabled,
                     "semantic_status": semantic_status.clone(),
@@ -5438,9 +6439,16 @@ impl FriggMcpServer {
                         "read": read_diagnostics_count,
                         "total": diagnostics_count,
                     },
-                }));
+                });
+                if let Some(stage_attribution) = stage_attribution.clone() {
+                    metadata_payload
+                        .as_object_mut()
+                        .expect("search_hybrid metadata payload should be an object")
+                        .insert("stage_attribution".to_owned(), stage_attribution);
+                }
+                let metadata = Some(metadata_payload);
 
-                Ok(Json(SearchHybridResponse {
+                let response = SearchHybridResponse {
                     matches,
                     semantic_requested: None,
                     semantic_enabled: None,
@@ -5451,11 +6459,59 @@ impl FriggMcpServer {
                     warning: None,
                     metadata,
                     note: None,
-                }))
+                };
+                let mut response_source_refs_value = json!({
+                    "scoped_repository_ids": scoped_repository_ids.clone(),
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "walk": walk_diagnostics_count,
+                        "read": read_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                    "semantic_requested": semantic_requested,
+                    "semantic_enabled": semantic_enabled,
+                    "semantic_status": semantic_status.clone(),
+                    "semantic_reason": semantic_reason.as_ref().map(|reason| Self::bounded_text(reason)),
+                    "semantic_candidate_count": semantic_candidate_count,
+                    "semantic_hit_count": semantic_hit_count,
+                    "semantic_match_count": semantic_match_count,
+                    "warning": warning.as_ref().map(|warning| Self::bounded_text(warning)),
+                    "channels": channel_metadata.clone(),
+                    "matches": match_anchors.clone(),
+                });
+                if let Some(stage_attribution) = stage_attribution.clone() {
+                    response_source_refs_value
+                        .as_object_mut()
+                        .expect("search_hybrid source refs should be an object")
+                        .insert("stage_attribution".to_owned(), stage_attribution);
+                }
+                response_source_refs = response_source_refs_value;
+                server.cache_search_hybrid_response(cache_key, &response, &response_source_refs);
+
+                Ok(Json(response))
             })();
+            let provenance_result = server.record_provenance_with_outcome(
+                "search_hybrid",
+                repository_hint.as_deref(),
+                json!({
+                    "repository_id": repository_hint.clone(),
+                    "query": Self::bounded_text(&params_for_blocking.query),
+                    "language": params_for_blocking
+                        .language
+                        .as_ref()
+                        .map(|language| Self::bounded_text(language)),
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                    "semantic": params_for_blocking.semantic,
+                    "weights": effective_weights.clone(),
+                }),
+                response_source_refs.clone(),
+                Self::provenance_outcome(&result),
+            );
 
             SearchHybridExecution {
                 result,
+                provenance_result,
                 scoped_repository_ids,
                 effective_limit,
                 effective_weights,
@@ -5470,45 +6526,14 @@ impl FriggMcpServer {
                 semantic_hit_count,
                 semantic_match_count,
                 warning,
+                channel_metadata,
+                match_anchors,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "search_hybrid",
-                repository_hint.as_deref(),
-                json!({
-                    "repository_id": repository_hint,
-                    "query": Self::bounded_text(&params.query),
-                    "language": params.language.map(|language| Self::bounded_text(&language)),
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                    "semantic": params.semantic,
-                    "weights": execution.effective_weights,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "diagnostics_count": execution.diagnostics_count,
-                    "diagnostics": {
-                        "walk": execution.walk_diagnostics_count,
-                        "read": execution.read_diagnostics_count,
-                        "total": execution.diagnostics_count,
-                    },
-                    "semantic_requested": execution.semantic_requested,
-                    "semantic_enabled": execution.semantic_enabled,
-                    "semantic_status": execution.semantic_status,
-                    "semantic_reason": execution.semantic_reason.map(|reason| Self::bounded_text(&reason)),
-                    "semantic_candidate_count": execution.semantic_candidate_count,
-                    "semantic_hit_count": execution.semantic_hit_count,
-                    "semantic_match_count": execution.semantic_match_count,
-                    "warning": execution.warning.map(|warning| Self::bounded_text(&warning)),
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("search_hybrid", result, provenance_result)
+        self.finalize_with_provenance("search_hybrid", result, execution.provenance_result)
     }
 
     #[tool(
@@ -5562,28 +6587,40 @@ impl FriggMcpServer {
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
-
-                if params_for_blocking.symbol.is_none() {
-                    if let (Some(path), Some(line)) = (
-                        params_for_blocking.path.as_deref(),
-                        params_for_blocking.line,
-                    ) {
-                        if let Some((response, repository_id, precise_symbol, precision)) = server
-                            .try_cached_precise_definition_fast_path(
-                            params_for_blocking.repository_id.as_deref(),
-                            path,
-                            line,
-                            params_for_blocking.column,
-                            limit,
-                        )? {
-                            scoped_repository_ids = vec![repository_id];
-                            selected_precise_symbol = Some(precise_symbol);
-                            resolution_source = Some("location_precise_cache".to_owned());
-                            resolution_precision = Some(precision);
-                            match_count = response.0.matches.len();
-                            return Ok(response);
-                        }
-                    }
+                let scoped_workspaces = server.attached_workspaces_for_repository(
+                    params_for_blocking.repository_id.as_deref(),
+                )?;
+                let scoped_repository_ids_for_cache = scoped_workspaces
+                    .iter()
+                    .map(|workspace| workspace.repository_id.clone())
+                    .collect::<Vec<_>>();
+                let cache_key = SearchSymbolResponseCacheKey {
+                    scoped_repository_ids: scoped_repository_ids_for_cache,
+                    query: query.clone(),
+                    path_class: path_class_filter.map(|value| value.as_str().to_owned()),
+                    path_regex: params_for_blocking.path_regex.clone(),
+                    limit,
+                };
+                let cache_is_fresh = scoped_workspaces.iter().all(|workspace| {
+                    server
+                        .workspace_repository_freshness_status(
+                            workspace,
+                            &server.config.semantic_runtime,
+                        )
+                        .map(|status| matches!(status.manifest, RepositoryManifestFreshness::Ready))
+                        .unwrap_or(false)
+                });
+                if cache_is_fresh
+                    && let Some(cached) = server.cached_search_symbol_response(&cache_key)
+                {
+                    scoped_repository_ids = cached.scoped_repository_ids;
+                    diagnostics_count = cached.diagnostics_count;
+                    manifest_walk_diagnostics_count = cached.manifest_walk_diagnostics_count;
+                    manifest_read_diagnostics_count = cached.manifest_read_diagnostics_count;
+                    symbol_extraction_diagnostics_count =
+                        cached.symbol_extraction_diagnostics_count;
+                    effective_limit = Some(cached.effective_limit);
+                    return Ok(Json(cached.response));
                 }
 
                 let corpora = server.collect_repository_symbol_corpora(
@@ -5778,11 +6815,22 @@ impl FriggMcpServer {
                     "path_class_sort": "runtime_first",
                 });
                 let (metadata, note) = Self::metadata_note_pair(metadata);
-                Ok(Json(SearchSymbolResponse {
+                let response = SearchSymbolResponse {
                     matches,
                     metadata,
                     note,
-                }))
+                };
+                server.cache_search_symbol_response(
+                    cache_key,
+                    &response,
+                    &scoped_repository_ids,
+                    diagnostics_count,
+                    manifest_walk_diagnostics_count,
+                    manifest_read_diagnostics_count,
+                    symbol_extraction_diagnostics_count,
+                    limit,
+                );
+                Ok(Json(response))
             })();
 
             SearchSymbolExecution {
@@ -5871,6 +6919,7 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut target_selection_candidate_count = 0usize;
             let mut target_selection_same_rank_count = 0usize;
+            let repository_hint = repository_hint.clone();
 
             let result = (|| -> Result<Json<FindReferencesResponse>, ErrorData> {
                 let limit = params_for_blocking
@@ -5940,6 +6989,8 @@ impl FriggMcpServer {
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                let heuristic_scip_signature =
+                    Self::scip_signature(&cached_precise_graph.discovery.artifact_digests);
                 let precise_coverage = cached_precise_graph.coverage_mode;
                 let graph = cached_precise_graph.graph;
                 let target_precise_stats = cached_precise_graph.ingest_stats;
@@ -6071,95 +7122,77 @@ impl FriggMcpServer {
                         })),
                     )
                 })?;
+                let heuristic_cache_key = HeuristicReferenceCacheKey {
+                    repository_id: target_corpus.repository_id.clone(),
+                    symbol_id: target.symbol.stable_id.clone(),
+                    corpus_signature: target_corpus.root_signature.clone(),
+                    scip_signature: heuristic_scip_signature,
+                };
 
-                let source_started_at = Instant::now();
-                let source_max_elapsed =
-                    Duration::from_millis(resource_budgets.source_max_elapsed_ms);
-                let source_max_file_bytes =
-                    Self::usize_to_u64(resource_budgets.source_max_file_bytes);
-                let source_max_total_bytes =
-                    Self::usize_to_u64(resource_budgets.source_max_total_bytes);
+                let all_references = if let Some(cached) =
+                    server.cached_heuristic_references(&heuristic_cache_key)
+                {
+                    source_read_diagnostics_count = cached.source_read_diagnostics_count;
+                    source_files_loaded = cached.source_files_loaded;
+                    source_bytes_loaded = cached.source_bytes_loaded;
+                    (*cached.references).clone()
+                } else {
+                    let source_started_at = Instant::now();
+                    let source_max_elapsed =
+                        Duration::from_millis(resource_budgets.source_max_elapsed_ms);
+                    let source_max_file_bytes =
+                        Self::usize_to_u64(resource_budgets.source_max_file_bytes);
+                    let source_max_total_bytes =
+                        Self::usize_to_u64(resource_budgets.source_max_total_bytes);
 
-                for (index, path) in target_corpus.source_paths.iter().enumerate() {
-                    if source_started_at.elapsed() > source_max_elapsed {
-                        let elapsed_ms =
-                            u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        return Err(Self::find_references_resource_budget_error(
-                            "source",
-                            "source_elapsed_ms",
-                            "find_references source processing exceeded time budget",
-                            json!({
-                                "repository_id": target_corpus.repository_id,
-                                "actual": elapsed_ms,
-                                "limit": resource_budgets.source_max_elapsed_ms,
-                                "files_loaded": Self::usize_to_u64(source_files_loaded),
-                                "bytes_loaded": source_bytes_loaded,
-                            }),
-                        ));
-                    }
-
-                    if index >= resource_budgets.source_max_files {
-                        return Err(Self::find_references_resource_budget_error(
-                            "source",
-                            "source_file_count",
-                            "find_references source file count exceeds configured budget",
-                            json!({
-                                "repository_id": target_corpus.repository_id,
-                                "actual": Self::usize_to_u64(index.saturating_add(1)),
-                                "limit": Self::usize_to_u64(resource_budgets.source_max_files),
-                            }),
-                        ));
-                    }
-
-                    let metadata = match fs::metadata(path) {
-                        Ok(metadata) => Some(metadata),
-                        Err(err) => {
-                            source_read_diagnostics_count += 1;
-                            warn!(
-                                repository_id = target_corpus.repository_id,
-                                path = %path.display(),
-                                error = %err,
-                                "skipping source file while resolving heuristic references"
-                            );
-                            None
-                        }
-                    };
-
-                    if let Some(metadata) = metadata {
-                        let pre_read_bytes = metadata.len();
-                        if pre_read_bytes > source_max_file_bytes {
+                    for (index, path) in target_corpus.source_paths.iter().enumerate() {
+                        if source_started_at.elapsed() > source_max_elapsed {
+                            let elapsed_ms =
+                                u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
                             return Err(Self::find_references_resource_budget_error(
                                 "source",
-                                "source_file_bytes",
-                                "find_references source file exceeds per-file byte budget",
+                                "source_elapsed_ms",
+                                "find_references source processing exceeded time budget",
                                 json!({
                                     "repository_id": target_corpus.repository_id,
-                                    "path": path.display().to_string(),
-                                    "actual": pre_read_bytes,
-                                    "limit": source_max_file_bytes,
+                                    "actual": elapsed_ms,
+                                    "limit": resource_budgets.source_max_elapsed_ms,
+                                    "files_loaded": Self::usize_to_u64(source_files_loaded),
+                                    "bytes_loaded": source_bytes_loaded,
                                 }),
                             ));
                         }
-                        let projected_total = source_bytes_loaded.saturating_add(pre_read_bytes);
-                        if projected_total > source_max_total_bytes {
+
+                        if index >= resource_budgets.source_max_files {
                             return Err(Self::find_references_resource_budget_error(
                                 "source",
-                                "source_total_bytes",
-                                "find_references source bytes exceed configured budget",
+                                "source_file_count",
+                                "find_references source file count exceeds configured budget",
                                 json!({
                                     "repository_id": target_corpus.repository_id,
-                                    "path": path.display().to_string(),
-                                    "actual": projected_total,
-                                    "limit": source_max_total_bytes,
+                                    "actual": Self::usize_to_u64(index.saturating_add(1)),
+                                    "limit": Self::usize_to_u64(resource_budgets.source_max_files),
                                 }),
                             ));
                         }
-                    }
 
-                    match fs::read_to_string(path) {
-                        Ok(source) => {
-                            let source_bytes = Self::usize_to_u64(source.len());
-                            if source_bytes > source_max_file_bytes {
+                        let metadata = match fs::metadata(path) {
+                            Ok(metadata) => Some(metadata),
+                            Err(err) => {
+                                source_read_diagnostics_count += 1;
+                                warn!(
+                                    repository_id = target_corpus.repository_id,
+                                    path = %path.display(),
+                                    error = %err,
+                                    "skipping source file while resolving heuristic references"
+                                );
+                                None
+                            }
+                        };
+
+                        if let Some(metadata) = metadata {
+                            let pre_read_bytes = metadata.len();
+                            if pre_read_bytes > source_max_file_bytes {
                                 return Err(Self::find_references_resource_budget_error(
                                     "source",
                                     "source_file_bytes",
@@ -6167,12 +7200,13 @@ impl FriggMcpServer {
                                     json!({
                                         "repository_id": target_corpus.repository_id,
                                         "path": path.display().to_string(),
-                                        "actual": source_bytes,
+                                        "actual": pre_read_bytes,
                                         "limit": source_max_file_bytes,
                                     }),
                                 ));
                             }
-                            let projected_total = source_bytes_loaded.saturating_add(source_bytes);
+                            let projected_total =
+                                source_bytes_loaded.saturating_add(pre_read_bytes);
                             if projected_total > source_max_total_bytes {
                                 return Err(Self::find_references_resource_budget_error(
                                     "source",
@@ -6186,24 +7220,66 @@ impl FriggMcpServer {
                                     }),
                                 ));
                             }
-
-                            resolver.ingest_source(path, &source);
-                            source_files_loaded = source_files_loaded.saturating_add(1);
-                            source_bytes_loaded = projected_total;
                         }
-                        Err(err) => {
-                            source_read_diagnostics_count += 1;
-                            warn!(
-                                repository_id = target_corpus.repository_id,
-                                path = %path.display(),
-                                error = %err,
-                                "skipping source file while resolving heuristic references"
-                            );
+
+                        match fs::read_to_string(path) {
+                            Ok(source) => {
+                                let source_bytes = Self::usize_to_u64(source.len());
+                                if source_bytes > source_max_file_bytes {
+                                    return Err(Self::find_references_resource_budget_error(
+                                        "source",
+                                        "source_file_bytes",
+                                        "find_references source file exceeds per-file byte budget",
+                                        json!({
+                                            "repository_id": target_corpus.repository_id,
+                                            "path": path.display().to_string(),
+                                            "actual": source_bytes,
+                                            "limit": source_max_file_bytes,
+                                        }),
+                                    ));
+                                }
+                                let projected_total =
+                                    source_bytes_loaded.saturating_add(source_bytes);
+                                if projected_total > source_max_total_bytes {
+                                    return Err(Self::find_references_resource_budget_error(
+                                        "source",
+                                        "source_total_bytes",
+                                        "find_references source bytes exceed configured budget",
+                                        json!({
+                                            "repository_id": target_corpus.repository_id,
+                                            "path": path.display().to_string(),
+                                            "actual": projected_total,
+                                            "limit": source_max_total_bytes,
+                                        }),
+                                    ));
+                                }
+
+                                resolver.ingest_source(path, &source);
+                                source_files_loaded = source_files_loaded.saturating_add(1);
+                                source_bytes_loaded = projected_total;
+                            }
+                            Err(err) => {
+                                source_read_diagnostics_count += 1;
+                                warn!(
+                                    repository_id = target_corpus.repository_id,
+                                    path = %path.display(),
+                                    error = %err,
+                                    "skipping source file while resolving heuristic references"
+                                );
+                            }
                         }
                     }
-                }
 
-                let all_references = resolver.finish();
+                    let all_references = resolver.finish();
+                    server.cache_heuristic_references(
+                        heuristic_cache_key,
+                        all_references.clone(),
+                        source_read_diagnostics_count,
+                        source_files_loaded,
+                        source_bytes_loaded,
+                    );
+                    all_references
+                };
                 total_matches = all_references.len();
                 let references = all_references.into_iter().take(limit).collect::<Vec<_>>();
 
@@ -6304,9 +7380,57 @@ impl FriggMcpServer {
                     note,
                 }))
             })();
+            let provenance_result = server.record_provenance_with_outcome(
+                "find_references",
+                repository_hint.as_deref(),
+                json!({
+                    "repository_id": repository_hint,
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids.clone(),
+                    "total_matches": total_matches,
+                    "selected_symbol_id": selected_symbol_id.clone(),
+                    "selected_precise_symbol": selected_precise_symbol.clone(),
+                    "resolution_precision": resolution_precision.clone(),
+                    "resolution_source": resolution_source.clone(),
+                    "diagnostics_count": diagnostics_count,
+                    "diagnostics": {
+                        "manifest_walk": manifest_walk_diagnostics_count,
+                        "manifest_read": manifest_read_diagnostics_count,
+                        "symbol_extraction": symbol_extraction_diagnostics_count,
+                        "source_read": source_read_diagnostics_count,
+                        "total": diagnostics_count,
+                    },
+                    "precise_artifacts_discovered": precise_artifacts_discovered,
+                    "precise_artifacts_discovered_bytes": precise_artifacts_discovered_bytes,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_ingested_bytes": precise_artifacts_ingested_bytes,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "precise_artifacts_failed_bytes": precise_artifacts_failed_bytes,
+                    "precise_reference_count": precise_reference_count,
+                    "resource_budgets": resource_budget_metadata_for_blocking.clone(),
+                    "source_files_discovered": source_files_discovered,
+                    "source_files_loaded": source_files_loaded,
+                    "source_bytes_loaded": source_bytes_loaded,
+                }),
+                Self::provenance_outcome(&result),
+            );
 
             FindReferencesExecution {
                 result,
+                provenance_result,
                 scoped_repository_ids,
                 total_matches,
                 selected_symbol_id,
@@ -6334,50 +7458,7 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-            "find_references",
-            repository_hint.as_deref(),
-            json!({
-                "repository_id": repository_hint,
-                "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                "path": params.path.map(|path| Self::bounded_text(&path)),
-                "line": params.line,
-                "column": params.column,
-                "limit": params.limit,
-                "effective_limit": execution.effective_limit,
-            }),
-            json!({
-                "scoped_repository_ids": execution.scoped_repository_ids,
-                "total_matches": execution.total_matches,
-                "selected_symbol_id": execution.selected_symbol_id,
-                "selected_precise_symbol": execution.selected_precise_symbol,
-                "resolution_precision": execution.resolution_precision,
-                "resolution_source": execution.resolution_source,
-                "diagnostics_count": execution.diagnostics_count,
-                "diagnostics": {
-                    "manifest_walk": execution.manifest_walk_diagnostics_count,
-                    "manifest_read": execution.manifest_read_diagnostics_count,
-                    "symbol_extraction": execution.symbol_extraction_diagnostics_count,
-                    "source_read": execution.source_read_diagnostics_count,
-                    "total": execution.diagnostics_count,
-                },
-                "precise_artifacts_discovered": execution.precise_artifacts_discovered,
-                "precise_artifacts_discovered_bytes": execution.precise_artifacts_discovered_bytes,
-                "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                "precise_artifacts_ingested_bytes": execution.precise_artifacts_ingested_bytes,
-                "precise_artifacts_failed": execution.precise_artifacts_failed,
-                "precise_artifacts_failed_bytes": execution.precise_artifacts_failed_bytes,
-                "precise_reference_count": execution.precise_reference_count,
-                "resource_budgets": resource_budget_metadata,
-                "source_files_discovered": execution.source_files_discovered,
-                "source_files_loaded": execution.source_files_loaded,
-                "source_bytes_loaded": execution.source_bytes_loaded,
-            }),
-            &result,
-        )
-            .await;
-        self.finalize_with_provenance("find_references", result, provenance_result)
+        self.finalize_with_provenance("find_references", result, execution.provenance_result)
     }
 
     #[tool(
@@ -6393,6 +7474,11 @@ impl FriggMcpServer {
         &self,
         params: Parameters<GoToDefinitionParams>,
     ) -> Result<Json<GoToDefinitionResponse>, ErrorData> {
+        struct GoToDefinitionExecution {
+            result: Result<Json<GoToDefinitionResponse>, ErrorData>,
+            provenance_result: Result<(), ErrorData>,
+        }
+
         let params = params.0;
         let repository_hint = params.repository_id.clone();
         let resource_budgets = self.find_references_resource_budgets();
@@ -6410,6 +7496,7 @@ impl FriggMcpServer {
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
             let mut match_count = 0usize;
+            let repository_hint = repository_hint.clone();
 
             let result = (|| -> Result<Json<GoToDefinitionResponse>, ErrorData> {
                 let limit = params_for_blocking
@@ -6418,207 +7505,591 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let corpora = server.collect_repository_symbol_corpora(
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                scoped_repository_ids = corpora
-                    .iter()
-                    .map(|corpus| corpus.repository_id.clone())
-                    .collect::<Vec<_>>();
-
-                let resolved_target = Self::resolve_navigation_target(
-                    &corpora,
-                    params_for_blocking.symbol.as_deref(),
-                    params_for_blocking.path.as_deref(),
-                    params_for_blocking.line,
-                    params_for_blocking.column,
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                resolution_source = Some(resolved_target.resolution_source.to_owned());
-                let symbol_query = resolved_target.symbol_query;
-                target_selection_candidate_count = resolved_target.target.candidate_count;
-                target_selection_same_rank_count =
-                    resolved_target.target.selected_rank_candidate_count;
-                let target = resolved_target.target.candidate;
-                selected_symbol_id = Some(target.symbol.stable_id.clone());
-                let target_corpus = resolved_target.target.corpus;
-
-                let cached_precise_graph =
-                    server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
-                let precise_coverage = cached_precise_graph.coverage_mode;
-                let graph = cached_precise_graph.graph;
-                precise_artifacts_ingested = cached_precise_graph.ingest_stats.artifacts_ingested;
-                precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
-                let precise_target = Self::select_precise_symbol_for_resolved_target(
-                    graph.as_ref(),
-                    &target_corpus.repository_id,
-                    &target.root,
-                    &symbol_query,
-                    &target.symbol,
-                );
-                if let Some(precise_target) = &precise_target {
-                    selected_precise_symbol = Some(precise_target.symbol.clone());
+                let cache_key = GoToDefinitionResponseCacheKey {
+                    repository_id: params_for_blocking.repository_id.clone(),
+                    symbol: params_for_blocking.symbol.clone(),
+                    path: params_for_blocking.path.clone(),
+                    line: params_for_blocking.line,
+                    column: params_for_blocking.column,
+                    limit,
+                };
+                if let Some(cached) = server.cached_go_to_definition_response(&cache_key) {
+                    scoped_repository_ids = cached.scoped_repository_ids;
+                    selected_symbol_id = cached.selected_symbol_id;
+                    selected_precise_symbol = cached.selected_precise_symbol;
+                    resolution_precision = cached.resolution_precision;
+                    resolution_source = cached.resolution_source;
+                    effective_limit = Some(cached.effective_limit);
+                    precise_artifacts_ingested = cached.precise_artifacts_ingested;
+                    precise_artifacts_failed = cached.precise_artifacts_failed;
+                    match_count = cached.match_count;
+                    return Ok(Json(cached.response));
                 }
 
-                let mut precise_matches = precise_target
-                    .as_ref()
-                    .map(|precise_target| {
-                        graph
-                            .precise_occurrences_for_symbol(
+                let response = if params_for_blocking.symbol.is_none() {
+                    if let (Some(path), Some(line)) = (
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                    ) {
+                        if let Some((response, repository_id, precise_symbol, precision)) = server
+                            .try_precise_definition_fast_path(
+                            params_for_blocking.repository_id.as_deref(),
+                            path,
+                            line,
+                            params_for_blocking.column,
+                            limit,
+                        )? {
+                            scoped_repository_ids = vec![repository_id];
+                            selected_precise_symbol = Some(precise_symbol);
+                            resolution_source = Some("location_precise_cache".to_owned());
+                            resolution_precision = Some(precision);
+                            match_count = response.0.matches.len();
+                            response
+                        } else {
+                            let corpora = server.collect_repository_symbol_corpora(
+                                params_for_blocking.repository_id.as_deref(),
+                            )?;
+                            scoped_repository_ids = corpora
+                                .iter()
+                                .map(|corpus| corpus.repository_id.clone())
+                                .collect::<Vec<_>>();
+
+                            let resolved_target = Self::resolve_navigation_target(
+                                &corpora,
+                                params_for_blocking.symbol.as_deref(),
+                                params_for_blocking.path.as_deref(),
+                                params_for_blocking.line,
+                                params_for_blocking.column,
+                                params_for_blocking.repository_id.as_deref(),
+                            )?;
+                            resolution_source = Some(resolved_target.resolution_source.to_owned());
+                            let symbol_query = resolved_target.symbol_query;
+                            target_selection_candidate_count =
+                                resolved_target.target.candidate_count;
+                            target_selection_same_rank_count =
+                                resolved_target.target.selected_rank_candidate_count;
+                            let target = resolved_target.target.candidate;
+                            selected_symbol_id = Some(target.symbol.stable_id.clone());
+                            let target_corpus = resolved_target.target.corpus;
+
+                            let cached_precise_graph = server.precise_graph_for_corpus(
+                                target_corpus.as_ref(),
+                                resource_budgets,
+                            )?;
+                            let precise_coverage = cached_precise_graph.coverage_mode;
+                            let graph = cached_precise_graph.graph;
+                            precise_artifacts_ingested =
+                                cached_precise_graph.ingest_stats.artifacts_ingested;
+                            precise_artifacts_failed =
+                                cached_precise_graph.ingest_stats.artifacts_failed;
+                            let precise_target = Self::select_precise_symbol_for_resolved_target(
+                                graph.as_ref(),
                                 &target_corpus.repository_id,
-                                &precise_target.symbol,
-                            )
-                            .into_iter()
-                            .filter(|occurrence| occurrence.is_definition())
-                            .map(|occurrence| NavigationLocation {
-                                symbol: if precise_target.display_name.is_empty() {
-                                    target.symbol.name.clone()
-                                } else {
-                                    precise_target.display_name.clone()
-                                },
-                                repository_id: target_corpus.repository_id.clone(),
-                                path: Self::canonicalize_navigation_path(
-                                    &target.root,
-                                    &occurrence.path,
-                                ),
-                                line: occurrence.range.start_line,
-                                column: occurrence.range.start_column,
-                                kind: Self::display_symbol_kind(&precise_target.kind),
-                                precision: Some(
-                                    Self::precise_match_precision(precise_coverage).to_owned(),
-                                ),
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                Self::sort_navigation_locations(&mut precise_matches);
-                if precise_matches.len() > limit {
-                    precise_matches.truncate(limit);
-                }
+                                &target.root,
+                                &symbol_query,
+                                &target.symbol,
+                            );
+                            if let Some(precise_target) = &precise_target {
+                                selected_precise_symbol = Some(precise_target.symbol.clone());
+                            }
 
-                if !precise_matches.is_empty() {
-                    let precision = Self::precise_resolution_precision(precise_coverage);
-                    resolution_precision = Some(precision.to_owned());
-                    match_count = precise_matches.len();
-                    let metadata = json!({
-                        "precision": precision,
-                        "heuristic": false,
-                        "target_symbol_id": target.symbol.stable_id.clone(),
-                        "target_precise_symbol": selected_precise_symbol.clone(),
-                        "resolution_source": resolution_source.clone(),
-                        "target_selection": Self::navigation_target_selection_note(
+                            let mut precise_matches = precise_target
+                                .as_ref()
+                                .map(|precise_target| {
+                                    graph
+                                        .precise_occurrences_for_symbol(
+                                            &target_corpus.repository_id,
+                                            &precise_target.symbol,
+                                        )
+                                        .into_iter()
+                                        .filter(|occurrence| occurrence.is_definition())
+                                        .map(|occurrence| NavigationLocation {
+                                            symbol: if precise_target.display_name.is_empty() {
+                                                target.symbol.name.clone()
+                                            } else {
+                                                precise_target.display_name.clone()
+                                            },
+                                            repository_id: target_corpus.repository_id.clone(),
+                                            path: Self::canonicalize_navigation_path(
+                                                &target.root,
+                                                &occurrence.path,
+                                            ),
+                                            line: occurrence.range.start_line,
+                                            column: occurrence.range.start_column,
+                                            kind: Self::display_symbol_kind(&precise_target.kind),
+                                            precision: Some(
+                                                Self::precise_match_precision(precise_coverage)
+                                                    .to_owned(),
+                                            ),
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            Self::sort_navigation_locations(&mut precise_matches);
+                            if precise_matches.len() > limit {
+                                precise_matches.truncate(limit);
+                            }
+
+                            if !precise_matches.is_empty() {
+                                let precision =
+                                    Self::precise_resolution_precision(precise_coverage);
+                                resolution_precision = Some(precision.to_owned());
+                                match_count = precise_matches.len();
+                                let metadata = json!({
+                                    "precision": precision,
+                                    "heuristic": false,
+                                    "target_symbol_id": target.symbol.stable_id.clone(),
+                                    "target_precise_symbol": selected_precise_symbol.clone(),
+                                    "resolution_source": resolution_source.clone(),
+                                    "target_selection": Self::navigation_target_selection_note(
+                                        &symbol_query,
+                                        &target,
+                                        target_selection_candidate_count,
+                                        target_selection_same_rank_count,
+                                    ),
+                                    "precise": Self::precise_note_with_count(
+                                        precise_coverage,
+                                        &cached_precise_graph.ingest_stats,
+                                        "definition_count",
+                                        precise_matches.len(),
+                                    )
+                                });
+                                let (metadata, note) = Self::metadata_note_pair(metadata);
+                                Json(GoToDefinitionResponse {
+                                    matches: precise_matches,
+                                    metadata,
+                                    note,
+                                })
+                            } else {
+                                let mut matches = vec![NavigationLocation {
+                                    symbol: target.symbol.name.clone(),
+                                    repository_id: target_corpus.repository_id.clone(),
+                                    path: Self::relative_display_path(
+                                        &target.root,
+                                        &target.symbol.path,
+                                    ),
+                                    line: target.symbol.line,
+                                    column: 1,
+                                    kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
+                                    precision: Some("heuristic".to_owned()),
+                                }];
+                                Self::sort_navigation_locations(&mut matches);
+                                if matches.len() > limit {
+                                    matches.truncate(limit);
+                                }
+
+                                resolution_precision = Some("heuristic".to_owned());
+                                match_count = matches.len();
+                                let metadata = json!({
+                                    "precision": "heuristic",
+                                    "heuristic": true,
+                                    "fallback_reason": "precise_absent",
+                                    "precise_absence_reason": Self::precise_absence_reason(
+                                        precise_coverage,
+                                        &cached_precise_graph.ingest_stats,
+                                        0,
+                                    ),
+                                    "target_symbol_id": target.symbol.stable_id.clone(),
+                                    "resolution_source": resolution_source.clone(),
+                                    "target_selection": Self::navigation_target_selection_note(
+                                        &symbol_query,
+                                        &target,
+                                        target_selection_candidate_count,
+                                        target_selection_same_rank_count,
+                                    ),
+                                    "precise": Self::precise_note_with_count(
+                                        precise_coverage,
+                                        &cached_precise_graph.ingest_stats,
+                                        "definition_count",
+                                        0,
+                                    )
+                                });
+                                let (metadata, note) = Self::metadata_note_pair(metadata);
+                                Json(GoToDefinitionResponse {
+                                    matches,
+                                    metadata,
+                                    note,
+                                })
+                            }
+                        }
+                    } else {
+                        let corpora = server.collect_repository_symbol_corpora(
+                            params_for_blocking.repository_id.as_deref(),
+                        )?;
+                        scoped_repository_ids = corpora
+                            .iter()
+                            .map(|corpus| corpus.repository_id.clone())
+                            .collect::<Vec<_>>();
+
+                        let resolved_target = Self::resolve_navigation_target(
+                            &corpora,
+                            params_for_blocking.symbol.as_deref(),
+                            params_for_blocking.path.as_deref(),
+                            params_for_blocking.line,
+                            params_for_blocking.column,
+                            params_for_blocking.repository_id.as_deref(),
+                        )?;
+                        resolution_source = Some(resolved_target.resolution_source.to_owned());
+                        let symbol_query = resolved_target.symbol_query;
+                        target_selection_candidate_count = resolved_target.target.candidate_count;
+                        target_selection_same_rank_count =
+                            resolved_target.target.selected_rank_candidate_count;
+                        let target = resolved_target.target.candidate;
+                        selected_symbol_id = Some(target.symbol.stable_id.clone());
+                        let target_corpus = resolved_target.target.corpus;
+
+                        let cached_precise_graph = server
+                            .precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                        let precise_coverage = cached_precise_graph.coverage_mode;
+                        let graph = cached_precise_graph.graph;
+                        precise_artifacts_ingested =
+                            cached_precise_graph.ingest_stats.artifacts_ingested;
+                        precise_artifacts_failed =
+                            cached_precise_graph.ingest_stats.artifacts_failed;
+                        let precise_target = Self::select_precise_symbol_for_resolved_target(
+                            graph.as_ref(),
+                            &target_corpus.repository_id,
+                            &target.root,
                             &symbol_query,
-                            &target,
-                            target_selection_candidate_count,
-                            target_selection_same_rank_count,
-                        ),
-                        "precise": Self::precise_note_with_count(
-                            precise_coverage,
-                            &cached_precise_graph.ingest_stats,
-                            "definition_count",
-                            precise_matches.len(),
-                        )
-                    });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
-                    return Ok(Json(GoToDefinitionResponse {
-                        matches: precise_matches,
-                        metadata,
-                        note,
-                    }));
-                }
+                            &target.symbol,
+                        );
+                        if let Some(precise_target) = &precise_target {
+                            selected_precise_symbol = Some(precise_target.symbol.clone());
+                        }
 
-                let mut matches = vec![NavigationLocation {
-                    symbol: target.symbol.name.clone(),
-                    repository_id: target_corpus.repository_id.clone(),
-                    path: Self::relative_display_path(&target.root, &target.symbol.path),
-                    line: target.symbol.line,
-                    column: 1,
-                    kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
-                    precision: Some("heuristic".to_owned()),
-                }];
-                Self::sort_navigation_locations(&mut matches);
-                if matches.len() > limit {
-                    matches.truncate(limit);
-                }
+                        let mut precise_matches = precise_target
+                            .as_ref()
+                            .map(|precise_target| {
+                                graph
+                                    .precise_occurrences_for_symbol(
+                                        &target_corpus.repository_id,
+                                        &precise_target.symbol,
+                                    )
+                                    .into_iter()
+                                    .filter(|occurrence| occurrence.is_definition())
+                                    .map(|occurrence| NavigationLocation {
+                                        symbol: if precise_target.display_name.is_empty() {
+                                            target.symbol.name.clone()
+                                        } else {
+                                            precise_target.display_name.clone()
+                                        },
+                                        repository_id: target_corpus.repository_id.clone(),
+                                        path: Self::canonicalize_navigation_path(
+                                            &target.root,
+                                            &occurrence.path,
+                                        ),
+                                        line: occurrence.range.start_line,
+                                        column: occurrence.range.start_column,
+                                        kind: Self::display_symbol_kind(&precise_target.kind),
+                                        precision: Some(
+                                            Self::precise_match_precision(precise_coverage)
+                                                .to_owned(),
+                                        ),
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        Self::sort_navigation_locations(&mut precise_matches);
+                        if precise_matches.len() > limit {
+                            precise_matches.truncate(limit);
+                        }
 
-                resolution_precision = Some("heuristic".to_owned());
-                match_count = matches.len();
-                let metadata = json!({
-                    "precision": "heuristic",
-                    "heuristic": true,
-                    "fallback_reason": "precise_absent",
-                    "precise_absence_reason": Self::precise_absence_reason(
-                        precise_coverage,
-                        &cached_precise_graph.ingest_stats,
-                        0,
-                    ),
-                    "target_symbol_id": target.symbol.stable_id.clone(),
-                    "resolution_source": resolution_source.clone(),
-                    "target_selection": Self::navigation_target_selection_note(
+                        if !precise_matches.is_empty() {
+                            let precision = Self::precise_resolution_precision(precise_coverage);
+                            resolution_precision = Some(precision.to_owned());
+                            match_count = precise_matches.len();
+                            let metadata = json!({
+                                "precision": precision,
+                                "heuristic": false,
+                                "target_symbol_id": target.symbol.stable_id.clone(),
+                                "target_precise_symbol": selected_precise_symbol.clone(),
+                                "resolution_source": resolution_source.clone(),
+                                "target_selection": Self::navigation_target_selection_note(
+                                    &symbol_query,
+                                    &target,
+                                    target_selection_candidate_count,
+                                    target_selection_same_rank_count,
+                                ),
+                                "precise": Self::precise_note_with_count(
+                                    precise_coverage,
+                                    &cached_precise_graph.ingest_stats,
+                                    "definition_count",
+                                    precise_matches.len(),
+                                )
+                            });
+                            let (metadata, note) = Self::metadata_note_pair(metadata);
+                            Json(GoToDefinitionResponse {
+                                matches: precise_matches,
+                                metadata,
+                                note,
+                            })
+                        } else {
+                            let mut matches = vec![NavigationLocation {
+                                symbol: target.symbol.name.clone(),
+                                repository_id: target_corpus.repository_id.clone(),
+                                path: Self::relative_display_path(
+                                    &target.root,
+                                    &target.symbol.path,
+                                ),
+                                line: target.symbol.line,
+                                column: 1,
+                                kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
+                                precision: Some("heuristic".to_owned()),
+                            }];
+                            Self::sort_navigation_locations(&mut matches);
+                            if matches.len() > limit {
+                                matches.truncate(limit);
+                            }
+
+                            resolution_precision = Some("heuristic".to_owned());
+                            match_count = matches.len();
+                            let metadata = json!({
+                                "precision": "heuristic",
+                                "heuristic": true,
+                                "fallback_reason": "precise_absent",
+                                "precise_absence_reason": Self::precise_absence_reason(
+                                    precise_coverage,
+                                    &cached_precise_graph.ingest_stats,
+                                    0,
+                                ),
+                                "target_symbol_id": target.symbol.stable_id.clone(),
+                                "resolution_source": resolution_source.clone(),
+                                "target_selection": Self::navigation_target_selection_note(
+                                    &symbol_query,
+                                    &target,
+                                    target_selection_candidate_count,
+                                    target_selection_same_rank_count,
+                                ),
+                                "precise": Self::precise_note_with_count(
+                                    precise_coverage,
+                                    &cached_precise_graph.ingest_stats,
+                                    "definition_count",
+                                    0,
+                                )
+                            });
+                            let (metadata, note) = Self::metadata_note_pair(metadata);
+                            Json(GoToDefinitionResponse {
+                                matches,
+                                metadata,
+                                note,
+                            })
+                        }
+                    }
+                } else {
+                    let corpora = server.collect_repository_symbol_corpora(
+                        params_for_blocking.repository_id.as_deref(),
+                    )?;
+                    scoped_repository_ids = corpora
+                        .iter()
+                        .map(|corpus| corpus.repository_id.clone())
+                        .collect::<Vec<_>>();
+
+                    let resolved_target = Self::resolve_navigation_target(
+                        &corpora,
+                        params_for_blocking.symbol.as_deref(),
+                        params_for_blocking.path.as_deref(),
+                        params_for_blocking.line,
+                        params_for_blocking.column,
+                        params_for_blocking.repository_id.as_deref(),
+                    )?;
+                    resolution_source = Some(resolved_target.resolution_source.to_owned());
+                    let symbol_query = resolved_target.symbol_query;
+                    target_selection_candidate_count = resolved_target.target.candidate_count;
+                    target_selection_same_rank_count =
+                        resolved_target.target.selected_rank_candidate_count;
+                    let target = resolved_target.target.candidate;
+                    selected_symbol_id = Some(target.symbol.stable_id.clone());
+                    let target_corpus = resolved_target.target.corpus;
+
+                    let cached_precise_graph = server
+                        .precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
+                    let precise_coverage = cached_precise_graph.coverage_mode;
+                    let graph = cached_precise_graph.graph;
+                    precise_artifacts_ingested =
+                        cached_precise_graph.ingest_stats.artifacts_ingested;
+                    precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
+                    let precise_target = Self::select_precise_symbol_for_resolved_target(
+                        graph.as_ref(),
+                        &target_corpus.repository_id,
+                        &target.root,
                         &symbol_query,
-                        &target,
-                        target_selection_candidate_count,
-                        target_selection_same_rank_count,
-                    ),
-                    "precise": Self::precise_note_with_count(
-                        precise_coverage,
-                        &cached_precise_graph.ingest_stats,
-                        "definition_count",
-                        0,
-                    )
-                });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
-                Ok(Json(GoToDefinitionResponse {
-                    matches,
-                    metadata,
-                    note,
-                }))
-            })();
+                        &target.symbol,
+                    );
+                    if let Some(precise_target) = &precise_target {
+                        selected_precise_symbol = Some(precise_target.symbol.clone());
+                    }
 
-            NavigationToolExecution {
+                    let mut precise_matches = precise_target
+                        .as_ref()
+                        .map(|precise_target| {
+                            graph
+                                .precise_occurrences_for_symbol(
+                                    &target_corpus.repository_id,
+                                    &precise_target.symbol,
+                                )
+                                .into_iter()
+                                .filter(|occurrence| occurrence.is_definition())
+                                .map(|occurrence| NavigationLocation {
+                                    symbol: if precise_target.display_name.is_empty() {
+                                        target.symbol.name.clone()
+                                    } else {
+                                        precise_target.display_name.clone()
+                                    },
+                                    repository_id: target_corpus.repository_id.clone(),
+                                    path: Self::canonicalize_navigation_path(
+                                        &target.root,
+                                        &occurrence.path,
+                                    ),
+                                    line: occurrence.range.start_line,
+                                    column: occurrence.range.start_column,
+                                    kind: Self::display_symbol_kind(&precise_target.kind),
+                                    precision: Some(
+                                        Self::precise_match_precision(precise_coverage).to_owned(),
+                                    ),
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    Self::sort_navigation_locations(&mut precise_matches);
+                    if precise_matches.len() > limit {
+                        precise_matches.truncate(limit);
+                    }
+
+                    if !precise_matches.is_empty() {
+                        let precision = Self::precise_resolution_precision(precise_coverage);
+                        resolution_precision = Some(precision.to_owned());
+                        match_count = precise_matches.len();
+                        let metadata = json!({
+                            "precision": precision,
+                            "heuristic": false,
+                            "target_symbol_id": target.symbol.stable_id.clone(),
+                            "target_precise_symbol": selected_precise_symbol.clone(),
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_note(
+                                &symbol_query,
+                                &target,
+                                target_selection_candidate_count,
+                                target_selection_same_rank_count,
+                            ),
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "definition_count",
+                                precise_matches.len(),
+                            )
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        Json(GoToDefinitionResponse {
+                            matches: precise_matches,
+                            metadata,
+                            note,
+                        })
+                    } else {
+                        let mut matches = vec![NavigationLocation {
+                            symbol: target.symbol.name.clone(),
+                            repository_id: target_corpus.repository_id.clone(),
+                            path: Self::relative_display_path(&target.root, &target.symbol.path),
+                            line: target.symbol.line,
+                            column: 1,
+                            kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
+                            precision: Some("heuristic".to_owned()),
+                        }];
+                        Self::sort_navigation_locations(&mut matches);
+                        if matches.len() > limit {
+                            matches.truncate(limit);
+                        }
+
+                        resolution_precision = Some("heuristic".to_owned());
+                        match_count = matches.len();
+                        let metadata = json!({
+                            "precision": "heuristic",
+                            "heuristic": true,
+                            "fallback_reason": "precise_absent",
+                            "precise_absence_reason": Self::precise_absence_reason(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                0,
+                            ),
+                            "target_symbol_id": target.symbol.stable_id.clone(),
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_note(
+                                &symbol_query,
+                                &target,
+                                target_selection_candidate_count,
+                                target_selection_same_rank_count,
+                            ),
+                            "precise": Self::precise_note_with_count(
+                                precise_coverage,
+                                &cached_precise_graph.ingest_stats,
+                                "definition_count",
+                                0,
+                            )
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        Json(GoToDefinitionResponse {
+                            matches,
+                            metadata,
+                            note,
+                        })
+                    }
+                };
+
+                server.cache_go_to_definition_response(
+                    cache_key,
+                    &response.0,
+                    &scoped_repository_ids,
+                    selected_symbol_id.as_deref(),
+                    selected_precise_symbol.as_deref(),
+                    resolution_precision.as_deref(),
+                    resolution_source.as_deref(),
+                    limit,
+                    precise_artifacts_ingested,
+                    precise_artifacts_failed,
+                    match_count,
+                );
+                Ok(response)
+            })();
+            let provenance_result = server.record_provenance_with_outcome(
+                "go_to_definition",
+                repository_hint.as_deref(),
+                json!({
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "repository_id": repository_hint,
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids,
+                    "total_matches": match_count,
+                    "selected_symbol_id": selected_symbol_id,
+                    "selected_precise_symbol": selected_precise_symbol,
+                    "resolution_precision": resolution_precision,
+                    "resolution_source": resolution_source,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "match_count": match_count,
+                }),
+                Self::provenance_outcome(&result),
+            );
+
+            GoToDefinitionExecution {
                 result,
-                scoped_repository_ids,
-                selected_symbol_id,
-                selected_precise_symbol,
-                resolution_precision,
-                resolution_source,
-                effective_limit,
-                precise_artifacts_ingested,
-                precise_artifacts_failed,
-                match_count,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "go_to_definition",
-                repository_hint.as_deref(),
-                json!({
-                    "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                    "repository_id": repository_hint,
-                    "path": params.path.map(|path| Self::bounded_text(&path)),
-                    "line": params.line,
-                    "column": params.column,
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "total_matches": execution.match_count,
-                    "selected_symbol_id": execution.selected_symbol_id,
-                    "selected_precise_symbol": execution.selected_precise_symbol,
-                    "resolution_precision": execution.resolution_precision,
-                    "resolution_source": execution.resolution_source,
-                    "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                    "precise_artifacts_failed": execution.precise_artifacts_failed,
-                    "match_count": execution.match_count,
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("go_to_definition", result, provenance_result)
+        self.finalize_with_provenance("go_to_definition", result, execution.provenance_result)
     }
 
     #[tool(
@@ -6658,6 +8129,26 @@ impl FriggMcpServer {
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
+                let cache_key = FindDeclarationsResponseCacheKey {
+                    repository_id: params_for_blocking.repository_id.clone(),
+                    symbol: params_for_blocking.symbol.clone(),
+                    path: params_for_blocking.path.clone(),
+                    line: params_for_blocking.line,
+                    column: params_for_blocking.column,
+                    limit,
+                };
+                if let Some(cached) = server.cached_find_declarations_response(&cache_key) {
+                    scoped_repository_ids = cached.scoped_repository_ids;
+                    selected_symbol_id = cached.selected_symbol_id;
+                    selected_precise_symbol = cached.selected_precise_symbol;
+                    resolution_precision = cached.resolution_precision;
+                    resolution_source = cached.resolution_source;
+                    effective_limit = Some(cached.effective_limit);
+                    precise_artifacts_ingested = cached.precise_artifacts_ingested;
+                    precise_artifacts_failed = cached.precise_artifacts_failed;
+                    match_count = cached.match_count;
+                    return Ok(Json(cached.response));
+                }
 
                 let corpora = server.collect_repository_symbol_corpora(
                     params_for_blocking.repository_id.as_deref(),
@@ -6762,11 +8253,25 @@ impl FriggMcpServer {
                         )
                     });
                     let (metadata, note) = Self::metadata_note_pair(metadata);
-                    return Ok(Json(FindDeclarationsResponse {
+                    let response = FindDeclarationsResponse {
                         matches: precise_matches,
                         metadata,
                         note,
-                    }));
+                    };
+                    server.cache_find_declarations_response(
+                        cache_key,
+                        &response,
+                        &scoped_repository_ids,
+                        selected_symbol_id.as_deref(),
+                        selected_precise_symbol.as_deref(),
+                        resolution_precision.as_deref(),
+                        resolution_source.as_deref(),
+                        limit,
+                        precise_artifacts_ingested,
+                        precise_artifacts_failed,
+                        match_count,
+                    );
+                    return Ok(Json(response));
                 }
 
                 let mut matches = vec![NavigationLocation {
@@ -6811,11 +8316,25 @@ impl FriggMcpServer {
                     )
                 });
                 let (metadata, note) = Self::metadata_note_pair(metadata);
-                Ok(Json(FindDeclarationsResponse {
+                let response = FindDeclarationsResponse {
                     matches,
                     metadata,
                     note,
-                }))
+                };
+                server.cache_find_declarations_response(
+                    cache_key,
+                    &response,
+                    &scoped_repository_ids,
+                    selected_symbol_id.as_deref(),
+                    selected_precise_symbol.as_deref(),
+                    resolution_precision.as_deref(),
+                    resolution_source.as_deref(),
+                    limit,
+                    precise_artifacts_ingested,
+                    precise_artifacts_failed,
+                    match_count,
+                );
+                Ok(Json(response))
             })();
 
             NavigationToolExecution {
@@ -7770,8 +9289,7 @@ impl FriggMcpServer {
                 symbol_count = outline.len();
 
                 let metadata = if language == SymbolLanguage::Blade {
-                    let blade_evidence =
-                        extract_blade_source_evidence_from_source(&absolute_path, &source, &symbols);
+                    let blade_evidence = extract_blade_source_evidence_from_source(&source, &symbols);
                     json!({
                         "source": "tree_sitter",
                         "language": language.as_str(),
@@ -7963,8 +9481,7 @@ impl FriggMcpServer {
                             search_structural_in_source(language, source_path, &source, &query)
                                 .map_err(Self::map_frigg_error)?;
                         if language == SymbolLanguage::Blade {
-                            let blade_evidence =
-                                extract_blade_source_evidence_from_source(source_path, &source, &[]);
+                            let blade_evidence = extract_blade_source_evidence_from_source(&source, &[]);
                             blade_relations_detected = blade_relations_detected
                                 .saturating_add(blade_evidence.relations.len());
                             blade_livewire_components
@@ -8106,7 +9623,7 @@ impl FriggMcpServer {
             .iter()
             .map(|step| step.tool_name.clone())
             .collect::<Vec<_>>();
-        let harness = DeepSearchHarness::new(self.clone());
+        let harness = DeepSearchHarness::new(self.with_provenance_enabled(false));
         let internal_result = harness.run_playbook(&playbook).await;
         let budget_metadata = internal_result
             .as_ref()
@@ -8161,7 +9678,7 @@ impl FriggMcpServer {
             Self::bounded_text(&params.expected_trace_artifact.trace_schema);
         let expected_step_count = params.expected_trace_artifact.step_count;
         let (playbook, expected_trace_artifact) = params.into_internal();
-        let harness = DeepSearchHarness::new(self.clone());
+        let harness = DeepSearchHarness::new(self.with_provenance_enabled(false));
         let internal_result = harness
             .replay_and_diff(&playbook, &expected_trace_artifact)
             .await;
@@ -8263,8 +9780,15 @@ impl FriggMcpServer {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FriggMcpServer {
     fn get_info(&self) -> ServerInfo {
-        let active_profile = active_runtime_tool_surface_profile().as_str();
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        let tool_surface_profile = self.tool_surface_profile.as_str();
+        let runtime_profile = self.runtime_profile.as_str();
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_prompts()
+                .enable_resources()
+                .enable_tools()
+                .build(),
+        )
             .with_server_info(
                 Implementation::new("frigg", env!("CARGO_PKG_VERSION"))
                     .with_title("Frigg Deep Search MCP")
@@ -8274,9 +9798,71 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Use list_repositories first; if no repository is attached or you want a session-local default repo, call workspace_attach. Runtime tool-surface profile is `{active_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include explore plus deep-search tools). For simple local file reads or literal scans in the checked-out workspace, shell tools may be faster than read_file or search_text. Use search_hybrid for broad doc/runtime questions, then pivot to search_symbol or scoped search_text.path_regex for concrete anchors. Use explore after discovery when you want bounded single-artifact probe/zoom/refine follow-up. Use read_file to confirm exact source when repository-aware evidence is useful, and treat search_hybrid warnings or non-`ok` semantic_status as weaker evidence."
+                    "Use list_repositories first; if no repository is attached or you want a session-local default repo, call workspace_attach. If the client declares MCP roots and Frigg started without startup roots, Frigg will seed empty sessions from those client roots after initialization before falling back to manual attach. Runtime tool-surface profile is `{tool_surface_profile}` (set `{TOOL_SURFACE_PROFILE_ENV}=extended` to include explore plus deep-search tools). Runtime profile is `{runtime_profile}`; call workspace_current to inspect attached repositories, watch/index health, active or recent runtime tasks, and recent provenance summaries. For simple local file reads or literal scans in the checked-out workspace, shell tools may be faster than read_file or search_text. Use search_hybrid for broad doc/runtime questions, then pivot to search_symbol or scoped search_text.path_regex for concrete anchors. Use explore after discovery when you want bounded single-artifact probe/zoom/refine follow-up. Use read_file to confirm exact source when repository-aware evidence is useful, and treat search_hybrid warnings or non-`ok` semantic_status as weaker evidence. Policy resources are available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
                 ),
             )
+    }
+
+    async fn on_initialized(&self, context: rmcp::service::NotificationContext<rmcp::RoleServer>) {
+        self.maybe_sync_client_roots(&context.peer, false).await;
+    }
+
+    async fn on_roots_list_changed(
+        &self,
+        context: rmcp::service::NotificationContext<rmcp::RoleServer>,
+    ) {
+        self.maybe_sync_client_roots(&context.peer, true).await;
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
+        Ok(rmcp::model::ListResourcesResult::with_all_items(
+            policy_resources(),
+        ))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResult, ErrorData> {
+        read_policy_resource(&request.uri, self.tool_surface_profile).ok_or_else(|| {
+            Self::resource_not_found(
+                format!("unknown resource `{}`", request.uri),
+                Some(json!({ "uri": request.uri })),
+            )
+        })
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, ErrorData> {
+        Ok(rmcp::model::ListPromptsResult::with_all_items(
+            guidance_prompts(),
+        ))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResult, ErrorData> {
+        read_guidance_prompt(
+            &request.name,
+            request.arguments.as_ref(),
+            self.tool_surface_profile,
+        )
+        .ok_or_else(|| {
+            Self::invalid_params(
+                format!("unknown prompt `{}`", request.name),
+                Some(json!({ "name": request.name })),
+            )
+        })
     }
 }
 
@@ -8285,12 +9871,22 @@ mod runtime_gate_tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::domain::FriggError;
     use crate::indexer::FileMetadataDigest;
-    use crate::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeProvider};
-    use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
+    use crate::mcp::RuntimeTaskRegistry;
+    use crate::mcp::types::{
+        RuntimeTaskKind, RuntimeTaskStatus, WorkspaceIndexComponentState, WorkspaceResolveMode,
+    };
+    use crate::searcher::ValidatedManifestCandidateCache;
+    use crate::settings::{
+        FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
+    };
+    use crate::storage::{
+        DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, Storage,
+    };
     use protobuf::{EnumOrUnknown, Message};
     use rmcp::model::ErrorCode;
     use scip::types::{
@@ -8373,6 +9969,8 @@ mod runtime_gate_tests {
         snapshot_id: &str,
         path: &str,
     ) -> SemanticChunkEmbeddingRecord {
+        let mut embedding = vec![0.25, 0.75];
+        embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
         SemanticChunkEmbeddingRecord {
             chunk_id: format!("chunk-{}", path.replace('/', "_")),
             repository_id: repository_id.to_owned(),
@@ -8387,7 +9985,7 @@ mod runtime_gate_tests {
             trace_id: Some("trace-001".to_owned()),
             content_hash_blake3: format!("hash-{}", path.replace('/', "_")),
             content_text: path.to_owned(),
-            embedding: vec![0.25, 0.75],
+            embedding,
         }
     }
 
@@ -8453,6 +10051,119 @@ mod runtime_gate_tests {
                 "extended-only tool should be registered when enabled: {tool_name}"
             );
         }
+    }
+
+    #[test]
+    fn server_info_enables_resources_and_prompts() {
+        let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, false);
+        let info = <FriggMcpServer as rmcp::ServerHandler>::get_info(&server);
+
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.capabilities.resources.is_some());
+        assert!(info.capabilities.prompts.is_some());
+
+        let instructions = info
+            .instructions
+            .expect("server info should publish MCP usage instructions");
+        assert!(instructions.contains("client declares MCP roots"));
+        assert!(instructions.contains(super::SUPPORT_MATRIX_RESOURCE_URI));
+        assert!(instructions.contains(super::ROUTING_GUIDE_PROMPT_NAME));
+    }
+
+    #[test]
+    fn declared_root_uris_attach_when_server_started_without_startup_roots() {
+        let workspace_root = temp_workspace_root("declared-roots-attach");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace root fixture");
+        fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+            .expect("failed to write workspace root fixture");
+
+        let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid");
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        assert!(server.attached_workspaces().is_empty());
+        assert!(server.current_repository_id().is_none());
+
+        let file_uri = format!(
+            "file://{}",
+            workspace_root
+                .canonicalize()
+                .expect("workspace root should canonicalize")
+                .display()
+        );
+        let attached = server.sync_declared_root_uris(&[file_uri], true);
+
+        assert_eq!(attached, 1);
+        let attached_workspaces = server.attached_workspaces();
+        assert_eq!(attached_workspaces.len(), 1);
+        assert_eq!(
+            attached_workspaces[0].root,
+            workspace_root
+                .canonicalize()
+                .expect("workspace root should canonicalize")
+        );
+        assert_eq!(
+            server.current_repository_id().as_deref(),
+            Some(attached_workspaces[0].repository_id.as_str())
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
+        let workspace_root = temp_workspace_root("attach-invalidates-manifest-cache");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace root fixture");
+        fs::write(workspace_root.join("src/lib.rs"), "pub struct Cached;\n")
+            .expect("failed to write workspace root fixture");
+        let root = workspace_root
+            .canonicalize()
+            .expect("workspace root should canonicalize");
+        let source_path = root.join("src/lib.rs");
+        let metadata = fs::metadata(&source_path).expect("source path should have metadata");
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        cache
+            .write()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .store_validated(
+                &root,
+                "snapshot-001",
+                &[FileMetadataDigest {
+                    path: source_path,
+                    size_bytes: metadata.len(),
+                    mtime_ns: None,
+                }],
+            );
+        assert!(
+            cache
+                .read()
+                .expect("validated manifest candidate cache should not be poisoned")
+                .has_entry_for_root(&root)
+        );
+
+        let server = FriggMcpServer::new_with_runtime(
+            FriggConfig::from_optional_workspace_roots(Vec::new())
+                .expect("empty serving config should be valid"),
+            RuntimeProfile::StdioEphemeral,
+            false,
+            Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
+            Arc::clone(&cache),
+        );
+
+        let _ = server
+            .attach_workspace_internal(&root, true, WorkspaceResolveMode::GitRoot)
+            .expect("workspace attach should succeed");
+
+        assert!(
+            !cache
+                .read()
+                .expect("validated manifest candidate cache should not be poisoned")
+                .has_entry_for_root(&root)
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 
     #[test]
@@ -8637,6 +10348,108 @@ mod runtime_gate_tests {
     }
 
     #[test]
+    fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
+        let workspace_root = temp_workspace_root("workspace-lexical-invalid-semantic-config");
+        fs::create_dir_all(workspace_root.join("src"))
+            .expect("failed to create workspace src directory");
+        fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+            .expect("failed to write source fixture");
+
+        let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config");
+        config.semantic_runtime.enabled = true;
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let workspace = server
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .attached_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        seed_manifest_snapshot(
+            &workspace_root,
+            &workspace.repository_id,
+            "snapshot-001",
+            &["src/lib.rs"],
+        );
+
+        let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+        let lexical = server.workspace_lexical_index_summary(&workspace, &storage);
+        let semantic = server.workspace_semantic_index_summary(&workspace, &storage);
+
+        assert_eq!(lexical.state, WorkspaceIndexComponentState::Ready);
+        assert_eq!(lexical.reason, None);
+        assert_eq!(lexical.snapshot_id.as_deref(), Some("snapshot-001"));
+        assert_eq!(lexical.artifact_count, Some(1));
+
+        assert_eq!(semantic.state, WorkspaceIndexComponentState::Error);
+        assert_eq!(
+            semantic.reason.as_deref(),
+            Some("semantic_runtime_invalid_config")
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
+        let server = FriggMcpServer::new_with_runtime_options(fixture_config(), true, false);
+
+        let manifest_task_id = server
+            .runtime_task_registry
+            .write()
+            .expect("runtime task registry should not be poisoned")
+            .start_task(
+                RuntimeTaskKind::ChangedReindex,
+                "repo-001",
+                "watch_manifest_fast",
+                Some("watch root /tmp/repo-001 class manifest_fast".to_owned()),
+            );
+        server
+            .runtime_task_registry
+            .write()
+            .expect("runtime task registry should not be poisoned")
+            .finish_task(
+                &manifest_task_id,
+                RuntimeTaskStatus::Succeeded,
+                Some("watch root /tmp/repo-001 class manifest_fast".to_owned()),
+            );
+        server
+            .runtime_task_registry
+            .write()
+            .expect("runtime task registry should not be poisoned")
+            .start_task(
+                RuntimeTaskKind::SemanticRefresh,
+                "repo-001",
+                "watch_semantic_followup",
+                Some("watch root /tmp/repo-001 class semantic_followup".to_owned()),
+            );
+
+        let runtime = server.runtime_status_summary();
+
+        assert!(
+            runtime.recent_tasks.iter().any(|task| {
+                task.kind == RuntimeTaskKind::ChangedReindex
+                    && task.phase == "watch_manifest_fast"
+                    && task.detail.as_deref()
+                        == Some("watch root /tmp/repo-001 class manifest_fast")
+            }),
+            "recent tasks should surface manifest-fast watch work distinctly"
+        );
+        assert!(
+            runtime.active_tasks.iter().any(|task| {
+                task.kind == RuntimeTaskKind::SemanticRefresh
+                    && task.phase == "watch_semantic_followup"
+                    && task.detail.as_deref()
+                        == Some("watch root /tmp/repo-001 class semantic_followup")
+            }),
+            "active tasks should surface semantic-followup watch work distinctly"
+        );
+    }
+
+    #[test]
     fn precise_graph_prewarm_populates_latest_precise_cache() {
         let workspace_root = temp_workspace_root("precise-prewarm");
         fs::create_dir_all(workspace_root.join("src"))
@@ -8660,7 +10473,7 @@ mod runtime_gate_tests {
             .next()
             .expect("server should register workspace");
 
-        server.prewarm_precise_graph_for_workspace(&workspace);
+        let _ = server.prewarm_precise_graph_for_workspace(&workspace);
 
         let cached = server
             .latest_precise_graph_cache
@@ -8680,7 +10493,7 @@ mod runtime_gate_tests {
     }
 
     #[test]
-    fn cached_precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild() {
+    fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild() {
         let workspace_root = temp_workspace_root("precise-fast-path");
         fs::create_dir_all(workspace_root.join("src"))
             .expect("failed to create workspace src directory");
@@ -8703,10 +10516,8 @@ mod runtime_gate_tests {
             .next()
             .expect("server should register workspace");
 
-        server.prewarm_precise_graph_for_workspace(&workspace);
-
         let response = server
-            .try_cached_precise_definition_fast_path(
+            .try_precise_definition_fast_path(
                 Some(&workspace.repository_id),
                 "src/lib.rs",
                 1,

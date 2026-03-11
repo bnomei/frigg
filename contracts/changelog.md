@@ -2,6 +2,118 @@
 
 Deterministic reverse-chronological log for public contract and behavior changes.
 
+## 2026-03-11
+
+- spec: `108-search-stage-attribution-and-corroborating-ranker`
+- change_set: `search-stage-attribution-and-corroborating-ranker.t003`
+- summary: `search_hybrid` benchmark and diagnostic surfaces now expose additive stage attribution for candidate intake, freshness validation, scan, witness scoring, graph expansion, semantic retrieval, anchor blending, document aggregation, and final diversification.
+- summary: hybrid ranking now preserves strongest-anchor identity for returned matches, aggregates corroborating anchors at document level before scoring, and runs one final diversification pass after aggregation.
+
+## 2026-03-10
+
+- spec: `106-semantic-sqlite-vec-topk-and-lean-storage`
+- change_set: `semantic-sqlite-vec-topk-and-lean-storage.t003`
+- summary: storage hot-path benchmarks now include a deterministic sqlite-vec semantic top-k workload with one bounded payload batch lookup, while search benchmark docs explicitly keep semantic hybrid coverage scoped to disabled/degraded control paths.
+- summary: storage and README contracts now describe `embedding_vectors` as a derived sqlite-vec projection over canonical semantic rows, including vector-only padding for shorter legacy embeddings and deterministic KNN `k` clamping at sqlite-vec's local limit.
+
+- spec: `58-hybrid-graph-channel-and-path-unification`
+- change_set: `hybrid-graph-channel-and-path-unification.t004`
+- summary: search latency release artifacts now include a deterministic graph-backed `search_hybrid` workload (`search_latency/hybrid/graph-php-target-evidence`) that exercises bounded PHP target-evidence edges with semantic disabled.
+- summary: benchmark methodology and budgets now distinguish graph-backed hybrid grounding from semantic-disabled/degraded paths, and the direct `search_latency/hybrid/*` budgets now reflect the heavier raw searcher hot path instead of MCP-layer tool timings.
+
+- spec: `100-persistent-runtime-task-resource-surface`
+- change_set: `persistent-runtime-task-resource-surface.t001`
+- summary: `workspace_current` now exposes additive `repositories` and `runtime` status blocks, including explicit runtime profile, watch availability, active/recent runtime tasks, and recent provenance summaries.
+- summary: Frigg now distinguishes `stdio_ephemeral`, `stdio_attached`, `http_loopback_service`, and `http_remote_service` in the public runtime status surface while preserving the existing stdio and attach-first compatibility flow.
+- summary: persistent local-service guidance now treats loopback HTTP as the preferred warm profile and keeps non-loopback HTTP behind explicit remote-bind plus auth-token requirements.
+
+## 2026-03-08
+
+- spec: `67-php-core-name-resolution-and-target-evidence`
+- change_set: `php-core-name-resolution-and-target-evidence.t001`
+- summary: PHP indexing now records deterministic canonical class-like names, namespace modules, enum cases, and local type-hint evidence so `search_symbol` and read-only graph flows can resolve framework-heavy repositories more reliably.
+- summary: deterministic PHP target evidence now captures attributes, `Foo::class`, `new Foo(...)`, callable literals, and cheap literal structure, while keeping the public MCP surface framework-neutral and free of Laravel-specific overlays.
+
+- spec: `66-blade-livewire-flux-runtime-symbol-surface`
+- change_set: `blade-livewire-flux-runtime-symbol-surface.t001`
+- summary: `.blade.php` now participates as first-class `blade` language support across runtime symbol corpora, `search_symbol`, `document_symbols`, and `search_structural`.
+- summary: Blade responses now expose bounded source-only metadata for template relations plus literal Livewire and Flux discovery, without claiming Laravel runtime overlays such as routes, providers, policies, validation, or Eloquent semantics.
+
+- spec: `69-semantic-hit-count-retained-candidate-semantics`
+- change_set: `semantic-hit-count-retained-candidate-semantics.t001`
+- summary: `search_hybrid.metadata.semantic_candidate_count` now represents the broader raw semantic chunk candidate pool, while `metadata.semantic_hit_count` now reports retained semantic documents after query-relevance pruning and before final hybrid ranking.
+- summary: semantic-ok warnings now distinguish between a healthy semantic channel with no retained query-relevant hits and a healthy channel whose retained semantic hits did not contribute to the returned top results.
+
+- spec: `68-hybrid-exact-anchor-tail-ranking-and-concrete-witnesses`
+- change_set: `hybrid-exact-anchor-tail-ranking-and-concrete-witnesses.t001`
+- summary: `search_hybrid` now expands query-overlap tokens from exact anchors such as `build_pipeline_runner` and `ProviderInterface`, so mixed intent-plus-symbol queries keep stronger path and excerpt pressure beyond rank 1.
+- summary: concrete runtime/example/test witness queries now apply stronger bounded overlap boosts for runtime/support/test paths, while weak-overlap generic docs and generic anchors like `server` or `discoverer` are damped more aggressively under witness intent.
+
+- spec: `65-mcp-response-deduplication-and-optional-omission`
+- change_set: `mcp-response-deduplication-and-optional-omission.t001`
+- summary: live `search_hybrid` responses now treat structured `metadata` as the canonical semantic-diagnostics payload and omit the duplicated top-level semantic mirrors plus the legacy JSON-string `note`.
+- summary: `workspace_attach` now keeps `storage` only at the top level while still returning repository `health`, avoiding duplicate storage blocks in attach responses.
+- summary: optional MCP fields such as `artifact_count`, `reason`, compatibility snapshot ids, provider/model, and legacy semantic mirrors are now omitted when unset instead of serializing `null`.
+
+- spec: `64-rust-entrypoint-build-flow-ranking-and-health-counts`
+- change_set: `rust-entrypoint-build-flow-ranking-and-health-counts.t001`
+- summary: `search_hybrid` now recognizes Rust entrypoint/build-flow queries such as “where the app starts and builds the pipeline runner”, promotes canonical entrypoints like `src/main.rs`, and prefers concrete build-anchor excerpts over nearby fake/mock helper witnesses.
+- summary: workspace index `health.lexical.artifact_count` now reports manifest entry counts when a snapshot is known, and `health.semantic.artifact_count` now reports semantic embedding row counts for the active or fallback semantic snapshot when known.
+
+- spec: `63-php-runtime-witness-intent-and-diversification`
+- change_set: `php-runtime-witness-intent-and-diversification.t001`
+- summary: `search_hybrid` now recognizes implementation-oriented runtime-witness queries such as `initialize`, `subscriptions`, `completion providers`, `handlers`, `transport`, and `resource updated`.
+- summary: under that intent, `search_hybrid` keeps bounded token recall active even when phrase-level lexical matches already filled the requested top-k, so concrete runtime witnesses can still enter the candidate set.
+- summary: under that intent, repeated generic docs and `composer.json` are downweighted while runtime/support/test/example witnesses receive bounded boosts and diversification pressure.
+
+- spec: `62-language-support-kernel-and-shared-relation-hooks`
+- change_set: `language-support-kernel-and-shared-relation-hooks.t001`
+- summary: centralized Rust/PHP language alias parsing, extension matching, and tool-capability checks behind a shared internal language-support surface so source filters, `document_symbols`, and `search_structural` stay aligned.
+- summary: shared PHP declaration-relation and heuristic implementation helper surfaces are now reused across search and MCP paths instead of maintaining parallel resolution logic.
+
+- spec: `61-semantic-snapshot-coherence-after-failed-reindex`
+- change_set: `semantic-snapshot-coherence-after-failed-reindex.t001`
+- summary: failed semantic reindex no longer leaves a newer manifest snapshot active without matching semantic embeddings; Frigg now rolls back the just-created manifest snapshot before surfacing the semantic failure.
+- summary: `search_hybrid` now falls back to the newest older manifest snapshot that still has semantic embeddings for the active provider/model when the latest manifest snapshot has none.
+- summary: split manifest/semantic snapshot recovery now surfaces `semantic_status=degraded` with deterministic snapshot IDs in `semantic_reason` instead of silently reporting `ok` with zero semantic contribution.
+- summary: older semantic fallback snapshots are now filtered against the latest manifest paths so removed files do not resurface from stale semantic storage.
+- summary: `search_hybrid` now surfaces `semantic_status=unavailable` when semantic runtime is enabled but no semantic corpus exists for the active repository/provider/model combination, separating missing-index states from true degraded provider/fallback states.
+- summary: `workspace_attach` and repository listings now keep `storage.index_state=uninitialized` for schema-only repo-local databases that have no manifest snapshot yet, while per-component `health` continues to report the more specific missing-index reason.
+
+- spec: `59-semantic-transport-diagnostics-and-json-send-path`
+- change_set: `semantic-transport-diagnostics-and-json-send-path.t001`
+- summary: semantic embedding provider failures now include sanitized request diagnostics (`inputs`, `input_chars_total`, `body_bytes`, `body_blake3`, `trace_id`) instead of opaque upstream-only error text.
+- summary: semantic reindex now wraps embedding failures with deterministic batch context (`batch_index`, `total_batches`, `batch_size`, first/last chunk anchors) so operators can isolate failing corpus slices quickly.
+- summary: live embedding requests now use reqwest's native JSON send path while preserving the existing OpenAI/Google payload shapes validated by local transport tests.
+
+- spec: `56-incoming-call-parity-and-symbol-discovery-filters`
+- change_set: `incoming-call-parity-and-symbol-discovery-filters.t001`
+- summary: `incoming_calls` precise occurrence fallback now emits `relation="calls"` for callable targets when the recovered source context is call-like, while preserving `refers_to` for non-call occurrences.
+- summary: `search_symbol` now accepts additive `path_class` and `path_regex` filters, and same-rank discovery results prefer runtime code under `src/` before project/support paths.
+
+- spec: `55-search-hybrid-semantic-contribution-observability`
+- change_set: `search-hybrid-semantic-contribution-observability.t001`
+- summary: `search_hybrid.semantic_enabled` now means semantic evidence actually contributed non-zero score to at least one returned match, not merely that the semantic channel executed successfully.
+- summary: `search_hybrid` success responses now expose additive `semantic_hit_count` and `semantic_match_count` counters at the top level and in the legacy JSON-string `note`.
+- summary: `search_hybrid.warning` can now appear for `semantic_status=ok` when semantic retrieval returned no hits or when semantic hits existed but none contributed to the returned top results.
+
+- spec: `54-precise-target-pinning-and-hybrid-recall-recovery`
+- change_set: `precise-target-pinning-and-hybrid-recall-recovery.t001`
+- summary: symbol-targeted precise navigation now pins same-name precise candidates to the already-selected target anchor, so returned precise definitions/references no longer drift away from `note.target_selection`.
+- summary: `search_hybrid` now keeps bounded lexical recall expansion active when the semantic channel is healthy but empty, preventing semantic-enabled empty result sets when lexical recovery can still find matches.
+
+- spec: `53-navigation-correctness-wave2`
+- change_set: `navigation-correctness-wave2.t001`
+- summary: `find_implementations` now uses a second precise recovery path that derives implementation matches from precise occurrences plus enclosing-definition context when direct SCIP implementation edges are missing.
+- summary: symbol-only navigation now ranks runtime code ahead of `benches/`, `examples/`, and `tests/` for ambiguous exact-name matches, and deterministic `note.target_selection` metadata now records the selected path class.
+- summary: `outgoing_calls` now returns callable edges only, labels surviving occurrence-derived precise matches as `calls`, and preserves an empty result instead of widening to non-callable reference noise.
+
+- spec: `52-navigation-disambiguation-and-hybrid-clarity`
+- change_set: `navigation-disambiguation-and-hybrid-clarity.t001`
+- summary: `find_references` now accepts symbol-or-location targeting in the public `v1` contract, prefers location resolution when `path`/`line` are supplied, and records the chosen resolver path in deterministic `note.resolution_source` metadata.
+- summary: `outgoing_calls` now recovers precise occurrence-derived `refers_to` matches when explicit SCIP call relationships are absent, aligning precise fallback behavior with `incoming_calls` before heuristic degradation.
+- summary: `search_hybrid` success responses now surface deterministic `warning` text for `disabled` and `degraded` semantic states at the top level and in the legacy JSON-string `note`, and the error/docs contract now clarifies how callers should interpret those states.
+
 ## 2026-03-06
 
 - spec: `47-session-workspace-attach-and-stdio-defaults`

@@ -91,17 +91,41 @@ def discover_criterion_roots(primary_root: Path) -> list[Path]:
 
 
 def locate_sample_file(criterion_roots: list[Path], workload_id: str) -> Path | None:
-    for root in criterion_roots:
+    candidates: list[tuple[int, Path]] = []
+    for root_index, root in enumerate(criterion_roots):
         candidate = root / workload_id / "new" / "sample.json"
         if candidate.is_file():
-            return candidate
-    return None
+            candidates.append((root_index, candidate))
+
+    if not candidates:
+        return None
+
+    _, sample_path = max(
+        candidates,
+        key=lambda item: (
+            item[1].stat().st_mtime_ns,
+            -item[0],
+        ),
+    )
+    return sample_path
+
+
+def load_search_stage_attribution(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text())
+    workloads = payload.get("workloads")
+    if not isinstance(workloads, list):
+        raise ValueError(f"invalid stage attribution workloads list in {path}")
+    return payload
 
 
 def markdown_report(
     report_rows: list[dict[str, Any]],
     criterion_roots: list[Path],
     budget_file: Path,
+    search_stage_attribution: dict[str, Any] | None,
+    search_stage_attribution_path: Path,
     pass_count: int,
     fail_count: int,
     missing_count: int,
@@ -132,6 +156,38 @@ def markdown_report(
             f"{row['budget']['p50_ms']:.2f}/{row['budget']['p95_ms']:.2f}/{row['budget']['p99_ms']:.2f} |"
         )
 
+    if search_stage_attribution is not None:
+        lines.extend(
+            [
+                "",
+                "## Search Stage Attribution",
+                "",
+                f"- source: `{search_stage_attribution_path}`",
+                "",
+                "| workload | candidate intake (ms) | freshness (ms) | scan (ms) | witness (ms) | graph (ms) | semantic (ms) | anchor blend (ms) | doc corroboration (ms) | final diversify (ms) |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for workload in sorted(
+            search_stage_attribution["workloads"],
+            key=lambda entry: str(entry["id"]),
+        ):
+            stage = workload["stage_attribution"]
+            lines.append(
+                "| `{id}` | {candidate:.3f} | {freshness:.3f} | {scan:.3f} | {witness:.3f} | {graph:.3f} | {semantic:.3f} | {blend:.3f} | {aggregate:.3f} | {diversify:.3f} |".format(
+                    id=workload["id"],
+                    candidate=float(stage["candidate_intake"]["elapsed_us"]) / 1000.0,
+                    freshness=float(stage["freshness_validation"]["elapsed_us"]) / 1000.0,
+                    scan=float(stage["scan"]["elapsed_us"]) / 1000.0,
+                    witness=float(stage["witness_scoring"]["elapsed_us"]) / 1000.0,
+                    graph=float(stage["graph_expansion"]["elapsed_us"]) / 1000.0,
+                    semantic=float(stage["semantic_retrieval"]["elapsed_us"]) / 1000.0,
+                    blend=float(stage["anchor_blending"]["elapsed_us"]) / 1000.0,
+                    aggregate=float(stage["document_aggregation"]["elapsed_us"]) / 1000.0,
+                    diversify=float(stage["final_diversification"]["elapsed_us"]) / 1000.0,
+                )
+            )
+
     return "\n".join(lines) + "\n"
 
 
@@ -153,6 +209,11 @@ def main() -> int:
         help="Markdown report output path (default: benchmarks/latest-report.md)",
     )
     parser.add_argument(
+        "--search-stage-attribution",
+        default="benchmarks/search-stage-attribution.latest.json",
+        help="Optional search stage attribution snapshot path (default: benchmarks/search-stage-attribution.latest.json)",
+    )
+    parser.add_argument(
         "--fail-on-budget",
         action="store_true",
         help="Exit non-zero if any workload fails budget or is missing",
@@ -162,7 +223,9 @@ def main() -> int:
     criterion_root = Path(args.criterion_root)
     budget_file = Path(args.budgets)
     output_path = Path(args.output)
+    search_stage_attribution_path = Path(args.search_stage_attribution)
     criterion_roots = discover_criterion_roots(criterion_root)
+    search_stage_attribution = load_search_stage_attribution(search_stage_attribution_path)
 
     budget_payload = load_budgets(budget_file)
     workload_entries = sorted(
@@ -179,6 +242,7 @@ def main() -> int:
     print(f"criterion_root={criterion_root}")
     print(f"criterion_roots={','.join(str(root) for root in criterion_roots)}")
     print(f"budget_file={budget_file}")
+    print(f"search_stage_attribution={search_stage_attribution_path}")
 
     for workload in workload_entries:
         workload_id = str(workload["id"])
@@ -234,6 +298,8 @@ def main() -> int:
             report_rows,
             criterion_roots,
             budget_file,
+            search_stage_attribution,
+            search_stage_attribution_path,
             pass_count,
             fail_count,
             missing_count,

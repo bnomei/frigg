@@ -242,6 +242,58 @@ fn citation_payloads_falls_back_to_legacy_snippet_when_excerpt_missing() {
 }
 
 #[test]
+fn citation_payloads_use_search_hybrid_anchor_spans_when_present() {
+    let mut trace = load_fixture_trace();
+    trace.step_count += 1;
+    trace.steps.push(frigg::mcp::DeepSearchTraceStep {
+        step_index: 5,
+        step_id: "tool-006".to_owned(),
+        tool_name: "search_hybrid".to_owned(),
+        params_json: "{\"query\":\"needle\",\"repository_id\":\"repo-001\"}".to_owned(),
+        outcome: DeepSearchTraceOutcome::Ok {
+            response_json: serde_json::json!({
+                "matches": [{
+                    "repository_id": "repo-001",
+                    "path": "src/semantic.rs",
+                    "line": 3,
+                    "column": 1,
+                    "excerpt": "needle from semantic chunk",
+                    "anchor": {
+                        "kind": "semantic_chunk",
+                        "start_line": 3,
+                        "start_column": 1,
+                        "end_line": 4,
+                        "end_column": 22,
+                        "detail": "chunk-src_semantic.rs-0"
+                    },
+                    "blended_score": 1.0,
+                    "lexical_score": 0.0,
+                    "graph_score": 0.0,
+                    "semantic_score": 1.0,
+                    "lexical_sources": [],
+                    "graph_sources": [],
+                    "semantic_sources": ["chunk-src_semantic.rs-0"]
+                }]
+            })
+            .to_string(),
+        },
+    });
+
+    let payload = DeepSearchHarness::compose_citation_payload(&trace, "answer")
+        .expect("citation payload composition should succeed for search_hybrid anchor traces");
+    let citation = payload
+        .citations
+        .iter()
+        .find(|citation| citation.tool_call_id == "tool-006")
+        .expect("expected search_hybrid citation");
+
+    assert_eq!(citation.path, "src/semantic.rs");
+    assert_eq!(citation.span.start_line, 3);
+    assert_eq!(citation.span.end_line, 4);
+    assert_eq!(citation.span.end_column, 22);
+}
+
+#[test]
 fn citation_payloads_skip_error_steps_deterministically() {
     let mut trace = load_fixture_trace();
     mark_step_error(

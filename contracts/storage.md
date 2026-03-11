@@ -13,12 +13,17 @@ Storage backend: local SQLite.
 | `snapshot` | `snapshot_id` | `repository_id`, `kind`, `revision`, `created_at` | Stores deterministic repository `snapshot` identity for replay/diff workflows. |
 | `file_manifest` | `(snapshot_id, path)` | `sha256`, `size_bytes`, `mtime_ns` | Stores per-`snapshot` file `manifest` records for incremental diffing. |
 | `provenance_event` | `(trace_id, tool_name, created_at)` | `payload_json` | Stores replayable tool-call `provenance` events. |
+| `semantic_chunk` | `(repository_id, snapshot_id, chunk_id)` | `path`, `language`, `chunk_index`, `start_line`, `end_line`, `content_text`, `created_at` | Stores shared per-`snapshot` semantic chunk metadata and chunk text exactly once per logical chunk. |
+| `semantic_chunk_embedding` | `(repository_id, snapshot_id, chunk_id, provider, model)` | `trace_id`, `content_hash_blake3`, `embedding_blob`, `dimensions`, `created_at` | Stores lean provider/model-specific semantic embeddings without duplicating shared chunk text. |
 
 ### Vector subsystem tables
 
 `Storage::initialize()` initializes vector storage with expected dimensions `1536` by default:
 
 - Required backend: virtual table `embedding_vectors` via `vec0(embedding float[<dims>])`.
+- Canonical semantic rows remain `semantic_chunk` + `semantic_chunk_embedding`; `embedding_vectors` is a derived sqlite-vec projection used for local top-k retrieval.
+- Projection rebuild may pad shorter canonical embeddings up to `1536` dimensions for sqlite-vec compatibility, but canonical embedding reads continue to return the stored row dimensions unchanged.
+- Semantic top-k queries clamp requested `k` to sqlite-vec's local maximum (`4096`) instead of widening the public API or silently switching backends.
 
 ### Required-table invariant
 
@@ -29,6 +34,8 @@ Storage backend: local SQLite.
 - `snapshot`
 - `file_manifest`
 - `provenance_event`
+- `semantic_chunk`
+- `semantic_chunk_embedding`
 
 ## 2) Migration policy
 
@@ -37,7 +44,7 @@ Storage backend: local SQLite.
 - On successful `migration`, `schema_version.version` is updated in the same transaction.
 - `initialize` is idempotent: rerunning it must not duplicate schema metadata or corrupt existing rows.
 - `verify` enforces exact schema version match with latest known `migration`; mismatch is a hard failure.
-- Current latest schema version is `3`.
+- Current latest schema version is `4`.
 - Backward-incompatible schema changes require contract update and an explicit migration note in this document.
 
 ### Vector backend transition policy

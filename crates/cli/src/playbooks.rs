@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
 use crate::searcher::{SearchFilters, SearchHybridQuery, TextSearcher};
+use crate::text_sanitization::{leading_metadata_comment_bounds, scrub_leading_metadata_comment};
 use serde::{Deserialize, Serialize};
 
 const PLAYBOOK_METADATA_MARKER: &str = "<!-- frigg-playbook";
@@ -132,35 +133,15 @@ fn default_hybrid_top_k() -> usize {
     8
 }
 
-fn playbook_metadata_header_bounds(raw: &str) -> Option<(usize, usize)> {
-    let raw = raw.trim_start_matches('\u{feff}');
-    let start = raw.find(PLAYBOOK_METADATA_MARKER)?;
-    let after_marker = &raw[start + PLAYBOOK_METADATA_MARKER.len()..];
-    let close_index = after_marker.find("-->")?;
-    Some((
-        start,
-        start + PLAYBOOK_METADATA_MARKER.len() + close_index + 3,
-    ))
-}
-
 pub fn scrub_playbook_metadata_header(raw: &str) -> Cow<'_, str> {
-    let Some((start, end)) = playbook_metadata_header_bounds(raw) else {
-        return Cow::Borrowed(raw);
-    };
-
-    let mut scrubbed = String::with_capacity(raw.len());
-    scrubbed.extend(raw[..start].chars());
-    scrubbed.extend(raw[start..end].chars().map(|ch| match ch {
-        '\n' | '\r' => ch,
-        _ => ' ',
-    }));
-    scrubbed.push_str(&raw[end..]);
-    Cow::Owned(scrubbed)
+    scrub_leading_metadata_comment(raw, PLAYBOOK_METADATA_MARKER)
 }
 
 pub fn parse_playbook_document(raw: &str) -> FriggResult<PlaybookDocument> {
     let raw = raw.trim_start_matches('\u{feff}');
-    let Some((header_start, header_end)) = playbook_metadata_header_bounds(raw) else {
+    let Some((header_start, header_end)) =
+        leading_metadata_comment_bounds(raw, PLAYBOOK_METADATA_MARKER)
+    else {
         return Err(FriggError::InvalidInput(
             "playbook metadata header must include '<!-- frigg-playbook'".to_owned(),
         ));

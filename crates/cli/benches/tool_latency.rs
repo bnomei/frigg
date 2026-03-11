@@ -662,18 +662,28 @@ fn assert_search_hybrid_semantic_toggle_off_workload(runtime: &Runtime, server: 
 
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.note, second.note);
+    let metadata = first
+        .metadata
+        .as_ref()
+        .expect("search_hybrid semantic-toggle-off benchmark probe should emit metadata");
     assert_eq!(
-        first.semantic_status.as_deref(),
+        metadata
+            .get("semantic_status")
+            .and_then(|value| value.as_str()),
         Some("disabled"),
         "search_hybrid semantic-toggle-off benchmark probe must emit disabled semantic_status"
     );
     assert_eq!(
-        first.semantic_enabled,
+        metadata
+            .get("semantic_enabled")
+            .and_then(|value| value.as_bool()),
         Some(false),
         "search_hybrid semantic-toggle-off benchmark probe must mark semantic_enabled=false"
     );
     assert_eq!(
-        first.semantic_reason.as_deref(),
+        metadata
+            .get("semantic_reason")
+            .and_then(|value| value.as_str()),
         Some("semantic channel disabled by request toggle"),
         "search_hybrid semantic-toggle-off benchmark probe must emit explicit semantic_reason"
     );
@@ -705,20 +715,28 @@ fn assert_search_hybrid_semantic_degraded_workload(runtime: &Runtime, server: &F
 
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.note, second.note);
+    let metadata = first
+        .metadata
+        .as_ref()
+        .expect("search_hybrid semantic-degraded benchmark probe should emit metadata");
     assert_eq!(
-        first.semantic_status.as_deref(),
+        metadata
+            .get("semantic_status")
+            .and_then(|value| value.as_str()),
         Some("degraded"),
         "search_hybrid semantic-degraded benchmark probe must emit degraded semantic_status"
     );
     assert_eq!(
-        first.semantic_enabled,
+        metadata
+            .get("semantic_enabled")
+            .and_then(|value| value.as_bool()),
         Some(false),
         "search_hybrid semantic-degraded benchmark probe must mark semantic_enabled=false"
     );
     assert!(
-        first
-            .semantic_reason
-            .as_deref()
+        metadata
+            .get("semantic_reason")
+            .and_then(|value| value.as_str())
             .is_some_and(|reason| reason.contains("semantic_runtime.model must not be blank")),
         "search_hybrid semantic-degraded benchmark probe should surface deterministic semantic startup-validation reason"
     );
@@ -770,7 +788,8 @@ fn populate_fixture(root: &Path) {
         "pub trait Service {}\n\
          pub struct Impl;\n\
          impl Service for Impl {}\n\
-         pub fn consumer() { let _ = ServiceMarker; }\n\
+         pub fn serve() {}\n\
+         pub fn consumer() { serve(); let _ = ServiceMarker; }\n\
          pub struct ServiceMarker;\n",
     )
     .expect("benchmark navigation fixture source should be writable");
@@ -783,7 +802,8 @@ fn populate_fixture(root: &Path) {
       "occurrences": [
         { "symbol": "scip-rust pkg frigg-bench#Service", "range": [0, 10, 17], "symbol_roles": 1 },
         { "symbol": "scip-rust pkg frigg-bench#Impl", "range": [1, 11, 15], "symbol_roles": 1 },
-        { "symbol": "scip-rust pkg frigg-bench#consumer", "range": [3, 7, 15], "symbol_roles": 1 }
+        { "symbol": "scip-rust pkg frigg-bench#serve", "range": [3, 7, 12], "symbol_roles": 1 },
+        { "symbol": "scip-rust pkg frigg-bench#consumer", "range": [4, 7, 15], "symbol_roles": 1 }
       ],
       "symbols": [
         {
@@ -805,8 +825,15 @@ fn populate_fixture(root: &Path) {
           "display_name": "consumer",
           "kind": "function",
           "relationships": [
-            { "symbol": "scip-rust pkg frigg-bench#Service", "is_reference": true }
+            { "symbol": "scip-rust pkg frigg-bench#Service", "is_reference": true },
+            { "symbol": "scip-rust pkg frigg-bench#serve", "is_reference": true }
           ]
+        },
+        {
+          "symbol": "scip-rust pkg frigg-bench#serve",
+          "display_name": "serve",
+          "kind": "function",
+          "relationships": []
         }
       ]
     }

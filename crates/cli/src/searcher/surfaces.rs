@@ -1,23 +1,9 @@
 use std::path::Path;
 
-use crate::path_class::repository_path_class;
+use crate::domain::{PathClass, SourceClass};
+use crate::path_class::classify_repository_path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum HybridSourceClass {
-    ErrorContracts,
-    ToolContracts,
-    BenchmarkDocs,
-    Documentation,
-    Readme,
-    Runtime,
-    Project,
-    Support,
-    Tests,
-    Fixtures,
-    Playbooks,
-    Specs,
-    Other,
-}
+pub(super) type HybridSourceClass = SourceClass;
 
 pub(super) fn hybrid_source_class(path: &str) -> HybridSourceClass {
     if path.starts_with("playbooks/") {
@@ -51,11 +37,10 @@ pub(super) fn hybrid_source_class(path: &str) -> HybridSourceClass {
         return HybridSourceClass::Tests;
     }
 
-    match repository_path_class(path) {
-        "runtime" => HybridSourceClass::Runtime,
-        "project" => HybridSourceClass::Project,
-        "support" => HybridSourceClass::Support,
-        _ => HybridSourceClass::Other,
+    match classify_repository_path(path) {
+        PathClass::Runtime => HybridSourceClass::Runtime,
+        PathClass::Project => HybridSourceClass::Project,
+        PathClass::Support => HybridSourceClass::Support,
     }
 }
 
@@ -110,11 +95,26 @@ pub(super) fn has_generic_runtime_anchor_stem(path: &str) -> bool {
 }
 
 pub(super) fn is_error_contract_path(path: &str) -> bool {
-    path == "contracts/errors.md"
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if !(normalized.starts_with("contracts/") || normalized.contains("/contracts/")) {
+        return false;
+    }
+
+    let Some(stem) = Path::new(&normalized)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+    else {
+        return false;
+    };
+
+    hybrid_identifier_tokens(stem)
+        .into_iter()
+        .any(|token| matches!(token.as_str(), "error" | "errors" | "failure" | "failures"))
 }
 
 pub(super) fn is_tool_contract_path(path: &str) -> bool {
-    path.starts_with("contracts/tools/")
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    normalized.starts_with("contracts/tools/") || normalized.contains("/contracts/tools/")
 }
 
 pub(super) fn is_readme_path(path: &str) -> bool {
@@ -164,6 +164,41 @@ pub(super) fn is_repo_metadata_path(path: &str) -> bool {
             | "pyproject.toml"
             | "poetry.lock"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::SourceClass;
+
+    use super::hybrid_source_class;
+
+    #[test]
+    fn hybrid_source_class_respects_specific_precedence_before_path_class() {
+        assert_eq!(
+            hybrid_source_class("contracts/errors.md"),
+            SourceClass::ErrorContracts
+        );
+        assert_eq!(
+            hybrid_source_class("contracts/tools/v1/search_hybrid.v1.schema.json"),
+            SourceClass::ToolContracts
+        );
+        assert_eq!(
+            hybrid_source_class("playbooks/runtime/deep-search.md"),
+            SourceClass::Playbooks
+        );
+    }
+
+    #[test]
+    fn hybrid_source_class_falls_back_to_typed_path_classification() {
+        assert_eq!(
+            hybrid_source_class("crates/cli/src/mcp/server.rs"),
+            SourceClass::Runtime
+        );
+        assert_eq!(
+            hybrid_source_class("crates/cli/examples/server.rs"),
+            SourceClass::Support
+        );
+    }
 }
 
 pub(super) fn is_python_entrypoint_runtime_path(path: &str) -> bool {
@@ -286,15 +321,43 @@ pub(super) fn is_frontend_runtime_noise_path(path: &str) -> bool {
 }
 
 pub(super) fn is_navigation_runtime_path(path: &str) -> bool {
-    path.starts_with("crates/cli/src/mcp/")
+    let normalized = path.trim_start_matches("./");
+    let path_class = classify_repository_path(normalized);
+    if !matches!(path_class, PathClass::Runtime | PathClass::Support) {
+        return false;
+    }
+
+    let Some(stem) = Path::new(normalized)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.to_ascii_lowercase())
+    else {
+        return false;
+    };
+
+    hybrid_identifier_tokens(&stem).into_iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "api"
+                | "client"
+                | "discoverer"
+                | "handler"
+                | "handlers"
+                | "protocol"
+                | "route"
+                | "router"
+                | "routes"
+                | "server"
+                | "transport"
+        )
+    })
 }
 
 pub(super) fn is_navigation_reference_doc_path(path: &str) -> bool {
-    path.starts_with("skills/frigg-mcp-search-navigation/")
-        || matches!(
-            path,
-            "contracts/semantic.md" | "contracts/tools/v1/README.md"
-        )
+    matches!(
+        hybrid_source_class(path),
+        HybridSourceClass::Documentation | HybridSourceClass::Readme | HybridSourceClass::Specs
+    )
 }
 
 pub(super) fn is_entrypoint_runtime_path(path: &str) -> bool {

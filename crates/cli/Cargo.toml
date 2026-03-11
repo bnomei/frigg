@@ -103,6 +103,11 @@ path = "benches/search_latency.rs"
 harness = false
 
 [[bench]]
+name = "semantic_chunk_hot_paths"
+path = "benches/semantic_chunk_hot_paths.rs"
+harness = false
+
+[[bench]]
 name = "storage_hot_paths"
 path = "benches/storage_hot_paths.rs"
 harness = false

@@ -1,21 +1,35 @@
+use std::fs::File;
 use std::future::Future;
+use std::io::Read;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use super::*;
 use crate::indexer::manifest::normalize_repository_relative_path;
+use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkCandidate {
-    pub(crate) chunk_id: String,
-    pub(crate) repository_id: String,
-    pub(crate) snapshot_id: String,
-    pub(crate) path: String,
-    pub(crate) language: String,
+    pub(crate) chunk_id: blake3::Hash,
+    pub(crate) repository_id: Arc<str>,
+    pub(crate) snapshot_id: Arc<str>,
+    pub(crate) path: Arc<str>,
+    pub(crate) language: Arc<str>,
     pub(crate) chunk_index: usize,
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
-    pub(crate) content_hash_blake3: String,
+    pub(crate) content_hash_blake3: blake3::Hash,
     pub(crate) content_text: String,
+}
+
+impl SemanticChunkCandidate {
+    fn chunk_id_string(&self) -> String {
+        semantic_chunk_id_string(&self.chunk_id)
+    }
+
+    fn content_hash_blake3_string(&self) -> String {
+        self.content_hash_blake3.to_hex().to_string()
+    }
 }
 
 pub(super) trait SemanticRuntimeEmbeddingExecutor: Sync {
@@ -97,7 +111,7 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
                 model,
                 input,
                 purpose: EmbeddingPurpose::Document,
-                dimensions: None,
+                dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
                 trace_id,
             };
             let response = match provider {
@@ -251,29 +265,29 @@ pub(super) fn build_semantic_embedding_records(
             if embedding.is_empty() {
                 return Err(FriggError::Internal(format!(
                     "semantic embedding provider returned an empty vector for chunk_id={}",
-                    chunk.chunk_id
+                    chunk.chunk_id_string()
                 )));
             }
             if embedding.iter().any(|value| !value.is_finite()) {
                 return Err(FriggError::Internal(format!(
                     "semantic embedding provider returned non-finite vector values for chunk_id={}",
-                    chunk.chunk_id
+                    chunk.chunk_id_string()
                 )));
             }
 
             output.push(SemanticChunkEmbeddingRecord {
-                chunk_id: chunk.chunk_id.clone(),
-                repository_id: chunk.repository_id.clone(),
-                snapshot_id: chunk.snapshot_id.clone(),
-                path: chunk.path.clone(),
-                language: chunk.language.clone(),
+                chunk_id: chunk.chunk_id_string(),
+                repository_id: chunk.repository_id.to_string(),
+                snapshot_id: chunk.snapshot_id.to_string(),
+                path: chunk.path.to_string(),
+                language: chunk.language.to_string(),
                 chunk_index: chunk.chunk_index,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 provider: provider.as_str().to_owned(),
                 model: model.to_owned(),
                 trace_id: Some(trace_id.clone()),
-                content_hash_blake3: chunk.content_hash_blake3.clone(),
+                content_hash_blake3: chunk.content_hash_blake3_string(),
                 content_text: chunk.content_text.clone(),
                 embedding,
             });
@@ -284,7 +298,7 @@ pub(super) fn build_semantic_embedding_records(
         left.path
             .cmp(&right.path)
             .then(left.chunk_index.cmp(&right.chunk_index))
-            .then(left.chunk_id.cmp(&right.chunk_id))
+            .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
     });
     Ok(output)
 }
@@ -295,205 +309,351 @@ pub(crate) fn build_semantic_chunk_candidates(
     snapshot_id: &str,
     current_manifest: &[FileDigest],
 ) -> FriggResult<Vec<SemanticChunkCandidate>> {
-    let mut output = Vec::new();
+    let repository_id = Arc::<str>::from(repository_id);
+    let snapshot_id = Arc::<str>::from(snapshot_id);
+    let mut output = Vec::with_capacity(
+        estimate_semantic_chunk_capacity(current_manifest).max(current_manifest.len()),
+    );
+    let mut last_repository_relative_path: Option<String> = None;
+    let mut needs_sort = false;
+    let mut source = String::new();
 
     for entry in current_manifest {
         let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
             continue;
         };
-        let source = match fs::read_to_string(&entry.path) {
-            Ok(source) => source,
-            Err(_) => continue,
-        };
         let repository_relative_path =
             normalize_repository_relative_path(workspace_root, &entry.path)?;
-        if repository_relative_path.starts_with("playbooks/") {
+        if last_repository_relative_path
+            .as_ref()
+            .is_some_and(|previous| previous > &repository_relative_path)
+        {
+            needs_sort = true;
+        }
+        source.clear();
+        let mut file = match File::open(&entry.path) {
+            Ok(file) => file,
+            Err(_) => continue,
+        };
+        if file.read_to_string(&mut source).is_err() {
             continue;
         }
-        let source = scrub_playbook_metadata_header(&source);
-        output.extend(build_file_semantic_chunks(
-            repository_id,
-            snapshot_id,
-            &repository_relative_path,
+        append_file_semantic_chunks(
+            &mut output,
+            Arc::clone(&repository_id),
+            Arc::clone(&snapshot_id),
+            Arc::<str>::from(repository_relative_path.as_str()),
             language,
-            source.as_ref(),
-        ));
+            source.as_str(),
+        );
+        last_repository_relative_path = Some(repository_relative_path);
     }
 
-    output.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.chunk_index.cmp(&right.chunk_index))
-            .then(left.chunk_id.cmp(&right.chunk_id))
-    });
+    if needs_sort {
+        output.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then(left.chunk_index.cmp(&right.chunk_index))
+                .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
+        });
+    }
     Ok(output)
 }
 
 pub(crate) fn build_file_semantic_chunks(
-    repository_id: &str,
-    snapshot_id: &str,
-    path: &str,
-    language: &str,
+    repository_id: impl Into<Arc<str>>,
+    snapshot_id: impl Into<Arc<str>>,
+    path: impl Into<Arc<str>>,
+    language: impl Into<Arc<str>>,
     source: &str,
 ) -> Vec<SemanticChunkCandidate> {
-    let mut chunks = Vec::new();
-    let mut current_lines: Vec<&str> = Vec::new();
-    let mut current_chars = 0usize;
-    let mut start_line = 1usize;
-    let mut chunk_index = 0usize;
-    let markdown_chunking = language == "markdown";
-
-    for (line_idx, line) in source.lines().enumerate() {
-        let line_number = line_idx + 1;
-        let markdown_heading_boundary =
-            markdown_chunking && !current_lines.is_empty() && is_markdown_heading(line);
-        let projected_chars = current_chars + line.len() + usize::from(!current_lines.is_empty());
-        let should_flush = markdown_heading_boundary
-            || (!current_lines.is_empty()
-                && (current_lines.len() >= SEMANTIC_CHUNK_MAX_LINES
-                    || projected_chars > SEMANTIC_CHUNK_MAX_CHARS));
-
-        if should_flush {
-            let created = create_semantic_chunk_candidates(
-                repository_id,
-                snapshot_id,
-                path,
-                language,
-                chunk_index,
-                start_line,
-                line_number.saturating_sub(1),
-                &current_lines,
-            );
-            chunk_index += created.len();
-            chunks.extend(created);
-            current_lines.clear();
-            current_chars = 0;
-            start_line = line_number;
-        }
-
-        current_chars += line.len() + usize::from(!current_lines.is_empty());
-        current_lines.push(line);
-    }
-
-    let created = create_semantic_chunk_candidates(
-        repository_id,
-        snapshot_id,
-        path,
-        language,
-        chunk_index,
-        start_line,
-        source.lines().count().max(start_line),
-        &current_lines,
+    let file_context = SemanticChunkFileContext::new(
+        repository_id.into(),
+        snapshot_id.into(),
+        path.into(),
+        language.into(),
     );
-    chunks.extend(created);
-
+    let estimated_chunks = source
+        .len()
+        .max(1)
+        .div_ceil(SEMANTIC_CHUNK_MAX_CHARS.max(1));
+    let mut chunks = Vec::with_capacity(estimated_chunks);
+    append_file_semantic_chunks_with_context(&mut chunks, &file_context, source);
     chunks
 }
 
-fn create_semantic_chunk_candidates(
-    repository_id: &str,
-    snapshot_id: &str,
-    path: &str,
-    language: &str,
+fn append_file_semantic_chunks(
+    output: &mut Vec<SemanticChunkCandidate>,
+    repository_id: impl Into<Arc<str>>,
+    snapshot_id: impl Into<Arc<str>>,
+    path: impl Into<Arc<str>>,
+    language: impl Into<Arc<str>>,
+    source: &str,
+) {
+    let file_context = SemanticChunkFileContext::new(
+        repository_id.into(),
+        snapshot_id.into(),
+        path.into(),
+        language.into(),
+    );
+    append_file_semantic_chunks_with_context(output, &file_context, source);
+}
+
+fn append_file_semantic_chunks_with_context(
+    output: &mut Vec<SemanticChunkCandidate>,
+    file_context: &SemanticChunkFileContext,
+    source: &str,
+) {
+    let markdown_chunking = file_context.language.as_ref() == "markdown";
+    if let Some(single_chunk) =
+        build_single_semantic_chunk_candidate_if_small(file_context, markdown_chunking, source)
+    {
+        output.extend(single_chunk);
+        return;
+    }
+
+    let mut current_chunk_start = 0usize;
+    let mut current_chars = 0usize;
+    let mut start_line = 1usize;
+    let mut chunk_index = 0usize;
+    let mut current_line = 0usize;
+
+    for (line_idx, raw_line) in source.split_inclusive('\n').enumerate() {
+        let line = raw_line.trim_end_matches(['\n', '\r']);
+        let line_number = line_idx + 1;
+        current_line = line_number;
+        let markdown_heading_boundary =
+            markdown_chunking && current_chars > 0 && is_markdown_heading(line);
+        let projected_chars = current_chars + line.len() + usize::from(current_chars > 0);
+        let should_flush = markdown_heading_boundary
+            || (current_chars > 0
+                && (line_number.saturating_sub(start_line) >= SEMANTIC_CHUNK_MAX_LINES
+                    || projected_chars > SEMANTIC_CHUNK_MAX_CHARS));
+
+        if should_flush {
+            let created = append_semantic_chunk_candidates(
+                output,
+                &file_context,
+                chunk_index,
+                start_line,
+                line_number.saturating_sub(1),
+                semantic_chunk_text_from_source(
+                    source,
+                    current_chunk_start,
+                    raw_line.as_ptr() as usize - source.as_ptr() as usize,
+                ),
+            );
+            chunk_index += created.len();
+            current_chars = 0;
+            start_line = line_number;
+            current_chunk_start = raw_line.as_ptr() as usize - source.as_ptr() as usize;
+        }
+
+        current_chars += line.len() + usize::from(current_chars > 0);
+    }
+
+    append_semantic_chunk_candidates(
+        output,
+        &file_context,
+        chunk_index,
+        start_line,
+        current_line.max(start_line),
+        semantic_chunk_text_from_source(source, current_chunk_start, source.len()),
+    );
+}
+
+fn build_single_semantic_chunk_candidate_if_small(
+    file_context: &SemanticChunkFileContext,
+    markdown_chunking: bool,
+    source: &str,
+) -> Option<Vec<SemanticChunkCandidate>> {
+    if markdown_chunking || !source.is_ascii() || source.len() > SEMANTIC_CHUNK_MAX_CHARS {
+        return None;
+    }
+
+    let content_text = semantic_chunk_text_from_source(source, 0, source.len());
+    if content_text.trim().is_empty() {
+        return Some(Vec::new());
+    }
+
+    let line_count = content_text
+        .as_bytes()
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count()
+        + 1;
+    if line_count > SEMANTIC_CHUNK_MAX_LINES {
+        return None;
+    }
+
+    Some(vec![build_semantic_chunk_candidate(
+        file_context,
+        0,
+        1,
+        line_count,
+        content_text.to_owned(),
+    )])
+}
+
+fn append_semantic_chunk_candidates(
+    output: &mut Vec<SemanticChunkCandidate>,
+    file_context: &SemanticChunkFileContext,
     chunk_index: usize,
     start_line: usize,
     end_line: usize,
-    lines: &[&str],
-) -> Vec<SemanticChunkCandidate> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
-    let content_text = lines.join("\n");
+    content_text: &str,
+) -> std::ops::Range<usize> {
     if content_text.trim().is_empty() {
-        return Vec::new();
+        return 0..0;
     }
 
-    split_text_for_semantic_chunking(&content_text, SEMANTIC_CHUNK_MAX_CHARS)
-        .into_iter()
-        .enumerate()
-        .map(|(offset, segment_text)| {
-            let mut content_hasher = Hasher::new();
-            content_hasher.update(segment_text.as_bytes());
-            let content_hash_blake3 = content_hasher.finalize().to_hex().to_string();
-
-            let segment_chunk_index = chunk_index + offset;
-            let mut chunk_id_hasher = Hasher::new();
-            chunk_id_hasher.update(repository_id.as_bytes());
-            chunk_id_hasher.update(&[0]);
-            chunk_id_hasher.update(path.as_bytes());
-            chunk_id_hasher.update(&[0]);
-            chunk_id_hasher.update(segment_chunk_index.to_string().as_bytes());
-            chunk_id_hasher.update(&[0]);
-            chunk_id_hasher.update(start_line.to_string().as_bytes());
-            chunk_id_hasher.update(&[0]);
-            chunk_id_hasher.update(end_line.to_string().as_bytes());
-            chunk_id_hasher.update(&[0]);
-            chunk_id_hasher.update(content_hash_blake3.as_bytes());
-
-            SemanticChunkCandidate {
-                chunk_id: format!("chunk-{}", chunk_id_hasher.finalize().to_hex()),
-                repository_id: repository_id.to_owned(),
-                snapshot_id: snapshot_id.to_owned(),
-                path: path.to_owned(),
-                language: language.to_owned(),
-                chunk_index: segment_chunk_index,
+    let output_start = output.len();
+    if content_text.is_ascii() {
+        let mut segment_start = 0usize;
+        let mut offset = 0usize;
+        while segment_start < content_text.len() {
+            let segment_end = (segment_start + SEMANTIC_CHUNK_MAX_CHARS).min(content_text.len());
+            output.push(build_semantic_chunk_candidate(
+                file_context,
+                chunk_index + offset,
                 start_line,
                 end_line,
-                content_hash_blake3,
-                content_text: segment_text,
-            }
-        })
-        .collect()
-}
-
-fn split_text_for_semantic_chunking(content_text: &str, max_chars: usize) -> Vec<String> {
-    if content_text.is_empty() || max_chars == 0 {
-        return Vec::new();
+                content_text[segment_start..segment_end].to_owned(),
+            ));
+            segment_start = segment_end;
+            offset += 1;
+        }
+        return output_start..output.len();
     }
 
-    let total_chars = content_text.chars().count();
-    if total_chars <= max_chars {
-        return vec![content_text.to_owned()];
+    let unicode_char_count = content_text.chars().count();
+    if unicode_char_count <= SEMANTIC_CHUNK_MAX_CHARS {
+        output.push(build_semantic_chunk_candidate(
+            file_context,
+            chunk_index,
+            start_line,
+            end_line,
+            content_text.to_owned(),
+        ));
+        return output_start..output.len();
     }
 
-    let mut segments = Vec::new();
     let mut segment_start = 0usize;
     let mut chars_in_segment = 0usize;
-
+    let mut offset = 0usize;
     for (byte_index, _) in content_text.char_indices() {
-        if chars_in_segment == max_chars {
-            segments.push(content_text[segment_start..byte_index].to_owned());
+        if chars_in_segment == SEMANTIC_CHUNK_MAX_CHARS {
+            output.push(build_semantic_chunk_candidate(
+                file_context,
+                chunk_index + offset,
+                start_line,
+                end_line,
+                content_text[segment_start..byte_index].to_owned(),
+            ));
             segment_start = byte_index;
             chars_in_segment = 0;
+            offset += 1;
         }
         chars_in_segment += 1;
     }
-
     if segment_start < content_text.len() {
-        segments.push(content_text[segment_start..].to_owned());
+        output.push(build_semantic_chunk_candidate(
+            file_context,
+            chunk_index + offset,
+            start_line,
+            end_line,
+            content_text[segment_start..].to_owned(),
+        ));
     }
 
-    segments
+    output_start..output.len()
 }
 
-pub(crate) fn semantic_chunk_language_for_path(path: &Path) -> Option<&'static str> {
-    if is_blade_path(path) {
-        return Some("blade");
+fn build_semantic_chunk_candidate(
+    file_context: &SemanticChunkFileContext,
+    chunk_index: usize,
+    start_line: usize,
+    end_line: usize,
+    content_text: String,
+) -> SemanticChunkCandidate {
+    let content_hash = blake3::hash(content_text.as_bytes());
+
+    let mut chunk_id_hasher = file_context.chunk_id_prefix.clone();
+    chunk_id_hasher.update(&chunk_index.to_le_bytes());
+    chunk_id_hasher.update(&[0]);
+    chunk_id_hasher.update(&start_line.to_le_bytes());
+    chunk_id_hasher.update(&[0]);
+    chunk_id_hasher.update(&end_line.to_le_bytes());
+    chunk_id_hasher.update(&[0]);
+    chunk_id_hasher.update(content_hash.as_bytes());
+    let chunk_id = chunk_id_hasher.finalize();
+
+    SemanticChunkCandidate {
+        chunk_id,
+        repository_id: Arc::clone(&file_context.repository_id),
+        snapshot_id: Arc::clone(&file_context.snapshot_id),
+        path: Arc::clone(&file_context.path),
+        language: Arc::clone(&file_context.language),
+        chunk_index,
+        start_line,
+        end_line,
+        content_hash_blake3: content_hash,
+        content_text,
     }
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("rs") => Some("rust"),
-        Some("php") => Some("php"),
-        Some("md" | "markdown") => Some("markdown"),
-        Some("json") => Some("json"),
-        Some("toml") => Some("toml"),
-        Some("txt") => Some("text"),
-        Some("yaml" | "yml") => Some("yaml"),
-        _ => None,
+}
+
+fn semantic_chunk_text_from_source(source: &str, start: usize, end: usize) -> &str {
+    source[start..end].trim_end_matches(['\n', '\r'])
+}
+
+fn semantic_chunk_id_string(chunk_id: &blake3::Hash) -> String {
+    let chunk_id_hex = chunk_id.to_hex();
+    let mut value = String::with_capacity("chunk-".len() + chunk_id_hex.as_str().len());
+    value.push_str("chunk-");
+    value.push_str(chunk_id_hex.as_str());
+    value
+}
+
+fn estimate_semantic_chunk_capacity(current_manifest: &[FileDigest]) -> usize {
+    current_manifest
+        .iter()
+        .filter(|entry| semantic_chunk_language_for_path(&entry.path).is_some())
+        .map(|entry| {
+            usize::try_from(entry.size_bytes)
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .div_ceil(SEMANTIC_CHUNK_MAX_CHARS.max(1))
+        })
+        .sum()
+}
+
+struct SemanticChunkFileContext {
+    repository_id: Arc<str>,
+    snapshot_id: Arc<str>,
+    path: Arc<str>,
+    language: Arc<str>,
+    chunk_id_prefix: Hasher,
+}
+
+impl SemanticChunkFileContext {
+    fn new(
+        repository_id: Arc<str>,
+        snapshot_id: Arc<str>,
+        path: Arc<str>,
+        language: Arc<str>,
+    ) -> Self {
+        let mut chunk_id_prefix = Hasher::new();
+        chunk_id_prefix.update(repository_id.as_bytes());
+        chunk_id_prefix.update(&[0]);
+        chunk_id_prefix.update(path.as_bytes());
+        chunk_id_prefix.update(&[0]);
+        Self {
+            repository_id,
+            snapshot_id,
+            path,
+            language,
+            chunk_id_prefix,
+        }
     }
 }
 

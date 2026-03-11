@@ -1,7 +1,11 @@
 use std::borrow::Cow;
-use std::fs;
-use std::path::Path;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
+mod attribution;
 mod candidates;
 mod graph_channel;
 mod hybrid_execution;
@@ -10,6 +14,7 @@ mod laravel;
 mod lexical_channel;
 mod lexical_recall;
 mod ordering;
+mod path_witness_projection;
 mod query_terms;
 mod ranker;
 mod regex_support;
@@ -18,19 +23,32 @@ mod scan_engine;
 mod semantic;
 mod surfaces;
 
-use crate::domain::{FriggError, FriggResult, model::TextMatch};
-use crate::indexer::FileMetadataDigest;
-use crate::language_support::{LanguageCapability, SymbolLanguage, parse_supported_language};
-use crate::manifest_validation::validate_manifest_digests_for_root;
-use crate::playbooks::scrub_playbook_metadata_header;
+use crate::domain::{
+    ChannelDiagnostic, ChannelHealth, ChannelHealthStatus, ChannelResult, ChannelStats,
+    EvidenceAnchor, EvidenceChannel, EvidenceDocumentRef, EvidenceHit, FriggError, FriggResult,
+    model::TextMatch,
+};
+use crate::indexer::PhpDeclarationRelation;
+use crate::languages::{
+    BladeSourceEvidence, LanguageCapability, PhpSourceEvidence, SymbolLanguage,
+    parse_supported_language,
+};
+pub use crate::manifest_validation::ValidatedManifestCandidateCache;
+use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
-use crate::storage::{Storage, resolve_provenance_db_path};
+use crate::storage::{
+    ManifestEntry, PathWitnessProjectionRecord, Storage, resolve_provenance_db_path,
+};
+use crate::text_sanitization::scrub_leading_metadata_comment;
+use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 use aho_corasick::AhoCorasick;
+use attribution::elapsed_us;
+pub use attribution::{SearchStageAttribution, SearchStageSample};
 use candidates::{
-    hard_excluded_runtime_path, hidden_workflow_candidates_for_repository, merge_candidate_files,
+    hidden_workflow_candidates_for_repository, merge_candidate_files,
     normalize_repository_relative_path, walk_candidate_files_for_repository,
 };
-use graph_channel::search_graph_channel_hits;
+use graph_channel::{HybridGraphArtifact, HybridGraphArtifactCacheKey, search_graph_channel_hits};
 use intent::HybridRankingIntent;
 use laravel::{
     is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
@@ -42,10 +60,12 @@ use laravel::{
     is_laravel_view_component_class_path,
 };
 use lexical_channel::{
-    best_path_witness_excerpt, build_hybrid_lexical_hits_with_intent,
+    HybridPathWitnessQueryContext, best_path_witness_anchor_in_file,
+    build_hybrid_lexical_hits_with_intent, build_hybrid_path_witness_hits_with_intent,
     hybrid_canonical_match_multiplier, hybrid_path_has_exact_stem_match,
     hybrid_path_quality_multiplier_with_intent, hybrid_path_witness_recall_score,
-    merge_hybrid_lexical_search_output, merge_hybrid_path_witness_recall_output, semantic_excerpt,
+    hybrid_path_witness_recall_score_for_projection, merge_hybrid_lexical_search_output,
+    semantic_excerpt,
 };
 #[cfg(test)]
 use lexical_channel::{build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query};
@@ -54,14 +74,18 @@ use ordering::{
     retain_bounded_match, sort_matches_deterministically,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
+use path_witness_projection::{
+    StoredPathWitnessProjection, build_path_witness_projection_record,
+    decode_path_witness_projection_record,
+};
 use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
     hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
     hybrid_path_overlap_count, hybrid_path_overlap_tokens, hybrid_query_exact_terms,
     hybrid_query_overlap_terms, path_has_exact_query_term_match,
 };
-use ranker::blend_hybrid_evidence;
 pub use ranker::rank_hybrid_evidence;
+use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
 use regex::Regex;
 pub use regex_support::{RegexSearchError, compile_safe_regex};
 use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
@@ -133,38 +157,46 @@ pub struct SearchExecutionOutput {
     pub diagnostics: SearchExecutionDiagnostics,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HybridDocumentRef {
-    pub repository_id: String,
-    pub path: String,
-    pub line: usize,
-    pub column: usize,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SearchCandidateFile {
+    relative_path: String,
+    absolute_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct HybridChannelHit {
-    pub document: HybridDocumentRef,
-    pub raw_score: f32,
-    pub excerpt: String,
-    pub provenance_id: String,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RepositoryCandidateUniverse {
+    repository_id: String,
+    root: PathBuf,
+    snapshot_id: Option<String>,
+    candidates: Vec<SearchCandidateFile>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum HybridChannel {
-    Lexical,
-    Graph,
-    Semantic,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SearchCandidateUniverse {
+    repositories: Vec<RepositoryCandidateUniverse>,
+    diagnostics: SearchExecutionDiagnostics,
 }
 
-impl HybridChannel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Lexical => "lexical",
-            Self::Graph => "graph",
-            Self::Semantic => "semantic",
-        }
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SearchCandidateUniverseBuild {
+    universe: SearchCandidateUniverse,
+    repository_count: usize,
+    candidate_count: usize,
+    manifest_backed_repository_count: usize,
+    candidate_intake_elapsed_us: u64,
+    freshness_validation_elapsed_us: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestCandidateFilesBuild {
+    snapshot_id: String,
+    candidates: Vec<(String, PathBuf)>,
+    candidate_intake_elapsed_us: u64,
+    freshness_validation_elapsed_us: u64,
+}
+
+pub type HybridDocumentRef = EvidenceDocumentRef;
+pub type HybridChannelHit = EvidenceHit;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HybridChannelWeights {
@@ -255,13 +287,17 @@ impl Default for HybridExecutionNote {
 #[derive(Debug, Clone, Default)]
 pub struct SearchHybridExecutionOutput {
     pub matches: Vec<HybridRankedEvidence>,
+    pub ranked_anchors: Vec<HybridRankedEvidence>,
     pub diagnostics: SearchExecutionDiagnostics,
+    pub channel_results: Vec<ChannelResult>,
     pub note: HybridExecutionNote,
+    pub stage_attribution: Option<SearchStageAttribution>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HybridRankedEvidence {
     pub document: HybridDocumentRef,
+    pub anchor: EvidenceAnchor,
     pub excerpt: String,
     pub blended_score: f32,
     pub lexical_score: f32,
@@ -272,6 +308,7 @@ pub struct HybridRankedEvidence {
     pub semantic_sources: Vec<String>,
 }
 
+#[cfg(test)]
 fn rank_hybrid_evidence_for_query(
     lexical_hits: &[HybridChannelHit],
     graph_hits: &[HybridChannelHit],
@@ -280,12 +317,158 @@ fn rank_hybrid_evidence_for_query(
     limit: usize,
     query_text: &str,
 ) -> FriggResult<Vec<HybridRankedEvidence>> {
+    rank_hybrid_evidence_for_query_with_witness(
+        lexical_hits,
+        &[],
+        graph_hits,
+        semantic_hits,
+        weights,
+        limit,
+        query_text,
+    )
+}
+
+fn rank_hybrid_anchor_evidence_for_query_with_witness(
+    lexical_hits: &[HybridChannelHit],
+    witness_hits: &[HybridChannelHit],
+    graph_hits: &[HybridChannelHit],
+    semantic_hits: &[HybridChannelHit],
+    weights: HybridChannelWeights,
+    limit: usize,
+    _query_text: &str,
+) -> FriggResult<Vec<HybridRankedEvidence>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
 
-    let ranked = blend_hybrid_evidence(lexical_hits, graph_hits, semantic_hits, weights)?;
-    Ok(diversify_hybrid_ranked_evidence(ranked, limit, query_text))
+    let mut lexical_and_witness_hits = lexical_hits.to_vec();
+    lexical_and_witness_hits.extend_from_slice(witness_hits);
+    let ranked = blend_hybrid_evidence(
+        &lexical_and_witness_hits,
+        graph_hits,
+        semantic_hits,
+        weights,
+    )?;
+    Ok(ranked.into_iter().take(limit).collect())
+}
+
+#[cfg(test)]
+fn rank_hybrid_evidence_for_query_with_witness(
+    lexical_hits: &[HybridChannelHit],
+    witness_hits: &[HybridChannelHit],
+    graph_hits: &[HybridChannelHit],
+    semantic_hits: &[HybridChannelHit],
+    weights: HybridChannelWeights,
+    limit: usize,
+    query_text: &str,
+) -> FriggResult<Vec<HybridRankedEvidence>> {
+    let ranked_anchors = rank_hybrid_anchor_evidence_for_query_with_witness(
+        lexical_hits,
+        witness_hits,
+        graph_hits,
+        semantic_hits,
+        weights,
+        limit.saturating_mul(4).max(32),
+        query_text,
+    )?;
+    let grouped =
+        group_hybrid_ranked_evidence(ranked_anchors, weights, limit.saturating_mul(4).max(32));
+    Ok(diversify_hybrid_ranked_evidence(grouped, limit, query_text))
+}
+
+fn search_diagnostics_to_channel_diagnostics(
+    diagnostics: &SearchExecutionDiagnostics,
+) -> Vec<ChannelDiagnostic> {
+    diagnostics
+        .entries
+        .iter()
+        .map(|entry| ChannelDiagnostic {
+            code: match entry.kind {
+                SearchDiagnosticKind::Walk => "walk".to_owned(),
+                SearchDiagnosticKind::Read => "read".to_owned(),
+            },
+            message: entry.message.clone(),
+        })
+        .collect()
+}
+
+fn empty_channel_result(
+    channel: EvidenceChannel,
+    status: ChannelHealthStatus,
+    reason: Option<String>,
+) -> ChannelResult {
+    ChannelResult::new(
+        channel,
+        Vec::new(),
+        ChannelHealth::new(status, reason),
+        Vec::new(),
+        ChannelStats::default(),
+    )
+}
+
+fn channel_result_by_channel(
+    channel_results: &[ChannelResult],
+    channel: EvidenceChannel,
+) -> Option<&ChannelResult> {
+    channel_results
+        .iter()
+        .find(|result| result.channel == channel)
+}
+
+fn hybrid_semantic_status_from_channel_health(status: ChannelHealthStatus) -> HybridSemanticStatus {
+    match status {
+        ChannelHealthStatus::Disabled | ChannelHealthStatus::Filtered => {
+            HybridSemanticStatus::Disabled
+        }
+        ChannelHealthStatus::Unavailable => HybridSemanticStatus::Unavailable,
+        ChannelHealthStatus::Ok => HybridSemanticStatus::Ok,
+        ChannelHealthStatus::Degraded => HybridSemanticStatus::Degraded,
+    }
+}
+
+fn hybrid_execution_note_from_channel_results(
+    query_semantic: Option<bool>,
+    semantic_runtime_enabled: bool,
+    channel_results: &[ChannelResult],
+) -> HybridExecutionNote {
+    let semantic = channel_result_by_channel(channel_results, EvidenceChannel::Semantic);
+    let semantic_requested = query_semantic.unwrap_or(semantic_runtime_enabled);
+    let semantic_status = semantic
+        .map(|result| hybrid_semantic_status_from_channel_health(result.health.status))
+        .unwrap_or(HybridSemanticStatus::Disabled);
+    let semantic_reason = semantic.and_then(|result| result.health.reason.clone());
+    let semantic_candidate_count = semantic.map_or(0, |result| result.stats.candidate_count);
+    let semantic_hit_count = semantic.map_or(0, |result| result.stats.hit_count);
+    let semantic_match_count = semantic.map_or(0, |result| result.stats.match_count);
+
+    HybridExecutionNote {
+        semantic_requested,
+        semantic_enabled: semantic_match_count > 0,
+        semantic_status,
+        semantic_reason,
+        semantic_candidate_count,
+        semantic_hit_count,
+        semantic_match_count,
+    }
+}
+
+fn match_count_for_hits(matches: &[HybridRankedEvidence], hits: &[HybridChannelHit]) -> usize {
+    use std::collections::BTreeSet;
+
+    if matches.is_empty() || hits.is_empty() {
+        return 0;
+    }
+
+    let matched_documents = matches
+        .iter()
+        .map(|entry| (&entry.document.repository_id, &entry.document.path))
+        .collect::<BTreeSet<_>>();
+    hits.iter()
+        .map(|hit| (&hit.document.repository_id, &hit.document.path))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|document| matched_documents.contains(document))
+        .count()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -296,6 +479,38 @@ struct NormalizedSearchFilters {
 
 pub struct TextSearcher {
     config: FriggConfig,
+    validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    hybrid_path_witness_projection_cache: Arc<
+        RwLock<
+            BTreeMap<HybridPathWitnessProjectionCacheKey, Arc<Vec<StoredPathWitnessProjection>>>,
+        >,
+    >,
+    hybrid_graph_file_analysis_cache:
+        Arc<RwLock<BTreeMap<HybridGraphFileAnalysisCacheKey, Arc<HybridGraphFileAnalysis>>>>,
+    hybrid_graph_artifact_cache:
+        Arc<RwLock<BTreeMap<HybridGraphArtifactCacheKey, Arc<HybridGraphArtifact>>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct HybridPathWitnessProjectionCacheKey {
+    repository_id: String,
+    root: PathBuf,
+    snapshot_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct HybridGraphFileAnalysisCacheKey {
+    path: PathBuf,
+    modified_unix_nanos: u128,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HybridGraphFileAnalysis {
+    symbols: Vec<crate::indexer::SymbolDefinition>,
+    php_declaration_relations: Option<Vec<PhpDeclarationRelation>>,
+    php_evidence: Option<PhpSourceEvidence>,
+    blade_evidence: Option<BladeSourceEvidence>,
 }
 
 pub const MAX_REGEX_PATTERN_BYTES: usize = 512;
@@ -322,7 +537,23 @@ const REGEX_TRIGRAM_HASH_MULTIPLIER: u32 = 0x9E37_79B1;
 
 impl TextSearcher {
     pub fn new(config: FriggConfig) -> Self {
-        Self { config }
+        Self::with_validated_manifest_candidate_cache(
+            config,
+            Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+        )
+    }
+
+    pub(crate) fn with_validated_manifest_candidate_cache(
+        config: FriggConfig,
+        validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    ) -> Self {
+        Self {
+            config,
+            validated_manifest_candidate_cache,
+            hybrid_path_witness_projection_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            hybrid_graph_file_analysis_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            hybrid_graph_artifact_cache: Arc::new(RwLock::new(BTreeMap::new())),
+        }
     }
 
     pub fn search(&self, query: SearchTextQuery) -> FriggResult<Vec<TextMatch>> {
@@ -374,6 +605,36 @@ impl TextSearcher {
             columns.clear();
             columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
         })
+    }
+
+    fn search_literal_with_candidate_universe(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+    ) -> FriggResult<SearchExecutionOutput> {
+        let matcher = AhoCorasick::new([query.query.as_str()])
+            .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
+        self.search_with_streaming_lines_in_universe(query, candidate_universe, |line, columns| {
+            columns.clear();
+            columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+        })
+    }
+
+    fn search_literal_prefix_with_candidate_universe(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+    ) -> FriggResult<SearchExecutionOutput> {
+        let matcher = AhoCorasick::new([query.query.as_str()])
+            .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
+        self.search_with_streaming_lines_prefix_in_universe(
+            query,
+            candidate_universe,
+            |line, columns| {
+                columns.clear();
+                columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+            },
+        )
     }
 
     pub fn search_regex(
@@ -436,6 +697,38 @@ impl TextSearcher {
         )
     }
 
+    fn search_regex_with_candidate_universe(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        matcher: Regex,
+        prefilter_plan: Option<regex_support::RegexPrefilterPlan>,
+    ) -> FriggResult<SearchExecutionOutput> {
+        if prefilter_plan.is_none() {
+            return self.search_with_streaming_lines_in_universe(
+                query,
+                candidate_universe,
+                |line, columns| {
+                    columns.clear();
+                    columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+                },
+            );
+        }
+        self.search_with_matcher_in_universe(
+            query,
+            candidate_universe,
+            |content| {
+                prefilter_plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.file_may_match(content))
+            },
+            |line, columns| {
+                columns.clear();
+                columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+            },
+        )
+    }
+
     pub fn search_hybrid(
         &self,
         query: SearchHybridQuery,
@@ -483,7 +776,40 @@ impl TextSearcher {
     where
         F: FnMut(&str, &mut Vec<usize>),
     {
-        scan_engine::search_with_streaming_lines(self, query, filters, match_columns)
+        let candidate_universe = self.build_candidate_universe(query, filters);
+        self.search_with_streaming_lines_in_universe(query, &candidate_universe, match_columns)
+    }
+
+    fn search_with_streaming_lines_in_universe<F>(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        match_columns: F,
+    ) -> FriggResult<SearchExecutionOutput>
+    where
+        F: FnMut(&str, &mut Vec<usize>),
+    {
+        scan_engine::search_with_streaming_lines_in_universe(
+            query,
+            candidate_universe,
+            match_columns,
+        )
+    }
+
+    fn search_with_streaming_lines_prefix_in_universe<F>(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        match_columns: F,
+    ) -> FriggResult<SearchExecutionOutput>
+    where
+        F: FnMut(&str, &mut Vec<usize>),
+    {
+        scan_engine::search_with_streaming_lines_prefix_in_universe(
+            query,
+            candidate_universe,
+            match_columns,
+        )
     }
 
     fn search_with_matcher<F, P>(
@@ -497,7 +823,32 @@ impl TextSearcher {
         P: FnMut(&str) -> bool,
         F: FnMut(&str, &mut Vec<usize>),
     {
-        scan_engine::search_with_matcher(self, query, filters, file_may_match, match_columns)
+        let candidate_universe = self.build_candidate_universe(query, filters);
+        self.search_with_matcher_in_universe(
+            query,
+            &candidate_universe,
+            file_may_match,
+            match_columns,
+        )
+    }
+
+    fn search_with_matcher_in_universe<F, P>(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        file_may_match: P,
+        match_columns: F,
+    ) -> FriggResult<SearchExecutionOutput>
+    where
+        P: FnMut(&str) -> bool,
+        F: FnMut(&str, &mut Vec<usize>),
+    {
+        scan_engine::search_with_matcher_in_universe(
+            query,
+            candidate_universe,
+            file_may_match,
+            match_columns,
+        )
     }
 }
 
@@ -507,63 +858,181 @@ fn should_scrub_playbook_metadata(path: &str) -> bool {
 
 fn scrub_search_content<'a>(path: &str, content: &'a str) -> Cow<'a, str> {
     if should_scrub_playbook_metadata(path) {
-        return scrub_playbook_metadata_header(content);
+        return scrub_leading_metadata_comment(content, "<!-- frigg-playbook");
     }
 
     Cow::Borrowed(content)
 }
 
 impl TextSearcher {
-    fn candidate_files_for_repository(
+    fn build_candidate_universe(
         &self,
-        repository_id: &str,
-        root: &Path,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
-        diagnostics: &mut SearchExecutionDiagnostics,
-    ) -> Vec<(String, std::path::PathBuf)> {
-        self.manifest_candidate_files_for_repository(repository_id, root, query, filters)
-            .unwrap_or_else(|| {
-                walk_candidate_files_for_repository(
-                    repository_id,
-                    root,
-                    query,
-                    filters,
-                    diagnostics,
-                )
-            })
+    ) -> SearchCandidateUniverse {
+        self.build_candidate_universe_with_attribution(query, filters)
+            .universe
     }
 
-    fn manifest_candidate_files_for_repository(
+    fn build_candidate_universe_with_attribution(
+        &self,
+        query: &SearchTextQuery,
+        filters: &NormalizedSearchFilters,
+    ) -> SearchCandidateUniverseBuild {
+        let mut diagnostics = SearchExecutionDiagnostics::default();
+        let mut repositories = self.config.repositories();
+        let mut candidate_intake_elapsed_us = 0_u64;
+        let mut freshness_validation_elapsed_us = 0_u64;
+        let mut manifest_backed_repository_count = 0_usize;
+        repositories.sort_by(|left, right| {
+            left.repository_id
+                .cmp(&right.repository_id)
+                .then(left.root_path.cmp(&right.root_path))
+        });
+
+        let repositories = repositories
+            .into_iter()
+            .filter(|repository| {
+                filters
+                    .repository_id
+                    .as_ref()
+                    .is_none_or(|repository_id| repository_id == &repository.repository_id.0)
+            })
+            .map(|repository| {
+                let repository_id = repository.repository_id.0;
+                let root = PathBuf::from(repository.root_path);
+                let (snapshot_id, candidates) = self
+                    .manifest_candidate_files_for_repository_with_attribution(
+                        &repository_id,
+                        &root,
+                        query,
+                        filters,
+                    )
+                    .map(|manifest| {
+                        candidate_intake_elapsed_us = candidate_intake_elapsed_us
+                            .saturating_add(manifest.candidate_intake_elapsed_us);
+                        freshness_validation_elapsed_us = freshness_validation_elapsed_us
+                            .saturating_add(manifest.freshness_validation_elapsed_us);
+                        manifest_backed_repository_count =
+                            manifest_backed_repository_count.saturating_add(1);
+                        (Some(manifest.snapshot_id), manifest.candidates)
+                    })
+                    .unwrap_or_else(|| {
+                        let walk_started_at = Instant::now();
+                        let walked = walk_candidate_files_for_repository(
+                            &repository_id,
+                            &root,
+                            query,
+                            filters,
+                            &mut diagnostics,
+                        );
+                        candidate_intake_elapsed_us =
+                            candidate_intake_elapsed_us.saturating_add(elapsed_us(walk_started_at));
+                        (None, walked)
+                    });
+                let candidates = candidates
+                    .into_iter()
+                    .map(|(relative_path, absolute_path)| SearchCandidateFile {
+                        relative_path,
+                        absolute_path,
+                    })
+                    .collect::<Vec<_>>();
+                RepositoryCandidateUniverse {
+                    repository_id,
+                    root,
+                    snapshot_id,
+                    candidates,
+                }
+            })
+            .collect::<Vec<_>>();
+        let repository_count = repositories.len();
+        let candidate_count = repositories
+            .iter()
+            .map(|repository| repository.candidates.len())
+            .sum();
+
+        sort_search_diagnostics_deterministically(&mut diagnostics.entries);
+
+        SearchCandidateUniverseBuild {
+            universe: SearchCandidateUniverse {
+                repositories,
+                diagnostics,
+            },
+            repository_count,
+            candidate_count,
+            manifest_backed_repository_count,
+            candidate_intake_elapsed_us,
+            freshness_validation_elapsed_us,
+        }
+    }
+
+    fn candidate_universe_with_hidden_workflows(
+        &self,
+        candidate_universe: &SearchCandidateUniverse,
+        filters: &NormalizedSearchFilters,
+        intent: &HybridRankingIntent,
+    ) -> SearchCandidateUniverse {
+        let mut candidate_universe = candidate_universe.clone();
+        for repository in &mut candidate_universe.repositories {
+            let mut candidates = repository
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.relative_path.clone(),
+                        candidate.absolute_path.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            merge_candidate_files(
+                &mut candidates,
+                hidden_workflow_candidates_for_repository(
+                    &repository.root,
+                    filters,
+                    intent,
+                    &mut candidate_universe.diagnostics,
+                ),
+            );
+            repository.candidates = candidates
+                .into_iter()
+                .map(|(relative_path, absolute_path)| SearchCandidateFile {
+                    relative_path,
+                    absolute_path,
+                })
+                .collect::<Vec<_>>();
+        }
+
+        sort_search_diagnostics_deterministically(&mut candidate_universe.diagnostics.entries);
+        candidate_universe
+    }
+
+    fn manifest_candidate_files_for_repository_with_attribution(
         &self,
         repository_id: &str,
         root: &Path,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
-    ) -> Option<Vec<(String, std::path::PathBuf)>> {
+    ) -> Option<ManifestCandidateFilesBuild> {
         let db_path = resolve_provenance_db_path(root).ok()?;
         if !db_path.exists() {
             return None;
         }
 
         let storage = Storage::new(db_path);
-        let latest = storage
-            .load_latest_manifest_for_repository(repository_id)
-            .ok()??;
-        let snapshot_digests = latest
-            .entries
-            .into_iter()
-            .map(|entry| FileMetadataDigest {
-                path: entry.path.into(),
-                size_bytes: entry.size_bytes,
-                mtime_ns: entry.mtime_ns,
-            })
-            .collect::<Vec<_>>();
-        let validated_digests = validate_manifest_digests_for_root(root, &snapshot_digests)?;
+        let freshness_started_at = Instant::now();
+        let validated_snapshot = latest_validated_manifest_snapshot(
+            &storage,
+            repository_id,
+            root,
+            Some(&self.validated_manifest_candidate_cache),
+        )?;
+        let freshness_validation_elapsed_us = elapsed_us(freshness_started_at);
+        let candidate_intake_started_at = Instant::now();
+        let root_ignore_matcher = build_root_ignore_matcher(root);
         let mut candidates = Vec::new();
-        for digest in validated_digests {
+        for digest in validated_snapshot.digests {
             let path = digest.path;
-            if hard_excluded_runtime_path(root, &path) {
+            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
                 continue;
             }
             let rel_path = normalize_repository_relative_path(root, &path);
@@ -583,9 +1052,15 @@ impl TextSearcher {
         }
         candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
         candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
-        Some(candidates)
+        Some(ManifestCandidateFilesBuild {
+            snapshot_id: validated_snapshot.snapshot_id,
+            candidates,
+            candidate_intake_elapsed_us: elapsed_us(candidate_intake_started_at),
+            freshness_validation_elapsed_us,
+        })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn search_path_witness_recall_with_filters(
         &self,
         query_text: &str,
@@ -603,72 +1078,92 @@ impl TextSearcher {
             path_regex: None,
             limit,
         };
-        let mut diagnostics = SearchExecutionDiagnostics::default();
-        let mut repositories = self.config.repositories();
-        repositories.sort_by(|left, right| {
-            left.repository_id
-                .cmp(&right.repository_id)
-                .then(left.root_path.cmp(&right.root_path))
-        });
+        let candidate_universe = self.build_candidate_universe(&empty_query, &normalized_filters);
+        self.search_path_witness_recall_in_universe(
+            query_text,
+            &candidate_universe,
+            &normalized_filters,
+            limit,
+            intent,
+        )
+    }
 
-        let mut scored = Vec::<(f32, String, String, std::path::PathBuf)>::new();
-        for repo in repositories {
-            if normalized_filters
-                .repository_id
-                .as_ref()
-                .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
-            {
-                continue;
-            }
-
-            let repository_id = repo.repository_id.0.clone();
-            let root = Path::new(&repo.root_path);
-            let mut candidates = self.candidate_files_for_repository(
-                &repository_id,
-                root,
-                &empty_query,
-                &normalized_filters,
-                &mut diagnostics,
-            );
-            merge_candidate_files(
-                &mut candidates,
-                hidden_workflow_candidates_for_repository(
-                    root,
-                    &normalized_filters,
+    fn search_path_witness_recall_in_universe(
+        &self,
+        query_text: &str,
+        candidate_universe: &SearchCandidateUniverse,
+        filters: &NormalizedSearchFilters,
+        limit: usize,
+        intent: &HybridRankingIntent,
+    ) -> FriggResult<SearchExecutionOutput> {
+        let top_k = limit.saturating_mul(2).max(16);
+        let materialized_limit = limit.saturating_add(2).max(8).min(top_k);
+        let query_context = HybridPathWitnessQueryContext::new(query_text);
+        let mut scored = Vec::<PathWitnessCandidate>::with_capacity(top_k);
+        let base_repositories = candidate_universe
+            .repositories
+            .iter()
+            .map(|repository| (repository.repository_id.clone(), repository))
+            .collect::<BTreeMap<_, _>>();
+        let candidate_universe =
+            self.candidate_universe_with_hidden_workflows(candidate_universe, filters, intent);
+        for repository in &candidate_universe.repositories {
+            let repository_candidates = self
+                .projected_path_witness_candidates_for_repository(
+                    repository,
+                    base_repositories.get(&repository.repository_id).copied(),
                     intent,
-                    &mut diagnostics,
-                ),
-            );
-
-            for (rel_path, path) in candidates {
-                let Some(score) = hybrid_path_witness_recall_score(&rel_path, intent, query_text)
-                else {
+                    &query_context,
+                )
+                .unwrap_or_else(|| {
+                    repository
+                        .candidates
+                        .iter()
+                        .filter_map(|candidate| {
+                            let score = hybrid_path_witness_recall_score(
+                                &candidate.relative_path,
+                                intent,
+                                &query_context,
+                            )?;
+                            Some(PathWitnessCandidate {
+                                score,
+                                repository_id: repository.repository_id.clone(),
+                                rel_path: candidate.relative_path.clone(),
+                                path: candidate.absolute_path.clone(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                });
+            for candidate in repository_candidates {
+                let insert_at = scored.partition_point(|probe| {
+                    path_witness_candidate_order(probe, &candidate).is_lt()
+                });
+                if insert_at >= top_k {
                     continue;
-                };
-                scored.push((score, repository_id.clone(), rel_path, path));
+                }
+
+                scored.insert(insert_at, candidate);
+                if scored.len() > top_k {
+                    scored.pop();
+                }
             }
         }
 
-        scored.sort_by(|left, right| {
-            right
-                .0
-                .total_cmp(&left.0)
-                .then(left.1.cmp(&right.1))
-                .then(left.2.cmp(&right.2))
-                .then(left.3.cmp(&right.3))
-        });
-        scored.truncate(limit.max(24));
-
-        let mut matches = Vec::new();
-        for (_, repository_id, rel_path, path) in scored {
-            let excerpt = fs::read_to_string(&path)
-                .ok()
-                .and_then(|content| best_path_witness_excerpt(&rel_path, &content, query_text))
-                .unwrap_or_else(|| rel_path.clone());
+        let mut matches = Vec::with_capacity(materialized_limit);
+        for candidate in scored.into_iter().take(materialized_limit) {
+            let PathWitnessCandidate {
+                repository_id,
+                rel_path,
+                path,
+                ..
+            } = candidate;
+            let (line, excerpt) =
+                best_path_witness_anchor_in_file(&rel_path, &path, &query_context)
+                    .unwrap_or_else(|| (1, rel_path.clone()));
             matches.push(TextMatch {
                 repository_id,
-                path: rel_path.clone(),
-                line: 1,
+                path: rel_path,
+                line,
                 column: 1,
                 excerpt,
             });
@@ -677,9 +1172,195 @@ impl TextSearcher {
         Ok(SearchExecutionOutput {
             total_matches: matches.len(),
             matches,
-            diagnostics,
+            diagnostics: candidate_universe.diagnostics,
         })
     }
+
+    fn projected_path_witness_candidates_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        base_repository: Option<&RepositoryCandidateUniverse>,
+        intent: &HybridRankingIntent,
+        query_context: &HybridPathWitnessQueryContext,
+    ) -> Option<Vec<PathWitnessCandidate>> {
+        let base_repository = base_repository?;
+        let snapshot_id = base_repository.snapshot_id.as_deref()?;
+        let projections = self
+            .load_or_build_path_witness_projections_for_repository(base_repository, snapshot_id)?;
+        let base_candidates_by_path = base_repository
+            .candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.relative_path.clone(),
+                    candidate.absolute_path.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let projections_by_path = projections
+            .iter()
+            .map(|projection| (projection.path.clone(), projection))
+            .collect::<BTreeMap<_, _>>();
+        if base_candidates_by_path
+            .keys()
+            .any(|path| !projections_by_path.contains_key(path))
+        {
+            return None;
+        }
+
+        let mut scored = Vec::new();
+        for (rel_path, path) in &base_candidates_by_path {
+            let projection = projections_by_path.get(rel_path)?;
+            let Some(score) = hybrid_path_witness_recall_score_for_projection(
+                rel_path,
+                projection,
+                intent,
+                query_context,
+            ) else {
+                continue;
+            };
+            scored.push(PathWitnessCandidate {
+                score,
+                repository_id: repository.repository_id.clone(),
+                rel_path: rel_path.clone(),
+                path: path.clone(),
+            });
+        }
+
+        for candidate in &repository.candidates {
+            if base_candidates_by_path.contains_key(&candidate.relative_path) {
+                continue;
+            }
+            let Some(score) =
+                hybrid_path_witness_recall_score(&candidate.relative_path, intent, query_context)
+            else {
+                continue;
+            };
+            scored.push(PathWitnessCandidate {
+                score,
+                repository_id: repository.repository_id.clone(),
+                rel_path: candidate.relative_path.clone(),
+                path: candidate.absolute_path.clone(),
+            });
+        }
+
+        Some(scored)
+    }
+
+    fn load_or_build_path_witness_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
+        let cache_key = HybridPathWitnessProjectionCacheKey {
+            repository_id: repository.repository_id.clone(),
+            root: repository.root.clone(),
+            snapshot_id: snapshot_id.to_owned(),
+        };
+        if let Some(cached) = self
+            .hybrid_path_witness_projection_cache
+            .read()
+            .ok()?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Some(cached);
+        }
+
+        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
+        if !db_path.exists() {
+            return None;
+        }
+
+        let storage = Storage::new(db_path);
+        let manifest_entries = storage.load_manifest_for_snapshot(snapshot_id).ok()?;
+        if manifest_entries.is_empty() {
+            return None;
+        }
+        let expected_paths = manifest_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+
+        let mut rows = storage
+            .load_path_witness_projections_for_repository_snapshot(
+                &repository.repository_id,
+                snapshot_id,
+            )
+            .ok()?;
+        let has_expected_rows = rows.len() == expected_paths.len()
+            && rows
+                .iter()
+                .map(|row| row.path.as_str())
+                .eq(expected_paths.iter().map(String::as_str));
+        if !has_expected_rows {
+            rows = self.build_path_witness_projection_records(
+                &repository.repository_id,
+                snapshot_id,
+                &manifest_entries,
+            )?;
+            storage
+                .replace_path_witness_projections_for_repository_snapshot(
+                    &repository.repository_id,
+                    snapshot_id,
+                    &rows,
+                )
+                .ok()?;
+        }
+
+        let projections = Arc::new(self.decode_path_witness_projection_records(&rows)?);
+        self.hybrid_path_witness_projection_cache
+            .write()
+            .ok()?
+            .insert(cache_key, Arc::clone(&projections));
+        Some(projections)
+    }
+
+    fn build_path_witness_projection_records(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        manifest_entries: &[ManifestEntry],
+    ) -> Option<Vec<PathWitnessProjectionRecord>> {
+        let mut rows = manifest_entries
+            .iter()
+            .map(|entry| {
+                build_path_witness_projection_record(repository_id, snapshot_id, &entry.path).ok()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        rows.sort_by(|left, right| left.path.cmp(&right.path));
+        rows.dedup_by(|left, right| left.path == right.path);
+        Some(rows)
+    }
+
+    fn decode_path_witness_projection_records(
+        &self,
+        rows: &[PathWitnessProjectionRecord],
+    ) -> Option<Vec<StoredPathWitnessProjection>> {
+        rows.iter()
+            .map(|row| decode_path_witness_projection_record(row).ok())
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct PathWitnessCandidate {
+    score: f32,
+    repository_id: String,
+    rel_path: String,
+    path: PathBuf,
+}
+
+fn path_witness_candidate_order(
+    left: &PathWitnessCandidate,
+    right: &PathWitnessCandidate,
+) -> Ordering {
+    right
+        .score
+        .total_cmp(&left.score)
+        .then_with(|| left.repository_id.cmp(&right.repository_id))
+        .then_with(|| left.rel_path.cmp(&right.rel_path))
+        .then_with(|| left.path.cmp(&right.path))
 }
 
 fn normalize_search_filters(filters: SearchFilters) -> FriggResult<NormalizedSearchFilters> {
@@ -720,6 +1401,7 @@ mod tests {
     use std::future::Future;
     use std::path::{Path, PathBuf};
     use std::pin::Pin;
+    use std::sync::{Arc, RwLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::domain::{FriggError, FriggResult, model::TextMatch};
@@ -737,10 +1419,11 @@ mod tests {
         HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS,
         MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind,
         SearchFilters, SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor,
-        TextSearcher, build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
-        build_hybrid_lexical_recall_regex, build_regex_prefilter_plan, compile_safe_regex,
-        hybrid_lexical_recall_tokens, hybrid_source_class, normalize_search_filters,
-        rank_hybrid_evidence, rank_hybrid_evidence_for_query,
+        TextSearcher, ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
+        build_hybrid_lexical_hits_for_query, build_hybrid_lexical_recall_regex,
+        build_regex_prefilter_plan, compile_safe_regex, hybrid_lexical_recall_tokens,
+        hybrid_source_class, normalize_search_filters, rank_hybrid_evidence,
+        rank_hybrid_evidence_for_query,
     };
 
     #[test]
@@ -836,6 +1519,38 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.path.starts_with("target/")),
             "walk fallback must not search target artifacts: {matches:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_search_walk_fallback_respects_root_ignore_file_for_auxiliary_trees()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-root-ignore");
+        prepare_workspace(
+            &root,
+            &[
+                ("src/main.rs", "needle main\n"),
+                ("auxiliary/embedded-repo/src/lib.rs", "needle auxiliary\n"),
+            ],
+        )?;
+        fs::write(root.join(".ignore"), "auxiliary/\n").map_err(FriggError::Io)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let matches = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "needle".to_owned(),
+                path_regex: None,
+                limit: 10,
+            },
+            SearchFilters::default(),
+        )?;
+
+        assert_eq!(
+            matches,
+            vec![text_match("repo-001", "src/main.rs", 1, 1, "needle main")]
         );
 
         cleanup_workspace(&root);
@@ -999,6 +1714,94 @@ mod tests {
     }
 
     #[test]
+    fn literal_search_reuses_validated_manifest_candidates_across_repeated_queries()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-manifest-cache-hit");
+        prepare_workspace(
+            &root,
+            &[("src/lib.rs", "pub fn cached() { let _ = \"needle\"; }\n")],
+        )?;
+        seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/lib.rs"])?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+            FriggConfig::from_workspace_roots(vec![root.clone()])?,
+            Arc::clone(&cache),
+        );
+        let query = SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 10,
+        };
+
+        let first = searcher
+            .search_literal_with_filters_diagnostics(query.clone(), SearchFilters::default())?;
+        let second =
+            searcher.search_literal_with_filters_diagnostics(query, SearchFilters::default())?;
+
+        assert_eq!(first.matches, second.matches);
+        assert_eq!(first.matches.len(), 1);
+        let stats = cache
+            .read()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.dirty_bypasses, 0);
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_search_dirty_validated_manifest_cache_falls_back_to_walk_for_new_files()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-manifest-cache-dirty");
+        prepare_workspace(&root, &[("src/lib.rs", "pub fn cached() {}\n")])?;
+        seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/lib.rs"])?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+            FriggConfig::from_workspace_roots(vec![root.clone()])?,
+            Arc::clone(&cache),
+        );
+        let query = SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 10,
+        };
+
+        let first = searcher
+            .search_literal_with_filters_diagnostics(query.clone(), SearchFilters::default())?;
+        assert_eq!(first.matches.len(), 0);
+
+        prepare_workspace(
+            &root,
+            &[("src/new.rs", "pub fn fresh() { let _ = \"needle\"; }\n")],
+        )?;
+        cache
+            .write()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .mark_dirty_root(&root);
+
+        let second =
+            searcher.search_literal_with_filters_diagnostics(query, SearchFilters::default())?;
+
+        assert_eq!(second.matches.len(), 1);
+        assert_eq!(second.matches[0].path, "src/new.rs");
+        let stats = cache
+            .read()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.dirty_bypasses, 1);
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn candidate_discovery_prefers_manifest_snapshot_across_search_modes() -> FriggResult<()> {
         let root = temp_workspace_root("candidate-discovery-prefers-manifest");
         prepare_workspace(
@@ -1042,6 +1845,65 @@ mod tests {
         )?;
         assert_eq!(
             regex,
+            vec![text_match(
+                "repo-001",
+                "src/indexed.rs",
+                1,
+                1,
+                "needle indexed"
+            )]
+        );
+
+        let hybrid = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "needle".to_owned(),
+                limit: 20,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+        assert_eq!(hybrid.note.semantic_status, HybridSemanticStatus::Disabled);
+        assert_eq!(hybrid.matches.len(), 1);
+        assert_eq!(hybrid.matches[0].document.path, "src/indexed.rs");
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_discovery_manifest_snapshot_respects_root_ignore_file() -> FriggResult<()> {
+        let root = temp_workspace_root("candidate-discovery-manifest-ignore");
+        prepare_workspace(
+            &root,
+            &[
+                ("src/indexed.rs", "needle indexed\n"),
+                ("auxiliary/embedded-repo/src/lib.rs", "needle auxiliary\n"),
+            ],
+        )?;
+        fs::write(root.join(".ignore"), "auxiliary/\n").map_err(FriggError::Io)?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &["src/indexed.rs", "auxiliary/embedded-repo/src/lib.rs"],
+        )?;
+
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+        let searcher = TextSearcher::new(config);
+
+        let literal = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "needle".to_owned(),
+                path_regex: None,
+                limit: 20,
+            },
+            SearchFilters::default(),
+        )?;
+        assert_eq!(
+            literal,
             vec![text_match(
                 "repo-001",
                 "src/indexed.rs",
@@ -1803,7 +2665,8 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_ranking_query_aware_lexical_hits_promote_public_docs_witnesses() -> FriggResult<()> {
+    fn hybrid_ranking_query_aware_lexical_hits_keep_public_docs_visible_with_runtime_and_tests()
+    -> FriggResult<()> {
         let query = "trace invalid_params typed error from public docs to runtime helper and tests";
         let lexical = build_hybrid_lexical_hits_for_query(
             &[
@@ -1845,7 +2708,12 @@ mod tests {
         )?;
 
         assert_eq!(ranked.len(), 3);
-        assert_eq!(ranked[0].document.path, "contracts/errors.md");
+        assert!(
+            ranked
+                .iter()
+                .any(|entry| entry.document.path == "contracts/errors.md"),
+            "public docs witness should remain in the ranked set"
+        );
         assert!(
             ranked
                 .iter()
@@ -3241,6 +4109,147 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_rust_mixed_tests_queries_keep_bench_witnesses_visible_under_test_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-mixed-tests-vs-benches");
+        let mut files = (0..14)
+            .map(|index| {
+                (
+                    format!("crates/biome_cli/tests/cases/noise_{index:02}.rs"),
+                    "tests fixtures integration assist biome json css analyzer\n".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        files.extend([
+            (
+                "crates/biome_cli/tests/cases/assist.rs".to_owned(),
+                "tests fixtures integration assist biome json css analyzer\n".to_owned(),
+            ),
+            (
+                "crates/biome_service/tests/fixtures/basic/biome.jsonc".to_owned(),
+                "{ \"tests\": \"fixtures integration assist biome json css analyzer\" }\n"
+                    .to_owned(),
+            ),
+            (
+                "crates/biome_configuration/benches/biome_json.rs".to_owned(),
+                "pub fn bench_biome_json() {}\n".to_owned(),
+            ),
+            (
+                "crates/biome_css_analyze/benches/css_analyzer.rs".to_owned(),
+                "pub fn bench_css_analyzer() {}\n".to_owned(),
+            ),
+            (
+                "benchmark/biome.json".to_owned(),
+                "{ \"benchmark\": true, \"biome\": \"json\" }\n".to_owned(),
+            ),
+        ]);
+        let file_refs = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect::<Vec<_>>();
+        prepare_workspace(&root, &file_refs)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests fixtures integration assist biome json examples benches benchmark css analyzer"
+                    .to_owned(),
+                limit: 12,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(12).any(|path| {
+                matches!(
+                    *path,
+                    "crates/biome_configuration/benches/biome_json.rs"
+                        | "crates/biome_css_analyze/benches/css_analyzer.rs"
+                )
+            }),
+            "a bench witness should remain visible for mixed rust tests queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_rust_mixed_examples_queries_keep_test_witnesses_visible_under_bench_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-mixed-benches-vs-tests");
+        let mut files = (0..14)
+            .map(|index| {
+                (
+                    format!("crates/biome_package/benches/noise_{index:02}.rs"),
+                    "examples benches benchmark biome json css analyzer\n".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        files.extend([
+            (
+                "crates/biome_configuration/benches/biome_json.rs".to_owned(),
+                "pub fn bench_biome_json() {}\n".to_owned(),
+            ),
+            (
+                "crates/biome_css_analyze/benches/css_analyzer.rs".to_owned(),
+                "pub fn bench_css_analyzer() {}\n".to_owned(),
+            ),
+            (
+                "crates/biome_cli/tests/cases/assist.rs".to_owned(),
+                "assert_cli_snapshot();\n".to_owned(),
+            ),
+            (
+                "crates/biome_cli/tests/cases/configuration.rs".to_owned(),
+                "assert_cli_snapshot();\n".to_owned(),
+            ),
+        ]);
+        let file_refs = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect::<Vec<_>>();
+        prepare_workspace(&root, &file_refs)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "examples benches benchmark biome json css analyzer tests assist".to_owned(),
+                limit: 12,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths
+                .iter()
+                .take(12)
+                .any(|path| *path == "crates/biome_cli/tests/cases/assist.rs"),
+            "a targeted test witness should remain visible for mixed rust examples queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_semantic_laravel_ui_queries_surface_livewire_and_blade_witnesses()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-laravel-ui-witnesses");
@@ -3404,15 +4413,23 @@ mod tests {
     fn hybrid_ranking_laravel_ui_queries_avoid_unit3d_component_only_collapse() -> FriggResult<()> {
         let query = "blade livewire flux component view slot section";
         let make_hit = |path: &str, raw_score: f32, excerpt: &str| HybridChannelHit {
+            channel: crate::domain::EvidenceChannel::LexicalManifest,
             document: HybridDocumentRef {
                 repository_id: "repo-001".to_owned(),
                 path: path.to_owned(),
                 line: 1,
                 column: 1,
             },
+            anchor: crate::domain::EvidenceAnchor::new(
+                crate::domain::EvidenceAnchorKind::TextSpan,
+                1,
+                1,
+                1,
+                1,
+            ),
             raw_score,
             excerpt: excerpt.to_owned(),
-            provenance_id: format!("lexical::{path}"),
+            provenance_ids: vec![format!("lexical::{path}")],
         };
         let lexical = vec![
             make_hit(
@@ -3921,6 +4938,130 @@ mod tests {
                     | "resources/views/components/finishing.blade.php"
             )),
             "Laravel UI ranking should still keep a Blade component witness in top-k: {blade_view_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_materializes_manifest_projection_rows() -> FriggResult<()> {
+        let root = temp_workspace_root("path-witness-projection-materialization");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "tests/CreatesApplication.php",
+                    "<?php\n\ntrait CreatesApplication {}\n",
+                ),
+                (
+                    "tests/DuskTestCase.php",
+                    "<?php\n\nabstract class DuskTestCase {}\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &["tests/CreatesApplication.php", "tests/DuskTestCase.php"],
+        )?;
+
+        let db_path = resolve_provenance_db_path(&root)?;
+        let storage = Storage::new(db_path);
+        assert!(
+            storage
+                .load_path_witness_projections_for_repository_snapshot("repo-001", "snapshot-001")?
+                .is_empty(),
+            "path witness projection rows should start empty before the first search"
+        );
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let query = "tests fixtures integration tests createsapplication dusktestcase";
+        let intent = HybridRankingIntent::from_query(query);
+        let output = searcher.search_path_witness_recall_with_filters(
+            query,
+            &SearchFilters::default(),
+            8,
+            &intent,
+        )?;
+
+        assert_eq!(output.matches.len(), 2);
+
+        let rows = storage
+            .load_path_witness_projections_for_repository_snapshot("repo-001", "snapshot-001")?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].path, "tests/CreatesApplication.php");
+        assert_eq!(rows[1].path, "tests/DuskTestCase.php");
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> FriggResult<()> {
+        let root = temp_workspace_root("path-witness-projection-cache-reuse");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "tests/CreatesApplication.php",
+                    "<?php\n\ntrait CreatesApplication {}\n",
+                ),
+                (
+                    "tests/DuskTestCase.php",
+                    "<?php\n\nabstract class DuskTestCase {}\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &["tests/CreatesApplication.php", "tests/DuskTestCase.php"],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        assert_eq!(
+            searcher
+                .hybrid_path_witness_projection_cache
+                .read()
+                .expect("path witness projection cache should not be poisoned")
+                .len(),
+            0
+        );
+
+        let query = "tests fixtures integration tests createsapplication dusktestcase";
+        let intent = HybridRankingIntent::from_query(query);
+        let first = searcher.search_path_witness_recall_with_filters(
+            query,
+            &SearchFilters::default(),
+            8,
+            &intent,
+        )?;
+        assert_eq!(
+            searcher
+                .hybrid_path_witness_projection_cache
+                .read()
+                .expect("path witness projection cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        let second = searcher.search_path_witness_recall_with_filters(
+            query,
+            &SearchFilters::default(),
+            8,
+            &intent,
+        )?;
+        assert_eq!(first.matches, second.matches);
+        assert_eq!(
+            searcher
+                .hybrid_path_witness_projection_cache
+                .read()
+                .expect("path witness projection cache should not be poisoned")
+                .len(),
+            1
         );
 
         cleanup_workspace(&root);
@@ -4909,6 +6050,121 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_error_taxonomy_queries_prefer_exact_anchored_runtime_and_tests_over_auxiliary_noise()
+    -> FriggResult<()> {
+        let query =
+            "invalid_params -32602 public error taxonomy docs contract runtime helper tests";
+        let lexical = build_hybrid_lexical_hits_for_query(
+            &[
+                text_match(
+                    "repo-001",
+                    "docs/error-taxonomy.md",
+                    1,
+                    1,
+                    "invalid_params maps to -32602",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/runtime/jsonrpc/errors.rs",
+                    1,
+                    1,
+                    "invalid_params runtime helper",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/runtime/replay.rs",
+                    1,
+                    1,
+                    "invalid_params replay helper",
+                ),
+                text_match(
+                    "repo-001",
+                    "tests/runtime_errors.rs",
+                    1,
+                    1,
+                    "invalid_params tests coverage",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/domain/error.rs",
+                    1,
+                    1,
+                    "invalid_params internal domain error type",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/main.rs",
+                    1,
+                    1,
+                    "runtime helper tests invalid_params",
+                ),
+                text_match(
+                    "repo-001",
+                    "src/cli_runtime.rs",
+                    1,
+                    1,
+                    "runtime helper tests invalid_params",
+                ),
+                text_match(
+                    "repo-001",
+                    "playbooks/error-contract-alignment.md",
+                    1,
+                    1,
+                    "runtime helper tests invalid_params",
+                ),
+                text_match(
+                    "repo-001",
+                    "fixtures/scip/matrix-invalid-range.json",
+                    1,
+                    1,
+                    "runtime helper tests invalid_params",
+                ),
+            ],
+            query,
+        );
+
+        let ranked = rank_hybrid_evidence_for_query(
+            &lexical,
+            &[],
+            &[],
+            HybridChannelWeights {
+                lexical: 1.0,
+                graph: 0.0,
+                semantic: 0.0,
+            },
+            5,
+            query,
+        )?;
+        let ranked_paths = ranked
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.contains(&"src/runtime/jsonrpc/errors.rs")
+                || ranked_paths.contains(&"src/runtime/replay.rs"),
+            "exact-anchored runtime helpers should remain in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.contains(&"tests/runtime_errors.rs"),
+            "exact-anchored test witnesses should remain in top-k: {ranked_paths:?}"
+        );
+        assert!(
+            !ranked_paths.contains(&"src/main.rs"),
+            "generic runtime entrypoints should not outrank exact-anchored runtime helpers: {ranked_paths:?}"
+        );
+        assert!(
+            !ranked_paths.contains(&"playbooks/error-contract-alignment.md"),
+            "playbook self-reference should not outrank exact-anchored runtime witnesses: {ranked_paths:?}"
+        );
+        assert!(
+            !ranked_paths.contains(&"fixtures/scip/matrix-invalid-range.json"),
+            "fixtures should not outrank exact-anchored runtime witnesses: {ranked_paths:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_shared_path_class_demotes_support_paths_under_crates_prefixes()
     -> FriggResult<()> {
         let query = "builder configuration";
@@ -5546,12 +6802,36 @@ mod tests {
             hybrid_hit("repo-001", "src/b.rs", 8.0, "lex-b"),
         ];
         let graph = vec![
-            hybrid_hit("repo-001", "src/b.rs", 5.0, "graph-b"),
-            hybrid_hit("repo-001", "src/c.rs", 4.0, "graph-c"),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::GraphPrecise,
+                "repo-001",
+                "src/b.rs",
+                5.0,
+                "graph-b",
+            ),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::GraphPrecise,
+                "repo-001",
+                "src/c.rs",
+                4.0,
+                "graph-c",
+            ),
         ];
         let semantic = vec![
-            hybrid_hit("repo-001", "src/c.rs", 0.9, "sem-c"),
-            hybrid_hit("repo-001", "src/a.rs", 0.2, "sem-a"),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::Semantic,
+                "repo-001",
+                "src/c.rs",
+                0.9,
+                "sem-c",
+            ),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::Semantic,
+                "repo-001",
+                "src/a.rs",
+                0.2,
+                "sem-a",
+            ),
         ];
 
         let ranked = rank_hybrid_evidence(
@@ -5573,18 +6853,392 @@ mod tests {
     }
 
     #[test]
+    fn graph_channel_falls_back_to_exact_stem_candidates_when_lexical_paths_have_no_symbols()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("graph-channel-fallback-exact-stem");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/Handlers/OrderHandler.php",
+                    "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class OrderHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+                ),
+                (
+                    "src/Listeners/OrderListener.php",
+                    "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\OrderHandler;\n\
+                     class OrderListener {\n\
+                         public function handlers(): array {\n\
+                             return [[OrderHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+                ),
+                (
+                    "docs/handlers.md",
+                    "# Handlers\nOrderHandler handle listener overview.\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let normalized_filters = normalize_search_filters(SearchFilters::default())?;
+        let candidate_universe = searcher.build_candidate_universe(
+            &SearchTextQuery {
+                query: String::new(),
+                path_regex: None,
+                limit: 5,
+            },
+            &normalized_filters,
+        );
+        let hits = super::graph_channel::search_graph_channel_hits(
+            &searcher,
+            "OrderHandler handle listener",
+            &candidate_universe,
+            &[TextMatch {
+                repository_id: "repo-001".to_owned(),
+                path: "docs/handlers.md".to_owned(),
+                line: 1,
+                column: 1,
+                excerpt: "OrderHandler handle listener overview".to_owned(),
+            }],
+            5,
+        )?;
+
+        assert!(
+            hits.iter()
+                .any(|hit| hit.document.path == "src/Handlers/OrderHandler.php"),
+            "graph fallback should recover the handler anchor from exact-stem candidates: {hits:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-graph-artifact-cache-reuse");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/Handlers/OrderHandler.php",
+                    "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class OrderHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+                ),
+                (
+                    "src/Listeners/OrderListener.php",
+                    "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\OrderHandler;\n\
+                     class OrderListener {\n\
+                         public function handlers(): array {\n\
+                             return [[OrderHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+                ),
+                (
+                    "docs/handlers.md",
+                    "# Handlers\nOrder handler listener overview.\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                "src/Handlers/OrderHandler.php",
+                "src/Listeners/OrderListener.php",
+                "docs/handlers.md",
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        assert_eq!(
+            searcher
+                .hybrid_graph_artifact_cache
+                .read()
+                .expect("hybrid graph artifact cache should not be poisoned")
+                .len(),
+            0
+        );
+
+        let first = searcher.search_hybrid(SearchHybridQuery {
+            query: "OrderHandler handle listener".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        })?;
+        assert!(
+            first
+                .matches
+                .iter()
+                .any(|entry| entry.document.path == "src/Listeners/OrderListener.php"),
+            "initial graph query should surface listener evidence: {:?}",
+            first.matches
+        );
+        assert_eq!(
+            searcher
+                .hybrid_graph_artifact_cache
+                .read()
+                .expect("hybrid graph artifact cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        let second = searcher.search_hybrid(SearchHybridQuery {
+            query: "OrderHandler handle listener".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        })?;
+        assert_eq!(first.matches, second.matches);
+        assert_eq!(
+            searcher
+                .hybrid_graph_artifact_cache
+                .read()
+                .expect("hybrid graph artifact cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-graph-artifact-cache-snapshot-change");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/Handlers/OrderHandler.php",
+                    "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class OrderHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+                ),
+                (
+                    "src/Listeners/OrderListener.php",
+                    "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\OrderHandler;\n\
+                     class OrderListener {\n\
+                         public function handlers(): array {\n\
+                             return [[OrderHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+                ),
+                (
+                    "docs/handlers.md",
+                    "# Handlers\nOrder handler listener overview.\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &[
+                "src/Handlers/OrderHandler.php",
+                "src/Listeners/OrderListener.php",
+                "docs/handlers.md",
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let first = searcher.search_hybrid(SearchHybridQuery {
+            query: "OrderHandler handle listener".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        })?;
+        assert!(
+            first
+                .matches
+                .iter()
+                .any(|entry| entry.document.path == "src/Listeners/OrderListener.php"),
+            "baseline graph query should surface listener evidence: {:?}",
+            first.matches
+        );
+        assert_eq!(
+            searcher
+                .hybrid_graph_artifact_cache
+                .read()
+                .expect("hybrid graph artifact cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/Handlers/PaymentHandler.php",
+                    "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class PaymentHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+                ),
+                (
+                    "src/Listeners/PaymentListener.php",
+                    "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\PaymentHandler;\n\
+                     class PaymentListener {\n\
+                         public function handlers(): array {\n\
+                             return [[PaymentHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-002",
+            &[
+                "src/Handlers/OrderHandler.php",
+                "src/Listeners/OrderListener.php",
+                "src/Handlers/PaymentHandler.php",
+                "src/Listeners/PaymentListener.php",
+                "docs/handlers.md",
+            ],
+        )?;
+
+        let second = searcher.search_hybrid(SearchHybridQuery {
+            query: "PaymentHandler handle listener".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        })?;
+        let payment_listener = second
+            .matches
+            .iter()
+            .find(|entry| entry.document.path == "src/Listeners/PaymentListener.php")
+            .expect("snapshot change should rebuild graph artifact for the new payment listener");
+        assert!(
+            payment_listener.graph_score > 0.0,
+            "rebuilt graph artifact should contribute graph evidence for new snapshot content: {:?}",
+            second.matches
+        );
+        assert_eq!(
+            searcher
+                .hybrid_graph_artifact_cache
+                .read()
+                .expect("hybrid graph artifact cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_graph_channel_seeds_from_canonical_runtime_paths_without_exact_symbol_terms()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-graph-canonical-path-seed");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/Handlers/OrderHandler.php",
+                    "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class OrderHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+                ),
+                (
+                    "src/Listeners/OrderListener.php",
+                    "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\OrderHandler;\n\
+                     class OrderListener {\n\
+                         public function handlers(): array {\n\
+                             return [[OrderHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+                ),
+                (
+                    "docs/handlers.md",
+                    "# Handlers\nOrder listener wiring overview.\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid(SearchHybridQuery {
+            query: "order listener wiring".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        })?;
+        let handler = output
+            .matches
+            .iter()
+            .find(|entry| entry.document.path == "src/Handlers/OrderHandler.php")
+            .expect("canonical path-seeded graph search should surface the handler runtime file");
+
+        assert!(
+            handler.graph_score > 0.0,
+            "graph channel should activate from canonical runtime path seeds even without exact symbol terms: {:?}",
+            output.matches
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_respects_configured_channel_weights() -> FriggResult<()> {
         let lexical = vec![
             hybrid_hit("repo-001", "src/a.rs", 10.0, "lex-a"),
             hybrid_hit("repo-001", "src/b.rs", 8.0, "lex-b"),
         ];
         let graph = vec![
-            hybrid_hit("repo-001", "src/b.rs", 5.0, "graph-b"),
-            hybrid_hit("repo-001", "src/c.rs", 4.0, "graph-c"),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::GraphPrecise,
+                "repo-001",
+                "src/b.rs",
+                5.0,
+                "graph-b",
+            ),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::GraphPrecise,
+                "repo-001",
+                "src/c.rs",
+                4.0,
+                "graph-c",
+            ),
         ];
         let semantic = vec![
-            hybrid_hit("repo-001", "src/c.rs", 0.9, "sem-c"),
-            hybrid_hit("repo-001", "src/a.rs", 0.2, "sem-a"),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::Semantic,
+                "repo-001",
+                "src/c.rs",
+                0.9,
+                "sem-c",
+            ),
+            hybrid_hit_with_channel(
+                crate::domain::EvidenceChannel::Semantic,
+                "repo-001",
+                "src/a.rs",
+                0.2,
+                "sem-a",
+            ),
         ];
         let weights = HybridChannelWeights {
             lexical: 0.2,
@@ -5607,8 +7261,20 @@ mod tests {
             hybrid_hit("repo-001", "src/b.rs", 1.0, "lex-b"),
             hybrid_hit("repo-001", "src/a.rs", 1.0, "lex-a"),
         ];
-        let graph = vec![hybrid_hit("repo-001", "src/c.rs", 1.0, "graph-c")];
-        let semantic = vec![hybrid_hit("repo-001", "src/c.rs", 1.0, "sem-c")];
+        let graph = vec![hybrid_hit_with_channel(
+            crate::domain::EvidenceChannel::GraphPrecise,
+            "repo-001",
+            "src/c.rs",
+            1.0,
+            "graph-c",
+        )];
+        let semantic = vec![hybrid_hit_with_channel(
+            crate::domain::EvidenceChannel::Semantic,
+            "repo-001",
+            "src/c.rs",
+            1.0,
+            "sem-c",
+        )];
 
         let first = rank_hybrid_evidence(
             &lexical,
@@ -5680,6 +7346,26 @@ mod tests {
                 .any(|source| source.starts_with("chunk-src_z.rs")),
             "semantic sources should include deterministic chunk provenance ids"
         );
+        let semantic_match = output
+            .matches
+            .iter()
+            .find(|matched| matched.document.path == "src/z.rs")
+            .expect("semantic-promoted match should be present");
+        assert_eq!(semantic_match.document.line, 2);
+        assert_eq!(semantic_match.anchor.start_line, 2);
+        assert_eq!(semantic_match.anchor.end_line, 2);
+        let semantic_channel = output
+            .channel_results
+            .iter()
+            .find(|result| result.channel == crate::domain::EvidenceChannel::Semantic)
+            .expect("semantic channel result should be present");
+        let semantic_hit = semantic_channel
+            .hits
+            .iter()
+            .find(|hit| hit.document.path == "src/z.rs")
+            .expect("semantic hit for src/z.rs should be present");
+        assert_eq!(semantic_hit.anchor.start_line, 2);
+        assert_eq!(semantic_hit.anchor.end_line, 3);
 
         cleanup_workspace(&root);
         Ok(())
@@ -6086,7 +7772,9 @@ mod tests {
 
     impl MockSemanticQueryEmbeddingExecutor {
         fn success(vector: Vec<f32>) -> Self {
-            Self { result: Ok(vector) }
+            Self {
+                result: Ok(pad_semantic_test_vector(vector)),
+            }
         }
 
         fn failure(message: &str) -> Self {
@@ -6134,22 +7822,22 @@ mod tests {
         semantic_runtime: SemanticRuntimeConfig,
     ) -> FriggResult<(TextSearcher, PathBuf)> {
         let root = temp_workspace_root(test_name);
+        let semantic_b = semantic_record("repo-001", "snapshot-001", "src/b.rs", 0, vec![1.0, 0.0]);
+        let mut semantic_z =
+            semantic_record("repo-001", "snapshot-001", "src/z.rs", 0, vec![0.0, 1.0]);
+        semantic_z.start_line = 2;
+        semantic_z.end_line = 3;
         prepare_workspace(
             &root,
             &[
                 ("src/b.rs", "pub fn b() { let _ = \"needle\"; }\n"),
-                ("src/z.rs", "pub fn z() { let _ = \"needle\"; }\n"),
+                (
+                    "src/z.rs",
+                    "pub fn z() {\n    let _ = \"needle\";\n    let _ = \"semantic\";\n}\n",
+                ),
             ],
         )?;
-        seed_semantic_embeddings(
-            &root,
-            "repo-001",
-            "snapshot-001",
-            &[
-                semantic_record("repo-001", "snapshot-001", "src/b.rs", 0, vec![1.0, 0.0]),
-                semantic_record("repo-001", "snapshot-001", "src/z.rs", 0, vec![0.0, 1.0]),
-            ],
-        )?;
+        seed_semantic_embeddings(&root, "repo-001", "snapshot-001", &[semantic_b, semantic_z])?;
 
         let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
         config.semantic_runtime = semantic_runtime;
@@ -6273,8 +7961,13 @@ mod tests {
             trace_id: Some("trace-semantic-test".to_owned()),
             content_hash_blake3: format!("hash-content-{path_slug}-{chunk_index}"),
             content_text: format!("semantic excerpt for {path}"),
-            embedding,
+            embedding: pad_semantic_test_vector(embedding),
         }
+    }
+
+    fn pad_semantic_test_vector(mut embedding: Vec<f32>) -> Vec<f32> {
+        embedding.resize(crate::storage::DEFAULT_VECTOR_DIMENSIONS, 0.0);
+        embedding
     }
 
     fn temp_workspace_root(test_name: &str) -> PathBuf {
@@ -6350,16 +8043,40 @@ mod tests {
         raw_score: f32,
         provenance_id: &str,
     ) -> HybridChannelHit {
+        hybrid_hit_with_channel(
+            crate::domain::EvidenceChannel::LexicalManifest,
+            repository_id,
+            path,
+            raw_score,
+            provenance_id,
+        )
+    }
+
+    fn hybrid_hit_with_channel(
+        channel: crate::domain::EvidenceChannel,
+        repository_id: &str,
+        path: &str,
+        raw_score: f32,
+        provenance_id: &str,
+    ) -> HybridChannelHit {
         HybridChannelHit {
+            channel,
             document: HybridDocumentRef {
                 repository_id: repository_id.to_owned(),
                 path: path.to_owned(),
                 line: 1,
                 column: 1,
             },
+            anchor: crate::domain::EvidenceAnchor::new(
+                crate::domain::EvidenceAnchorKind::TextSpan,
+                1,
+                1,
+                1,
+                1,
+            ),
             raw_score,
             excerpt: format!("excerpt for {path}"),
-            provenance_id: provenance_id.to_owned(),
+            provenance_ids: vec![provenance_id.to_owned()],
         }
     }
 }

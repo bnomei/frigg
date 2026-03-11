@@ -7,7 +7,9 @@
   "input_required": [],
   "output_fields": [
     "repository",
-    "session_default"
+    "session_default",
+    "repositories",
+    "runtime"
   ],
   "output_required": [
     "session_default"

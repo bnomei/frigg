@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::gitignore::Gitignore;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -12,10 +12,12 @@ use tracing::{info, warn};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::indexer::{
-    FileMetadataDigest, ReindexMode, reindex_repository_with_runtime_config,
-    semantic_chunk_language_for_path,
+    ReindexMode, reindex_repository_with_runtime_config,
+    reindex_repository_with_runtime_config_and_dirty_paths,
 };
-use crate::manifest_validation::validate_manifest_digests_for_root;
+use crate::manifest_validation::ValidatedManifestCandidateCache;
+use crate::mcp::RuntimeTaskRegistry;
+use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
 use crate::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
 };
@@ -23,24 +25,28 @@ use crate::storage::{Storage, resolve_provenance_db_path};
 
 mod repository;
 mod scheduler;
+#[cfg(test)]
+use crate::workspace_ignores::build_root_ignore_matcher;
 use repository::{
     WatchedRepository, build_watched_repositories, event_kind_is_relevant,
     repository_index_for_path, should_ignore_watch_path, startup_refresh_status,
 };
 #[cfg(test)]
-use repository::{
-    build_root_ignore_matcher, latest_manifest_is_valid, repository_relative_watch_path,
-};
-use scheduler::WatchSchedulerState;
+use repository::{latest_manifest_is_valid, repository_relative_watch_path};
+use scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
 
 const WATCH_TICK_MS: u64 = 50;
 const MAX_RECENT_PATH_SAMPLES: usize = 4;
 
 enum SupervisorCommand {
     Event(Event),
-    InitialSync(usize),
+    InitialSync {
+        root_idx: usize,
+        class: WatchRefreshClass,
+    },
     ReindexCompleted {
         root_idx: usize,
+        class: WatchRefreshClass,
         result: Result<crate::indexer::ReindexSummary, String>,
     },
 }
@@ -60,6 +66,8 @@ impl Drop for WatchRuntime {
 pub fn maybe_start_watch_runtime(
     config: &FriggConfig,
     transport: RuntimeTransportKind,
+    task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
+    validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
 ) -> FriggResult<Option<WatchRuntime>> {
     if !config.watch.enabled_for_transport(transport) {
         info!(
@@ -108,6 +116,8 @@ pub fn maybe_start_watch_runtime(
         watch_config.clone(),
         semantic_runtime.clone(),
         semantic_credentials.clone(),
+        task_registry,
+        validated_manifest_candidate_cache,
         command_rx,
         command_tx.clone(),
     ));
@@ -128,12 +138,21 @@ pub fn maybe_start_watch_runtime(
         info!(
             repository_id = %repository.repository_id,
             root = %repository.root.display(),
+            refresh_class = %startup_status
+                .refresh_class
+                .unwrap_or(WatchRefreshClass::ManifestFast)
+                .as_str(),
             startup_reason = %startup_status.reason,
             snapshot_id = startup_status.snapshot_id.as_deref().unwrap_or("-"),
             debounce_ms = watch_config.debounce_ms,
-            "built-in watch mode queued initial changed reindex"
+            "built-in watch mode queued initial refresh"
         );
-        let _ = command_tx.send(SupervisorCommand::InitialSync(root_idx));
+        let _ = command_tx.send(SupervisorCommand::InitialSync {
+            root_idx,
+            class: startup_status
+                .refresh_class
+                .unwrap_or(WatchRefreshClass::ManifestFast),
+        });
     }
 
     Ok(Some(WatchRuntime {
@@ -148,6 +167,8 @@ async fn run_supervisor(
     watch_config: crate::settings::WatchConfig,
     semantic_runtime: SemanticRuntimeConfig,
     semantic_credentials: SemanticRuntimeCredentials,
+    task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
+    validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     mut command_rx: mpsc::UnboundedReceiver<SupervisorCommand>,
     command_tx: mpsc::UnboundedSender<SupervisorCommand>,
 ) {
@@ -165,16 +186,32 @@ async fn run_supervisor(
                 };
                 let now = Instant::now();
                 match command {
-                    SupervisorCommand::Event(event) => handle_notify_event(&repositories, &mut scheduler, event, now, debounce),
-                    SupervisorCommand::InitialSync(root_idx) => scheduler.enqueue_initial_sync(root_idx, now),
-                    SupervisorCommand::ReindexCompleted { root_idx, result } => {
+                    SupervisorCommand::Event(event) => handle_notify_event(
+                        &repositories,
+                        &mut scheduler,
+                        &validated_manifest_candidate_cache,
+                        event,
+                        now,
+                        debounce,
+                    ),
+                    SupervisorCommand::InitialSync { root_idx, class } => {
+                        scheduler.enqueue_initial_sync(root_idx, class, now)
+                    }
+                    SupervisorCommand::ReindexCompleted {
+                        root_idx,
+                        class,
+                        result,
+                    } => {
                         handle_reindex_completed(
                             &repositories,
                             &mut scheduler,
                             root_idx,
+                            class,
                             result,
                             now,
                             retry,
+                            &semantic_runtime,
+                            &semantic_credentials,
                         );
                     }
                 }
@@ -183,8 +220,8 @@ async fn run_supervisor(
         }
 
         let now = Instant::now();
-        if let Some(root_idx) = scheduler.next_ready_root(now) {
-            scheduler.mark_started(root_idx);
+        if let Some(ScheduledRefresh { root_idx, class }) = scheduler.next_ready_refresh(now) {
+            let recent_paths = scheduler.mark_started(root_idx, class);
             let Some(repository) = repositories.get(root_idx).cloned() else {
                 warn!(root_idx, "built-in watch mode resolved invalid root index");
                 continue;
@@ -192,32 +229,99 @@ async fn run_supervisor(
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
+                refresh_class = %class.as_str(),
                 debounce_ms = watch_config.debounce_ms,
-                "built-in watch mode starting changed reindex"
+                "built-in watch mode starting refresh"
             );
+            let task_id = task_registry
+                .write()
+                .expect("watch runtime task registry poisoned")
+                .start_task(
+                    watch_task_kind_for_class(class),
+                    repository.repository_id.clone(),
+                    watch_task_phase_for_class(class),
+                    Some(format!(
+                        "watch root {} class {}",
+                        repository.root.display(),
+                        class.as_str()
+                    )),
+                );
             let completion_tx = command_tx.clone();
             let semantic_runtime = semantic_runtime.clone();
             let semantic_credentials = semantic_credentials.clone();
+            let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
+            let validated_manifest_candidate_cache =
+                Arc::clone(&validated_manifest_candidate_cache);
+            let recent_paths = recent_paths;
             tokio::task::spawn_blocking(move || {
-                let result = reindex_repository_with_runtime_config(
-                    &repository.repository_id,
-                    &repository.root,
-                    &repository.db_path,
-                    ReindexMode::ChangedOnly,
-                    &semantic_runtime,
-                    &semantic_credentials,
-                )
+                let result = match class {
+                    WatchRefreshClass::ManifestFast => {
+                        let mut lexical_only_runtime = semantic_runtime.clone();
+                        lexical_only_runtime.enabled = false;
+                        reindex_repository_with_runtime_config_and_dirty_paths(
+                            &repository.repository_id,
+                            &repository.root,
+                            &repository.db_path,
+                            ReindexMode::ChangedOnly,
+                            &lexical_only_runtime,
+                            &semantic_credentials,
+                            &recent_paths,
+                        )
+                    }
+                    WatchRefreshClass::SemanticFollowup => reindex_repository_with_runtime_config(
+                        &repository.repository_id,
+                        &repository.root,
+                        &repository.db_path,
+                        ReindexMode::Full,
+                        &semantic_runtime,
+                        &semantic_credentials,
+                    ),
+                }
                 .map_err(|err| err.to_string());
-                let _ =
-                    completion_tx.send(SupervisorCommand::ReindexCompleted { root_idx, result });
+                let detail = result.as_ref().err().cloned();
+                let status = if result.is_ok() {
+                    RuntimeTaskStatus::Succeeded
+                } else {
+                    RuntimeTaskStatus::Failed
+                };
+                if result.is_ok() && class == WatchRefreshClass::ManifestFast {
+                    validated_manifest_candidate_cache
+                        .write()
+                        .expect("validated manifest candidate cache poisoned")
+                        .invalidate_root(&repository.root);
+                }
+                task_registry
+                    .write()
+                    .expect("watch runtime task registry poisoned")
+                    .finish_task(&task_id, status, detail);
+                let _ = completion_tx.send(SupervisorCommand::ReindexCompleted {
+                    root_idx,
+                    class,
+                    result,
+                });
             });
         }
+    }
+}
+
+fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
+    match class {
+        WatchRefreshClass::ManifestFast => RuntimeTaskKind::ChangedReindex,
+        WatchRefreshClass::SemanticFollowup => RuntimeTaskKind::SemanticRefresh,
+    }
+}
+
+fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
+    match class {
+        WatchRefreshClass::ManifestFast => "watch_manifest_fast",
+        WatchRefreshClass::SemanticFollowup => "watch_semantic_followup",
     }
 }
 
 fn handle_notify_event(
     repositories: &[WatchedRepository],
     scheduler: &mut WatchSchedulerState,
+    validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
     event: Event,
     now: Instant,
     debounce: Duration,
@@ -235,6 +339,10 @@ fn handle_notify_event(
         }
 
         scheduler.record_path_change(root_idx, path.clone(), now, debounce);
+        validated_manifest_candidate_cache
+            .write()
+            .expect("validated manifest candidate cache poisoned")
+            .mark_dirty_root(&repositories[root_idx].root);
         info!(
             repository_id = %repositories[root_idx].repository_id,
             path = %path.display(),
@@ -247,9 +355,12 @@ fn handle_reindex_completed(
     repositories: &[WatchedRepository],
     scheduler: &mut WatchSchedulerState,
     root_idx: usize,
+    class: WatchRefreshClass,
     result: Result<crate::indexer::ReindexSummary, String>,
     now: Instant,
     retry: Duration,
+    semantic_runtime: &SemanticRuntimeConfig,
+    semantic_credentials: &SemanticRuntimeCredentials,
 ) {
     let Some(repository) = repositories.get(root_idx) else {
         warn!(
@@ -261,29 +372,67 @@ fn handle_reindex_completed(
 
     match result {
         Ok(summary) => {
-            scheduler.mark_succeeded(root_idx, now);
+            scheduler.mark_succeeded(root_idx, class, now);
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
+                refresh_class = %class.as_str(),
                 snapshot_id = %summary.snapshot_id,
                 files_scanned = summary.files_scanned,
                 files_changed = summary.files_changed,
                 files_deleted = summary.files_deleted,
                 duration_ms = summary.duration_ms,
-                "built-in watch mode changed reindex succeeded"
+                "built-in watch mode refresh succeeded"
             );
+            if class == WatchRefreshClass::ManifestFast {
+                queue_semantic_followup_if_needed(
+                    repository,
+                    scheduler,
+                    root_idx,
+                    now,
+                    semantic_runtime,
+                    semantic_credentials,
+                );
+            }
         }
         Err(error) => {
-            scheduler.mark_failed(root_idx, now, retry);
+            scheduler.mark_failed(root_idx, class, now, retry);
             warn!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
+                refresh_class = %class.as_str(),
                 retry_ms = retry.as_millis(),
                 error = %error,
-                "built-in watch mode changed reindex failed; retry scheduled"
+                "built-in watch mode refresh failed; retry scheduled"
             );
         }
     }
+}
+
+fn queue_semantic_followup_if_needed(
+    repository: &WatchedRepository,
+    scheduler: &mut WatchSchedulerState,
+    root_idx: usize,
+    now: Instant,
+    semantic_runtime: &SemanticRuntimeConfig,
+    semantic_credentials: &SemanticRuntimeCredentials,
+) {
+    let Ok(status) = startup_refresh_status(repository, semantic_runtime, semantic_credentials)
+    else {
+        return;
+    };
+    if status.refresh_class != Some(WatchRefreshClass::SemanticFollowup) {
+        return;
+    }
+
+    scheduler.enqueue_semantic_followup(root_idx, now);
+    info!(
+        repository_id = %repository.repository_id,
+        root = %repository.root.display(),
+        startup_reason = %status.reason,
+        snapshot_id = status.snapshot_id.as_deref().unwrap_or("-"),
+        "built-in watch mode queued semantic follow-up after manifest refresh"
+    );
 }
 
 #[cfg(test)]
@@ -309,6 +458,14 @@ mod tests {
         if path.exists() {
             fs::remove_dir_all(path).expect("temp watch workspace should be removable");
         }
+    }
+
+    fn test_runtime_task_registry() -> Arc<RwLock<RuntimeTaskRegistry>> {
+        Arc::new(RwLock::new(RuntimeTaskRegistry::new()))
+    }
+
+    fn test_validated_manifest_candidate_cache() -> Arc<RwLock<ValidatedManifestCandidateCache>> {
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()))
     }
 
     fn init_storage(workspace_root: &Path) -> PathBuf {
@@ -376,24 +533,35 @@ mod tests {
         scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
         scheduler.record_path_change(1, PathBuf::from("two.rs"), now, debounce);
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(749)),
+            scheduler.next_ready_refresh(now + Duration::from_millis(749)),
             None
         );
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(750)),
-            Some(0)
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
+            Some(ScheduledRefresh {
+                root_idx: 0,
+                class: WatchRefreshClass::ManifestFast,
+            })
         );
 
-        scheduler.mark_started(0);
+        let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert_eq!(started_paths, vec![PathBuf::from("one.rs")]);
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(750)),
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
             None
         );
 
-        scheduler.mark_succeeded(0, now + Duration::from_millis(760));
+        scheduler.mark_succeeded(
+            0,
+            WatchRefreshClass::ManifestFast,
+            now + Duration::from_millis(760),
+        );
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(760)),
-            Some(1)
+            scheduler.next_ready_refresh(now + Duration::from_millis(760)),
+            Some(ScheduledRefresh {
+                root_idx: 1,
+                class: WatchRefreshClass::ManifestFast,
+            })
         );
     }
 
@@ -404,24 +572,32 @@ mod tests {
         let debounce = Duration::from_millis(750);
 
         scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
-        scheduler.mark_started(0);
+        let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert_eq!(started_paths, vec![PathBuf::from("one.rs")]);
         scheduler.record_path_change(
             0,
             PathBuf::from("one.rs"),
             now + Duration::from_millis(100),
             debounce,
         );
-        assert!(scheduler.root_rerun_requested(0));
+        assert!(scheduler.root_rerun_requested(0, WatchRefreshClass::ManifestFast));
 
-        scheduler.mark_succeeded(0, now + Duration::from_millis(200));
-        assert!(scheduler.root_pending(0));
+        scheduler.mark_succeeded(
+            0,
+            WatchRefreshClass::ManifestFast,
+            now + Duration::from_millis(200),
+        );
+        assert!(scheduler.root_pending(0, WatchRefreshClass::ManifestFast));
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(849)),
+            scheduler.next_ready_refresh(now + Duration::from_millis(849)),
             None
         );
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(850)),
-            Some(0)
+            scheduler.next_ready_refresh(now + Duration::from_millis(850)),
+            Some(ScheduledRefresh {
+                root_idx: 0,
+                class: WatchRefreshClass::ManifestFast,
+            })
         );
     }
 
@@ -431,9 +607,10 @@ mod tests {
         let now = Instant::now();
         let retry = Duration::from_millis(5_000);
 
-        scheduler.enqueue_initial_sync(0, now);
-        scheduler.mark_started(0);
-        scheduler.mark_failed(0, now, retry);
+        scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, now);
+        let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert!(started_paths.is_empty());
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry);
         scheduler.record_path_change(
             0,
             PathBuf::from("retry.rs"),
@@ -442,12 +619,148 @@ mod tests {
         );
 
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(4_999)),
+            scheduler.next_ready_refresh(now + Duration::from_millis(4_999)),
             None
         );
         assert_eq!(
-            scheduler.next_ready_root(now + Duration::from_millis(5_000)),
-            Some(0)
+            scheduler.next_ready_refresh(now + Duration::from_millis(5_000)),
+            Some(ScheduledRefresh {
+                root_idx: 0,
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+    }
+
+    #[test]
+    fn scheduler_passes_only_current_batch_recent_paths_to_started_refresh() {
+        let mut scheduler = WatchSchedulerState::new(1);
+        let now = Instant::now();
+        let debounce = Duration::from_millis(750);
+
+        scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
+        scheduler.record_path_change(0, PathBuf::from("two.rs"), now, debounce);
+        let first_started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert_eq!(
+            first_started_paths,
+            vec![PathBuf::from("one.rs"), PathBuf::from("two.rs")]
+        );
+
+        scheduler.record_path_change(
+            0,
+            PathBuf::from("three.rs"),
+            now + Duration::from_millis(100),
+            debounce,
+        );
+        scheduler.mark_succeeded(
+            0,
+            WatchRefreshClass::ManifestFast,
+            now + Duration::from_millis(200),
+        );
+        let second_started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert_eq!(second_started_paths, vec![PathBuf::from("three.rs")]);
+    }
+
+    #[test]
+    fn scheduler_allows_manifest_fast_while_other_root_runs_semantic_followup() {
+        let mut scheduler = WatchSchedulerState::new(2);
+        let now = Instant::now();
+        let debounce = Duration::from_millis(750);
+
+        scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+        scheduler.record_path_change(1, PathBuf::from("two.rs"), now, debounce);
+
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
+            Some(ScheduledRefresh {
+                root_idx: 1,
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+        let _ = scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
+            Some(ScheduledRefresh {
+                root_idx: 1,
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+    }
+
+    #[test]
+    fn watch_runtime_fairness_allows_unrelated_manifest_fast_while_semantic_followup_is_active() {
+        let mut scheduler = WatchSchedulerState::new(2);
+        let now = Instant::now();
+        let debounce = Duration::from_millis(750);
+
+        scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+        let started_paths = scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+        assert!(started_paths.is_empty());
+
+        scheduler.record_path_change(
+            0,
+            PathBuf::from("root-zero-during-semantic.rs"),
+            now + Duration::from_millis(10),
+            debounce,
+        );
+        scheduler.record_path_change(1, PathBuf::from("root-one.rs"), now, debounce);
+
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
+            Some(ScheduledRefresh {
+                root_idx: 1,
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+    }
+
+    #[test]
+    fn watch_runtime_fairness_noisy_root_rerun_does_not_starve_other_manifest_fast_work() {
+        let mut scheduler = WatchSchedulerState::new(2);
+        let now = Instant::now();
+        let debounce = Duration::from_millis(750);
+
+        scheduler.record_path_change(0, PathBuf::from("root-zero-first.rs"), now, debounce);
+        scheduler.record_path_change(
+            1,
+            PathBuf::from("root-one.rs"),
+            now + Duration::from_millis(10),
+            debounce,
+        );
+
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(750)),
+            Some(ScheduledRefresh {
+                root_idx: 0,
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+        let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        assert_eq!(started_paths, vec![PathBuf::from("root-zero-first.rs")]);
+
+        scheduler.record_path_change(
+            0,
+            PathBuf::from("root-zero-rerun.rs"),
+            now + Duration::from_millis(100),
+            debounce,
+        );
+        assert!(scheduler.root_rerun_requested(0, WatchRefreshClass::ManifestFast));
+
+        scheduler.mark_succeeded(
+            0,
+            WatchRefreshClass::ManifestFast,
+            now + Duration::from_millis(200),
+        );
+        assert!(scheduler.root_pending(0, WatchRefreshClass::ManifestFast));
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(759)),
+            None
+        );
+        assert_eq!(
+            scheduler.next_ready_refresh(now + Duration::from_millis(760)),
+            Some(ScheduledRefresh {
+                root_idx: 1,
+                class: WatchRefreshClass::ManifestFast,
+            })
         );
     }
 
@@ -623,6 +936,10 @@ mod tests {
         .expect("startup refresh status should resolve");
         assert!(status.should_refresh);
         assert_eq!(status.reason, "semantic_snapshot_missing_for_active_model");
+        assert_eq!(
+            status.refresh_class,
+            Some(WatchRefreshClass::SemanticFollowup)
+        );
 
         cleanup_workspace(&workspace_root);
     }
@@ -668,6 +985,7 @@ mod tests {
         .expect("startup refresh status should resolve");
         assert!(!status.should_refresh);
         assert_eq!(status.reason, "manifest_valid_no_semantic_eligible_entries");
+        assert_eq!(status.refresh_class, None);
 
         cleanup_workspace(&workspace_root);
     }
@@ -688,9 +1006,14 @@ mod tests {
             retry_ms: 100,
         };
 
-        let runtime = maybe_start_watch_runtime(&config, RuntimeTransportKind::Stdio)
-            .expect("watch runtime should start")
-            .expect("watch runtime should be enabled");
+        let runtime = maybe_start_watch_runtime(
+            &config,
+            RuntimeTransportKind::Stdio,
+            test_runtime_task_registry(),
+            test_validated_manifest_candidate_cache(),
+        )
+        .expect("watch runtime should start")
+        .expect("watch runtime should be enabled");
         let snapshot_id = wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
             .await
             .expect("initial sync should create a manifest snapshot");
@@ -724,9 +1047,14 @@ mod tests {
             retry_ms: 100,
         };
 
-        let runtime = maybe_start_watch_runtime(&config, RuntimeTransportKind::Stdio)
-            .expect("watch runtime should start")
-            .expect("watch runtime should be enabled");
+        let runtime = maybe_start_watch_runtime(
+            &config,
+            RuntimeTransportKind::Stdio,
+            test_runtime_task_registry(),
+            test_validated_manifest_candidate_cache(),
+        )
+        .expect("watch runtime should start")
+        .expect("watch runtime should be enabled");
         wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
             .await
             .expect("initial sync should create a manifest snapshot");
@@ -780,9 +1108,14 @@ mod tests {
             retry_ms: 100,
         };
 
-        let runtime = maybe_start_watch_runtime(&config, RuntimeTransportKind::Stdio)
-            .expect("watch runtime should start")
-            .expect("watch runtime should be enabled");
+        let runtime = maybe_start_watch_runtime(
+            &config,
+            RuntimeTransportKind::Stdio,
+            test_runtime_task_registry(),
+            test_validated_manifest_candidate_cache(),
+        )
+        .expect("watch runtime should start")
+        .expect("watch runtime should be enabled");
         tokio::time::sleep(Duration::from_millis(250)).await;
 
         let latest = Storage::new(&db_path)
@@ -820,9 +1153,14 @@ mod tests {
             retry_ms: 100,
         };
 
-        let runtime = maybe_start_watch_runtime(&config, RuntimeTransportKind::Stdio)
-            .expect("watch runtime should start")
-            .expect("watch runtime should be enabled");
+        let runtime = maybe_start_watch_runtime(
+            &config,
+            RuntimeTransportKind::Stdio,
+            test_runtime_task_registry(),
+            test_validated_manifest_candidate_cache(),
+        )
+        .expect("watch runtime should start")
+        .expect("watch runtime should be enabled");
         tokio::time::sleep(Duration::from_millis(250)).await;
 
         let created_path = workspace_root.join("added.rs");

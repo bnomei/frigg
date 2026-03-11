@@ -2,6 +2,7 @@ use std::error::Error;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use axum::Router;
 use axum::extract::{Request, State};
@@ -10,12 +11,13 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
-use frigg::mcp::FriggMcpServer;
+use frigg::mcp::{FriggMcpServer, RuntimeTaskRegistry};
 use frigg::playbooks::run_hybrid_playbook_regressions;
-use frigg::searcher::TextSearcher;
+use frigg::searcher::{TextSearcher, ValidatedManifestCandidateCache};
 use frigg::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
     SemanticRuntimeProvider, SemanticRuntimeStartupError, WatchConfig, WatchMode,
+    runtime_profile_for_transport,
 };
 use frigg::storage::{
     DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend, ensure_provenance_db_parent_dir,
@@ -209,9 +211,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     run_strict_startup_vector_readiness_gate(&config)?;
     run_semantic_runtime_startup_gate(&config)?;
     let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
-    let _watch_runtime = maybe_start_watch_runtime(&watch_runtime_config, transport_kind)?;
+    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+    let validated_manifest_candidate_cache =
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+    let _watch_runtime = maybe_start_watch_runtime(
+        &watch_runtime_config,
+        transport_kind,
+        Arc::clone(&runtime_task_registry),
+        Arc::clone(&validated_manifest_candidate_cache),
+    )?;
+    let runtime_watch_active = _watch_runtime.is_some();
+    let runtime_profile = runtime_profile_for_transport(transport_kind, runtime_watch_active);
 
-    let server = FriggMcpServer::new(config);
+    let server = FriggMcpServer::new_with_runtime(
+        config,
+        runtime_profile,
+        runtime_watch_active,
+        runtime_task_registry,
+        validated_manifest_candidate_cache,
+    );
     if let Some(runtime) = http_runtime {
         serve_http(runtime, server).await?;
     } else {
