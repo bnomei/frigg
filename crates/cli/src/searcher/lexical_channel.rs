@@ -318,6 +318,9 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     if intent.wants_examples && is_example_support_path(path) {
         multiplier *= 1.48;
     }
+    if !intent.wants_examples && is_example_support_path(path) {
+        multiplier *= 0.58;
+    }
     if intent.wants_benchmarks && class == HybridSourceClass::Support {
         multiplier *= 1.14;
     }
@@ -535,7 +538,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
             multiplier *= 1.38;
         }
         if is_entrypoint_runtime {
-            multiplier *= 1.22;
+            multiplier *= 1.72;
         }
         if wants_rust_workspace_config && is_rust_workspace_config_path(path) {
             multiplier *= 1.42;
@@ -579,7 +582,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
             multiplier *= 2.72;
         }
         if is_repo_root_runtime_config_artifact {
-            multiplier *= 1.46;
+            multiplier *= 1.92;
         }
         if is_laravel_core_provider_path(path) {
             multiplier *= 1.94;
@@ -986,13 +989,13 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         score += 3.0;
     }
     if intent.wants_runtime_config_artifacts && is_entrypoint {
-        score += 2.4;
+        score += 6.0;
     }
     if intent.wants_entrypoint_build_flow && is_config_artifact {
         score += if path_overlap == 0 { 2.8 } else { 3.4 };
     }
     if intent.wants_entrypoint_build_flow && is_repo_root_runtime_config_artifact {
-        score += 4.6;
+        score += 7.2;
     }
     if wants_rust_workspace_config && is_rust_workspace_config {
         score += 3.6;
@@ -1052,6 +1055,9 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     }
     if intent.wants_runtime_config_artifacts && is_test_support && !is_config_artifact {
         score -= 3.2;
+    }
+    if !intent.wants_examples && is_example_support {
+        score -= 3.8;
     }
     if query_context.query_mentions_cli && is_cli_test {
         score += 3.8;

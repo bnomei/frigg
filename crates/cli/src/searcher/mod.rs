@@ -6953,6 +6953,26 @@ mod tests {
                     "name: Authorize vercel deploys\njobs:\n  release:\n    steps:\n      - run: pnpm authorize-vercel-deploys\n",
                 ),
                 (
+                    ".github/workflows/autofix_linters.yml",
+                    "name: Autofix linters\njobs:\n  lint:\n    steps:\n      - run: pnpm lint\n",
+                ),
+                (
+                    ".github/workflows/avoid-typos.yml",
+                    "name: Avoid typos\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    ".github/workflows/braintrust-evals.yml",
+                    "name: Braintrust evals\njobs:\n  evals:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
+                    ".github/workflows/docs-tests.yml",
+                    "name: Docs tests\njobs:\n  docs:\n    steps:\n      - run: pnpm test:docs\n",
+                ),
+                (
+                    ".github/workflows/pg-meta-tests.yml",
+                    "name: pg-meta tests\njobs:\n  test:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
                     "packages/pg-meta/test/config.test.ts",
                     "describe('config', () => test('package tsconfig github workflow ai tests', () => {}));\n",
                 ),
@@ -7056,6 +7076,10 @@ mod tests {
                     "export async function runCli() { return \"docs cli\"; }\n",
                 ),
                 (
+                    "apps/ui-library/registry/default/clients/nextjs/lib/supabase/server.ts",
+                    "export function createNextClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
                     "packages/build-icons/src/main.mjs",
                     "export const main = 'entry point bootstrap server app cli router main';\n",
                 ),
@@ -7078,6 +7102,26 @@ mod tests {
                 (
                     "examples/ai/image_search/image_search/main.py",
                     "ENTRYPOINT = 'entry point bootstrap server app cli router main'\n",
+                ),
+                (
+                    "examples/auth/nextjs-full/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/auth/nextjs/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/realtime/nextjs-authorization-demo/utils/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/user-management/angular-user-management/src/main.ts",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/user-management/ionic-angular-user-management/src/main.ts",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
                 ),
             ],
         )?;
