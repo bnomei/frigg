@@ -24,8 +24,8 @@ pub(crate) use crate::languages::{
     resolve_blade_relation_evidence_edges, resolve_php_target_evidence_edges,
 };
 use crate::languages::{
-    collect_blade_symbols_from_source, parser_for_language, semantic_chunk_language_for_path,
-    symbol_from_node, tree_sitter_language,
+    collect_blade_symbols_from_source, parser_for_path, semantic_chunk_language_for_path,
+    symbol_from_node, tree_sitter_language_for_path,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
@@ -519,7 +519,7 @@ pub fn extract_symbols_from_source(
     path: &Path,
     source: &str,
 ) -> FriggResult<Vec<SymbolDefinition>> {
-    let mut parser = parser_for_language(language)?;
+    let mut parser = parser_for_path(language, path)?;
     let tree = parser.parse(source, None).ok_or_else(|| {
         FriggError::Internal(format!(
             "failed to parse source for symbol extraction: {}",
@@ -545,7 +545,7 @@ pub fn search_structural_in_source(
         ));
     }
 
-    let ts_language = tree_sitter_language(language);
+    let ts_language = tree_sitter_language_for_path(language, path);
     let compiled_query = Query::new(&ts_language, query).map_err(|error| {
         FriggError::InvalidInput(format!(
             "invalid structural query for {}: {error}",
@@ -553,7 +553,7 @@ pub fn search_structural_in_source(
         ))
     })?;
 
-    let mut parser = parser_for_language(language)?;
+    let mut parser = parser_for_path(language, path)?;
     let tree = parser.parse(source, None).ok_or_else(|| {
         FriggError::Internal(format!(
             "failed to parse source for structural search: {}",
@@ -2587,6 +2587,236 @@ mod tests {
     }
 
     #[test]
+    fn symbols_typescript_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/typescript_symbols.ts");
+        let symbols = extract_symbols_from_source(
+            SymbolLanguage::TypeScript,
+            path,
+            typescript_symbols_fixture(),
+        )?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::Module, "Api", 1).is_some(),
+            "expected TypeScript namespace/module symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Class, "User", 2).is_some(),
+            "expected TypeScript class symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Property, "id", 3).is_some(),
+            "expected TypeScript class field symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "save", 4).is_some(),
+            "expected TypeScript method symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Interface, "Repository", 6).is_some(),
+            "expected TypeScript interface symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "find", 7).is_some(),
+            "expected TypeScript interface method symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Property, "status", 8).is_some(),
+            "expected TypeScript interface property symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Enum, "Role", 10).is_some(),
+            "expected TypeScript enum symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::TypeAlias, "UserId", 11).is_some(),
+            "expected TypeScript type alias symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "renderUser", 12).is_some(),
+            "expected TypeScript arrow-function binding symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Const, "LIMIT", 13).is_some(),
+            "expected TypeScript const binding symbol"
+        );
+
+        let tsx_symbols = extract_symbols_from_source(
+            SymbolLanguage::TypeScript,
+            Path::new("fixtures/component.tsx"),
+            typescript_tsx_fixture(),
+        )?;
+        assert!(
+            find_symbol(&tsx_symbols, SymbolKind::Function, "App", 1).is_some(),
+            "expected TSX component binding to be discoverable as a function symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_python_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/python_symbols.py");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Python, path, python_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::TypeAlias, "Alias", 1).is_some(),
+            "expected Python type alias symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Class, "Service", 2).is_some(),
+            "expected Python class symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "run", 3).is_some(),
+            "expected Python method symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "helper", 6).is_some(),
+            "expected Python function symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_go_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/go_symbols.go");
+        let symbols = extract_symbols_from_source(SymbolLanguage::Go, path, go_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::Module, "main", 1).is_some(),
+            "expected Go package symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Struct, "Service", 2).is_some(),
+            "expected Go struct symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Interface, "Runner", 3).is_some(),
+            "expected Go interface symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::TypeAlias, "ID", 4).is_some(),
+            "expected Go type alias symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Const, "Limit", 5).is_some(),
+            "expected Go const symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "helper", 6).is_some(),
+            "expected Go function symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "Run", 7).is_some(),
+            "expected Go method symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_kotlin_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/kotlin_symbols.kt");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Kotlin, path, kotlin_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::Enum, "Role", 1).is_some(),
+            "expected Kotlin enum symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Class, "Service", 2).is_some(),
+            "expected Kotlin class symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Property, "name", 3).is_some(),
+            "expected Kotlin property symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "run", 4).is_some(),
+            "expected Kotlin method symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::TypeAlias, "Alias", 6).is_some(),
+            "expected Kotlin type alias symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "helper", 7).is_some(),
+            "expected Kotlin top-level function symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_lua_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/lua_symbols.lua");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Lua, path, lua_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "run", 1).is_some(),
+            "expected Lua dotted function symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "save", 4).is_some(),
+            "expected Lua method symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_nim_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/nim_symbols.nim");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Nim, path, nim_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::Struct, "Service", 1).is_some(),
+            "expected Nim object symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Enum, "Mode", 2).is_some(),
+            "expected Nim enum-like type symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "helper", 4).is_some(),
+            "expected Nim proc symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Method, "run", 6).is_some(),
+            "expected Nim method symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn symbols_roc_extracts_definition_metadata() -> FriggResult<()> {
+        let path = Path::new("fixtures/roc_symbols.roc");
+        let symbols =
+            extract_symbols_from_source(SymbolLanguage::Roc, path, roc_symbols_fixture())?;
+
+        assert!(
+            find_symbol(&symbols, SymbolKind::TypeAlias, "UserId", 1).is_some(),
+            "expected Roc nominal type symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Const, "id", 2).is_some(),
+            "expected Roc value symbol"
+        );
+        assert!(
+            find_symbol(&symbols, SymbolKind::Function, "greet", 4).is_some(),
+            "expected Roc function value symbol"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> FriggResult<()>
     {
         let path = Path::new("src/OrderListener.php");
@@ -2973,7 +3203,7 @@ mod tests {
     }
 
     #[test]
-    fn symbols_rust_php_extraction_is_deterministic() -> FriggResult<()> {
+    fn symbols_supported_language_extraction_is_deterministic() -> FriggResult<()> {
         let first = extract_symbols_from_source(
             SymbolLanguage::Rust,
             Path::new("fixtures/rust_symbols.rs"),
@@ -2994,9 +3224,86 @@ mod tests {
             Path::new("fixtures/php_symbols.php"),
             php_symbols_fixture(),
         )?;
+        let fifth = extract_symbols_from_source(
+            SymbolLanguage::TypeScript,
+            Path::new("fixtures/typescript_symbols.ts"),
+            typescript_symbols_fixture(),
+        )?;
+        let sixth = extract_symbols_from_source(
+            SymbolLanguage::TypeScript,
+            Path::new("fixtures/typescript_symbols.ts"),
+            typescript_symbols_fixture(),
+        )?;
+        let seventh = extract_symbols_from_source(
+            SymbolLanguage::Python,
+            Path::new("fixtures/python_symbols.py"),
+            python_symbols_fixture(),
+        )?;
+        let eighth = extract_symbols_from_source(
+            SymbolLanguage::Python,
+            Path::new("fixtures/python_symbols.py"),
+            python_symbols_fixture(),
+        )?;
+        let ninth = extract_symbols_from_source(
+            SymbolLanguage::Go,
+            Path::new("fixtures/go_symbols.go"),
+            go_symbols_fixture(),
+        )?;
+        let tenth = extract_symbols_from_source(
+            SymbolLanguage::Go,
+            Path::new("fixtures/go_symbols.go"),
+            go_symbols_fixture(),
+        )?;
+        let eleventh = extract_symbols_from_source(
+            SymbolLanguage::Kotlin,
+            Path::new("fixtures/kotlin_symbols.kt"),
+            kotlin_symbols_fixture(),
+        )?;
+        let twelfth = extract_symbols_from_source(
+            SymbolLanguage::Kotlin,
+            Path::new("fixtures/kotlin_symbols.kt"),
+            kotlin_symbols_fixture(),
+        )?;
+        let thirteenth = extract_symbols_from_source(
+            SymbolLanguage::Lua,
+            Path::new("fixtures/lua_symbols.lua"),
+            lua_symbols_fixture(),
+        )?;
+        let fourteenth = extract_symbols_from_source(
+            SymbolLanguage::Lua,
+            Path::new("fixtures/lua_symbols.lua"),
+            lua_symbols_fixture(),
+        )?;
+        let fifteenth = extract_symbols_from_source(
+            SymbolLanguage::Nim,
+            Path::new("fixtures/nim_symbols.nim"),
+            nim_symbols_fixture(),
+        )?;
+        let sixteenth = extract_symbols_from_source(
+            SymbolLanguage::Nim,
+            Path::new("fixtures/nim_symbols.nim"),
+            nim_symbols_fixture(),
+        )?;
+        let seventeenth = extract_symbols_from_source(
+            SymbolLanguage::Roc,
+            Path::new("fixtures/roc_symbols.roc"),
+            roc_symbols_fixture(),
+        )?;
+        let eighteenth = extract_symbols_from_source(
+            SymbolLanguage::Roc,
+            Path::new("fixtures/roc_symbols.roc"),
+            roc_symbols_fixture(),
+        )?;
 
         assert_eq!(first, second);
         assert_eq!(third, fourth);
+        assert_eq!(fifth, sixth);
+        assert_eq!(seventh, eighth);
+        assert_eq!(ninth, tenth);
+        assert_eq!(eleventh, twelfth);
+        assert_eq!(thirteenth, fourteenth);
+        assert_eq!(fifteenth, sixteenth);
+        assert_eq!(seventeenth, eighteenth);
         Ok(())
     }
 
@@ -3028,6 +3335,159 @@ mod tests {
                 (PathBuf::from("fixtures/structural.rs"), 2, 1),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_typescript_tsx_uses_extension_aware_grammar() -> FriggResult<()> {
+        let matches = search_structural_in_source(
+            SymbolLanguage::TypeScript,
+            Path::new("fixtures/component.tsx"),
+            typescript_tsx_fixture(),
+            "(jsx_self_closing_element) @jsx",
+        )?;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, PathBuf::from("fixtures/component.tsx"));
+        assert_eq!(matches[0].span.start_line, 1);
+        assert_eq!(matches[0].excerpt, "<Button />");
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_python_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Python,
+            Path::new("fixtures/python_symbols.py"),
+            python_symbols_fixture(),
+            "(function_definition) @fn",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Python,
+            Path::new("fixtures/python_symbols.py"),
+            python_symbols_fixture(),
+            "(function_definition) @fn",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].span.start_line, 3);
+        assert_eq!(first[1].span.start_line, 6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_go_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Go,
+            Path::new("fixtures/go_symbols.go"),
+            go_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Go,
+            Path::new("fixtures/go_symbols.go"),
+            go_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].span.start_line, 6);
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_kotlin_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Kotlin,
+            Path::new("fixtures/kotlin_symbols.kt"),
+            kotlin_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Kotlin,
+            Path::new("fixtures/kotlin_symbols.kt"),
+            kotlin_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].span.start_line, 4);
+        assert_eq!(first[1].span.start_line, 7);
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_lua_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Lua,
+            Path::new("fixtures/lua_symbols.lua"),
+            lua_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Lua,
+            Path::new("fixtures/lua_symbols.lua"),
+            lua_symbols_fixture(),
+            "(function_declaration) @fn",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].span.start_line, 1);
+        assert_eq!(first[1].span.start_line, 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_nim_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Nim,
+            Path::new("fixtures/nim_symbols.nim"),
+            nim_symbols_fixture(),
+            "(proc_declaration) @proc",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Nim,
+            Path::new("fixtures/nim_symbols.nim"),
+            nim_symbols_fixture(),
+            "(proc_declaration) @proc",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].span.start_line, 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn structural_search_roc_returns_deterministic_captures() -> FriggResult<()> {
+        let first = search_structural_in_source(
+            SymbolLanguage::Roc,
+            Path::new("fixtures/roc_symbols.roc"),
+            roc_symbols_fixture(),
+            "(value_declaration) @value",
+        )?;
+        let second = search_structural_in_source(
+            SymbolLanguage::Roc,
+            Path::new("fixtures/roc_symbols.roc"),
+            roc_symbols_fixture(),
+            "(value_declaration) @value",
+        )?;
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].span.start_line, 2);
+        assert_eq!(first[1].span.start_line, 4);
+
         Ok(())
     }
 
@@ -3472,6 +3932,94 @@ mod tests {
          <livewire:orders.table />\n\
          @livewire('stats-card')\n\
          <flux:button variant=\"primary\">Save</flux:button>\n"
+    }
+
+    fn typescript_symbols_fixture() -> &'static str {
+        "namespace Api {}\n\
+         export class User {\n\
+             readonly id: string;\n\
+             save(): void {}\n\
+         }\n\
+         export interface Repository {\n\
+             find(id: string): User;\n\
+             status: string;\n\
+         }\n\
+         export enum Role { Admin }\n\
+         export type UserId = string;\n\
+         export const renderUser = (user: User) => user.id;\n\
+         const LIMIT = 10;\n"
+    }
+
+    fn typescript_tsx_fixture() -> &'static str {
+        "export const App = () => <Button />;\n"
+    }
+
+    fn python_symbols_fixture() -> &'static str {
+        concat!(
+            "type Alias = str\n",
+            "class Service:\n",
+            "    def run(self) -> None:\n",
+            "        pass\n",
+            "\n",
+            "def helper() -> Alias:\n",
+            "    return \"ok\"\n",
+        )
+    }
+
+    fn go_symbols_fixture() -> &'static str {
+        concat!(
+            "package main\n",
+            "type Service struct{}\n",
+            "type Runner interface{ Run() }\n",
+            "type ID = string\n",
+            "const Limit = 10\n",
+            "func helper() string { return \"ok\" }\n",
+            "func (s *Service) Run() string { return \"ok\" }\n",
+        )
+    }
+
+    fn kotlin_symbols_fixture() -> &'static str {
+        concat!(
+            "enum class Role { Admin }\n",
+            "class Service {\n",
+            "    val name: String = \"ok\"\n",
+            "    fun run(): String = name\n",
+            "}\n",
+            "typealias Alias = String\n",
+            "fun helper(): Alias = \"ok\"\n",
+        )
+    }
+
+    fn lua_symbols_fixture() -> &'static str {
+        concat!(
+            "function Service.run()\n",
+            "    return \"ok\"\n",
+            "end\n",
+            "function Service:save()\n",
+            "    return true\n",
+            "end\n",
+        )
+    }
+
+    fn nim_symbols_fixture() -> &'static str {
+        concat!(
+            "type Service = object\n",
+            "type Mode = enum\n",
+            "  Ready\n",
+            "proc helper(): string =\n",
+            "  \"ok\"\n",
+            "method run(self: Service): string =\n",
+            "  \"ok\"\n",
+        )
+    }
+
+    fn roc_symbols_fixture() -> &'static str {
+        concat!(
+            "UserId := U64\n",
+            "id : U64\n",
+            "id = 1\n",
+            "greet = \\name -> name\n",
+        )
     }
 
     fn php_source_evidence_fixture() -> &'static str {

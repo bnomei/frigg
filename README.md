@@ -42,8 +42,13 @@ Frigg is intentionally conservative about first-class support claims.
 | Rust | first-class | first-class | first-class when enabled | first-class |
 | PHP | first-class | first-class | first-class when enabled | first-class |
 | Blade | first-class template surface | bounded source/template navigation and structural search | bounded template retrieval; no Laravel runtime overlays | first-class template surface |
-| TypeScript / TSX | external SCIP artifacts can be ingested; runtime support not yet first-class | planned / partial | not first-class | planned |
-| Python | external SCIP artifacts can be ingested; runtime support not yet first-class | planned / partial | not first-class | planned |
+| TypeScript / TSX | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Python | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Go | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Kotlin / KTS | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Lua | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Roc | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+| Nim | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
 
 If a language or framework is not marked first-class here, Frigg should not market it as if it already has parity.
 
@@ -57,7 +62,7 @@ New languages move through staged capability upgrades instead of being announced
 - `semantic_parity`: semantic chunking, indexing, ranking, watch/reindex behavior, and provenance all align with the first-class languages.
 
 Current next-language priority: TypeScript / TSX.
-Python remains planned, but behind TypeScript / TSX in the public rollout order.
+Python, Go, Kotlin / KTS, Lua, Roc, and Nim now share the same baseline runtime surface, but TypeScript / TSX stays ahead in the follow-on queue for precise and semantic-parity work.
 
 ## Core Concepts
 
@@ -206,9 +211,9 @@ mv index.scip .frigg/scip/python.scip
 Notes:
 - regenerate these artifacts when the source changes materially
 - if navigation metadata reports `precise_absence_reason=no_scip_artifacts_discovered`, check `.frigg/scip/` first
-- today Frigg's validated runtime/query surface is Rust, PHP, and Blade for source-backed symbol/search workflows; precise SCIP-backed navigation remains validated for Rust and PHP
-- TypeScript/TSX precise parity is planned, and Python precise parity is not yet claimed by Frigg even though external SCIP can be generated already
-- generating a `.scip` artifact for TypeScript or Python does not by itself make those languages first-class in Frigg's public support matrix
+- today Frigg's strongest validated runtime/query surface is Rust, PHP, and Blade for source-backed symbol/search workflows; TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim now ship baseline runtime symbol/outline/structural support, while precise SCIP-backed navigation remains validated for Rust and PHP
+- TypeScript / TSX precise parity remains the next follow-on priority, and the other baseline runtime languages are still not claimed as precise-parity or semantic-parity surfaces
+- generating a `.scip` artifact for TypeScript / TSX, Python, Go, Kotlin, Lua, Roc, or Nim does not by itself make those languages first-class in Frigg's public support matrix
 
 ### 4) Run as MCP server
 
@@ -419,7 +424,7 @@ Noise-control tip:
 - `outgoing_calls` is callable-only. Occurrence-derived precise recovery emits `relation="calls"` for surviving callable targets and does not widen the result set to locals, fields, constants, or type-only references.
 - Navigation, call-hierarchy, document-symbol, and structural-search responses now expose typed `metadata` objects alongside the backward-compatible JSON-string `note`.
 - `document_symbols` now returns hierarchical `children` instead of a flat list with empty containers only.
-- `document_symbols` and `search_structural` now accept Rust, PHP, and Blade. Blade responses include additive `metadata.blade` summaries for normalized template relations, literal Livewire tags and `wire:*` directives, and Flux tag or hint discovery.
+- `document_symbols` and `search_structural` now accept Rust, PHP, and Blade, plus baseline TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim source files. Blade responses include additive `metadata.blade` summaries for normalized template relations, literal Livewire tags and `wire:*` directives, and Flux tag or hint discovery.
 - Blade, Livewire, and Flux support is source-only and bounded. Frigg does not boot Laravel and does not claim route, provider, container, policy, validation, or Eloquent overlays in this slice.
 
 Advanced runtime tools (only added when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`):

@@ -30,6 +30,23 @@ struct LanguageSupportEntry {
     next_priority: bool,
 }
 
+fn baseline_runtime_support_entry(
+    id: &'static str,
+    display_name: &'static str,
+    next_priority: bool,
+) -> LanguageSupportEntry {
+    LanguageSupportEntry {
+        id,
+        display_name,
+        status: "baseline_runtime_surface",
+        search_outline: "baseline_runtime_surface",
+        navigation: "bounded_heuristic_navigation",
+        semantic_retrieval: "experimental_when_enabled",
+        rollout_stage: "runtime_l1_l2",
+        next_priority,
+    }
+}
+
 fn support_matrix_json() -> String {
     let stages = vec![
         LanguageStage {
@@ -80,26 +97,13 @@ fn support_matrix_json() -> String {
             rollout_stage: "runtime_l1_l2",
             next_priority: false,
         },
-        LanguageSupportEntry {
-            id: "typescript_tsx",
-            display_name: "TypeScript / TSX",
-            status: "planned",
-            search_outline: "planned_partial",
-            navigation: "planned_partial",
-            semantic_retrieval: "not_first_class",
-            rollout_stage: "witness_only",
-            next_priority: true,
-        },
-        LanguageSupportEntry {
-            id: "python",
-            display_name: "Python",
-            status: "planned",
-            search_outline: "planned_partial",
-            navigation: "planned_partial",
-            semantic_retrieval: "not_first_class",
-            rollout_stage: "witness_only",
-            next_priority: false,
-        },
+        baseline_runtime_support_entry("typescript_tsx", "TypeScript / TSX", true),
+        baseline_runtime_support_entry("python", "Python", false),
+        baseline_runtime_support_entry("go", "Go", false),
+        baseline_runtime_support_entry("kotlin", "Kotlin / KTS", false),
+        baseline_runtime_support_entry("lua", "Lua", false),
+        baseline_runtime_support_entry("roc", "Roc", false),
+        baseline_runtime_support_entry("nim", "Nim", false),
     ];
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.support_matrix.v1",
@@ -255,12 +259,12 @@ pub(crate) fn read_guidance_prompt(
         text.push_str(task);
         text.push_str("\n\n");
     }
-    text.push_str(
+text.push_str(
         "Routing policy:\n\
 1. Prefer shell tools for trivial local scans, file reads, or git/filesystem inspection.\n\
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
-4. Keep public language claims conservative: Rust and PHP are first-class, Blade is a first-class template surface, and TypeScript / TSX is the next preferred language priority when the support matrix reopens.\n\
+4. Keep public language claims conservative: Rust and PHP are first-class, Blade is a first-class template surface, and TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, plus Nim are baseline runtime surfaces rather than precise or semantic-parity languages.\n\
 5. Use `explore` only after discovery and only when the active profile includes it.\n\n",
     );
     text.push_str(profile_note);
@@ -319,6 +323,39 @@ mod tests {
                     entry["id"] == json!("typescript_tsx") && entry["next_priority"] == json!(true)
                 })
         );
+        assert!(
+            parsed["languages"]
+                .as_array()
+                .expect("languages should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["id"] == json!("typescript_tsx")
+                        && entry["rollout_stage"] == json!("runtime_l1_l2")
+                })
+        );
+        assert!(
+            parsed["languages"]
+                .as_array()
+                .expect("languages should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["id"] == json!("python")
+                        && entry["rollout_stage"] == json!("runtime_l1_l2")
+                })
+        );
+        for language_id in ["go", "kotlin", "lua", "roc", "nim"] {
+            assert!(
+                parsed["languages"]
+                    .as_array()
+                    .expect("languages should be an array")
+                    .iter()
+                    .any(|entry| {
+                        entry["id"] == json!(language_id)
+                            && entry["rollout_stage"] == json!("runtime_l1_l2")
+                    }),
+                "expected {language_id} to be marked as runtime_l1_l2"
+            );
+        }
     }
 
     #[test]

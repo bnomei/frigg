@@ -1,7 +1,14 @@
 mod blade;
+mod go;
+mod kotlin;
+mod lua;
+mod nim;
 mod php;
+mod python;
 mod registry;
+mod roc;
 mod rust;
+mod typescript;
 
 #[allow(unused_imports)]
 pub(crate) use blade::{
@@ -30,9 +37,9 @@ pub(crate) use php::{
 };
 pub(crate) use registry::{
     HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
-    heuristic_implementation_strategy, parse_supported_language, parser_for_language,
+    heuristic_implementation_strategy, parse_supported_language, parser_for_path,
     semantic_chunk_language_for_path, supported_language_for_path, symbol_from_node,
-    tree_sitter_language,
+    tree_sitter_language_for_path,
 };
 #[allow(unused_imports)]
 pub(crate) use rust::{
@@ -71,6 +78,42 @@ mod tests {
         );
         assert_eq!(
             parse_supported_language("ts", LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::TypeScript)
+        );
+        assert_eq!(
+            parse_supported_language("tsx", LanguageCapability::StructuralSearch),
+            Some(SymbolLanguage::TypeScript)
+        );
+        assert_eq!(
+            parse_supported_language("py", LanguageCapability::DocumentSymbols),
+            Some(SymbolLanguage::Python)
+        );
+        assert_eq!(
+            parse_supported_language("go", LanguageCapability::StructuralSearch),
+            Some(SymbolLanguage::Go)
+        );
+        assert_eq!(
+            parse_supported_language("kt", LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::Kotlin)
+        );
+        assert_eq!(
+            parse_supported_language("lua", LanguageCapability::DocumentSymbols),
+            Some(SymbolLanguage::Lua)
+        );
+        assert_eq!(
+            parse_supported_language("roc", LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::Roc)
+        );
+        assert_eq!(
+            parse_supported_language("nim", LanguageCapability::DocumentSymbols),
+            Some(SymbolLanguage::Nim)
+        );
+        assert_eq!(
+            parse_supported_language("golang", LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::Go)
+        );
+        assert_eq!(
+            parse_supported_language("java", LanguageCapability::SymbolCorpus),
             None
         );
     }
@@ -97,7 +140,53 @@ mod tests {
         );
         assert_eq!(
             supported_language_for_path(Path::new("src/app.ts"), LanguageCapability::SymbolCorpus),
-            None
+            Some(SymbolLanguage::TypeScript)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("src/app.tsx"),
+                LanguageCapability::StructuralSearch
+            ),
+            Some(SymbolLanguage::TypeScript)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("server/main.py"),
+                LanguageCapability::DocumentSymbols
+            ),
+            Some(SymbolLanguage::Python)
+        );
+        assert_eq!(
+            supported_language_for_path(Path::new("cmd/main.go"), LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::Go)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("app/main.kts"),
+                LanguageCapability::StructuralSearch
+            ),
+            Some(SymbolLanguage::Kotlin)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("scripts/init.lua"),
+                LanguageCapability::DocumentSymbols
+            ),
+            Some(SymbolLanguage::Lua)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("src/Main.roc"),
+                LanguageCapability::StructuralSearch
+            ),
+            Some(SymbolLanguage::Roc)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("tools/config.nims"),
+                LanguageCapability::DocumentSymbols
+            ),
+            Some(SymbolLanguage::Nim)
         );
     }
 
@@ -110,6 +199,34 @@ mod tests {
         assert_eq!(
             semantic_chunk_language_for_path(Path::new("resources/views/welcome.blade.php")),
             Some("blade")
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("src/app.tsx")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("app/main.py")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("cmd/main.go")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("app/main.kts")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("scripts/init.lua")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("src/Main.roc")),
+            None
+        );
+        assert_eq!(
+            semantic_chunk_language_for_path(Path::new("tools/config.nims")),
+            None
         );
         assert_eq!(
             semantic_chunk_language_for_path(Path::new("docs/overview.md")),
@@ -129,6 +246,34 @@ mod tests {
         );
         assert_eq!(
             heuristic_implementation_strategy(SymbolLanguage::Blade),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::TypeScript),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Python),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Go),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Kotlin),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Lua),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Roc),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Nim),
             None
         );
     }

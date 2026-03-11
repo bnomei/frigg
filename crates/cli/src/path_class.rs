@@ -1,4 +1,7 @@
+use std::path::Path;
+
 use crate::domain::PathClass;
+use crate::languages::{LanguageCapability, supported_language_for_path};
 
 pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
     let normalized = relative_path.trim_start_matches("./");
@@ -24,11 +27,19 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         PathClass::Runtime
     } else if normalized.starts_with("resources/views/") {
         PathClass::Support
-    } else if components.iter().any(|component| *component == "src") {
+    } else if components.iter().any(|component| *component == "src")
+        || is_repo_root_supported_source_file(normalized)
+    {
         PathClass::Runtime
     } else {
         PathClass::Project
     }
+}
+
+fn is_repo_root_supported_source_file(relative_path: &str) -> bool {
+    !relative_path.contains('/')
+        && supported_language_for_path(Path::new(relative_path), LanguageCapability::SymbolCorpus)
+            .is_some()
 }
 
 pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
@@ -89,5 +100,16 @@ mod tests {
             "support"
         );
         assert_eq!(repository_path_class("tests/DuskTestCase.php"), "support");
+    }
+
+    #[test]
+    fn repository_path_class_treats_repo_root_supported_source_files_as_runtime() {
+        assert_eq!(repository_path_class("main.py"), "runtime");
+        assert_eq!(repository_path_class("index.tsx"), "runtime");
+        assert_eq!(repository_path_class("main.go"), "runtime");
+        assert_eq!(repository_path_class("Main.kt"), "runtime");
+        assert_eq!(repository_path_class("init.lua"), "runtime");
+        assert_eq!(repository_path_class("Main.roc"), "runtime");
+        assert_eq!(repository_path_class("config.nims"), "runtime");
     }
 }

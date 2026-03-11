@@ -38,6 +38,56 @@ fn build_workspace_fixture(test_name: &str) -> PathBuf {
     root
 }
 
+fn build_multilang_workspace_fixture(test_name: &str) -> PathBuf {
+    let root = temp_workspace_root(test_name);
+    let src_dir = root.join("src");
+    fs::create_dir_all(&src_dir).expect("failed to create multi-language fixture source directory");
+    fs::write(
+        src_dir.join("App.tsx"),
+        "export class DashboardCard {\n\
+             render() { return <Card />; }\n\
+         }\n",
+    )
+    .expect("failed to seed typescript fixture source file");
+    fs::write(
+        src_dir.join("app.py"),
+        "class PyService:\n\
+             def run(self) -> str:\n\
+                 return \"ok\"\n",
+    )
+    .expect("failed to seed python fixture source file");
+    fs::write(
+        src_dir.join("main.go"),
+        "package main\n\
+         type GoService struct{}\n",
+    )
+    .expect("failed to seed go fixture source file");
+    fs::write(
+        src_dir.join("Main.kt"),
+        "class KotlinService\n",
+    )
+    .expect("failed to seed kotlin fixture source file");
+    fs::write(
+        src_dir.join("init.lua"),
+        "function luaRun()\n\
+             return \"ok\"\n\
+         end\n",
+    )
+    .expect("failed to seed lua fixture source file");
+    fs::write(
+        src_dir.join("app.nim"),
+        "proc nimHelper(): string =\n\
+           \"ok\"\n",
+    )
+    .expect("failed to seed nim fixture source file");
+    fs::write(
+        src_dir.join("main.roc"),
+        "rocGreet = \\name -> name\n",
+    )
+    .expect("failed to seed roc fixture source file");
+    root
+}
+
 fn storage_path_for_workspace(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".frigg").join("storage.sqlite3")
 }
@@ -233,6 +283,127 @@ async fn provenance_bounded_text_fields_are_truncated() {
     assert!(
         stored_query.ends_with("..."),
         "expected bounded query marker suffix"
+    );
+
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test]
+async fn provenance_search_symbol_records_baseline_language_queries() {
+    let workspace_root = build_multilang_workspace_fixture("search-symbol-multilang");
+    let server = server_for_workspace(&workspace_root);
+
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "DashboardCard".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("typescript search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "PyService".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("python search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "GoService".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("go search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "KotlinService".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("kotlin search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "luaRun".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("lua search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "nimHelper".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("nim search_symbol should succeed");
+    server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "rocGreet".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(5),
+        }))
+        .await
+        .expect("roc search_symbol should succeed");
+
+    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
+    let rows = storage
+        .load_provenance_events_for_tool("search_symbol", 10)
+        .expect("expected search_symbol provenance rows");
+    let queries = rows
+        .iter()
+        .map(|row| {
+            serde_json::from_str::<Value>(&row.payload_json)
+                .expect("failed to parse search_symbol provenance payload")
+        })
+        .map(|payload| payload["params"]["query"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+
+    assert!(
+        queries.iter().any(|query| query == "DashboardCard"),
+        "missing typescript search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "PyService"),
+        "missing python search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "GoService"),
+        "missing go search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "KotlinService"),
+        "missing kotlin search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "luaRun"),
+        "missing lua search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "nimHelper"),
+        "missing nim search_symbol provenance query: {queries:?}"
+    );
+    assert!(
+        queries.iter().any(|query| query == "rocGreet"),
+        "missing roc search_symbol provenance query: {queries:?}"
     );
 
     cleanup_workspace(&workspace_root);

@@ -1685,6 +1685,179 @@ async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
 }
 
 #[tokio::test]
+async fn search_symbol_returns_typescript_symbols_from_runtime_corpus() {
+    let workspace_root = temp_workspace_root("search-symbol-typescript");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("App.tsx"),
+        "type Props = {};\n\
+         export class DashboardCard {\n\
+             title: string;\n\
+             render(_props: Props) { return <Card />; }\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "DashboardCard".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should return typescript matches")
+        .0;
+
+    assert!(
+        response
+            .matches
+            .iter()
+            .any(|matched| matched.symbol == "DashboardCard" && matched.kind == "class")
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.path == "src/App.tsx")
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_returns_python_symbols_from_runtime_corpus() {
+    let workspace_root = temp_workspace_root("search-symbol-python");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary python fixture");
+    fs::write(
+        src_root.join("app.py"),
+        concat!(
+            "type Alias = str\n",
+            "class Service:\n",
+            "    def run(self) -> Alias:\n",
+            "        return \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary python fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "Service".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should return python matches")
+        .0;
+
+    assert!(
+        response
+            .matches
+            .iter()
+            .any(|matched| matched.symbol == "Service" && matched.kind == "class")
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.path == "src/app.py")
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus() {
+    let workspace_root = temp_workspace_root("search-symbol-additional-languages");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary multi-language fixture");
+    fs::write(
+        src_root.join("main.go"),
+        concat!(
+            "package main\n",
+            "type GoService struct{}\n",
+            "func goHelper() string { return \"ok\" }\n",
+        ),
+    )
+    .expect("failed to seed temporary go fixture");
+    fs::write(
+        src_root.join("Main.kt"),
+        concat!(
+            "class KotlinService\n",
+            "fun kotlinHelper(): String = \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary kotlin fixture");
+    fs::write(
+        src_root.join("init.lua"),
+        concat!(
+            "function luaRun()\n",
+            "    return \"ok\"\n",
+            "end\n",
+        ),
+    )
+    .expect("failed to seed temporary lua fixture");
+    fs::write(
+        src_root.join("app.nim"),
+        concat!(
+            "proc nimHelper(): string =\n",
+            "  \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary nim fixture");
+    fs::write(
+        src_root.join("main.roc"),
+        concat!(
+            "UserId := U64\n",
+            "rocGreet = \\name -> name\n",
+        ),
+    )
+    .expect("failed to seed temporary roc fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    for (query, expected_kind, expected_path) in [
+        ("GoService", "struct", "src/main.go"),
+        ("KotlinService", "class", "src/Main.kt"),
+        ("luaRun", "function", "src/init.lua"),
+        ("nimHelper", "function", "src/app.nim"),
+        ("rocGreet", "function", "src/main.roc"),
+    ] {
+        let response = server
+            .search_symbol(Parameters(SearchSymbolParams {
+                query: query.to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                path_class: None,
+                path_regex: None,
+                limit: Some(20),
+            }))
+            .await
+            .expect("search_symbol should return baseline-language matches")
+            .0;
+
+        assert!(
+            response.matches.iter().any(|matched| {
+                matched.symbol == query && matched.kind == expected_kind && matched.path == expected_path
+            }),
+            "expected {query} {expected_kind} match in {expected_path}, got {:?}",
+            response
+                .matches
+                .iter()
+                .map(|matched| (&matched.symbol, &matched.kind, &matched.path))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn search_symbol_resolves_php_canonical_queries() {
     let workspace_root = temp_workspace_root("search-symbol-php-canonical");
     let src_root = workspace_root.join("src");
@@ -4203,6 +4376,296 @@ async fn document_symbols_returns_php_metadata_evidence_counts() {
 }
 
 #[tokio::test]
+async fn document_symbols_returns_typescript_outline_for_tsx_files() {
+    let workspace_root = temp_workspace_root("document-symbols-typescript");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("App.tsx"),
+        "type Props = {};\n\
+         export function App(_props: Props) {\n\
+             return <Card />;\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/App.tsx".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return typescript outline")
+        .0;
+
+    assert!(
+        response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "Props" && symbol.kind == "type_alias")
+    );
+    assert!(
+        response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "App" && symbol.kind == "function")
+    );
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "typescript"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_returns_python_outline() {
+    let workspace_root = temp_workspace_root("document-symbols-python");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary python fixture");
+    fs::write(
+        src_root.join("app.py"),
+        concat!(
+            "type Alias = str\n",
+            "class Service:\n",
+            "    def run(self) -> None:\n",
+            "        pass\n",
+            "\n",
+            "def helper() -> Alias:\n",
+            "    return \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary python fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/app.py".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return python outline")
+        .0;
+
+    assert!(
+        response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "Alias" && symbol.kind == "type_alias")
+    );
+    assert!(
+        response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "Service" && symbol.kind == "class")
+    );
+    assert!(
+        response
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.children.iter())
+            .any(|symbol| symbol.symbol == "run" && symbol.kind == "method")
+    );
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "python"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_returns_additional_baseline_language_outlines() {
+    let workspace_root = temp_workspace_root("document-symbols-additional-baselines");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary baseline fixtures");
+    fs::write(
+        src_root.join("main.go"),
+        concat!(
+            "package main\n",
+            "type Service struct{}\n",
+            "func helper() string { return \"ok\" }\n",
+        ),
+    )
+    .expect("failed to seed temporary go fixture");
+    fs::write(
+        src_root.join("App.kt"),
+        concat!(
+            "class Service {\n",
+            "    fun run(): String = \"ok\"\n",
+            "}\n",
+            "typealias Alias = String\n",
+        ),
+    )
+    .expect("failed to seed temporary kotlin fixture");
+    fs::write(
+        src_root.join("init.lua"),
+        concat!(
+            "function Service.run()\n",
+            "    return \"ok\"\n",
+            "end\n",
+        ),
+    )
+    .expect("failed to seed temporary lua fixture");
+    fs::write(
+        src_root.join("main.roc"),
+        concat!(
+            "UserId := U64\n",
+            "greet = \\name -> name\n",
+        ),
+    )
+    .expect("failed to seed temporary roc fixture");
+    fs::write(
+        src_root.join("main.nim"),
+        concat!(
+            "type Service = object\n",
+            "proc helper(): string =\n",
+            "  \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary nim fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let go_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/main.go".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return go outline")
+        .0;
+    assert!(
+        go_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "main" && symbol.kind == "module")
+    );
+    assert_eq!(
+        go_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "go"
+    );
+
+    let kotlin_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/App.kt".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return kotlin outline")
+        .0;
+    assert!(
+        kotlin_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "Service" && symbol.kind == "class")
+    );
+    assert!(
+        kotlin_response
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.children.iter())
+            .any(|symbol| symbol.symbol == "run" && symbol.kind == "method")
+    );
+    assert_eq!(
+        kotlin_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "kotlin"
+    );
+
+    let lua_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/init.lua".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return lua outline")
+        .0;
+    assert!(
+        lua_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "run" && symbol.kind == "function")
+    );
+    assert_eq!(
+        lua_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "lua"
+    );
+
+    let roc_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/main.roc".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return roc outline")
+        .0;
+    assert!(
+        roc_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "UserId" && symbol.kind == "type_alias")
+    );
+    assert!(
+        roc_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "greet" && symbol.kind == "function")
+    );
+    assert_eq!(
+        roc_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "roc"
+    );
+
+    let nim_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/main.nim".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+        }))
+        .await
+        .expect("document_symbols should return nim outline")
+        .0;
+    assert!(
+        nim_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "Service" && symbol.kind == "struct")
+    );
+    assert!(
+        nim_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "helper" && symbol.kind == "function")
+    );
+    assert_eq!(
+        nim_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "nim"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn document_symbols_returns_hierarchy_for_nested_symbols() {
     let workspace_root = temp_workspace_root("document-symbols-hierarchy");
     let src_root = workspace_root.join("src");
@@ -4332,7 +4795,21 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
     assert_eq!(retryable_tag(&error), Some(false));
     assert_eq!(
         error_data_field(&error, "supported_extensions"),
-        &serde_json::json!([".rs", ".php", ".blade.php"])
+        &serde_json::json!([
+            ".rs",
+            ".php",
+            ".blade.php",
+            ".ts",
+            ".tsx",
+            ".py",
+            ".go",
+            ".kt",
+            ".kts",
+            ".lua",
+            ".roc",
+            ".nim",
+            ".nims"
+        ])
     );
 }
 
@@ -4528,12 +5005,221 @@ async fn search_structural_returns_deterministic_blade_matches() {
 }
 
 #[tokio::test]
+async fn search_structural_returns_typescript_tsx_matches() {
+    let workspace_root = temp_workspace_root("search-structural-typescript");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary tsx fixture");
+    fs::write(
+        src_root.join("App.tsx"),
+        "export function App() {\n\
+             return <Card />;\n\
+         }\n",
+    )
+    .expect("failed to seed temporary tsx fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(jsx_self_closing_element) @jsx".to_owned(),
+            language: Some("tsx".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"App\.tsx$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return typescript matches")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].path, "src/App.tsx");
+    assert_eq!(response.matches[0].excerpt, "<Card />");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("search_structural should emit typed metadata")["language"],
+        "typescript"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_structural_returns_python_matches() {
+    let workspace_root = temp_workspace_root("search-structural-python");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary python fixture");
+    fs::write(
+        src_root.join("app.py"),
+        concat!(
+            "def first():\n",
+            "    return 1\n",
+            "\n",
+            "def second():\n",
+            "    return 2\n",
+        ),
+    )
+    .expect("failed to seed temporary python fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_definition) @fn".to_owned(),
+            language: Some("py".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"app\.py$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return python matches")
+        .0;
+
+    assert_eq!(response.matches.len(), 2);
+    assert_eq!(response.matches[0].path, "src/app.py");
+    assert_eq!(
+        response
+            .metadata
+            .as_ref()
+            .expect("search_structural should emit typed metadata")["language"],
+        "python"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_structural_returns_additional_baseline_language_matches() {
+    let workspace_root = temp_workspace_root("search-structural-additional-baselines");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary baseline fixtures");
+    fs::write(
+        src_root.join("main.go"),
+        concat!(
+            "package main\n",
+            "func helper() string { return \"ok\" }\n",
+        ),
+    )
+    .expect("failed to seed temporary go fixture");
+    fs::write(
+        src_root.join("App.kt"),
+        concat!(
+            "class Service {\n",
+            "    fun run(): String = \"ok\"\n",
+            "}\n",
+            "fun helper(): String = \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary kotlin fixture");
+    fs::write(
+        src_root.join("init.lua"),
+        concat!(
+            "function Service.run()\n",
+            "    return \"ok\"\n",
+            "end\n",
+        ),
+    )
+    .expect("failed to seed temporary lua fixture");
+    fs::write(
+        src_root.join("main.roc"),
+        concat!(
+            "greet = \\name -> name\n",
+            "id = 1\n",
+        ),
+    )
+    .expect("failed to seed temporary roc fixture");
+    fs::write(
+        src_root.join("main.nim"),
+        concat!(
+            "proc helper(): string =\n",
+            "  \"ok\"\n",
+        ),
+    )
+    .expect("failed to seed temporary nim fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let go_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_declaration) @fn".to_owned(),
+            language: Some("golang".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"main\.go$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return go matches")
+        .0;
+    assert_eq!(go_response.matches.len(), 1);
+    assert_eq!(go_response.metadata.as_ref().expect("typed metadata")["language"], "go");
+
+    let kotlin_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_declaration) @fn".to_owned(),
+            language: Some("kt".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"App\.kt$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return kotlin matches")
+        .0;
+    assert_eq!(kotlin_response.matches.len(), 2);
+    assert_eq!(
+        kotlin_response.metadata.as_ref().expect("typed metadata")["language"],
+        "kotlin"
+    );
+
+    let lua_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_declaration) @fn".to_owned(),
+            language: Some("lua".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"init\.lua$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return lua matches")
+        .0;
+    assert_eq!(lua_response.matches.len(), 1);
+    assert_eq!(lua_response.metadata.as_ref().expect("typed metadata")["language"], "lua");
+
+    let roc_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(value_declaration) @value".to_owned(),
+            language: Some("roc".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"main\.roc$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return roc matches")
+        .0;
+    assert_eq!(roc_response.matches.len(), 2);
+    assert_eq!(roc_response.metadata.as_ref().expect("typed metadata")["language"], "roc");
+
+    let nim_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(proc_declaration) @proc".to_owned(),
+            language: Some("nims".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"main\.nim$".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_structural should return nim matches")
+        .0;
+    assert_eq!(nim_response.matches.len(), 1);
+    assert_eq!(nim_response.metadata.as_ref().expect("typed metadata")["language"], "nim");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn search_structural_rejects_unsupported_language_with_typed_error() {
     let server = server_for_fixture();
     let error = match server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item) @fn".to_owned(),
-            language: Some("go".to_owned()),
+            language: Some("java".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path_regex: None,
             limit: Some(20),
@@ -4549,7 +5235,18 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
     assert_eq!(retryable_tag(&error), Some(false));
     assert_eq!(
         error_data_field(&error, "supported_languages"),
-        &serde_json::json!(["rust", "php", "blade"])
+        &serde_json::json!([
+            "rust",
+            "php",
+            "blade",
+            "typescript",
+            "python",
+            "go",
+            "kotlin",
+            "lua",
+            "roc",
+            "nim"
+        ])
     );
 }
 

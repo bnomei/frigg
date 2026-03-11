@@ -39,7 +39,13 @@ tokio = { version = "1.50.0", features = ["fs", "io-std", "macros", "net", "rt",
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 tree-sitter = "0.26.6"
+tree-sitter-go = "0.25.0"
+tree-sitter-kotlin = { path = "vendor/tree-sitter-kotlin" }
+tree-sitter-lua = "0.5.0"
+tree-sitter-nim = { path = "vendor/tree-sitter-nim" }
+tree-sitter-python = "0.23.3"
 tree-sitter-php = "0.24.2"
+tree-sitter-roc = { path = "vendor/tree-sitter-roc" }
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 url = "2.5.8"
