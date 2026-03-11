@@ -224,9 +224,9 @@ just run
 ```
 
 Notes:
-- If no `--workspace-root` values are passed, stdio auto-attaches the current working directory, preferring the enclosing Git root when present, and sets it as the session default repository.
+- If no `--workspace-root` values are passed, stdio starts detached and does not create local Frigg state until `workspace_attach` is called explicitly.
 - For Codex-style stdio MCP clients, prefer launching `frigg` with no startup `--workspace-root` args. That lets the MCP handshake complete before session-local workspace attach/status logic runs.
-- If the client declares MCP roots and Frigg starts without startup roots, Frigg seeds an empty session from those client roots after initialization before falling back to manual `workspace_attach`.
+- If Frigg starts without startup roots, the session stays detached until `workspace_attach` is called explicitly.
 - `workspace_current` is the read-only runtime status tool: it returns the session default repository, all attached repositories, runtime profile, watch/index health, active or recent runtime tasks, and recent provenance summaries.
 - Repository index `health.lexical` and `health.semantic` in `workspace_current` now reuse the same shared snapshot freshness semantics as watch/search startup status: expect reasons such as `missing_manifest_snapshot`, `stale_manifest_snapshot`, `manifest_valid_no_semantic_eligible_entries`, and `semantic_snapshot_missing_for_active_model`.
 - Built-in watch runtime tasks now distinguish `watch_manifest_fast` (`changed_reindex`) from `watch_semantic_followup` (`semantic_refresh`) in `workspace_current.runtime.active_tasks` and `workspace_current.runtime.recent_tasks`.
@@ -272,7 +272,7 @@ Remote bind requires explicit opt-in and auth token:
 
 HTTP attach-first flow:
 - HTTP can start with zero `--workspace-root` flags.
-- If the client declares MCP roots and Frigg started without startup roots, Frigg seeds an empty session from those client roots before falling back to manual attach.
+- If Frigg started without startup roots, the session stays detached until `workspace_attach` is called explicitly.
 - Call `list_repositories`; if it still returns an empty list or you need a different session-local default repository, call `workspace_attach`.
 - Call `workspace_current` to confirm the session default repository and inspect runtime/task status when needed.
 
