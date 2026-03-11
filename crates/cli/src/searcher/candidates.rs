@@ -124,7 +124,9 @@ pub(super) fn hidden_workflow_candidates_for_repository(
         }
         let rel_path = normalize_repository_relative_path(root, path);
         if intent.wants_entrypoint_build_flow {
-            if !is_entrypoint_build_workflow_path(&rel_path) {
+            let allow_ci_witness =
+                intent.wants_ci_workflow_witnesses && is_ci_workflow_path(&rel_path);
+            if !allow_ci_witness && !is_entrypoint_build_workflow_path(&rel_path) {
                 continue;
             }
         } else if !is_ci_workflow_path(&rel_path) {

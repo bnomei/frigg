@@ -4,7 +4,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::domain::model::TextMatch;
-use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceHit};
+use crate::domain::{
+    EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceHit, FrameworkHint,
+};
 
 use super::{
     HybridChannelHit, HybridDocumentRef, HybridRankingIntent, HybridSourceClass,
@@ -12,8 +14,8 @@ use super::{
     hybrid_excerpt_has_exact_identifier_anchor, hybrid_excerpt_has_test_double_anchor,
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_tokens,
     hybrid_query_exact_terms, hybrid_query_overlap_terms, hybrid_source_class,
-    is_bench_support_path, is_ci_workflow_path, is_cli_test_support_path,
-    is_entrypoint_build_workflow_path, is_entrypoint_reference_doc_path,
+    hybrid_specific_witness_query_terms, is_bench_support_path, is_ci_workflow_path,
+    is_cli_test_support_path, is_entrypoint_build_workflow_path, is_entrypoint_reference_doc_path,
     is_entrypoint_runtime_path, is_example_support_path, is_frontend_runtime_noise_path,
     is_generic_runtime_witness_doc_path, is_laravel_blade_component_path,
     is_laravel_bootstrap_entrypoint_path, is_laravel_core_provider_path,
@@ -24,7 +26,7 @@ use super::{
     is_loose_python_test_module_path, is_navigation_reference_doc_path, is_navigation_runtime_path,
     is_non_code_test_doc_path, is_python_entrypoint_runtime_path, is_python_runtime_config_path,
     is_python_test_witness_path, is_repo_metadata_path, is_runtime_config_artifact_path,
-    is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
     path_has_exact_query_term_match, sort_matches_deterministically,
     sort_search_diagnostics_deterministically,
 };
@@ -172,33 +174,30 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     let wants_example_or_bench_witnesses = intent.wants_examples || intent.wants_benchmarks;
     let penalize_generic_runtime_docs =
         !intent.wants_docs && !intent.wants_onboarding && !intent.wants_readme;
-    let mut multiplier = match class {
-        HybridSourceClass::ErrorContracts => 1.0,
-        HybridSourceClass::ToolContracts => 1.0,
-        HybridSourceClass::BenchmarkDocs => 0.98,
-        HybridSourceClass::Playbooks => {
-            if intent.penalize_playbook_self_reference {
-                0.25
-            } else {
-                0.45
-            }
+    let wants_rust_workspace_config = intent.has_framework_hint(FrameworkHint::Rust);
+    let wants_python_workspace_config = intent.has_framework_hint(FrameworkHint::Python);
+    let wants_python_witnesses = intent.has_framework_hint(FrameworkHint::Python);
+    let mut multiplier = if class == HybridSourceClass::Other {
+        match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+            Some(
+                "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt" | "kts",
+            ) => 1.0,
+            _ => 0.9,
         }
-        HybridSourceClass::Documentation => 0.88,
-        HybridSourceClass::Readme => 0.78,
-        HybridSourceClass::Specs => 0.82,
-        HybridSourceClass::Fixtures => 0.92,
-        HybridSourceClass::Project => 0.94,
-        HybridSourceClass::Support => 0.78,
-        HybridSourceClass::Tests => 0.97,
-        HybridSourceClass::Runtime => 1.0,
-        HybridSourceClass::Other => {
-            match Path::new(path).extension().and_then(|ext| ext.to_str()) {
-                Some(
-                    "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt"
-                    | "kts",
-                ) => 1.0,
-                _ => 0.9,
-            }
+    } else {
+        match class {
+            HybridSourceClass::ErrorContracts => 1.0,
+            HybridSourceClass::ToolContracts => 1.0,
+            HybridSourceClass::BenchmarkDocs => 0.98,
+            HybridSourceClass::Documentation => 0.88,
+            HybridSourceClass::Readme => 0.78,
+            HybridSourceClass::Specs => 0.82,
+            HybridSourceClass::Fixtures => 0.92,
+            HybridSourceClass::Project => 0.94,
+            HybridSourceClass::Support => 0.78,
+            HybridSourceClass::Tests => 0.97,
+            HybridSourceClass::Runtime => 1.0,
+            _ => 0.94,
         }
     };
     let is_repo_metadata = is_repo_metadata_path(path);
@@ -275,9 +274,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     if intent.wants_mcp_runtime_surface
         && matches!(
             class,
-            HybridSourceClass::BenchmarkDocs
-                | HybridSourceClass::Fixtures
-                | HybridSourceClass::Playbooks
+            HybridSourceClass::BenchmarkDocs | HybridSourceClass::Fixtures
         )
     {
         multiplier *= 0.72;
@@ -295,10 +292,16 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         multiplier *= 0.68;
     }
     if intent.wants_tests && class == HybridSourceClass::Tests {
-        multiplier *= 1.12;
+        multiplier *= 1.24;
     }
     if intent.wants_test_witness_recall && class == HybridSourceClass::Tests {
-        multiplier *= 1.18;
+        multiplier *= 1.36;
+    }
+    if intent.wants_test_witness_recall
+        && intent.wants_laravel_ui_witnesses
+        && class == HybridSourceClass::Tests
+    {
+        multiplier *= 1.32;
     }
     if intent.wants_examples && class == HybridSourceClass::Support {
         multiplier *= 1.18;
@@ -329,7 +332,11 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         && !is_example_support_path(path)
         && !is_bench_support_path(path)
     {
-        multiplier *= 0.68;
+        multiplier *= if intent.wants_test_witness_recall {
+            0.92
+        } else {
+            0.68
+        };
     }
     if wants_example_or_bench_witnesses
         && class == HybridSourceClass::Runtime
@@ -453,13 +460,13 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
             multiplier *= 1.52;
         }
         if is_python_test_witness_path(path) {
-            multiplier *= 1.34;
+            multiplier *= if wants_python_witnesses { 1.34 } else { 0.72 };
         }
         if intent.wants_benchmarks && is_python_test_witness_path(path) {
-            multiplier *= 1.18;
+            multiplier *= if wants_python_witnesses { 1.18 } else { 0.84 };
         }
         if is_loose_python_test_module_path(path) {
-            multiplier *= 1.08;
+            multiplier *= if wants_python_witnesses { 1.08 } else { 0.82 };
         }
         if is_non_code_test_doc_path(path) {
             multiplier *= 0.24;
@@ -482,13 +489,17 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
             multiplier *= 1.24;
         }
         if is_python_entrypoint_runtime_path(path) {
-            multiplier *= 1.36;
+            multiplier *= if wants_python_witnesses { 1.36 } else { 0.84 };
         }
         if is_python_runtime_config_path(path) {
-            multiplier *= 1.28;
+            multiplier *= if wants_python_workspace_config {
+                1.28
+            } else {
+                0.74
+            };
         }
         if is_python_test_witness_path(path) {
-            multiplier *= 1.26;
+            multiplier *= if wants_python_witnesses { 1.26 } else { 0.78 };
         }
         if is_loose_python_test_module_path(path) {
             multiplier *= 0.84;
@@ -514,8 +525,15 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         if is_runtime_config_artifact_path(path) {
             multiplier *= 1.40;
         }
+        if wants_rust_workspace_config && is_rust_workspace_config_path(path) {
+            multiplier *= 1.42;
+        }
         if is_python_runtime_config_path(path) {
-            multiplier *= 1.18;
+            multiplier *= if wants_python_workspace_config {
+                1.18
+            } else {
+                0.92
+            };
         }
         if matches!(
             class,
@@ -540,10 +558,10 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     }
     if intent.wants_entrypoint_build_flow {
         if is_entrypoint_runtime_path(path) {
-            multiplier *= 1.48;
+            multiplier *= 1.92;
         }
         if is_entrypoint_build_workflow_path(path) {
-            multiplier *= 3.20;
+            multiplier *= 2.72;
         }
         if is_laravel_core_provider_path(path) {
             multiplier *= 1.94;
@@ -557,7 +575,11 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
             multiplier *= 1.58;
         }
         if is_python_runtime_config_path(path) {
-            multiplier *= 1.18;
+            multiplier *= if wants_python_workspace_config {
+                1.18
+            } else {
+                0.84
+            };
         }
         if matches!(class, HybridSourceClass::Runtime) && !is_entrypoint_runtime_path(path) {
             multiplier *= 0.88;
@@ -627,6 +649,7 @@ pub(super) fn hybrid_canonical_match_multiplier(path: &str, exact_terms: &[Strin
 pub(super) struct HybridPathWitnessQueryContext {
     exact_terms: Vec<String>,
     query_overlap_terms: Vec<String>,
+    specific_query_terms: Vec<String>,
     query_mentions_cli: bool,
 }
 
@@ -635,6 +658,7 @@ impl HybridPathWitnessQueryContext {
         Self {
             exact_terms: hybrid_query_exact_terms(query_text),
             query_overlap_terms: hybrid_query_overlap_terms(query_text),
+            specific_query_terms: hybrid_specific_witness_query_terms(query_text),
             query_mentions_cli: query_text.to_ascii_lowercase().contains("cli"),
         }
     }
@@ -745,12 +769,18 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
 
     let path_overlap =
         hybrid_overlap_count(&projection.path_terms, &query_context.query_overlap_terms);
+    let specific_path_overlap =
+        hybrid_overlap_count(&projection.path_terms, &query_context.specific_query_terms);
     let is_entrypoint = projection.flags.is_entrypoint_runtime;
     let is_entrypoint_build_workflow =
         intent.wants_entrypoint_build_flow && projection.flags.is_entrypoint_build_workflow;
     let is_ci_workflow = intent.wants_ci_workflow_witnesses && projection.flags.is_ci_workflow;
     let is_config_artifact = projection.flags.is_runtime_config_artifact;
     let is_python_config = projection.flags.is_python_runtime_config;
+    let is_rust_workspace_config = is_rust_workspace_config_path(path);
+    let wants_rust_workspace_config = intent.has_framework_hint(FrameworkHint::Rust);
+    let wants_python_workspace_config = intent.has_framework_hint(FrameworkHint::Python);
+    let wants_python_witnesses = intent.has_framework_hint(FrameworkHint::Python);
     let is_python_test = projection.flags.is_python_test_witness;
     let is_example_support = projection.flags.is_example_support;
     let is_bench_support = projection.flags.is_bench_support;
@@ -758,13 +788,17 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     let is_cli_test = projection.flags.is_cli_test_support;
     let is_test_harness = projection.flags.is_test_harness;
     let is_scripts_ops = intent.wants_scripts_ops_witnesses && projection.flags.is_scripts_ops;
+    let is_laravel_partial_view = path.contains("/parts/") || path.contains("/partials/");
+    let is_laravel_top_level_blade_view = projection.flags.is_laravel_non_livewire_blade_view
+        && !projection.flags.is_laravel_layout_blade_view
+        && !is_laravel_partial_view;
     if path_overlap == 0
         && !is_entrypoint
         && !is_entrypoint_build_workflow
         && !is_ci_workflow
         && !(intent.wants_runtime_config_artifacts && is_config_artifact)
-        && !is_python_config
-        && !is_python_test
+        && !(wants_python_workspace_config && is_python_config)
+        && !(wants_python_witnesses && is_python_test)
         && !(intent.wants_examples && is_example_support)
         && !(intent.wants_benchmarks && is_bench_support)
         && !(query_context.query_mentions_cli && is_cli_test)
@@ -775,8 +809,22 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     }
 
     let mut score = path_overlap as f32;
+    if specific_path_overlap > 0 {
+        score += if intent.wants_entrypoint_build_flow {
+            3.0 * specific_path_overlap as f32
+        } else if intent.wants_test_witness_recall && projection.flags.is_test_support {
+            7.2 * specific_path_overlap as f32
+        } else if intent.wants_laravel_ui_witnesses {
+            2.2 * specific_path_overlap as f32
+        } else {
+            1.2 * specific_path_overlap as f32
+        };
+    }
     if is_entrypoint {
         score += 4.0;
+        if intent.wants_entrypoint_build_flow {
+            score += 3.2;
+        }
     }
     if is_entrypoint_build_workflow {
         score += 7.2;
@@ -797,6 +845,27 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         } else {
             3.6
         };
+    }
+    if intent.wants_laravel_ui_witnesses
+        && !intent.wants_laravel_form_action_witnesses
+        && !intent.wants_laravel_layout_witnesses
+    {
+        if is_laravel_top_level_blade_view {
+            score += if intent.wants_blade_component_witnesses {
+                3.2
+            } else {
+                1.8
+            };
+            if specific_path_overlap > 0 {
+                score += 1.4 * specific_path_overlap as f32;
+            }
+        } else if is_laravel_partial_view && projection.flags.is_laravel_non_livewire_blade_view {
+            score -= if intent.wants_blade_component_witnesses {
+                2.4
+            } else {
+                1.2
+            };
+        }
     }
     if intent.wants_livewire_view_witnesses && projection.flags.is_laravel_livewire_view {
         score += 2.8;
@@ -859,11 +928,23 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
             6.4
         };
     }
+    if intent.wants_laravel_ui_witnesses
+        && !query_context.specific_query_terms.is_empty()
+        && specific_path_overlap == 0
+        && (projection.flags.is_laravel_non_livewire_blade_view
+            || projection.flags.is_laravel_livewire_view)
+    {
+        score -= if projection.flags.is_laravel_layout_blade_view {
+            1.0
+        } else {
+            1.4
+        };
+    }
     if intent.wants_entrypoint_build_flow && projection.flags.is_laravel_route {
         score += 4.8;
     }
     if intent.wants_entrypoint_build_flow && projection.flags.is_laravel_bootstrap_entrypoint {
-        score += 3.6;
+        score += 8.0;
     }
     if intent.wants_entrypoint_build_flow && projection.flags.is_laravel_core_provider {
         score += 4.4;
@@ -873,11 +954,18 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     if intent.wants_runtime_config_artifacts && is_config_artifact {
         score += 3.2;
     }
+    if wants_rust_workspace_config && is_rust_workspace_config {
+        score += 3.6;
+    }
     if is_python_config {
-        score += 3.0;
+        score += if wants_python_workspace_config {
+            3.0
+        } else {
+            0.2
+        };
     }
     if is_python_test {
-        score += 3.4;
+        score += if wants_python_witnesses { 3.4 } else { 0.4 };
     }
     if intent.wants_examples && is_example_support {
         score += 4.2;
@@ -903,13 +991,24 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     }
     if intent.wants_test_witness_recall && projection.flags.is_test_support {
         score += 2.6;
+        if !is_example_support && !is_bench_support {
+            score += match path_overlap {
+                0 | 1 => 0.0,
+                2 => 1.2,
+                _ => 5.4,
+            };
+        }
     }
     if wants_example_or_bench_witnesses
         && projection.flags.is_test_support
         && !is_example_support
         && !is_bench_support
     {
-        score -= 2.4;
+        score -= if intent.wants_test_witness_recall {
+            0.8
+        } else {
+            2.4
+        };
     }
     if query_context.query_mentions_cli && is_cli_test {
         score += 3.8;

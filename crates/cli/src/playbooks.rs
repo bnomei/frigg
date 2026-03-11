@@ -380,6 +380,25 @@ fn witness_outcomes(
         .collect()
 }
 
+fn semantic_status_allowed(allowed_statuses: &[String], semantic_status: &str) -> bool {
+    if allowed_statuses.is_empty() {
+        return true;
+    }
+
+    let semantic_status = semantic_status.trim().to_ascii_lowercase();
+    if allowed_statuses
+        .iter()
+        .any(|status| status.trim().eq_ignore_ascii_case(&semantic_status))
+    {
+        return true;
+    }
+
+    semantic_status == "unavailable"
+        && allowed_statuses
+            .iter()
+            .any(|status| status.trim().eq_ignore_ascii_case("disabled"))
+}
+
 pub fn run_hybrid_playbook_regression(
     searcher: &TextSearcher,
     regression: &LoadedHybridPlaybookRegression,
@@ -402,10 +421,7 @@ pub fn run_hybrid_playbook_regression(
                 .iter()
                 .map(|status| status.trim().to_ascii_lowercase())
                 .collect::<Vec<_>>();
-            let status_allowed = allowed_statuses.is_empty()
-                || allowed_statuses
-                    .iter()
-                    .any(|status| status == &semantic_status);
+            let status_allowed = semantic_status_allowed(&allowed_statuses, &semantic_status);
             let matched_paths = output
                 .matches
                 .iter()
@@ -735,6 +751,22 @@ Body text.
                 .contains("hybrid witness group 'docs' must include at least one path"),
             "unexpected missing witness group paths error: {error}"
         );
+    }
+
+    #[test]
+    fn semantic_status_allowed_treats_unavailable_like_disabled_fallback() {
+        let allowed = vec![
+            "ok".to_owned(),
+            "degraded".to_owned(),
+            "disabled".to_owned(),
+        ];
+
+        assert!(super::semantic_status_allowed(&allowed, "disabled"));
+        assert!(super::semantic_status_allowed(&allowed, "unavailable"));
+        assert!(!super::semantic_status_allowed(
+            &["ok".to_owned()],
+            "unavailable"
+        ));
     }
 
     #[test]

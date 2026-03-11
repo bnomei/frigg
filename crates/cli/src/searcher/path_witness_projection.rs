@@ -116,6 +116,13 @@ pub(super) fn decode_path_witness_projection_record(
             record.source_class, record.path
         ))
     })?;
+    let source_class = match source_class {
+        // Legacy rows may still carry the old FRIGG-specific playbook class. Normalize those
+        // projections to the generic path-based class so ranking behavior does not depend on
+        // historical storage state.
+        SourceClass::Playbooks => SourceClass::Project,
+        other => other,
+    };
     let path_terms = serde_json::from_str(&record.path_terms_json).map_err(|err| {
         FriggError::Internal(format!(
             "failed to decode stored path witness terms for '{}': {err}",

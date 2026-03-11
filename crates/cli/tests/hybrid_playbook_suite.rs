@@ -72,6 +72,17 @@ fn top_paths(output: &SearchHybridExecutionOutput) -> Vec<&str> {
         .collect()
 }
 
+fn semantic_status_allowed(allowed_statuses: &[String], semantic_status: &str) -> bool {
+    let semantic_status = semantic_status.trim().to_ascii_lowercase();
+    allowed_statuses
+        .iter()
+        .any(|status| status.trim().eq_ignore_ascii_case(&semantic_status))
+        || (semantic_status == "unavailable"
+            && allowed_statuses
+                .iter()
+                .any(|status| status.trim().eq_ignore_ascii_case("disabled")))
+}
+
 fn assert_playbook_regression(
     regression: &LoadedHybridPlaybookRegression,
     output: &SearchHybridExecutionOutput,
@@ -79,11 +90,7 @@ fn assert_playbook_regression(
 ) {
     let semantic_status = output.note.semantic_status.as_str();
     assert!(
-        regression
-            .spec
-            .allowed_semantic_statuses
-            .iter()
-            .any(|status| status == semantic_status),
+        semantic_status_allowed(&regression.spec.allowed_semantic_statuses, semantic_status),
         "playbook {} returned disallowed semantic status '{}' with reason {:?}",
         regression.metadata.playbook_id,
         semantic_status,

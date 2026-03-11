@@ -6,9 +6,6 @@ use crate::path_class::classify_repository_path;
 pub(super) type HybridSourceClass = SourceClass;
 
 pub(super) fn hybrid_source_class(path: &str) -> HybridSourceClass {
-    if path.starts_with("playbooks/") {
-        return HybridSourceClass::Playbooks;
-    }
     if is_error_contract_path(path) {
         return HybridSourceClass::ErrorContracts;
     }
@@ -170,7 +167,9 @@ pub(super) fn is_repo_metadata_path(path: &str) -> bool {
 mod tests {
     use crate::domain::SourceClass;
 
-    use super::hybrid_source_class;
+    use super::{
+        hybrid_source_class, is_runtime_config_artifact_path, is_rust_workspace_config_path,
+    };
 
     #[test]
     fn hybrid_source_class_respects_specific_precedence_before_path_class() {
@@ -184,7 +183,7 @@ mod tests {
         );
         assert_eq!(
             hybrid_source_class("playbooks/runtime/deep-search.md"),
-            SourceClass::Playbooks
+            SourceClass::Project
         );
     }
 
@@ -198,6 +197,28 @@ mod tests {
             hybrid_source_class("crates/cli/examples/server.rs"),
             SourceClass::Support
         );
+    }
+
+    #[test]
+    fn rust_workspace_config_paths_are_detected_as_runtime_config_artifacts() {
+        for path in [
+            "Cargo.toml",
+            "Cargo.lock",
+            ".cargo/config.toml",
+            "rust-toolchain.toml",
+            "rustfmt.toml",
+            "clippy.toml",
+            "crates/tooling/.cargo/config.toml",
+        ] {
+            assert!(
+                is_rust_workspace_config_path(path),
+                "{path} should be detected as a rust workspace config path"
+            );
+            assert!(
+                is_runtime_config_artifact_path(path),
+                "{path} should participate in runtime config artifact ranking"
+            );
+        }
     }
 }
 
@@ -228,7 +249,25 @@ pub(super) fn is_python_runtime_config_path(path: &str) -> bool {
     )
 }
 
+pub(super) fn is_rust_workspace_config_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if normalized == ".cargo/config.toml" || normalized.ends_with("/.cargo/config.toml") {
+        return true;
+    }
+
+    matches!(
+        Path::new(&normalized)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("cargo.toml" | "cargo.lock" | "rust-toolchain.toml" | "rustfmt.toml" | "clippy.toml")
+    )
+}
+
 pub(super) fn is_runtime_config_artifact_path(path: &str) -> bool {
+    if is_rust_workspace_config_path(path) {
+        return true;
+    }
+
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     matches!(
         Path::new(&normalized)

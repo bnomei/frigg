@@ -239,6 +239,322 @@ fn prepare_erpsaas_blade_profile_pressure_fixture(workspace_root: &Path) {
     );
 }
 
+fn prepare_bookstack_blade_fix_wave_fixture(workspace_root: &Path) {
+    let generic_books_partial = "<div>blade component layout slot section view render resources views parts books sidebar actions</div>\n";
+    let generic_header_partial = "<div>blade component layout slot section view render resources views layouts parts header navigation</div>\n";
+    let provider_pressure = "<?php\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n";
+
+    prepare_workspace(
+        workspace_root,
+        &[
+            (
+                "bootstrap/app.php",
+                "<?php\n$app = new \\BookStack\\App\\Application(dirname(__DIR__));\n$app->singleton(Illuminate\\Contracts\\Http\\Kernel::class, BookStack\\Http\\Kernel::class);\n$app->singleton(Illuminate\\Contracts\\Console\\Kernel::class, BookStack\\Console\\Kernel::class);\nreturn $app;\n",
+            ),
+            (
+                "bootstrap/phpstan.php",
+                "<?php\nreturn ['bootstrap' => true, 'app' => 'bookstack'];\n",
+            ),
+            (
+                "routes/web.php",
+                "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::middleware(['web'])->group(function () {\n    Route::get('/books', fn () => view('books.parts.list'));\n});\n",
+            ),
+            (
+                "routes/api.php",
+                "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::middleware(['api'])->group(function () {\n    Route::get('/api/docs', fn () => ['ok' => true]);\n});\n",
+            ),
+            (
+                "app/App/Providers/EventServiceProvider.php",
+                provider_pressure,
+            ),
+            (
+                "app/App/Providers/AppServiceProvider.php",
+                provider_pressure,
+            ),
+            (
+                "app/App/Providers/AuthServiceProvider.php",
+                provider_pressure,
+            ),
+            ("app/Http/Middleware/ApiAuthenticate.php", provider_pressure),
+            ("app/Http/Middleware/ApplyCspRules.php", provider_pressure),
+            ("app/Http/Middleware/Authenticate.php", provider_pressure),
+            (
+                "resources/views/books/parts/index-sidebar-section-actions.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-new.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-popular.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-recents.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-actions.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-activity.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-details.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-shelves.blade.php",
+                generic_books_partial,
+            ),
+            (
+                "resources/views/layouts/parts/header-links.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/layouts/parts/header.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/layouts/parts/header-logo.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/layouts/parts/header-search.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/layouts/parts/header-user-menu.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/layouts/parts/notifications.blade.php",
+                generic_header_partial,
+            ),
+            (
+                "resources/views/api-docs/index.blade.php",
+                "@extends('layouts.simple')\n@section('body')\n@include('api-docs.parts.getting-started')\n@include('api-docs.parts.endpoint')\n@stop\n",
+            ),
+            (
+                "resources/views/api-docs/parts/endpoint.blade.php",
+                "<article>\n    <h2>API endpoint</h2>\n    <p>Endpoint docs and API response details.</p>\n</article>\n",
+            ),
+            (
+                "resources/views/api-docs/parts/getting-started.blade.php",
+                "<section>\n    <h2>API getting started</h2>\n    <p>Authentication, request format, and API docs overview.</p>\n</section>\n",
+            ),
+            (
+                "resources/views/attachments/list.blade.php",
+                "<div>Attachment manager list.</div>\n",
+            ),
+            (
+                "resources/views/attachments/manager-edit-form.blade.php",
+                "<form>Attachment manager edit form.</form>\n",
+            ),
+            (
+                "resources/views/attachments/manager-link-form.blade.php",
+                "<form>Attachment manager link form.</form>\n",
+            ),
+            (
+                "resources/views/attachments/manager-list.blade.php",
+                "<div>Attachment manager list.</div>\n",
+            ),
+            (
+                "resources/views/attachments/manager.blade.php",
+                "<section>Attachment manager.</section>\n",
+            ),
+            (
+                "tests/Activity/AuditLogApiTest.php",
+                "<?php\n// tests audit log api audit log tests audit log api\n",
+            ),
+            (
+                "tests/Activity/AuditLogTest.php",
+                "<?php\n// tests audit log settings audit log permissions tests audit log\n",
+            ),
+            (
+                "tests/Activity/CommentDisplayTest.php",
+                "<?php\n// tests audit log comment display tests audit log\n",
+            ),
+            (
+                "tests/Activity/CommentMentionTest.php",
+                "<?php\n// tests audit log comment mention tests audit log\n",
+            ),
+            (
+                "tests/Activity/CommentSettingTest.php",
+                "<?php\n// tests audit log comment settings tests audit log\n",
+            ),
+            (
+                "tests/Activity/CommentStoreTest.php",
+                "<?php\n// tests audit log comment store tests audit log\n",
+            ),
+            (
+                "resources/views/settings/audit.blade.php",
+                "<h1>Audit Log</h1>\n",
+            ),
+        ],
+    );
+}
+
+fn prepare_bookstack_playbook_test_pressure_fixture(workspace_root: &Path) {
+    prepare_bookstack_blade_fix_wave_fixture(workspace_root);
+    prepare_workspace(
+        workspace_root,
+        &[
+            (
+                "app/Activity/Controllers/AuditLogController.php",
+                "<?php\nclass AuditLogController {\n    public function index() {\n        return 'tests fixtures integration audit log resources views api docs docs parts';\n    }\n}\n",
+            ),
+            (
+                "app/Activity/Controllers/AuditLogApiController.php",
+                "<?php\nclass AuditLogApiController {\n    public function index() {\n        return ['docs' => 'tests fixtures integration audit log resources views api docs docs parts'];\n    }\n}\n",
+            ),
+            (
+                "app/Activity/Models/Activity.php",
+                "<?php\nclass Activity {\n    public string $audit = 'tests fixtures integration audit log resources views api docs docs parts';\n}\n",
+            ),
+            (
+                "app/Console/Commands/ClearActivityCommand.php",
+                "<?php\nclass ClearActivityCommand {\n    protected $signature = 'activity:clear';\n}\n",
+            ),
+            (
+                "app/Theming/ThemeEvents.php",
+                "<?php\nclass ThemeEvents {}\n",
+            ),
+            (
+                "app/Config/clockwork.php",
+                "<?php\nreturn ['audit' => 'tests fixtures integration audit log resources views api docs docs parts'];\n",
+            ),
+            (
+                "app/Config/logging.php",
+                "<?php\nreturn ['audit' => 'tests fixtures integration audit log resources views api docs docs parts'];\n",
+            ),
+            (
+                "app/Config/services.php",
+                "<?php\nreturn ['audit' => 'tests fixtures integration audit log resources views api docs docs parts'];\n",
+            ),
+            (
+                "dev/docs/php-testing.md",
+                "# PHP testing\ntests fixtures integration audit log resources views api docs docs parts\n",
+            ),
+            (
+                "dev/docs/development.md",
+                "# Development\ntests fixtures integration audit log resources views api docs docs parts\n",
+            ),
+            (
+                "dev/docs/permission-scenario-testing.md",
+                "# Permission scenario testing\ntests fixtures integration audit log resources views api docs docs parts\n",
+            ),
+            (
+                "lang/ar/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/bg/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/bn/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/bs/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/ca/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/cs/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/cy/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/da/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/de/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            (
+                "lang/de_informal/settings.php",
+                "<?php\nreturn ['audit' => 'docs'];\n",
+            ),
+            ("composer.json", "{ \"name\": \"bookstack/bookstack\" }\n"),
+            ("composer.lock", "{ \"packages\": [] }\n"),
+            ("jest.config.ts", "export default {};\n"),
+            (
+                "dev/build/svg-blank-transform.js",
+                "export default function svgBlankTransform() { return 'audit'; }\n",
+            ),
+            (
+                "dev/docker/db-testing/run.sh",
+                "#!/usr/bin/env bash\necho audit\n",
+            ),
+        ],
+    );
+}
+
+fn prepare_bookstack_models_data_pressure_fixture(workspace_root: &Path) {
+    prepare_workspace(
+        workspace_root,
+        &[
+            (
+                "database/migrations/2014_10_12_000000_create_users_table.php",
+                "<?php\nSchema::create('users', function ($table) {\n    $table->id();\n    $table->string('email');\n});\n",
+            ),
+            (
+                "database/migrations/2014_10_12_100000_create_password_resets_table.php",
+                "<?php\nSchema::create('password_resets', function ($table) {\n    $table->string('email');\n    $table->string('token');\n});\n",
+            ),
+            (
+                "database/migrations/2015_07_12_114933_create_books_table.php",
+                "<?php\nSchema::create('books', function ($table) {\n    $table->id();\n    $table->string('name');\n});\n",
+            ),
+            (
+                "database/migrations/2015_07_12_190027_create_pages_table.php",
+                "<?php\nSchema::create('pages', function ($table) {\n    $table->id();\n    $table->unsignedBigInteger('book_id');\n});\n",
+            ),
+            (
+                "database/seeders/DatabaseSeeder.php",
+                "<?php\nclass DatabaseSeeder {\n    public function run() {}\n}\n",
+            ),
+            (
+                "database/factories/UserFactory.php",
+                "<?php\nclass UserFactory {}\n",
+            ),
+            (
+                "app/Activity/Tools/WebhookFormatter.php",
+                "<?php\nclass WebhookFormatter {\n    public function format(array $data) {\n        return $data;\n    }\n}\n",
+            ),
+            (
+                "app/Exports/ZipExports/Models/ZipExportBook.php",
+                "<?php\nclass ZipExportBook {\n    public string $model = 'book';\n}\n",
+            ),
+            (
+                "app/Entities/Tools/MixedEntityListLoader.php",
+                "<?php\nclass MixedEntityListLoader {\n    public function load(array $data) {\n        return $data;\n    }\n}\n",
+            ),
+            (
+                "app/Exports/ZipExports/Models/ZipExportAttachment.php",
+                "<?php\nclass ZipExportAttachment {\n    public string $model = 'attachment';\n}\n",
+            ),
+            ("app/Models/User.php", "<?php\nclass User {}\n"),
+            (
+                "app/Policies/BookPolicy.php",
+                "<?php\nclass BookPolicy {}\n",
+            ),
+        ],
+    );
+}
+
 #[test]
 fn php_hybrid_regression_harness_supports_top_k_witness_groups() {
     let workspace_root = temp_workspace_root("hybrid-witness-groups");
@@ -2007,6 +2323,166 @@ fn php_hybrid_blade_view_surface_test_queries_keep_erpsaas_document_components_v
 }
 
 #[test]
+fn php_hybrid_bookstack_blade_surface_queries_keep_hidden_views_and_tests_visible() {
+    let workspace_root = temp_workspace_root("bookstack-blade-surface-hidden-witnesses");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "resources/views/api-docs/index.blade.php",
+                "@extends('layouts.base')\n@section('content')\n<div>API docs index</div>\n@endsection\n",
+            ),
+            (
+                "resources/views/api-docs/parts/endpoint.blade.php",
+                "<section>API docs endpoint</section>\n",
+            ),
+            (
+                "resources/views/api-docs/parts/getting-started.blade.php",
+                "<section>API docs getting started</section>\n",
+            ),
+            (
+                "resources/views/attachments/list.blade.php",
+                "<div>Attachment list</div>\n",
+            ),
+            (
+                "resources/views/attachments/manager-edit-form.blade.php",
+                "<form>Attachment manager edit form</form>\n",
+            ),
+            (
+                "resources/views/attachments/manager-link-form.blade.php",
+                "<form>Attachment manager link form</form>\n",
+            ),
+            (
+                "resources/views/attachments/manager-list.blade.php",
+                "<div>Attachment manager list</div>\n",
+            ),
+            (
+                "resources/views/attachments/manager.blade.php",
+                "<section>Attachment manager</section>\n",
+            ),
+            (
+                "tests/Activity/AuditLogApiTest.php",
+                "<?php\nclass AuditLogApiTest extends TestCase {}\n",
+            ),
+            (
+                "tests/Activity/AuditLogTest.php",
+                "<?php\nclass AuditLogTest extends TestCase {}\n",
+            ),
+            (
+                "tests/Activity/CommentDisplayTest.php",
+                "<?php\nclass CommentDisplayTest extends TestCase {}\n",
+            ),
+            (
+                "tests/Activity/CommentMentionTest.php",
+                "<?php\nclass CommentMentionTest extends TestCase {}\n",
+            ),
+            (
+                "tests/Activity/CommentSettingTest.php",
+                "<?php\nclass CommentSettingTest extends TestCase {}\n",
+            ),
+            (
+                "tests/Activity/CommentStoreTest.php",
+                "<?php\nclass CommentStoreTest extends TestCase {}\n",
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-actions.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/header-links.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/header.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/header-logo.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/header-search.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/header-user-menu.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/layouts/parts/notifications.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-new.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-popular.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/index-sidebar-section-recents.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-actions.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-activity.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-details.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+            (
+                "resources/views/books/parts/show-sidebar-section-shelves.blade.php",
+                "<div>blade component layout slot section view render tests audit log resources views api docs docs parts</div>\n",
+            ),
+        ],
+    );
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "blade component layout slot section view render tests audit log resources views api docs docs parts",
+        14,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[
+            (
+                "blade-views",
+                &[
+                    "resources/views/api-docs/index.blade.php",
+                    "resources/views/api-docs/parts/endpoint.blade.php",
+                    "resources/views/api-docs/parts/getting-started.blade.php",
+                    "resources/views/attachments/list.blade.php",
+                    "resources/views/attachments/manager-edit-form.blade.php",
+                    "resources/views/attachments/manager-link-form.blade.php",
+                    "resources/views/attachments/manager-list.blade.php",
+                    "resources/views/attachments/manager.blade.php",
+                ],
+            ),
+            (
+                "tests",
+                &[
+                    "tests/Activity/AuditLogApiTest.php",
+                    "tests/Activity/AuditLogTest.php",
+                    "tests/Activity/CommentDisplayTest.php",
+                    "tests/Activity/CommentMentionTest.php",
+                    "tests/Activity/CommentSettingTest.php",
+                    "tests/Activity/CommentStoreTest.php",
+                ],
+            ),
+        ],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
 fn php_hybrid_laravel_compound_test_hint_queries_surface_bootstrap_test_files() {
     let workspace_root = temp_workspace_root("laravel-test-hints");
     prepare_workspace(
@@ -2052,6 +2528,78 @@ fn php_hybrid_laravel_compound_test_hint_queries_surface_bootstrap_test_files() 
                 "tests/Browser/LoginTest.php",
             ],
         )],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_laravel_bootstrap_queries_keep_bootstrap_entrypoints_visible_under_provider_crowding()
+{
+    let workspace_root = temp_workspace_root("laravel-bootstrap-entrypoint-crowding");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "bootstrap/app.php",
+                "<?php\nreturn Application::configure(basePath: dirname(__DIR__));\n",
+            ),
+            ("bootstrap/phpstan.php", "<?php\nreturn [];\n"),
+            (
+                "routes/web.php",
+                "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::get('/', fn () => view('books.index'));\n",
+            ),
+            (
+                "routes/api.php",
+                "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::get('/ping', fn () => ['ok' => true]);\n",
+            ),
+            (
+                "app/App/Providers/EventServiceProvider.php",
+                "<?php\nclass EventServiceProvider {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/App/Providers/AppServiceProvider.php",
+                "<?php\nclass AppServiceProvider {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/App/Providers/AuthServiceProvider.php",
+                "<?php\nclass AuthServiceProvider {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/App/Providers/BroadcastServiceProvider.php",
+                "<?php\nclass BroadcastServiceProvider {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/App/Providers/HorizonServiceProvider.php",
+                "<?php\nclass HorizonServiceProvider {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/Http/Middleware/ApiAuthenticate.php",
+                "<?php\nclass ApiAuthenticate {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/Http/Middleware/ApplyCspRules.php",
+                "<?php\nclass ApplyCspRules {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+            (
+                "app/Http/Middleware/Authenticate.php",
+                "<?php\nclass Authenticate {}\n// blade bootstrap providers routes middleware app entrypoint blade bootstrap providers routes middleware app entrypoint\n",
+            ),
+        ],
+    );
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "blade bootstrap providers routes middleware app entrypoint",
+        8,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[
+            ("routes", &["routes/web.php", "routes/api.php"]),
+            ("bootstrap", &["bootstrap/app.php", "bootstrap/phpstan.php"]),
+        ],
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -2135,6 +2683,141 @@ fn php_hybrid_laravel_entrypoint_queries_surface_routes_files() {
                 ],
             ),
         ],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_bookstack_entrypoint_queries_keep_bootstrap_witnesses_visible() {
+    let workspace_root = temp_workspace_root("bookstack-entrypoint-wave");
+    prepare_bookstack_blade_fix_wave_fixture(&workspace_root);
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "blade bootstrap providers routes middleware app entrypoint",
+        8,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[("providers", &["bootstrap/app.php", "bootstrap/phpstan.php"])],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_bookstack_blade_view_queries_keep_api_docs_views_visible() {
+    let workspace_root = temp_workspace_root("bookstack-blade-views-wave");
+    prepare_bookstack_blade_fix_wave_fixture(&workspace_root);
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "blade component layout slot section view render resources views api docs docs parts tests audit log",
+        14,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[(
+            "blade-views",
+            &[
+                "resources/views/api-docs/index.blade.php",
+                "resources/views/api-docs/parts/endpoint.blade.php",
+                "resources/views/api-docs/parts/getting-started.blade.php",
+                "resources/views/attachments/list.blade.php",
+                "resources/views/attachments/manager-edit-form.blade.php",
+                "resources/views/attachments/manager-link-form.blade.php",
+                "resources/views/attachments/manager-list.blade.php",
+                "resources/views/attachments/manager.blade.php",
+            ],
+        )],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_bookstack_blade_test_queries_keep_audit_log_tests_visible() {
+    let workspace_root = temp_workspace_root("bookstack-tests-wave");
+    prepare_bookstack_blade_fix_wave_fixture(&workspace_root);
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "blade component layout slot section view render tests audit log resources views api docs docs parts",
+        14,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[(
+            "tests",
+            &[
+                "tests/Activity/AuditLogApiTest.php",
+                "tests/Activity/AuditLogTest.php",
+                "tests/Activity/CommentDisplayTest.php",
+                "tests/Activity/CommentMentionTest.php",
+                "tests/Activity/CommentSettingTest.php",
+                "tests/Activity/CommentStoreTest.php",
+            ],
+        )],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_bookstack_playbook_test_queries_keep_audit_log_tests_visible() {
+    let workspace_root = temp_workspace_root("bookstack-playbook-tests-wave");
+    prepare_bookstack_playbook_test_pressure_fixture(&workspace_root);
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "tests fixtures integration audit log resources views api docs docs parts",
+        26,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[(
+            "tests",
+            &[
+                "tests/Activity/AuditLogApiTest.php",
+                "tests/Activity/AuditLogTest.php",
+                "tests/Activity/CommentDisplayTest.php",
+                "tests/Activity/CommentMentionTest.php",
+                "tests/Activity/CommentSettingTest.php",
+                "tests/Activity/CommentStoreTest.php",
+            ],
+        )],
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[test]
+fn php_hybrid_bookstack_models_data_playbook_queries_keep_migrations_visible() {
+    let workspace_root = temp_workspace_root("bookstack-models-data-wave");
+    prepare_bookstack_models_data_pressure_fixture(&workspace_root);
+    let searcher = searcher_for_workspace_root(&workspace_root);
+    let paths = top_paths(
+        &searcher,
+        "model migration seeder factory data app models database users table resets table",
+        11,
+    );
+
+    assert_witness_groups(
+        &paths,
+        &[(
+            "models-data",
+            &[
+                "database/migrations/2014_10_12_000000_create_users_table.php",
+                "database/migrations/2014_10_12_100000_create_password_resets_table.php",
+                "database/migrations/2015_07_12_114933_create_books_table.php",
+                "database/migrations/2015_07_12_190027_create_pages_table.php",
+            ],
+        )],
     );
 
     cleanup_workspace_root(&workspace_root);

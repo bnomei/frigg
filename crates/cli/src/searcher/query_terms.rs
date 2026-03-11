@@ -31,6 +31,65 @@ pub(super) fn hybrid_query_exact_terms(query_text: &str) -> Vec<String> {
     tokens
 }
 
+pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<String> {
+    const GENERIC_WITNESS_TERMS: &[&str] = &[
+        "action",
+        "actions",
+        "app",
+        "application",
+        "applications",
+        "blade",
+        "build",
+        "component",
+        "components",
+        "create",
+        "creates",
+        "entry",
+        "entrypoint",
+        "flow",
+        "form",
+        "forms",
+        "layout",
+        "layouts",
+        "middleware",
+        "modal",
+        "modals",
+        "page",
+        "pages",
+        "part",
+        "parts",
+        "provider",
+        "providers",
+        "render",
+        "resource",
+        "resources",
+        "route",
+        "routes",
+        "script",
+        "scripts",
+        "section",
+        "sections",
+        "slot",
+        "slots",
+        "test",
+        "tests",
+        "ui",
+        "view",
+        "views",
+        "wire",
+        "wiring",
+    ];
+
+    hybrid_query_exact_terms(query_text)
+        .into_iter()
+        .filter(|term| {
+            !GENERIC_WITNESS_TERMS
+                .iter()
+                .any(|generic| generic == &term.as_str())
+        })
+        .collect()
+}
+
 pub(super) fn path_has_exact_query_term_match(path: &str, exact_terms: &[String]) -> bool {
     let Some(stem) = Path::new(path).file_stem().and_then(|stem| stem.to_str()) else {
         return false;

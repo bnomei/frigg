@@ -6,7 +6,7 @@ use crate::domain::{FriggResult, model::TextMatch};
 use super::{
     BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD, SearchCandidateUniverse, SearchDiagnostic,
     SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery, retain_bounded_match,
-    scrub_search_content, should_scrub_playbook_metadata, sort_matches_deterministically,
+    scrub_search_content, should_scrub_leading_markdown_comment, sort_matches_deterministically,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
 
@@ -39,7 +39,7 @@ where
             {
                 continue;
             }
-            if should_scrub_playbook_metadata(&rel_path) {
+            if should_scrub_leading_markdown_comment(&rel_path) {
                 let content = match fs::read_to_string(path) {
                     Ok(content) => content,
                     Err(err) => {
@@ -230,7 +230,7 @@ where
             {
                 continue;
             }
-            if should_scrub_playbook_metadata(rel_path) {
+            if should_scrub_leading_markdown_comment(rel_path) {
                 let content = match fs::read_to_string(path) {
                     Ok(content) => content,
                     Err(err) => {

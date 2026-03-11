@@ -183,10 +183,7 @@ impl SearchIntent {
                     || self.has_goal(SearchGoal::Examples)
             }
             SourceClass::Fixtures => self.has_goal(SearchGoal::Fixtures),
-            SourceClass::Playbooks => {
-                self.playbook_reference_policy == PlaybookReferencePolicy::AllowSelfReference
-            }
-            SourceClass::Specs | SourceClass::Other => false,
+            _ => false,
         }
     }
 }
@@ -436,6 +433,41 @@ impl QueryContext {
     fn mentions_laravel_ui(&self) -> bool {
         self.has_any(&["blade", "livewire", "flux"])
             && (self.has_blade_ui_surface_terms() || self.has_blade_form_action_terms())
+    }
+
+    fn has_strong_test_focus_terms(&self) -> bool {
+        self.has_any(&[
+            "fixture",
+            "fixtures",
+            "integration",
+            "scenario",
+            "assert",
+            "coverage",
+            "parity",
+            "replay",
+            "conformance",
+            "inspector",
+        ])
+    }
+
+    fn mentions_model_data_surface(&self) -> bool {
+        self.has_any(&[
+            "model",
+            "models",
+            "migration",
+            "migrations",
+            "seeder",
+            "seeders",
+            "factory",
+            "factories",
+            "policy",
+            "policies",
+            "validation",
+            "database",
+            "schema",
+            "table",
+            "tables",
+        ])
     }
 
     fn mentions_playbooks(&self) -> bool {
@@ -840,7 +872,8 @@ fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchInten
         "cli main",
         "main module",
         "runtime config",
-    ]) || builder.has_artifact_bias(ArtifactBias::LaravelUi)
+    ]) || context.mentions_model_data_surface()
+        || builder.has_artifact_bias(ArtifactBias::LaravelUi)
         || builder.has_goal(SearchGoal::EntryPointBuildFlow)
         || builder.has_goal(SearchGoal::NavigationFallbacks))
     {
@@ -977,9 +1010,25 @@ fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBu
             || builder.has_goal(SearchGoal::ErrorTaxonomy)
             || builder.has_goal(SearchGoal::ToolContracts))
         && context.has_any(&["runtime helper", "runtime helpers", "helper", "call site"]);
+    let laravel_ui_with_path_hints = builder.has_goal(SearchGoal::Tests)
+        && builder.has_artifact_bias(ArtifactBias::LaravelUi)
+        && builder.has_goal(SearchGoal::Documentation)
+        && !builder.has_goal(SearchGoal::Readme)
+        && !builder.has_goal(SearchGoal::Contracts)
+        && !builder.has_goal(SearchGoal::ErrorTaxonomy)
+        && !builder.has_goal(SearchGoal::ToolContracts);
+    let docs_with_strong_test_focus = builder.has_goal(SearchGoal::Tests)
+        && builder.has_goal(SearchGoal::Documentation)
+        && context.has_strong_test_focus_terms()
+        && !builder.has_goal(SearchGoal::Readme)
+        && !builder.has_goal(SearchGoal::Contracts)
+        && !builder.has_goal(SearchGoal::ErrorTaxonomy)
+        && !builder.has_goal(SearchGoal::ToolContracts);
 
     if !(has_test_or_cli_signal
         && (bridge_docs_contract_runtime_tests
+            || laravel_ui_with_path_hints
+            || docs_with_strong_test_focus
             || (!builder.has_goal(SearchGoal::Documentation)
                 && !builder.has_goal(SearchGoal::Readme)
                 && !builder.has_goal(SearchGoal::Contracts)
@@ -1177,6 +1226,40 @@ mod tests {
                 .applied_rule_ids()
                 .contains(&SearchIntentRuleId::BladeComponentWitnessTerms)
         );
+    }
+
+    #[test]
+    fn laravel_ui_queries_keep_test_witness_focus_when_docs_are_path_hints() {
+        let intent = SearchIntent::from_query(
+            "blade component layout slot section view render resources views api docs docs parts tests audit log",
+        );
+
+        assert!(intent.has_goal(SearchGoal::Documentation));
+        assert!(intent.has_artifact_bias(ArtifactBias::LaravelUi));
+        assert!(intent.has_artifact_bias(ArtifactBias::TestWitness));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+    }
+
+    #[test]
+    fn test_execution_queries_keep_test_witness_focus_when_docs_are_path_hints() {
+        let intent = SearchIntent::from_query(
+            "tests fixtures integration audit log resources views api docs docs parts",
+        );
+
+        assert!(intent.has_goal(SearchGoal::Documentation));
+        assert!(intent.has_goal(SearchGoal::Tests));
+        assert!(intent.has_artifact_bias(ArtifactBias::TestWitness));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+    }
+
+    #[test]
+    fn model_data_queries_request_runtime_witness_recall() {
+        let intent = SearchIntent::from_query(
+            "model migration seeder factory data app models database users table resets table",
+        );
+
+        assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
     }
 
     #[test]

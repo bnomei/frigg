@@ -39,7 +39,7 @@ use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
 use crate::storage::{
     ManifestEntry, PathWitnessProjectionRecord, Storage, resolve_provenance_db_path,
 };
-use crate::text_sanitization::scrub_leading_metadata_comment;
+use crate::text_sanitization::scrub_leading_html_comment;
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 use aho_corasick::AhoCorasick;
 use attribution::elapsed_us;
@@ -82,7 +82,8 @@ use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
     hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
     hybrid_path_overlap_count, hybrid_path_overlap_tokens, hybrid_query_exact_terms,
-    hybrid_query_overlap_terms, path_has_exact_query_term_match,
+    hybrid_query_overlap_terms, hybrid_specific_witness_query_terms,
+    path_has_exact_query_term_match,
 };
 pub use ranker::rank_hybrid_evidence;
 use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
@@ -101,8 +102,8 @@ use surfaces::{
     is_generic_runtime_witness_doc_path, is_loose_python_test_module_path,
     is_navigation_reference_doc_path, is_navigation_runtime_path, is_non_code_test_doc_path,
     is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
-    is_repo_metadata_path, is_runtime_config_artifact_path, is_scripts_ops_path,
-    is_test_harness_path, is_test_support_path,
+    is_repo_metadata_path, is_runtime_config_artifact_path, is_rust_workspace_config_path,
+    is_scripts_ops_path, is_test_harness_path, is_test_support_path,
 };
 
 #[derive(Debug, Clone)]
@@ -852,13 +853,20 @@ impl TextSearcher {
     }
 }
 
-fn should_scrub_playbook_metadata(path: &str) -> bool {
-    path.starts_with("playbooks/") && path.ends_with(".md")
+fn should_scrub_leading_markdown_comment(path: &str) -> bool {
+    matches!(
+        Path::new(path.trim_start_matches("./"))
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("md" | "markdown" | "mdown")
+    )
 }
 
 fn scrub_search_content<'a>(path: &str, content: &'a str) -> Cow<'a, str> {
-    if should_scrub_playbook_metadata(path) {
-        return scrub_leading_metadata_comment(content, "<!-- frigg-playbook");
+    if should_scrub_leading_markdown_comment(path) {
+        return scrub_leading_html_comment(content);
     }
 
     Cow::Borrowed(content)
@@ -1096,8 +1104,19 @@ impl TextSearcher {
         limit: usize,
         intent: &HybridRankingIntent,
     ) -> FriggResult<SearchExecutionOutput> {
-        let top_k = limit.saturating_mul(2).max(16);
-        let materialized_limit = limit.saturating_add(2).max(8).min(top_k);
+        let widen_surface_witness_pool = intent.wants_laravel_ui_witnesses
+            || intent.wants_test_witness_recall
+            || intent.wants_entrypoint_build_flow;
+        let top_k = if widen_surface_witness_pool {
+            limit.saturating_mul(4).max(32)
+        } else {
+            limit.saturating_mul(2).max(16)
+        };
+        let materialized_limit = if widen_surface_witness_pool {
+            limit.saturating_mul(2).max(20).min(top_k)
+        } else {
+            limit.saturating_add(2).max(8).min(top_k)
+        };
         let query_context = HybridPathWitnessQueryContext::new(query_text);
         let mut scored = Vec::<PathWitnessCandidate>::with_capacity(top_k);
         let base_repositories = candidate_universe
@@ -1279,7 +1298,9 @@ impl TextSearcher {
         }
         let expected_paths = manifest_entries
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(|entry| {
+                normalize_repository_relative_path(&repository.root, Path::new(&entry.path))
+            })
             .collect::<Vec<_>>();
 
         let mut rows = storage
@@ -1297,6 +1318,7 @@ impl TextSearcher {
             rows = self.build_path_witness_projection_records(
                 &repository.repository_id,
                 snapshot_id,
+                &repository.root,
                 &manifest_entries,
             )?;
             storage
@@ -1320,12 +1342,16 @@ impl TextSearcher {
         &self,
         repository_id: &str,
         snapshot_id: &str,
+        root: &Path,
         manifest_entries: &[ManifestEntry],
     ) -> Option<Vec<PathWitnessProjectionRecord>> {
         let mut rows = manifest_entries
             .iter()
             .map(|entry| {
-                build_path_witness_projection_record(repository_id, snapshot_id, &entry.path).ok()
+                let relative_path =
+                    normalize_repository_relative_path(root, Path::new(&entry.path));
+                build_path_witness_projection_record(repository_id, snapshot_id, &relative_path)
+                    .ok()
             })
             .collect::<Option<Vec<_>>>()?;
         rows.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1487,6 +1513,48 @@ mod tests {
                 .all(|entry| entry.path != "contracts/errors.md"),
             "walk fallback should respect gitignored contract artifacts"
         );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_search_scrubs_generic_markdown_leading_comment_metadata() -> FriggResult<()> {
+        let root = temp_workspace_root("literal-search-markdown-leading-comment");
+        prepare_workspace(
+            &root,
+            &[(
+                "docs/guide.md",
+                "<!-- hidden metadata secret-token -->\n# Guide\npublic content\n",
+            )],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let hidden = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "secret-token".to_owned(),
+                path_regex: None,
+                limit: 10,
+            },
+            SearchFilters::default(),
+        )?;
+        assert!(
+            hidden.is_empty(),
+            "leading markdown comment metadata should not pollute literal search: {:?}",
+            hidden
+        );
+
+        let public = searcher.search_literal_with_filters(
+            SearchTextQuery {
+                query: "public".to_owned(),
+                path_regex: None,
+                limit: 10,
+            },
+            SearchFilters::default(),
+        )?;
+        assert_eq!(public.len(), 1);
+        assert_eq!(public[0].path, "docs/guide.md");
+        assert_eq!(public[0].line, 3);
 
         cleanup_workspace(&root);
         Ok(())
@@ -2037,6 +2105,70 @@ mod tests {
                 )
             }),
             "manifest-backed path recall should still surface hidden GitHub workflow build configs in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_path_witness_recall_keeps_hidden_ci_workflows_for_entrypoint_build_config_queries()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("candidate-discovery-hidden-ci-workflow-supplement");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "src/bin/tool/main.rs",
+                    "mod app;\nfn main() { app::run(); }\n",
+                ),
+                ("src/bin/tool/app.rs", "pub fn run() {}\n"),
+                (
+                    ".github/workflows/CICD.yml",
+                    "name: CI\njobs:\n  test:\n    steps:\n      - run: cargo test\n",
+                ),
+                (
+                    ".github/workflows/require-changelog-for-PRs.yml",
+                    "name: Require changelog\njobs:\n  changelog:\n    steps:\n      - run: ./scripts/check-changelog.sh\n",
+                ),
+            ],
+        )?;
+        seed_manifest_snapshot(
+            &root,
+            "repo-001",
+            "snapshot-001",
+            &["src/bin/tool/main.rs", "src/bin/tool/app.rs"],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query:
+                    "entry point bootstrap build flow command runner main config cargo github workflow cicd require changelog"
+                        .to_owned(),
+                limit: 11,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            ranked_paths.iter().take(11).any(|path| {
+                matches!(
+                    *path,
+                    ".github/workflows/CICD.yml"
+                        | ".github/workflows/require-changelog-for-PRs.yml"
+                )
+            }),
+            "entrypoint build-config queries should retain generic hidden CI workflows in top-k: {ranked_paths:?}"
         );
 
         cleanup_workspace(&root);
@@ -3966,6 +4098,102 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_rust_workspace_config_queries_prefer_root_rust_configs_over_nested_pyprojects()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-workspace-config-vs-pyproject");
+        let mut files = vec![
+            (
+                "Cargo.toml".to_owned(),
+                "[workspace]\nmembers = [\"crates/*\"]\n".to_owned(),
+            ),
+            (
+                "Cargo.lock".to_owned(),
+                "[[package]]\nname = \"ruff\"\n".to_owned(),
+            ),
+            (
+                ".cargo/config.toml".to_owned(),
+                "[build]\ntarget-dir = \"target\"\n".to_owned(),
+            ),
+            (
+                "rust-toolchain.toml".to_owned(),
+                "[toolchain]\nchannel = \"stable\"\n".to_owned(),
+            ),
+            ("rustfmt.toml".to_owned(), "edition = \"2021\"\n".to_owned()),
+            ("clippy.toml".to_owned(), "msrv = \"1.80\"\n".to_owned()),
+        ];
+        files.extend((0..8).map(|index| {
+            (
+                format!("crates/noise_{index:02}/pyproject.toml"),
+                "[tool.pytest.ini_options]\naddopts = \"-q\"\n".to_owned(),
+            )
+        }));
+        let file_refs = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect::<Vec<_>>();
+        prepare_workspace(&root, &file_refs)?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "workspace cargo toolchain config cargo lock".to_owned(),
+                limit: 9,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let first_rust_config = ranked_paths
+            .iter()
+            .position(|path| {
+                matches!(
+                    *path,
+                    "Cargo.toml"
+                        | "Cargo.lock"
+                        | ".cargo/config.toml"
+                        | "rust-toolchain.toml"
+                        | "rustfmt.toml"
+                        | "clippy.toml"
+                )
+            })
+            .expect("a rust workspace config witness should be ranked");
+        let first_pyproject = ranked_paths
+            .iter()
+            .position(|path| path.ends_with("pyproject.toml"))
+            .expect("pyproject noise should still be ranked");
+
+        assert!(
+            first_rust_config < first_pyproject,
+            "rust workspace config should outrank nested pyproject noise: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(5).any(|path| {
+                matches!(
+                    *path,
+                    "Cargo.toml"
+                        | "Cargo.lock"
+                        | ".cargo/config.toml"
+                        | "rust-toolchain.toml"
+                        | "rustfmt.toml"
+                        | "clippy.toml"
+                )
+            }),
+            "a rust workspace config witness should land near the top: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_examples_queries_keep_examples_and_benches_visible_over_test_noise()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-rust-examples-benches");
@@ -4032,6 +4260,114 @@ mod tests {
                     | "crates/ruff_benchmark/benches/formatter.rs"
             )),
             "an examples-or-benches witness should land near the top: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_rust_tests_queries_keep_required_tests_visible_under_examples_and_benches_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-tests-vs-examples-benches-crowding");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "crates/ruff/tests/analyze_graph.rs",
+                    "mod analyze_graph {}\n",
+                ),
+                (
+                    "crates/ruff/tests/cli/analyze_graph.rs",
+                    "mod cli_analyze_graph {}\n",
+                ),
+                ("crates/ruff/tests/cli/format.rs", "mod cli_format {}\n"),
+                ("crates/ruff/tests/cli/lint.rs", "mod cli_lint {}\n"),
+                ("crates/ruff/tests/cli/main.rs", "mod cli_main {}\n"),
+                ("crates/ruff/tests/config.rs", "mod config_test {}\n"),
+                (
+                    "crates/ruff_annotate_snippets/examples/footer.rs",
+                    "Level::Error.title(\"mismatched types\").footer(Level::Note.title(\"expected type\"));\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/examples/footer.svg",
+                    "<svg><text>expected type</text><text>footer</text></svg>\n",
+                ),
+                (
+                    "crates/ruff_python_formatter/tests/fixtures.rs",
+                    "fn black_compatibility() { format_range(); }\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/linter.rs",
+                    "fn benchmark_linter() { criterion_group!(benches); }\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/ty.rs",
+                    "fn benchmark_ty() { criterion_group!(benches); }\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/ty_walltime.rs",
+                    "fn benchmark_ty_walltime() { criterion_group!(benches); }\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/examples/expected_type.rs",
+                    "Level::Note.title(\"expected type\");\n",
+                ),
+                (
+                    "crates/ruff_python_parser/tests/fixtures.rs",
+                    "fn parse_fixture() { parse_module(\"x = 1\"); }\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/examples/expected_type.svg",
+                    "<svg><text>expected type</text></svg>\n",
+                ),
+                (
+                    "crates/ruff_annotate_snippets/tests/examples.rs",
+                    "fn examples_snapshot() { assert_snapshot!(); }\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/formatter.rs",
+                    "fn benchmark_formatter() { criterion_group!(benches); }\n",
+                ),
+                (
+                    "crates/ruff_benchmark/benches/lexer.rs",
+                    "fn benchmark_lexer() { criterion_group!(benches); }\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests fixtures integration analyze graph entrypoint".to_owned(),
+                limit: 12,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(12).any(|path| {
+                matches!(
+                    *path,
+                    "crates/ruff/tests/analyze_graph.rs"
+                        | "crates/ruff/tests/cli/analyze_graph.rs"
+                        | "crates/ruff/tests/cli/format.rs"
+                        | "crates/ruff/tests/cli/lint.rs"
+                        | "crates/ruff/tests/cli/main.rs"
+                        | "crates/ruff/tests/config.rs"
+                )
+            }),
+            "a required Rust test witness should remain visible under example/bench crowding: {ranked_paths:?}"
         );
 
         cleanup_workspace(&root);
@@ -5418,6 +5754,220 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_entrypoint_build_flow_queries_keep_runtime_entrypoints_visible_under_workflow_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-entrypoint-vs-workflow-crowding");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "crates/ruff/src/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    "crates/ruff_dev/src/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    "crates/ruff_python_formatter/src/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    "crates/ty/src/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    "crates/ty_completion_bench/src/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    ".github/workflows/build-binaries.yml",
+                    "name: Build binaries\njobs:\n  build:\n    steps:\n      - run: cargo build --release --bin ruff\n",
+                ),
+                (
+                    ".github/workflows/build-docker.yml",
+                    "name: Build docker\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+                ),
+                (
+                    ".github/workflows/build-wasm.yml",
+                    "name: Build wasm\njobs:\n  build:\n    steps:\n      - run: cargo build --target wasm32-unknown-unknown\n",
+                ),
+                (
+                    ".github/workflows/publish-playground.yml",
+                    "name: Publish playground\njobs:\n  publish:\n    steps:\n      - run: cargo run --bin playground\n",
+                ),
+                (
+                    ".github/workflows/publish-ty-playground.yml",
+                    "name: Publish ty playground\njobs:\n  publish:\n    steps:\n      - run: cargo run --bin ty-playground\n",
+                ),
+                (
+                    ".github/workflows/release.yml",
+                    "name: Release\njobs:\n  release:\n    steps:\n      - run: cargo build --release\n",
+                ),
+                (
+                    ".github/workflows/publish-docs.yml",
+                    "name: Publish docs\njobs:\n  publish:\n    steps:\n      - run: cargo doc --no-deps\n",
+                ),
+                (
+                    ".github/workflows/publish-mirror.yml",
+                    "name: Publish mirror\njobs:\n  publish:\n    steps:\n      - run: echo mirror\n",
+                ),
+                (
+                    ".github/workflows/publish-pypi.yml",
+                    "name: Publish pypi\njobs:\n  publish:\n    steps:\n      - run: maturin publish\n",
+                ),
+                (
+                    ".github/workflows/publish-versions.yml",
+                    "name: Publish versions\njobs:\n  publish:\n    steps:\n      - run: cargo metadata --format-version 1\n",
+                ),
+                (
+                    ".github/workflows/publish-wasm.yml",
+                    "name: Publish wasm\njobs:\n  publish:\n    steps:\n      - run: wasm-pack build\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap build flow command runner main".to_owned(),
+                limit: 11,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(11).any(|path| {
+                matches!(
+                    *path,
+                    "crates/ruff/src/main.rs"
+                        | "crates/ruff_dev/src/main.rs"
+                        | "crates/ruff_python_formatter/src/main.rs"
+                        | "crates/ty/src/main.rs"
+                        | "crates/ty_completion_bench/src/main.rs"
+                )
+            }),
+            "a runtime entrypoint witness should remain visible under workflow crowding: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(11)
+                .any(|path| path.starts_with(".github/workflows/")),
+            "workflow witnesses should remain visible for entrypoint build-flow queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_entrypoint_build_flow_queries_recover_bat_build_config_witnesses()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-rust-bat-build-config-witnesses");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "Cargo.toml",
+                    "[package]\nname = \"bat\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+                ),
+                ("rustfmt.toml", "edition = \"2021\"\n"),
+                (
+                    ".github/workflows/CICD.yml",
+                    "name: CICD\njobs:\n  build:\n    steps:\n      - run: cargo build --locked\n",
+                ),
+                (
+                    ".github/workflows/require-changelog-for-PRs.yml",
+                    "name: Require changelog\njobs:\n  check:\n    steps:\n      - run: ./tests/scripts/license-checks.sh\n",
+                ),
+                (
+                    "src/lib.rs",
+                    "pub fn run() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                (
+                    "src/bin/bat/main.rs",
+                    "fn main() { let _ = \"entry point bootstrap build flow command runner main\"; }\n",
+                ),
+                ("src/bin/bat/app.rs", "pub fn build_app() {}\n"),
+                ("src/bin/bat/assets.rs", "pub fn build_assets() {}\n"),
+                ("src/bin/bat/clap_app.rs", "pub fn clap_app() {}\n"),
+                (
+                    "src/bin/bat/completions.rs",
+                    "pub fn generate_completions() {}\n",
+                ),
+                ("src/bin/bat/config.rs", "pub fn load_bat_config() {}\n"),
+                ("src/config.rs", "pub struct RuntimeConfig;\n"),
+                ("tests/scripts/license-checks.sh", "#!/bin/sh\necho check\n"),
+                (
+                    "tests/examples/system_config/bat/config",
+                    "--theme=\"TwoDark\"\n",
+                ),
+                (
+                    "tests/syntax-tests/highlighted/Elixir/command.ex",
+                    "defmodule Command do\nend\n",
+                ),
+                (
+                    "tests/syntax-tests/highlighted/Go/main.go",
+                    "package main\nfunc main() {}\n",
+                ),
+                (
+                    "tests/syntax-tests/source/Elixir/command.ex",
+                    "defmodule Command do\nend\n",
+                ),
+                (
+                    "tests/syntax-tests/source/Go/main.go",
+                    "package main\nfunc main() {}\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap build flow command runner main config cargo github workflow cicd require changelog".to_owned(),
+                limit: 11,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(11).any(|path| {
+                matches!(
+                    *path,
+                    "Cargo.toml"
+                        | ".github/workflows/CICD.yml"
+                        | ".github/workflows/require-changelog-for-PRs.yml"
+                )
+            }),
+            "build-config entrypoint queries should recover a Cargo/workflow witness in top-k: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semantic_runtime()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-rust-entrypoint-build-workflows-semantic");
@@ -6790,6 +7340,50 @@ mod tests {
             "token literal floor should avoid empty degraded hybrid responses"
         );
         assert_eq!(output.matches[0].document.path, "src/lib.rs");
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_large_top_k_laravel_witness_queries_do_not_panic() -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-large-topk-laravel-witness");
+        prepare_workspace(
+            &root,
+            &[
+                ("tests/CreatesApplication.php", "<?php\n"),
+                ("tests/DuskTestCase.php", "<?php\n"),
+                (
+                    "resources/views/auth/confirm-password.blade.php",
+                    "<div>confirm password</div>\n",
+                ),
+                (
+                    "resources/views/components/applications/advanced.blade.php",
+                    "<div>advanced</div>\n",
+                ),
+                ("app/Livewire/ActivityMonitor.php", "<?php\n"),
+                ("app/Livewire/Dashboard.php", "<?php\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests fixtures integration creates application dusk case resources views auth confirm auth forgot view components app livewire activity monitor dashboard".to_owned(),
+                limit: 200,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Disabled);
+        assert!(
+            !output.matches.is_empty(),
+            "large lexical top-k witness queries should still return results instead of panicking"
+        );
 
         cleanup_workspace(&root);
         Ok(())

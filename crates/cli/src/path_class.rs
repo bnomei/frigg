@@ -17,6 +17,9 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         || normalized.starts_with("app/")
         || normalized.starts_with("bootstrap/")
         || normalized.starts_with("routes/")
+        || normalized.starts_with("database/migrations/")
+        || normalized.starts_with("database/seeders/")
+        || normalized.starts_with("database/factories/")
     {
         PathClass::Runtime
     } else if normalized.starts_with("resources/views/") {
@@ -52,6 +55,18 @@ mod tests {
         );
         assert_eq!(repository_path_class("bootstrap/app.php"), "runtime");
         assert_eq!(repository_path_class("routes/web.php"), "runtime");
+        assert_eq!(
+            repository_path_class("database/migrations/2014_10_12_000000_create_users_table.php"),
+            "runtime"
+        );
+        assert_eq!(
+            repository_path_class("database/seeders/DatabaseSeeder.php"),
+            "runtime"
+        );
+        assert_eq!(
+            repository_path_class("database/factories/UserFactory.php"),
+            "runtime"
+        );
     }
 
     #[test]

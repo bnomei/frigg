@@ -79,7 +79,9 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         || ranking_intent.wants_tool_contracts
         || exact_terms.len() >= 4;
     let lexical_working_limit = if widen_lexical_working_set {
-        lexical_limit.saturating_mul(4).clamp(lexical_limit, 128)
+        lexical_limit
+            .saturating_mul(4)
+            .clamp(lexical_limit, lexical_limit.max(128))
     } else {
         lexical_limit
     };
@@ -407,8 +409,10 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         .unwrap_or(u64::MAX);
     let lexical_only_fast_path =
         witness_hits.is_empty() && graph_hits.is_empty() && semantic_channel_result.hits.is_empty();
-    let total_rank_input_count =
-        ranking_lexical_hits.len() + graph_hits.len() + semantic_channel_result.hits.len();
+    let total_rank_input_count = ranking_lexical_hits.len()
+        + witness_hits.len()
+        + graph_hits.len()
+        + semantic_channel_result.hits.len();
     let (
         ranked_anchors,
         matches,
@@ -459,11 +463,10 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             final_diversification_sample,
         )
     } else {
-        let empty_witness_hits = Vec::new();
         let blend_started_at = Instant::now();
         let ranked_anchors = rank_hybrid_anchor_evidence_for_query_with_witness(
             &ranking_lexical_hits,
-            &empty_witness_hits,
+            &witness_hits,
             &graph_hits,
             &semantic_channel_result.hits,
             query.weights,
