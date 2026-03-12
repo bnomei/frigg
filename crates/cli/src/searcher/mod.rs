@@ -1107,17 +1107,26 @@ impl TextSearcher {
             || intent.wants_test_witness_recall
             || intent.wants_runtime_config_artifacts
             || intent.wants_entrypoint_build_flow;
-        let top_k = if widen_runtime_config_witness_pool {
-            limit.saturating_mul(6).max(48)
+        let top_k = if widen_runtime_config_witness_pool
+            && (intent.wants_test_witness_recall || intent.wants_entrypoint_build_flow)
+        {
+            limit.saturating_mul(12).max(128)
+        } else if widen_runtime_config_witness_pool {
+            limit.saturating_mul(8).max(80)
+        } else if intent.wants_test_witness_recall || intent.wants_entrypoint_build_flow {
+            limit.saturating_mul(10).max(96)
         } else if widen_surface_witness_pool {
-            limit.saturating_mul(4).max(32)
+            limit.saturating_mul(6).max(64)
         } else {
             limit.saturating_mul(2).max(16)
         };
         let materialized_limit = if widen_runtime_config_witness_pool {
-            limit.saturating_mul(4).max(32).min(top_k)
+            top_k
         } else if widen_surface_witness_pool {
-            limit.saturating_mul(2).max(20).min(top_k)
+            // Surface-heavy runtime queries rely on post-selection guardrails to recover
+            // companion witnesses, so materialize the full witness frontier instead of
+            // truncating before those guardrails can see the candidates.
+            top_k
         } else {
             limit.saturating_add(2).max(8).min(top_k)
         };
@@ -4309,6 +4318,351 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_ranking_python_entrypoint_queries_recover_saved_wave_backend_tests_under_classic_crowding()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-python-saved-wave-entrypoint-backend-tests");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    ".github/workflows/classic-autogpt-docker-release.yml",
+                    "name: Docker release\njobs:\n  release:\n    steps:\n      - run: python classic/cli.py\n",
+                ),
+                (
+                    "classic/original_autogpt/autogpt/app/main.py",
+                    "from autogpt.app.cli import run_cli\nrun_cli()\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/main.py",
+                    "def main() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/utils/dependencies/main.py",
+                    "def main() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                    "from backend.copilot.executor.server import serve\nserve()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/app.py",
+                    "from fastapi import FastAPI\napp = FastAPI()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/cli.py",
+                    "def main() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/__main__.py",
+                    "from agbenchmark.main import main\nmain()\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/app.py",
+                    "def app() -> None:\n    return None\n",
+                ),
+                ("classic/cli.py", "def main() -> None:\n    return None\n"),
+                (
+                    "classic/forge/forge/__main__.py",
+                    "from forge.app import app\napp()\n",
+                ),
+                (
+                    "classic/original_autogpt/autogpt/__main__.py",
+                    "from autogpt.app.main import run\nrun()\n",
+                ),
+                (
+                    "classic/original_autogpt/autogpt/app/cli.py",
+                    "def run_cli() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/benchmark/frontend/src/pages/index.tsx",
+                    "export const Home = 'entry point bootstrap app startup cli main';\n",
+                ),
+                (
+                    "autogpt_platform/backend/pyproject.toml",
+                    "[project]\nname = \"autogpt-backend\"\n[project.scripts]\nbackend = \"backend.app:app\"\n",
+                ),
+                (
+                    "autogpt_platform/backend/test/agent_generator/test_service.py",
+                    "def test_service_runtime() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/api/test_helpers.py",
+                    "def build_test_helpers() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                    "def test_e2e_auth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+                    "def load_test_helper_graph() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
+                    "def test_integration_bridge() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
+                    "def test_mcp_runtime() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
+                    "def test_oauth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+                    "def test_server_bootstrap() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/test/test_block.py",
+                    "def test_block_contract() -> None:\n    assert True\n",
+                ),
+                (
+                    "classic/original_autogpt/tests/integration/test_setup.py",
+                    "def test_setup() -> None:\n    assert True\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap app startup cli main".to_owned(),
+                limit: 16,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let witness_paths = output
+            .channel_results
+            .iter()
+            .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+            .map(|result| {
+                result
+                    .hits
+                    .iter()
+                    .map(|hit| hit.document.path.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        println!("entrypoint witness paths: {witness_paths:?}");
+        let required_backend_tests = [
+            "autogpt_platform/backend/backend/api/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            "autogpt_platform/backend/backend/blocks/test/test_block.py",
+        ];
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(16)
+                .any(|path| *path == "autogpt_platform/backend/pyproject.toml"),
+            "saved-wave entrypoint queries should keep backend runtime config visible: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(16)
+                .any(|path| required_backend_tests.iter().any(|required| required == path)),
+            "saved-wave entrypoint queries should recover a backend test witness under classic crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_python_tests_queries_recover_saved_wave_backend_tests_under_setup_crowding()
+    -> FriggResult<()> {
+        let intent = HybridRankingIntent::from_query(
+            "tests fixtures integration helpers e2e config setup pyproject",
+        );
+        assert!(intent.wants_test_witness_recall);
+
+        let root = temp_workspace_root("hybrid-python-saved-wave-tests-backend-witness");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "classic/original_autogpt/tests/integration/test_setup.py",
+                    "def test_setup() -> None:\n    assert True\n",
+                ),
+                (
+                    "classic/original_autogpt/tests/unit/test_config.py",
+                    "def test_runtime_config() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/pyproject.toml",
+                    "[project]\nname = \"autogpt-backend\"\n[project.scripts]\nbackend = \"backend.app:app\"\n",
+                ),
+                (
+                    "classic/original_autogpt/autogpt/app/setup.py",
+                    "from setuptools import setup\nsetup(name=\"classic-autogpt-app\")\n",
+                ),
+                (
+                    "classic/benchmark/pyproject.toml",
+                    "[project]\nname = \"agbenchmark\"\n",
+                ),
+                (
+                    "classic/forge/pyproject.toml",
+                    "[project]\nname = \"forge\"\n",
+                ),
+                (
+                    "classic/original_autogpt/setup.py",
+                    "from setuptools import setup\nsetup(name=\"classic-autogpt\")\n",
+                ),
+                (
+                    "autogpt_platform/autogpt_libs/pyproject.toml",
+                    "[project]\nname = \"autogpt-libs\"\n",
+                ),
+                (
+                    "classic/original_autogpt/pyproject.toml",
+                    "[project]\nname = \"classic-autogpt\"\n",
+                ),
+                ("classic/cli.py", "def main() -> None:\n    return None\n"),
+                (
+                    "classic/original_autogpt/autogpt/app/cli.py",
+                    "def run_cli() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/cli.py",
+                    "def main() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/__main__.py",
+                    "from agbenchmark.main import main\nmain()\n",
+                ),
+                (
+                    "classic/benchmark/agbenchmark/app.py",
+                    "def app() -> None:\n    return None\n",
+                ),
+                (
+                    "classic/forge/forge/__main__.py",
+                    "from forge.app import app\napp()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/app.py",
+                    "from fastapi import FastAPI\napp = FastAPI()\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/twitter/tweets/manage.py",
+                    "def main() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/test/agent_generator/test_service.py",
+                    "def test_service_runtime() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/api/test_helpers.py",
+                    "def build_test_helpers() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                    "def test_e2e_auth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+                    "def load_test_helper_graph() -> None:\n    return None\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
+                    "def test_integration_bridge() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
+                    "def test_mcp_runtime() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
+                    "def test_oauth_flow() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+                    "def test_server_bootstrap() -> None:\n    assert True\n",
+                ),
+                (
+                    "autogpt_platform/backend/backend/blocks/test/test_block.py",
+                    "def test_block_contract() -> None:\n    assert True\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "tests fixtures integration helpers e2e config setup pyproject".to_owned(),
+                limit: 16,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+        let witness_paths = output
+            .channel_results
+            .iter()
+            .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+            .map(|result| {
+                result
+                    .hits
+                    .iter()
+                    .map(|hit| hit.document.path.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        println!("tests witness paths: {witness_paths:?}");
+        let required_backend_tests = [
+            "autogpt_platform/backend/backend/api/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            "autogpt_platform/backend/backend/blocks/test/test_block.py",
+        ];
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(16)
+                .any(|path| *path == "autogpt_platform/backend/pyproject.toml"),
+            "saved-wave tests queries should keep backend runtime config visible: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(16)
+                .any(|path| required_backend_tests.iter().any(|required| required == path)),
+            "saved-wave tests queries should recover a backend test witness under setup crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_ranking_rust_config_queries_rescue_cargo_manifests_from_path_witness_recall()
     -> FriggResult<()> {
         let root = temp_workspace_root("hybrid-rust-config-path-witness");
@@ -6530,6 +6884,102 @@ mod tests {
         assert!(
             platform_main_rank < host_lib_rank,
             "platform/main.roc should outrank generic host runtime library noise for Roc platform queries: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_roc_mixed_entrypoint_example_queries_recover_example_witnesses_under_runtime_noise()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-roc-entrypoints-with-example-hints");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "platform/main.roc",
+                    "# entry point main app package platform runtime\nplatform \"cli\"\npackages {}\nprovides [main_for_host!]\n",
+                ),
+                ("platform/Arg.roc", "# platform arg runtime package\n"),
+                ("platform/Cmd.roc", "# platform cmd runtime package\n"),
+                ("platform/Host.roc", "# platform host runtime package\n"),
+                ("platform/Stdin.roc", "# stdin bytes runtime package\n"),
+                (
+                    "examples/command.roc",
+                    "# example command line package\napp [main!] { pf: platform \"../platform/main.roc\" }\n",
+                ),
+                (
+                    "examples/command-line-args.roc",
+                    "# command line args bytes stdin example\napp [main!] { pf: platform \"../platform/main.roc\" }\n",
+                ),
+                (
+                    "examples/bytes-stdin-stdout.roc",
+                    "# bytes stdin stdout example\napp [main!] { pf: platform \"../platform/main.roc\" }\n",
+                ),
+                ("tests/cmd-test.roc", "# tests command bytes stdin\n"),
+                (
+                    "crates/roc_host_bin/src/main.rs",
+                    "fn main() { let _ = \"entry point main app package platform runtime\"; }\n",
+                ),
+                (
+                    "crates/roc_host/src/lib.rs",
+                    "pub fn host_runtime() { let _ = \"main app package runtime\"; }\n",
+                ),
+                (
+                    "crates/roc_command/src/lib.rs",
+                    "pub fn command_runtime() { let _ = \"command runtime\"; }\n",
+                ),
+                (
+                    "crates/roc_env/src/lib.rs",
+                    "pub fn env_runtime() { let _ = \"env runtime\"; }\n",
+                ),
+                (
+                    "ci/rust_http_server/src/main.rs",
+                    "fn main() { let _ = \"entry point main app package platform runtime\"; }\n",
+                ),
+                ("rust-toolchain.toml", "[toolchain]\nchannel = \"stable\"\n"),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query:
+                    "entry point main app package platform runtime tests bytes stdin command line examples benches benchmark"
+                        .to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "platform/main.roc"
+                        | "crates/roc_host_bin/src/main.rs"
+                        | "ci/rust_http_server/src/main.rs"
+                )
+            }),
+            "Roc mixed entrypoint/example queries should keep at least one entrypoint witness visible: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| path.starts_with("examples/")),
+            "Roc mixed entrypoint/example queries should recover an example witness under runtime/test noise: {ranked_paths:?}"
         );
 
         cleanup_workspace(&root);

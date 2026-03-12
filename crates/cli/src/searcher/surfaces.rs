@@ -79,6 +79,35 @@ pub(super) fn is_test_support_path(path: &str) -> bool {
         || is_python_named_test_module_path(&normalized)
 }
 
+pub(super) fn is_runtime_anchor_test_support_path(path: &str) -> bool {
+    if !is_test_support_path(path) {
+        return false;
+    }
+
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let Some(stem) = Path::new(&normalized)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| normalize_runtime_anchor_test_stem(stem))
+    else {
+        return false;
+    };
+
+    matches!(
+        stem.as_str(),
+        "app"
+            | "bootstrap"
+            | "cli"
+            | "daemon"
+            | "main"
+            | "manage"
+            | "run"
+            | "server"
+            | "service"
+            | "worker"
+    )
+}
+
 pub(super) fn is_cli_test_support_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     is_test_support_path(&normalized)
@@ -176,9 +205,9 @@ mod tests {
 
     use super::{
         hybrid_source_class, is_entrypoint_runtime_path, is_go_entrypoint_runtime_path,
-        is_python_test_witness_path, is_runtime_config_artifact_path,
-        is_rust_workspace_config_path, is_test_support_path,
-        is_typescript_runtime_module_index_path,
+        is_python_test_witness_path, is_runtime_adjacent_python_test_path,
+        is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
+        is_rust_workspace_config_path, is_test_support_path, is_typescript_runtime_module_index_path,
     };
 
     #[test]
@@ -422,6 +451,57 @@ mod tests {
             !is_python_test_witness_path("autogpt_platform/backend/backend/api/helpers.py"),
             "non-test python helpers should not be treated as test witnesses"
         );
+    }
+
+    #[test]
+    fn runtime_adjacent_python_test_paths_distinguish_nested_runtime_modules_from_test_trees() {
+        for path in [
+            "autogpt_platform/backend/backend/api/test_helpers.py",
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            "classic/original_autogpt/autogpt/app/helper_test.py",
+        ] {
+            assert!(
+                is_runtime_adjacent_python_test_path(path),
+                "{path} should be treated as a runtime-adjacent python test path"
+            );
+        }
+
+        for path in [
+            "autogpt_platform/backend/test/agent_generator/test_service.py",
+            "classic/original_autogpt/tests/integration/test_setup.py",
+            "tests/test_server.py",
+        ] {
+            assert!(
+                !is_runtime_adjacent_python_test_path(path),
+                "{path} should remain a dedicated test-tree python path"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_anchor_test_support_paths_strip_common_test_affixes() {
+        for path in [
+            "backend/tests/test_server.py",
+            "backend/tests/server_test.py",
+            "tests/cli_test.py",
+            "pkg/worker_test.go",
+        ] {
+            assert!(
+                is_runtime_anchor_test_support_path(path),
+                "{path} should be treated as a runtime-anchor test support path"
+            );
+        }
+
+        for path in [
+            "backend/tests/test_helpers.py",
+            "backend/tests/test_routes.py",
+            "backend/app/server.py",
+        ] {
+            assert!(
+                !is_runtime_anchor_test_support_path(path),
+                "{path} should not be treated as a runtime-anchor test support path"
+            );
+        }
     }
 }
 
@@ -670,6 +750,17 @@ fn is_python_named_test_module_path(path: &str) -> bool {
         && (file_name.starts_with("test_") || file_name.ends_with("_test.py"))
 }
 
+fn normalize_runtime_anchor_test_stem(stem: &str) -> String {
+    let normalized = stem.trim().to_ascii_lowercase();
+    normalized
+        .strip_prefix("test_")
+        .or_else(|| normalized.strip_prefix("tests_"))
+        .or_else(|| normalized.strip_suffix("_test"))
+        .or_else(|| normalized.strip_suffix("_tests"))
+        .unwrap_or(normalized.as_str())
+        .to_owned()
+}
+
 pub(super) fn is_rust_workspace_config_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     if normalized == ".cargo/config.toml" || normalized.ends_with("/.cargo/config.toml") {
@@ -728,6 +819,15 @@ pub(super) fn is_python_test_witness_path(path: &str) -> bool {
             || normalized.starts_with("tests/")
             || file_name == "conftest.py"
             || is_python_named_test_module_path(path))
+}
+
+pub(super) fn is_runtime_adjacent_python_test_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    is_python_test_witness_path(path)
+        && !normalized.starts_with("tests/")
+        && !normalized.contains("/tests/")
+        && !normalized.starts_with("test/")
+        && !normalized.contains("/test/")
 }
 
 pub(super) fn is_loose_python_test_module_path(path: &str) -> bool {

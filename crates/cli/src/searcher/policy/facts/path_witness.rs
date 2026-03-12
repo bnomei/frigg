@@ -9,8 +9,10 @@ use super::super::super::query_terms::{
     hybrid_specific_witness_query_terms, path_has_exact_query_term_match,
 };
 use super::super::super::surfaces::{
-    HybridSourceClass, is_entrypoint_runtime_path, is_python_test_witness_path,
-    is_rust_workspace_config_path, is_test_support_path, is_typescript_runtime_module_index_path,
+    HybridSourceClass, is_bench_support_path, is_entrypoint_runtime_path,
+    is_example_support_path, is_python_test_witness_path, is_runtime_adjacent_python_test_path,
+    is_runtime_anchor_test_support_path, is_rust_workspace_config_path, is_test_support_path,
+    is_typescript_runtime_module_index_path,
 };
 
 pub(crate) struct PathWitnessQueryContext {
@@ -48,6 +50,7 @@ pub(crate) struct PathWitnessFacts {
     pub(crate) wants_python_witnesses: bool,
     pub(crate) is_repo_root_runtime_config_artifact: bool,
     pub(crate) is_python_test: bool,
+    pub(crate) is_runtime_adjacent_python_test: bool,
     pub(crate) is_example_support: bool,
     pub(crate) is_bench_support: bool,
     pub(crate) wants_example_or_bench_witnesses: bool,
@@ -55,6 +58,7 @@ pub(crate) struct PathWitnessFacts {
     pub(crate) is_test_harness: bool,
     pub(crate) is_scripts_ops: bool,
     pub(crate) is_test_support: bool,
+    pub(crate) is_runtime_anchor_test_support: bool,
     pub(crate) is_examples_rs: bool,
     pub(crate) is_laravel_non_livewire_blade_view: bool,
     pub(crate) is_laravel_livewire_view: bool,
@@ -104,6 +108,7 @@ impl PathWitnessFacts {
             hybrid_overlap_count(&projection.path_terms, &query_context.specific_query_terms);
         let is_config_artifact = projection.flags.is_runtime_config_artifact;
         let is_test_support = projection.flags.is_test_support || is_test_support_path(path);
+        let is_runtime_anchor_test_support = is_runtime_anchor_test_support_path(path);
         let path_stem = Path::new(path)
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -151,13 +156,15 @@ impl PathWitnessFacts {
             is_repo_root_runtime_config_artifact,
             is_python_test: projection.flags.is_python_test_witness
                 || is_python_test_witness_path(path),
-            is_example_support: projection.flags.is_example_support,
-            is_bench_support: projection.flags.is_bench_support,
+            is_runtime_adjacent_python_test: is_runtime_adjacent_python_test_path(path),
+            is_example_support: projection.flags.is_example_support || is_example_support_path(path),
+            is_bench_support: projection.flags.is_bench_support || is_bench_support_path(path),
             wants_example_or_bench_witnesses: intent.wants_examples || intent.wants_benchmarks,
             is_cli_test: projection.flags.is_cli_test_support,
             is_test_harness: projection.flags.is_test_harness,
             is_scripts_ops: intent.wants_scripts_ops_witnesses && projection.flags.is_scripts_ops,
             is_test_support,
+            is_runtime_anchor_test_support,
             is_examples_rs,
             is_laravel_non_livewire_blade_view: projection.flags.is_laravel_non_livewire_blade_view,
             is_laravel_livewire_view: projection.flags.is_laravel_livewire_view,
@@ -216,6 +223,7 @@ impl Default for PathWitnessFacts {
             wants_python_witnesses: false,
             is_repo_root_runtime_config_artifact: false,
             is_python_test: false,
+            is_runtime_adjacent_python_test: false,
             is_example_support: false,
             is_bench_support: false,
             wants_example_or_bench_witnesses: false,
@@ -223,6 +231,7 @@ impl Default for PathWitnessFacts {
             is_test_harness: false,
             is_scripts_ops: false,
             is_test_support: false,
+            is_runtime_anchor_test_support: false,
             is_examples_rs: false,
             is_laravel_non_livewire_blade_view: false,
             is_laravel_livewire_view: false,
@@ -258,5 +267,37 @@ impl Default for PathWitnessFacts {
             path_stem_is_server_or_cli: false,
             path_stem_is_main: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::searcher::intent::HybridRankingIntent;
+    use crate::searcher::path_witness_projection::StoredPathWitnessProjection;
+
+    #[test]
+    fn path_witness_facts_use_live_example_support_for_stale_projections() {
+        let query =
+            "tests fixtures integration entry point main app package platform runtime bytes stdin command line examples benches benchmark";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = PathWitnessQueryContext::new(query);
+        let mut stale_example =
+            StoredPathWitnessProjection::from_path("examples/command-line-args.roc");
+        stale_example.flags.is_example_support = false;
+
+        let facts = PathWitnessFacts::from_projection(
+            "examples/command-line-args.roc",
+            &stale_example,
+            &intent,
+            &query_context,
+        );
+
+        assert!(
+            facts.is_example_support,
+            "live path detection should recover stale example-support projections"
+        );
+        assert!(facts.wants_examples);
+        assert!(facts.wants_test_witness_recall);
     }
 }

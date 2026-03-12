@@ -45,6 +45,11 @@ fn gate_test_support(ctx: &PathWitnessFacts) -> bool {
     ctx.wants_test_witness_recall && (ctx.is_test_support || ctx.is_python_test)
 }
 
+fn gate_runtime_anchor_test_support(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_runtime_anchor_test_support
+        && (ctx.wants_entrypoint_build_flow || ctx.wants_runtime_config_artifacts)
+}
+
 fn gate_examples(ctx: &PathWitnessFacts) -> bool {
     ctx.wants_examples && ctx.is_example_support
 }
@@ -79,6 +84,10 @@ const GATE_RULES: &[GateRule<PathWitnessFacts>] = &[
     GateRule::new("python_workspace_config", gate_python_workspace_config),
     GateRule::new("python_witness", gate_python_witness),
     GateRule::new("test_support", gate_test_support),
+    GateRule::new(
+        "runtime_anchor_test_support",
+        gate_runtime_anchor_test_support,
+    ),
     GateRule::new("examples", gate_examples),
     GateRule::new("benchmarks", gate_benchmarks),
     GateRule::new("cli_test", gate_cli_test),
@@ -221,7 +230,10 @@ fn scripts_exact_query_match_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffec
 }
 
 fn runtime_config_test_support_penalty(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_config_artifacts && ctx.is_test_support && !ctx.is_config_artifact)
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_test_support
+        && !ctx.is_config_artifact
+        && !ctx.is_runtime_anchor_test_support)
         .then_some(PolicyEffect::Add(-3.2))
 }
 
@@ -438,8 +450,42 @@ fn workspace_python_test_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
         }))
 }
 
+fn runtime_adjacent_python_test_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    if !ctx.is_runtime_adjacent_python_test
+        || !(ctx.wants_entrypoint_build_flow
+            || ctx.wants_runtime_config_artifacts
+            || ctx.wants_test_witness_recall)
+    {
+        return None;
+    }
+
+    let delta = if ctx.specific_path_overlap > 0 {
+        3.2
+    } else if ctx.path_overlap > 0 || ctx.wants_entrypoint_build_flow {
+        2.6
+    } else {
+        2.0
+    };
+
+    Some(PolicyEffect::Add(delta))
+}
+
 fn tests_support_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
     (ctx.wants_test_witness_recall && ctx.is_test_support).then_some(PolicyEffect::Add(2.6))
+}
+
+fn runtime_anchor_test_support_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    if !ctx.is_runtime_anchor_test_support {
+        return None;
+    }
+
+    if ctx.wants_entrypoint_build_flow {
+        Some(PolicyEffect::Add(4.4))
+    } else if ctx.wants_runtime_config_artifacts {
+        Some(PolicyEffect::Add(3.6))
+    } else {
+        None
+    }
 }
 
 fn tests_support_path_overlap_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
@@ -705,9 +751,19 @@ const SCORE_RULES: &[ScoreRule<PathWitnessFacts>] = &[
         workspace_python_test_bonus,
     ),
     ScoreRule::new(
+        "tests.runtime_adjacent_python_bonus",
+        PolicyStage::PathWitness,
+        runtime_adjacent_python_test_bonus,
+    ),
+    ScoreRule::new(
         "tests.support_bonus",
         PolicyStage::PathWitness,
         tests_support_bonus,
+    ),
+    ScoreRule::new(
+        "tests.runtime_anchor_support_bonus",
+        PolicyStage::PathWitness,
+        runtime_anchor_test_support_bonus,
     ),
     ScoreRule::new(
         "tests.support_path_overlap_bonus",
@@ -835,5 +891,37 @@ mod tests {
         let rule_ids = trace_rule_ids(&evaluation);
 
         assert!(!rule_ids.contains(&"tests.exact_query_match_bonus"));
+    }
+
+    #[test]
+    fn policy_trace_path_witness_entrypoint_runtime_anchor_test_bonus() {
+        let ctx = PathWitnessFacts {
+            wants_entrypoint_build_flow: true,
+            is_test_support: true,
+            is_runtime_anchor_test_support: true,
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true).expect("evaluation");
+        let rule_ids = trace_rule_ids(&evaluation);
+
+        assert!(rule_ids.contains(&"tests.runtime_anchor_support_bonus"));
+        assert!(!rule_ids.contains(&"runtime_config.test_support_penalty"));
+    }
+
+    #[test]
+    fn policy_trace_path_witness_runtime_config_runtime_anchor_test_skips_generic_penalty() {
+        let ctx = PathWitnessFacts {
+            wants_runtime_config_artifacts: true,
+            is_test_support: true,
+            is_runtime_anchor_test_support: true,
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true).expect("evaluation");
+        let rule_ids = trace_rule_ids(&evaluation);
+
+        assert!(rule_ids.contains(&"tests.runtime_anchor_support_bonus"));
+        assert!(!rule_ids.contains(&"runtime_config.test_support_penalty"));
     }
 }

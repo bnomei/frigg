@@ -123,18 +123,15 @@ pub(super) fn decode_path_witness_projection_record(
         SourceClass::Playbooks => SourceClass::Project,
         other => other,
     };
-    let path_terms = serde_json::from_str(&record.path_terms_json).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to decode stored path witness terms for '{}': {err}",
-            record.path
-        ))
-    })?;
     let flags = serde_json::from_str(&record.flags_json).map_err(|err| {
         FriggError::Internal(format!(
             "failed to decode stored path witness flags for '{}': {err}",
             record.path
         ))
     })?;
+    // Path tokenization evolves with generic recall heuristics. Recompute from the live path so
+    // ranking does not depend on stale stored projection terms from older Frigg versions.
+    let path_terms = hybrid_path_overlap_tokens(&record.path);
 
     Ok(StoredPathWitnessProjection {
         path: record.path.clone(),
@@ -183,5 +180,47 @@ fn build_path_witness_projection_flags(path: &str) -> PathWitnessProjectionFlags
         is_laravel_bootstrap_entrypoint: is_laravel_bootstrap_entrypoint_path(path),
         is_laravel_core_provider: is_laravel_core_provider_path(path),
         is_laravel_provider: is_laravel_provider_path(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::PathWitnessProjectionRecord;
+
+    #[test]
+    fn decode_path_witness_projection_record_recomputes_live_terms_for_stale_rows() {
+        let path = "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py";
+        let projection = StoredPathWitnessProjection::from_path(path);
+        let stale_terms = vec![
+            "autogpt_platform".to_owned(),
+            "autogpt".to_owned(),
+            "platform".to_owned(),
+            "backend".to_owned(),
+            "blocks".to_owned(),
+            "test_helpers".to_owned(),
+        ];
+        let record = PathWitnessProjectionRecord {
+            repository_id: "repo".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+            path: path.to_owned(),
+            path_class: projection.path_class.as_str().to_owned(),
+            source_class: projection.source_class.as_str().to_owned(),
+            path_terms_json: serde_json::to_string(&stale_terms).expect("stale terms json"),
+            flags_json: serde_json::to_string(&projection.flags).expect("flags json"),
+        };
+
+        let decoded =
+            decode_path_witness_projection_record(&record).expect("decode should succeed");
+
+        assert!(
+            decoded.path_terms.iter().any(|term| term == "helpers"),
+            "live decoding should recover split helper token: {:?}",
+            decoded.path_terms
+        );
+        assert_ne!(
+            decoded.path_terms, stale_terms,
+            "decoded path terms should not trust stale stored tokenization"
+        );
     }
 }

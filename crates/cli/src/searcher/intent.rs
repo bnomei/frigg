@@ -1004,14 +1004,12 @@ fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBu
     let runtime_config_query_with_incidental_tests = builder
         .has_artifact_bias(ArtifactBias::RuntimeConfigArtifact)
         && !context.has_strong_test_focus_terms();
+    let allow_readme_for_strong_test_focus = context.has_strong_test_focus_terms();
     if runtime_config_query_with_incidental_tests {
         return false;
     }
 
-    let has_test_or_cli_signal = builder.has_goal(SearchGoal::Tests)
-        || (context.mentions_cli_context()
-            && (builder.has_goal(SearchGoal::EntryPointBuildFlow)
-                || builder.has_goal(SearchGoal::RuntimeWitnesses)));
+    let has_test_or_cli_signal = builder.has_goal(SearchGoal::Tests);
     let bridge_docs_contract_runtime_tests = builder.has_goal(SearchGoal::Tests)
         && (builder.has_goal(SearchGoal::Contracts)
             || builder.has_goal(SearchGoal::ErrorTaxonomy)
@@ -1027,7 +1025,7 @@ fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBu
     let docs_with_strong_test_focus = builder.has_goal(SearchGoal::Tests)
         && builder.has_goal(SearchGoal::Documentation)
         && context.has_strong_test_focus_terms()
-        && !builder.has_goal(SearchGoal::Readme)
+        && (!builder.has_goal(SearchGoal::Readme) || allow_readme_for_strong_test_focus)
         && !builder.has_goal(SearchGoal::Contracts)
         && !builder.has_goal(SearchGoal::ErrorTaxonomy)
         && !builder.has_goal(SearchGoal::ToolContracts);
@@ -1037,7 +1035,7 @@ fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBu
             || laravel_ui_with_path_hints
             || docs_with_strong_test_focus
             || (!builder.has_goal(SearchGoal::Documentation)
-                && !builder.has_goal(SearchGoal::Readme)
+                && (!builder.has_goal(SearchGoal::Readme) || allow_readme_for_strong_test_focus)
                 && !builder.has_goal(SearchGoal::Contracts)
                 && !builder.has_goal(SearchGoal::ErrorTaxonomy)
                 && !builder.has_goal(SearchGoal::ToolContracts))))
@@ -1288,6 +1286,29 @@ mod tests {
         assert!(intent.has_goal(SearchGoal::Tests));
         assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
         assert!(!intent.has_artifact_bias(ArtifactBias::TestWitness));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+    }
+
+    #[test]
+    fn entrypoint_cli_queries_do_not_activate_test_witness_focus_without_test_terms() {
+        let intent = SearchIntent::from_query("entry point bootstrap app startup cli main");
+
+        assert!(intent.has_goal(SearchGoal::EntryPointBuildFlow));
+        assert!(!intent.has_goal(SearchGoal::Tests));
+        assert!(!intent.has_artifact_bias(ArtifactBias::TestWitness));
+        assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+    }
+
+    #[test]
+    fn strong_python_test_focus_queries_keep_test_witness_recall_even_with_setup_readme_terms() {
+        let intent =
+            SearchIntent::from_query("tests fixtures integration helpers e2e config setup pyproject");
+
+        assert!(intent.has_goal(SearchGoal::Tests));
+        assert!(intent.has_goal(SearchGoal::Onboarding));
+        assert!(intent.has_goal(SearchGoal::Readme));
+        assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
+        assert!(intent.has_artifact_bias(ArtifactBias::TestWitness));
         assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
     }
 }
