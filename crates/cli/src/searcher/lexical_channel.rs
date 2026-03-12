@@ -27,8 +27,8 @@ use super::{
     is_non_code_test_doc_path, is_python_entrypoint_runtime_path, is_python_runtime_config_path,
     is_python_test_witness_path, is_repo_metadata_path, is_runtime_config_artifact_path,
     is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
-    path_has_exact_query_term_match, sort_matches_deterministically,
-    sort_search_diagnostics_deterministically,
+    is_typescript_runtime_module_index_path, path_has_exact_query_term_match,
+    sort_matches_deterministically, sort_search_diagnostics_deterministically,
 };
 
 #[cfg(test)]
@@ -179,6 +179,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     let wants_python_workspace_config = intent.has_framework_hint(FrameworkHint::Python);
     let wants_python_witnesses = intent.has_framework_hint(FrameworkHint::Python);
     let is_entrypoint_runtime = is_entrypoint_runtime_path(path);
+    let is_typescript_runtime_module_index = is_typescript_runtime_module_index_path(path);
     let is_runtime_config_artifact = is_runtime_config_artifact_path(path);
     let is_repo_root_runtime_config_artifact =
         is_runtime_config_artifact && !normalized_path.contains('/');
@@ -540,6 +541,9 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
         if is_entrypoint_runtime {
             multiplier *= 1.72;
         }
+        if is_typescript_runtime_module_index {
+            multiplier *= 1.22;
+        }
         if wants_rust_workspace_config && is_rust_workspace_config_path(path) {
             multiplier *= 1.42;
         }
@@ -577,6 +581,9 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     if intent.wants_entrypoint_build_flow {
         if is_entrypoint_runtime {
             multiplier *= 1.92;
+        }
+        if is_typescript_runtime_module_index {
+            multiplier *= 1.16;
         }
         if is_entrypoint_build_workflow_path(path) {
             multiplier *= 2.72;
@@ -793,6 +800,7 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     let specific_path_overlap =
         hybrid_overlap_count(&projection.path_terms, &query_context.specific_query_terms);
     let is_entrypoint = projection.flags.is_entrypoint_runtime || is_entrypoint_runtime_path(path);
+    let is_typescript_runtime_module_index = is_typescript_runtime_module_index_path(path);
     let is_entrypoint_build_workflow =
         intent.wants_entrypoint_build_flow && projection.flags.is_entrypoint_build_workflow;
     let is_ci_workflow = intent.wants_ci_workflow_witnesses && projection.flags.is_ci_workflow;
@@ -818,6 +826,11 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     } else {
         projection.source_class
     };
+    let path_stem = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.trim().to_ascii_lowercase())
+        .unwrap_or_default();
     let is_laravel_partial_view = path.contains("/parts/") || path.contains("/partials/");
     let is_laravel_top_level_blade_view = projection.flags.is_laravel_non_livewire_blade_view
         && !projection.flags.is_laravel_layout_blade_view
@@ -828,6 +841,8 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
         && !is_ci_workflow
         && !(intent.wants_entrypoint_build_flow && is_config_artifact)
         && !(intent.wants_runtime_config_artifacts && is_config_artifact)
+        && !((intent.wants_entrypoint_build_flow || intent.wants_runtime_config_artifacts)
+            && is_typescript_runtime_module_index)
         && !(wants_python_workspace_config && is_python_config)
         && !(wants_python_witnesses && is_python_test)
         && !(intent.wants_examples && is_example_support)
@@ -990,12 +1005,23 @@ pub(super) fn hybrid_path_witness_recall_score_for_projection(
     }
     if intent.wants_runtime_config_artifacts && is_entrypoint {
         score += 6.0;
+        if matches!(path_stem.as_str(), "server" | "cli") {
+            score += 4.2;
+        } else if path_stem == "main" {
+            score -= 2.2;
+        }
+    }
+    if intent.wants_runtime_config_artifacts && is_typescript_runtime_module_index {
+        score += if path_overlap == 0 { 4.0 } else { 4.8 };
     }
     if intent.wants_entrypoint_build_flow && is_config_artifact {
         score += if path_overlap == 0 { 2.8 } else { 3.4 };
     }
     if intent.wants_entrypoint_build_flow && is_repo_root_runtime_config_artifact {
         score += 7.2;
+    }
+    if intent.wants_entrypoint_build_flow && is_typescript_runtime_module_index {
+        score += if path_overlap == 0 { 3.2 } else { 3.8 };
     }
     if wants_rust_workspace_config && is_rust_workspace_config {
         score += 3.6;

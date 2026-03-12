@@ -178,6 +178,7 @@ mod tests {
         hybrid_source_class, is_entrypoint_runtime_path, is_go_entrypoint_runtime_path,
         is_python_test_witness_path, is_runtime_config_artifact_path,
         is_rust_workspace_config_path, is_test_support_path,
+        is_typescript_runtime_module_index_path,
     };
 
     #[test]
@@ -255,6 +256,33 @@ mod tests {
             assert!(
                 !is_entrypoint_runtime_path(path),
                 "{path} should not be detected as a runtime entrypoint"
+            );
+        }
+    }
+
+    #[test]
+    fn typescript_runtime_module_index_paths_detect_generic_runtime_sibling_surfaces() {
+        for path in [
+            "packages/pg-meta/src/index.ts",
+            "packages/ai-commands/src/sql/index.ts",
+            "packages/icons/src/icons/index.ts",
+            "packages/marketing/src/crm/index.ts",
+            "apps/design-system/app/fonts/index.ts",
+        ] {
+            assert!(
+                is_typescript_runtime_module_index_path(path),
+                "{path} should be detected as a TypeScript runtime module index surface"
+            );
+        }
+
+        for path in [
+            "packages/cli/src/config/index.ts",
+            "packages/testing/playwright/tests/e2e/building-blocks/workflow-entry-points.spec.ts",
+            "apps/studio/tests/config/router.tsx",
+        ] {
+            assert!(
+                !is_typescript_runtime_module_index_path(path),
+                "{path} should not be detected as a TypeScript runtime module index surface"
             );
         }
     }
@@ -493,7 +521,12 @@ pub(super) fn is_typescript_entrypoint_runtime_path(path: &str) -> bool {
         return true;
     }
 
-    if !matches!(classify_repository_path(&normalized), PathClass::Runtime) {
+    let looks_like_runtime_tree =
+        matches!(classify_repository_path(&normalized), PathClass::Runtime)
+            || normalized.starts_with("app/")
+            || normalized.contains("/app/")
+            || normalized.contains("/lib/");
+    if !looks_like_runtime_tree {
         return false;
     }
 
@@ -519,6 +552,68 @@ pub(super) fn is_typescript_entrypoint_runtime_path(path: &str) -> bool {
                 "app" | "bootstrap" | "cli" | "daemon" | "server" | "service" | "worker"
             )
         })
+}
+
+pub(super) fn is_typescript_runtime_module_index_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if is_test_support_path(&normalized)
+        || is_example_support_path(&normalized)
+        || is_bench_support_path(&normalized)
+    {
+        return false;
+    }
+
+    let candidate = Path::new(&normalized);
+    let Some(extension) = candidate.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    if !matches!(
+        extension,
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
+    ) {
+        return false;
+    }
+
+    let looks_like_runtime_tree =
+        matches!(classify_repository_path(&normalized), PathClass::Runtime)
+            || normalized.starts_with("app/")
+            || normalized.contains("/app/")
+            || normalized.contains("/lib/");
+    if !looks_like_runtime_tree {
+        return false;
+    }
+
+    let Some(stem) = candidate.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    if !stem.eq_ignore_ascii_case("index") {
+        return false;
+    }
+
+    let path_tokens = hybrid_identifier_tokens(&normalized);
+    if path_tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "bench"
+                | "benches"
+                | "config"
+                | "configs"
+                | "fixture"
+                | "fixtures"
+                | "mock"
+                | "mocks"
+                | "spec"
+                | "specs"
+                | "stories"
+                | "story"
+                | "test"
+                | "tests"
+        )
+    }) {
+        return false;
+    }
+
+    true
 }
 
 pub(super) fn is_go_entrypoint_runtime_path(path: &str) -> bool {

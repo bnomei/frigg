@@ -104,6 +104,7 @@ use surfaces::{
     is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
     is_repo_metadata_path, is_runtime_config_artifact_path, is_rust_workspace_config_path,
     is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_typescript_runtime_module_index_path,
 };
 
 #[derive(Debug, Clone)]
@@ -1104,15 +1105,21 @@ impl TextSearcher {
         limit: usize,
         intent: &HybridRankingIntent,
     ) -> FriggResult<SearchExecutionOutput> {
+        let widen_runtime_config_witness_pool = intent.wants_runtime_config_artifacts;
         let widen_surface_witness_pool = intent.wants_laravel_ui_witnesses
             || intent.wants_test_witness_recall
+            || intent.wants_runtime_config_artifacts
             || intent.wants_entrypoint_build_flow;
-        let top_k = if widen_surface_witness_pool {
+        let top_k = if widen_runtime_config_witness_pool {
+            limit.saturating_mul(6).max(48)
+        } else if widen_surface_witness_pool {
             limit.saturating_mul(4).max(32)
         } else {
             limit.saturating_mul(2).max(16)
         };
-        let materialized_limit = if widen_surface_witness_pool {
+        let materialized_limit = if widen_runtime_config_witness_pool {
+            limit.saturating_mul(4).max(32).min(top_k)
+        } else if widen_surface_witness_pool {
             limit.saturating_mul(2).max(20).min(top_k)
         } else {
             limit.saturating_add(2).max(8).min(top_k)
@@ -7029,7 +7036,6 @@ mod tests {
             .iter()
             .map(|entry| entry.document.path.as_str())
             .collect::<Vec<_>>();
-
         assert!(
             ranked_paths
                 .iter()
@@ -7161,6 +7167,341 @@ mod tests {
                 .take(14)
                 .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
             "typescript entrypoint queries should keep a root manifest visible under test crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_typescript_config_queries_recover_saved_fix_wave_runtime_siblings()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-saved-wave-config-crowding");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "package.json",
+                    "{\n  \"scripts\": {\n    \"test:ui\": \"pnpm turbo run test --filter=ui\"\n  }\n}\n",
+                ),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                    "export function createServerClient() { return \"supabase server\"; }\n",
+                ),
+                (
+                    "apps/docs/generator/cli.ts",
+                    "export async function runCli() { return \"docs cli\"; }\n",
+                ),
+                (
+                    "apps/docs/internals/files/cli.ts",
+                    "export async function runFilesCli() { return \"files cli\"; }\n",
+                ),
+                (
+                    "apps/design-system/app/fonts/index.ts",
+                    "export * from './registry';\n",
+                ),
+                (
+                    "packages/pg-meta/src/index.ts",
+                    "export * from './pg-meta';\n",
+                ),
+                (
+                    "packages/ai-commands/src/sql/index.ts",
+                    "export * from './functions';\n",
+                ),
+                (
+                    "packages/icons/src/icons/index.ts",
+                    "export * from './library';\n",
+                ),
+                (
+                    "packages/marketing/src/crm/index.ts",
+                    "export * from './hubspot';\n",
+                ),
+                (
+                    ".github/workflows/ai-tests.yml",
+                    "name: AI tests\njobs:\n  test:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
+                    ".github/workflows/authorize-vercel-deploys.yml",
+                    "name: Authorize vercel deploys\njobs:\n  release:\n    steps:\n      - run: pnpm authorize-vercel-deploys\n",
+                ),
+                (
+                    ".github/workflows/autofix_linters.yml",
+                    "name: Autofix linters\njobs:\n  lint:\n    steps:\n      - run: pnpm lint\n",
+                ),
+                (
+                    ".github/workflows/avoid-typos.yml",
+                    "name: Avoid typos\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    ".github/workflows/braintrust-evals.yml",
+                    "name: Braintrust evals\njobs:\n  evals:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
+                    ".github/workflows/braintrust-preview-scorers-cleanup.yml",
+                    "name: Braintrust cleanup\njobs:\n  cleanup:\n    steps:\n      - run: pnpm cleanup\n",
+                ),
+                (
+                    ".github/workflows/braintrust-preview-scorers-deploy.yml",
+                    "name: Braintrust deploy\njobs:\n  deploy:\n    steps:\n      - run: pnpm deploy\n",
+                ),
+                (
+                    ".github/workflows/docs-lint-v2-comment.yml",
+                    "name: Docs lint comment\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    ".github/workflows/docs-tests.yml",
+                    "name: Docs tests\njobs:\n  docs:\n    steps:\n      - run: pnpm test:docs\n",
+                ),
+                (
+                    ".github/workflows/fix-typos.yml",
+                    "name: Fix typos\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    ".github/workflows/pg-meta-tests.yml",
+                    "name: pg-meta tests\njobs:\n  test:\n    steps:\n      - run: pnpm test:ui\n",
+                ),
+                (
+                    ".github/workflows/prettier.yml",
+                    "name: Prettier\njobs:\n  lint:\n    steps:\n      - run: pnpm prettier\n",
+                ),
+                (
+                    ".github/workflows/dashboard-pr-reminder.yml",
+                    "name: Dashboard reminder\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    ".github/workflows/docs-lint-v2-scheduled.yml",
+                    "name: Docs lint scheduled\njobs:\n  docs:\n    steps:\n      - run: pnpm docs:lint\n",
+                ),
+                (
+                    "packages/pg-meta/test/config.test.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "packages/ai-commands/test/extensions.ts",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.test.tsx",
+                    "test('config package tsconfig github workflow ai tests');\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'config package tsconfig github workflow ai tests';\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "config package tsconfig github workflow ai tests".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "saved-wave config queries should keep a root config artifact visible: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+                        | "apps/docs/generator/cli.ts"
+                        | "apps/docs/internals/files/cli.ts"
+                        | "apps/design-system/app/fonts/index.ts"
+                        | "packages/pg-meta/src/index.ts"
+                        | "packages/ai-commands/src/sql/index.ts"
+                        | "packages/icons/src/icons/index.ts"
+                        | "packages/marketing/src/crm/index.ts"
+                )
+            }),
+            "saved-wave config queries should recover a runtime sibling witness under workflow crowding: {ranked_paths:?}"
+        );
+
+        cleanup_workspace(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_ranking_typescript_entrypoint_queries_recover_saved_fix_wave_nested_indexes()
+    -> FriggResult<()> {
+        let root = temp_workspace_root("hybrid-typescript-saved-wave-entrypoint-crowding");
+        prepare_workspace(
+            &root,
+            &[
+                (
+                    "package.json",
+                    "{\n  \"scripts\": {\n    \"build\": \"turbo run build\",\n    \"test:ui\": \"turbo run test --filter=ui\"\n  }\n}\n",
+                ),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                    "export function createServerClient() { return \"supabase server\"; }\n",
+                ),
+                (
+                    "apps/docs/generator/cli.ts",
+                    "export async function runCli() { return \"docs cli\"; }\n",
+                ),
+                (
+                    "apps/docs/internals/files/cli.ts",
+                    "export async function runFilesCli() { return \"files cli\"; }\n",
+                ),
+                (
+                    "apps/design-system/app/fonts/index.ts",
+                    "export * from './registry';\n",
+                ),
+                (
+                    "packages/pg-meta/src/index.ts",
+                    "export * from './pg-meta';\n",
+                ),
+                (
+                    "packages/ai-commands/src/sql/index.ts",
+                    "export * from './functions';\n",
+                ),
+                (
+                    "packages/icons/src/icons/index.ts",
+                    "export * from './library';\n",
+                ),
+                (
+                    "packages/marketing/src/crm/index.ts",
+                    "export * from './hubspot';\n",
+                ),
+                (
+                    "packages/build-icons/src/main.mjs",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "apps/studio/tests/config/router.tsx",
+                    "export const router = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/auth/nextjs-full/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "packages/pg-meta/test/db/server.crt",
+                    "entry point bootstrap server app cli router main\n",
+                ),
+                (
+                    "packages/pg-meta/test/db/server.key",
+                    "entry point bootstrap server app cli router main\n",
+                ),
+                (
+                    "apps/ui-library/registry/default/clients/nextjs/lib/supabase/server.ts",
+                    "export function createNextClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/auth/nextjs/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/realtime/nextjs-authorization-demo/utils/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/user-management/angular-user-management/src/main.ts",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/user-management/ionic-angular-user-management/src/main.ts",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/user-management/nextjs-user-management/lib/supabase/server.ts",
+                    "export function createClient() { return 'entry point bootstrap server app cli router main'; }\n",
+                ),
+                (
+                    "examples/auth/quickstarts/react/src/main.jsx",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/todo-list/sveltejs-todo-list/src/main.ts",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+                (
+                    "examples/user-management/react-user-management/src/main.jsx",
+                    "export const main = 'entry point bootstrap server app cli router main';\n",
+                ),
+            ],
+        )?;
+
+        let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+        let output = searcher.search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "entry point bootstrap server app cli router main".to_owned(),
+                limit: 14,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(false),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &PanicSemanticQueryEmbeddingExecutor,
+        )?;
+
+        let ranked_paths = output
+            .matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+                        | "apps/docs/generator/cli.ts"
+                        | "apps/docs/internals/files/cli.ts"
+                        | "apps/design-system/app/fonts/index.ts"
+                        | "packages/pg-meta/src/index.ts"
+                        | "packages/ai-commands/src/sql/index.ts"
+                        | "packages/icons/src/icons/index.ts"
+                        | "packages/marketing/src/crm/index.ts"
+                )
+            }),
+            "saved-wave entrypoint queries should recover a required runtime witness under example crowding: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths.iter().take(14).any(|path| {
+                matches!(
+                    *path,
+                    "apps/design-system/app/fonts/index.ts"
+                        | "packages/pg-meta/src/index.ts"
+                        | "packages/ai-commands/src/sql/index.ts"
+                        | "packages/icons/src/icons/index.ts"
+                        | "packages/marketing/src/crm/index.ts"
+                )
+            }),
+            "saved-wave entrypoint queries should surface a nested runtime index witness: {ranked_paths:?}"
+        );
+        assert!(
+            ranked_paths
+                .iter()
+                .take(14)
+                .any(|path| matches!(*path, "package.json" | "tsconfig.json")),
+            "saved-wave entrypoint queries should keep a root config artifact visible: {ranked_paths:?}"
         );
 
         cleanup_workspace(&root);

@@ -32,6 +32,7 @@ use super::surfaces::{
     is_non_code_test_doc_path, is_python_entrypoint_runtime_path, is_python_runtime_config_path,
     is_python_test_witness_path, is_repo_metadata_path, is_runtime_config_artifact_path,
     is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_typescript_runtime_module_index_path,
 };
 
 pub(super) fn diversify_hybrid_ranked_evidence(
@@ -43,6 +44,10 @@ pub(super) fn diversify_hybrid_ranked_evidence(
     let query_context = HybridSelectionQueryContext::new(&intent, query_text);
     let mut seen_classes = BTreeMap::<HybridSourceClass, usize>::new();
     let mut seen_laravel_ui_surfaces = BTreeMap::<LaravelUiSurfaceClass, usize>::new();
+    let mut seen_ci_workflows = 0usize;
+    let mut seen_example_support = 0usize;
+    let mut seen_repo_root_runtime_configs = 0usize;
+    let mut seen_typescript_runtime_module_indexes = 0usize;
     let mut remaining = ranked
         .into_iter()
         .map(|evidence| HybridSelectionCandidate::new(evidence, &intent, &query_context))
@@ -57,6 +62,10 @@ pub(super) fn diversify_hybrid_ranked_evidence(
             &query_context,
             &seen_classes,
             &seen_laravel_ui_surfaces,
+            seen_ci_workflows,
+            seen_example_support,
+            seen_repo_root_runtime_configs,
+            seen_typescript_runtime_module_indexes,
         );
 
         for (index, candidate) in remaining.iter().enumerate().skip(1) {
@@ -66,6 +75,10 @@ pub(super) fn diversify_hybrid_ranked_evidence(
                 &query_context,
                 &seen_classes,
                 &seen_laravel_ui_surfaces,
+                seen_ci_workflows,
+                seen_example_support,
+                seen_repo_root_runtime_configs,
+                seen_typescript_runtime_module_indexes,
             );
             if score.total_cmp(&best_score).is_gt()
                 || (score.total_cmp(&best_score).is_eq()
@@ -86,6 +99,18 @@ pub(super) fn diversify_hybrid_ranked_evidence(
             .or_insert(0) += 1;
         if let Some(surface) = laravel_ui_surface_class(&chosen.evidence.document.path) {
             *seen_laravel_ui_surfaces.entry(surface).or_insert(0) += 1;
+        }
+        if chosen.static_features.is_ci_workflow {
+            seen_ci_workflows += 1;
+        }
+        if chosen.static_features.is_example_support {
+            seen_example_support += 1;
+        }
+        if chosen.static_features.is_repo_root_runtime_config_artifact {
+            seen_repo_root_runtime_configs += 1;
+        }
+        if chosen.static_features.is_typescript_runtime_module_index {
+            seen_typescript_runtime_module_indexes += 1;
         }
         selected.push(chosen.evidence);
     }
@@ -155,6 +180,11 @@ struct HybridSelectionStaticFeatures {
     excerpt_has_exact_identifier_anchor: bool,
     excerpt_has_build_flow_anchor: bool,
     excerpt_has_test_double_anchor: bool,
+    is_ci_workflow: bool,
+    is_example_support: bool,
+    has_path_witness_source: bool,
+    is_repo_root_runtime_config_artifact: bool,
+    is_typescript_runtime_module_index: bool,
 }
 
 struct HybridSelectionCandidate {
@@ -190,6 +220,21 @@ impl HybridSelectionCandidate {
         };
         let has_exact_query_term_match =
             path_has_exact_query_term_match(&evidence.document.path, &query_context.exact_terms);
+        let is_ci_workflow = is_ci_workflow_path(&evidence.document.path);
+        let is_example_support = is_example_support_path(&evidence.document.path);
+        let has_path_witness_source = evidence
+            .lexical_sources
+            .iter()
+            .any(|source| source.starts_with("path_witness:"));
+        let is_repo_root_runtime_config_artifact =
+            is_runtime_config_artifact_path(&evidence.document.path)
+                && !evidence
+                    .document
+                    .path
+                    .trim_start_matches("./")
+                    .contains('/');
+        let is_typescript_runtime_module_index =
+            is_typescript_runtime_module_index_path(&evidence.document.path);
         let excerpt_overlap = if query_context.query_has_identifier_anchor
             && (intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow)
         {
@@ -233,6 +278,11 @@ impl HybridSelectionCandidate {
                 excerpt_has_exact_identifier_anchor,
                 excerpt_has_build_flow_anchor,
                 excerpt_has_test_double_anchor,
+                is_ci_workflow,
+                is_example_support,
+                has_path_witness_source,
+                is_repo_root_runtime_config_artifact,
+                is_typescript_runtime_module_index,
             },
         }
     }
@@ -313,6 +363,10 @@ fn hybrid_selection_score(
     query_context: &HybridSelectionQueryContext,
     seen_classes: &BTreeMap<HybridSourceClass, usize>,
     seen_laravel_ui_surfaces: &BTreeMap<LaravelUiSurfaceClass, usize>,
+    seen_ci_workflows: usize,
+    seen_example_support: usize,
+    seen_repo_root_runtime_configs: usize,
+    seen_typescript_runtime_module_indexes: usize,
 ) -> f32 {
     let evidence = &candidate.evidence;
     let class = candidate.static_features.class;
@@ -324,6 +378,11 @@ fn hybrid_selection_score(
         .get(&HybridSourceClass::Runtime)
         .copied()
         .unwrap_or(0);
+    let path_stem = Path::new(&evidence.document.path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.trim().to_ascii_lowercase())
+        .unwrap_or_default();
     let mut score = evidence.blended_score
         * hybrid_path_quality_multiplier_with_intent(&evidence.document.path, intent);
     score *= candidate.static_features.canonical_match_multiplier;
@@ -561,6 +620,61 @@ fn hybrid_selection_score(
         if is_runtime_config_artifact_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.30 } else { 0.16 };
         }
+        if is_entrypoint_runtime_path(&evidence.document.path) {
+            if matches!(path_stem.as_str(), "server" | "cli") {
+                score += if seen_count == 0 { 1.60 } else { 0.80 };
+            } else if path_stem == "main" {
+                score -= if seen_count == 0 { 0.84 } else { 0.42 };
+                if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+                    score -= 1.48;
+                }
+            }
+            if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+                score += if matches!(path_stem.as_str(), "server" | "cli") {
+                    0.96
+                } else {
+                    0.44
+                };
+            }
+            if candidate.static_features.has_path_witness_source {
+                score += if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+                    if matches!(path_stem.as_str(), "server" | "cli") {
+                        2.20
+                    } else {
+                        1.10
+                    }
+                } else if seen_count == 0 {
+                    0.44
+                } else {
+                    0.22
+                };
+            }
+        }
+        if is_typescript_runtime_module_index_path(&evidence.document.path) {
+            score += if seen_count == 0 { 1.10 } else { 0.54 };
+            if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+                score += 0.36;
+            }
+            if candidate.static_features.has_path_witness_source {
+                score += if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+                    1.34
+                } else if seen_count == 0 {
+                    0.30
+                } else {
+                    0.14
+                };
+            }
+        }
+        if candidate
+            .static_features
+            .is_repo_root_runtime_config_artifact
+        {
+            score += if seen_repo_root_runtime_configs == 0 {
+                0.84
+            } else {
+                0.10
+            };
+        }
         if query_context.wants_rust_workspace_config
             && is_rust_workspace_config_path(&evidence.document.path)
         {
@@ -585,6 +699,18 @@ fn hybrid_selection_score(
             && !is_runtime_config_artifact_path(&evidence.document.path)
         {
             score -= if seen_count == 0 { 0.32 } else { 0.18 };
+        }
+        if seen_repo_root_runtime_configs > 0 && runtime_seen == 0 {
+            if candidate.static_features.is_ci_workflow {
+                score -= 1.24;
+            }
+            if matches!(class, HybridSourceClass::Tests | HybridSourceClass::Specs) {
+                score -= if seen_count == 0 {
+                    1.34
+                } else {
+                    0.88 + (0.28 * seen_count as f32)
+                };
+            }
         }
     }
     if intent.wants_laravel_ui_witnesses {
@@ -978,6 +1104,19 @@ fn hybrid_selection_score(
         if is_runtime_config_artifact_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.18 } else { 0.10 };
         }
+        if is_typescript_runtime_module_index_path(&evidence.document.path) {
+            score += if seen_count == 0 { 0.30 } else { 0.16 };
+        }
+        if candidate
+            .static_features
+            .is_repo_root_runtime_config_artifact
+        {
+            score += if seen_repo_root_runtime_configs == 0 {
+                0.96
+            } else {
+                0.12
+            };
+        }
         if is_python_runtime_config_path(&evidence.document.path) {
             score += if seen_count == 0 { 0.16 } else { 0.08 };
         }
@@ -1019,6 +1158,42 @@ fn hybrid_selection_score(
         if is_loose_python_test_module_path(&evidence.document.path) {
             score -= if runtime_seen == 0 { 0.18 } else { 0.10 };
         }
+    }
+    if candidate.static_features.is_ci_workflow
+        && (intent.wants_runtime_config_artifacts || intent.wants_entrypoint_build_flow)
+    {
+        if seen_ci_workflows == 0 {
+            score += 0.16;
+        } else {
+            let repeat_penalty = if intent.wants_runtime_config_artifacts {
+                1.28
+            } else {
+                0.84
+            };
+            score -= repeat_penalty * seen_ci_workflows as f32;
+            if seen_repo_root_runtime_configs > 0 {
+                score -= 0.22;
+            }
+        }
+    }
+    if candidate.static_features.is_example_support
+        && !intent.wants_examples
+        && (intent.wants_runtime_config_artifacts || intent.wants_entrypoint_build_flow)
+    {
+        score -= if seen_example_support == 0 {
+            0.22
+        } else {
+            0.74 * seen_example_support as f32
+        };
+    }
+    if candidate.static_features.is_typescript_runtime_module_index
+        && (intent.wants_runtime_config_artifacts || intent.wants_entrypoint_build_flow)
+    {
+        score += if seen_typescript_runtime_module_indexes == 0 {
+            0.72
+        } else {
+            0.24
+        };
     }
     if query_context.query_has_identifier_anchor
         && (intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow)

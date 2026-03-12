@@ -13,13 +13,13 @@ use crate::languages::SymbolLanguage;
 use crate::settings::SemanticRuntimeCredentials;
 
 use super::{
-    HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankingIntent,
-    RepositoryCandidateUniverse, SearchCandidateFile, SearchCandidateUniverse,
-    SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput,
-    SearchHybridQuery, SearchStageAttribution, SearchStageSample, SearchTextQuery, TextSearcher,
-    build_hybrid_lexical_hits_with_intent, build_hybrid_lexical_recall_regex,
-    build_hybrid_path_witness_hits_with_intent, empty_channel_result,
-    hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
+    HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridChannelHit, HybridPathWitnessQueryContext,
+    HybridRankedEvidence, HybridRankingIntent, RepositoryCandidateUniverse, SearchCandidateFile,
+    SearchCandidateUniverse, SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters,
+    SearchHybridExecutionOutput, SearchHybridQuery, SearchStageAttribution, SearchStageSample,
+    SearchTextQuery, TextSearcher, build_hybrid_lexical_hits_with_intent,
+    build_hybrid_lexical_recall_regex, build_hybrid_path_witness_hits_with_intent,
+    empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
     hybrid_path_has_exact_stem_match, hybrid_path_witness_recall_score, hybrid_query_exact_terms,
     match_count_for_hits, merge_hybrid_lexical_search_output, normalize_search_filters,
     rank_hybrid_anchor_evidence_for_query_with_witness, retain_semantic_hits_for_query,
@@ -85,6 +85,11 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     } else {
         lexical_limit
     };
+    let path_witness_working_limit = if wants_path_witness_recall {
+        query.limit.saturating_mul(4).max(32)
+    } else {
+        lexical_limit
+    };
     let semantic_limit = query.limit.max(searcher.config.max_search_results);
     let lexical_seed_terms = if wants_path_witness_recall {
         hybrid_lexical_recall_tokens(&query_text)
@@ -114,7 +119,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             &candidate_universe,
             &ranking_intent,
             context,
-            lexical_limit,
+            path_witness_working_limit,
         )
     });
     let lexical_candidate_universe = path_witness_lexical_universe
@@ -154,10 +159,11 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         )?
     };
     let mut lexical_document_count = distinct_match_document_count(&lexical_output.matches);
-    if lexical_seeded_with_terms
+    let should_widen_seeded_lexical_universe = lexical_seeded_with_terms
         && !std::ptr::eq(lexical_candidate_universe, &candidate_universe)
-        && lexical_document_count < query.limit
-    {
+        && (lexical_document_count < query.limit
+            || (wants_path_witness_recall && lexical_document_count < path_witness_working_limit));
+    if should_widen_seeded_lexical_universe {
         lexical_output = search_case_insensitive_recall_terms_with_universe(
             searcher,
             &lexical_seed_terms,
@@ -325,7 +331,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
                 &query_text,
                 &candidate_universe,
                 &normalized_filters,
-                lexical_limit,
+                path_witness_working_limit,
                 &ranking_intent,
             )?;
             witness_scoring_elapsed_us = witness_started_at
@@ -353,7 +359,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     let merged_ranking_matches = merged_ranking_matches_with_witness(
         &lexical_output.matches,
         &witness_output.matches,
-        lexical_limit,
+        path_witness_working_limit,
     );
     let ranking_lexical_hits = if witness_output.matches.is_empty() {
         lexical_hits.clone()
@@ -415,6 +421,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         + semantic_channel_result.hits.len();
     let (
         ranked_anchors,
+        _grouped_matches,
         matches,
         anchor_blending_sample,
         document_aggregation_sample,
@@ -444,8 +451,11 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             grouped_matches.len(),
         );
         let diversification_started_at = Instant::now();
-        let matches =
-            super::diversify_hybrid_ranked_evidence(grouped_matches, query.limit, &query_text);
+        let matches = super::diversify_hybrid_ranked_evidence(
+            grouped_matches.clone(),
+            query.limit,
+            &query_text,
+        );
         let final_diversification_sample = SearchStageSample::new(
             diversification_started_at
                 .elapsed()
@@ -457,6 +467,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         );
         (
             ranked_anchors,
+            grouped_matches,
             matches,
             anchor_blending_sample,
             document_aggregation_sample,
@@ -498,8 +509,11 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             grouped_matches.len(),
         );
         let diversification_started_at = Instant::now();
-        let matches =
-            super::diversify_hybrid_ranked_evidence(grouped_matches, query.limit, &query_text);
+        let matches = super::diversify_hybrid_ranked_evidence(
+            grouped_matches.clone(),
+            query.limit,
+            &query_text,
+        );
         let final_diversification_sample = SearchStageSample::new(
             diversification_started_at
                 .elapsed()
@@ -511,12 +525,19 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         );
         (
             ranked_anchors,
+            grouped_matches,
             matches,
             anchor_blending_sample,
             document_aggregation_sample,
             final_diversification_sample,
         )
     };
+    let matches = preserve_runtime_config_surface_selection(
+        matches,
+        &witness_hits,
+        &ranking_intent,
+        query.limit,
+    );
     let mut diagnostics = lexical_output.diagnostics.clone();
     merge_execution_diagnostics(&mut diagnostics, witness_output.diagnostics.clone());
     let graph_hit_count = graph_hits.len();
@@ -645,6 +666,126 @@ fn merge_execution_diagnostics(
     base.entries.extend(supplement.entries);
     sort_search_diagnostics_deterministically(&mut base.entries);
     base.entries.dedup();
+}
+
+fn preserve_runtime_config_surface_selection(
+    mut matches: Vec<HybridRankedEvidence>,
+    witness_hits: &[HybridChannelHit],
+    intent: &HybridRankingIntent,
+    limit: usize,
+) -> Vec<HybridRankedEvidence> {
+    if !intent.wants_runtime_config_artifacts || matches.is_empty() {
+        return matches;
+    }
+    if matches
+        .iter()
+        .any(is_specific_runtime_config_surface_document)
+    {
+        return matches;
+    }
+
+    let Some(candidate) = witness_hits
+        .iter()
+        .filter(|hit| {
+            !matches
+                .iter()
+                .any(|selected| selected.document == hit.document)
+        })
+        .filter(|hit| is_specific_runtime_config_surface_path(&hit.document.path))
+        .max_by(|left, right| {
+            runtime_config_surface_guardrail_priority_for_path(&left.document.path)
+                .cmp(&runtime_config_surface_guardrail_priority_for_path(
+                    &right.document.path,
+                ))
+                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
+                .then_with(|| left.document.cmp(&right.document).reverse())
+        })
+        .map(hybrid_ranked_evidence_from_witness_hit)
+    else {
+        return matches;
+    };
+
+    let replacement_index = matches
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, entry)| is_runtime_config_guardrail_replacement(entry))
+        .map(|(index, _)| index);
+
+    if let Some(index) = replacement_index {
+        matches[index] = candidate;
+    } else if matches.len() < limit {
+        matches.push(candidate);
+    }
+
+    matches
+}
+
+fn is_repo_root_runtime_config_document(entry: &HybridRankedEvidence) -> bool {
+    super::surfaces::is_runtime_config_artifact_path(&entry.document.path)
+        && !entry.document.path.trim_start_matches("./").contains('/')
+}
+
+fn is_specific_runtime_config_surface_document(entry: &HybridRankedEvidence) -> bool {
+    is_specific_runtime_config_surface_path(&entry.document.path)
+}
+
+fn is_specific_runtime_config_surface_path(path: &str) -> bool {
+    if super::surfaces::is_typescript_runtime_module_index_path(path) {
+        return true;
+    }
+    if !super::surfaces::is_entrypoint_runtime_path(path) {
+        return false;
+    }
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| !stem.eq_ignore_ascii_case("main"))
+        .unwrap_or(false)
+}
+
+fn runtime_config_surface_guardrail_priority_for_path(path: &str) -> usize {
+    let path_stem = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(path_stem.as_str(), "server" | "cli") {
+        3
+    } else if super::surfaces::is_typescript_runtime_module_index_path(path) {
+        2
+    } else {
+        1
+    }
+}
+
+fn hybrid_ranked_evidence_from_witness_hit(hit: &HybridChannelHit) -> HybridRankedEvidence {
+    HybridRankedEvidence {
+        document: hit.document.clone(),
+        anchor: hit.anchor.clone(),
+        excerpt: hit.excerpt.clone(),
+        blended_score: hit.raw_score.max(0.0),
+        lexical_score: hit.raw_score.max(0.0),
+        graph_score: 0.0,
+        semantic_score: 0.0,
+        lexical_sources: hit.provenance_ids.clone(),
+        graph_sources: Vec::new(),
+        semantic_sources: Vec::new(),
+    }
+}
+
+fn is_runtime_config_guardrail_replacement(entry: &HybridRankedEvidence) -> bool {
+    if is_repo_root_runtime_config_document(entry) {
+        return false;
+    }
+    if super::surfaces::is_ci_workflow_path(&entry.document.path) {
+        return true;
+    }
+    matches!(
+        super::surfaces::hybrid_source_class(&entry.document.path),
+        super::surfaces::HybridSourceClass::Tests | super::surfaces::HybridSourceClass::Specs
+    ) || super::surfaces::is_test_support_path(&entry.document.path)
+        || super::surfaces::is_test_harness_path(&entry.document.path)
 }
 
 fn merged_ranking_matches_with_witness(
