@@ -15,6 +15,7 @@ mod lexical_channel;
 mod lexical_recall;
 mod ordering;
 mod path_witness_projection;
+mod policy;
 mod query_terms;
 mod ranker;
 mod regex_support;
@@ -62,10 +63,9 @@ use laravel::{
 use lexical_channel::{
     HybridPathWitnessQueryContext, best_path_witness_anchor_in_file,
     build_hybrid_lexical_hits_with_intent, build_hybrid_path_witness_hits_with_intent,
-    hybrid_canonical_match_multiplier, hybrid_path_has_exact_stem_match,
-    hybrid_path_quality_multiplier_with_intent, hybrid_path_witness_recall_score,
-    hybrid_path_witness_recall_score_for_projection, merge_hybrid_lexical_search_output,
-    semantic_excerpt,
+    hybrid_path_has_exact_stem_match, hybrid_path_quality_multiplier_with_intent,
+    hybrid_path_witness_recall_score, hybrid_path_witness_recall_score_for_projection,
+    merge_hybrid_lexical_search_output, semantic_excerpt,
 };
 #[cfg(test)]
 use lexical_channel::{build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query};
@@ -82,8 +82,7 @@ use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
     hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
     hybrid_path_overlap_count, hybrid_path_overlap_tokens, hybrid_query_exact_terms,
-    hybrid_query_overlap_terms, hybrid_specific_witness_query_terms,
-    path_has_exact_query_term_match,
+    hybrid_query_overlap_terms,
 };
 pub use ranker::rank_hybrid_evidence;
 use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
@@ -95,16 +94,14 @@ use semantic::{
     RuntimeSemanticQueryEmbeddingExecutor, SemanticRuntimeQueryEmbeddingExecutor,
     retain_semantic_hits_for_query, search_semantic_channel_hits,
 };
+#[cfg(test)]
+use surfaces::HybridSourceClass;
 use surfaces::{
-    HybridSourceClass, hybrid_source_class, is_bench_support_path, is_ci_workflow_path,
-    is_cli_test_support_path, is_entrypoint_build_workflow_path, is_entrypoint_reference_doc_path,
-    is_entrypoint_runtime_path, is_example_support_path, is_frontend_runtime_noise_path,
-    is_generic_runtime_witness_doc_path, is_loose_python_test_module_path,
-    is_navigation_reference_doc_path, is_navigation_runtime_path, is_non_code_test_doc_path,
-    is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
-    is_repo_metadata_path, is_runtime_config_artifact_path, is_rust_workspace_config_path,
-    is_scripts_ops_path, is_test_harness_path, is_test_support_path,
-    is_typescript_runtime_module_index_path,
+    hybrid_source_class, is_bench_support_path, is_ci_workflow_path, is_cli_test_support_path,
+    is_entrypoint_build_workflow_path, is_entrypoint_runtime_path, is_example_support_path,
+    is_frontend_runtime_noise_path, is_python_runtime_config_path, is_python_test_witness_path,
+    is_runtime_config_artifact_path, is_scripts_ops_path, is_test_harness_path,
+    is_test_support_path,
 };
 
 #[derive(Debug, Clone)]

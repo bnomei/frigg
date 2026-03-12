@@ -39,6 +39,10 @@ pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<Strin
         "application",
         "applications",
         "blade",
+        "bench",
+        "benches",
+        "benchmark",
+        "benchmarks",
         "build",
         "component",
         "components",
@@ -46,9 +50,15 @@ pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<Strin
         "creates",
         "entry",
         "entrypoint",
+        "example",
+        "examples",
         "flow",
+        "fixture",
+        "fixtures",
         "form",
         "forms",
+        "integration",
+        "integrations",
         "layout",
         "layouts",
         "middleware",
@@ -100,6 +110,61 @@ pub(super) fn path_has_exact_query_term_match(path: &str, exact_terms: &[String]
     }
 
     exact_terms.iter().any(|term| term == &normalized_stem)
+}
+
+pub(super) fn hybrid_canonical_match_multiplier(path: &str, exact_terms: &[String]) -> f32 {
+    const CANONICAL_SUFFIXES: &[&str] = &[
+        "reference",
+        "request",
+        "response",
+        "result",
+        "results",
+        "handler",
+        "formatter",
+    ];
+
+    let Some(stem) = Path::new(path).file_stem().and_then(|stem| stem.to_str()) else {
+        return 1.0;
+    };
+    let normalized_stem = stem.trim().to_ascii_lowercase();
+    if normalized_stem.is_empty() || exact_terms.is_empty() {
+        return 1.0;
+    }
+    if exact_terms
+        .iter()
+        .any(|term| term.eq_ignore_ascii_case(&normalized_stem))
+    {
+        return 1.65;
+    }
+
+    for term in exact_terms {
+        if !normalized_stem.starts_with(term.as_str()) || normalized_stem == *term {
+            continue;
+        }
+        let suffix = &normalized_stem[term.len()..];
+        if CANONICAL_SUFFIXES
+            .iter()
+            .any(|candidate| candidate == &suffix)
+        {
+            return 0.78;
+        }
+    }
+
+    1.0
+}
+
+pub(super) fn hybrid_path_has_exact_stem_match(path: &str, exact_terms: &[String]) -> bool {
+    let Some(stem) = Path::new(path).file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let normalized_stem = stem.trim().to_ascii_lowercase();
+    if normalized_stem.is_empty() {
+        return false;
+    }
+
+    exact_terms
+        .iter()
+        .any(|term| term.eq_ignore_ascii_case(&normalized_stem))
 }
 
 pub(super) fn hybrid_query_overlap_terms(query_text: &str) -> Vec<String> {

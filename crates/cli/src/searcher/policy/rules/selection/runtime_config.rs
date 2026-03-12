@@ -1,0 +1,313 @@
+use super::super::super::dsl::{ScoreRule, apply_score_rules};
+use super::super::super::facts::SelectionFacts;
+use super::super::super::kernel::PolicyProgram;
+use super::super::super::trace::{PolicyEffect, PolicyStage};
+use crate::searcher::surfaces::HybridSourceClass;
+
+fn artifact_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_runtime_config_artifact).then_some(
+        PolicyEffect::Add(if ctx.seen_count == 0 { 0.42 } else { 0.22 }),
+    )
+}
+
+fn server_or_cli_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_entrypoint_runtime
+        && ctx.path_stem_is_server_or_cli)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            1.60
+        } else {
+            0.80
+        }))
+}
+
+fn main_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_entrypoint_runtime && ctx.path_stem_is_main)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            -0.84
+        } else {
+            -0.42
+        }))
+}
+
+fn main_without_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_entrypoint_runtime
+        && ctx.path_stem_is_main
+        && ctx.seen_repo_root_runtime_configs > 0
+        && ctx.runtime_seen == 0)
+        .then_some(PolicyEffect::Add(-1.48))
+}
+
+fn repo_root_runtime_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_entrypoint_runtime
+        && ctx.seen_repo_root_runtime_configs > 0
+        && ctx.runtime_seen == 0)
+        .then_some(PolicyEffect::Add(if ctx.path_stem_is_server_or_cli {
+            0.96
+        } else {
+            0.44
+        }))
+}
+
+fn path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_runtime_config_artifacts
+        || !ctx.is_entrypoint_runtime
+        || !ctx.has_path_witness_source
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(
+        if ctx.seen_repo_root_runtime_configs > 0 && ctx.runtime_seen == 0 {
+            if ctx.path_stem_is_server_or_cli {
+                2.20
+            } else {
+                1.10
+            }
+        } else if ctx.seen_count == 0 {
+            0.44
+        } else {
+            0.22
+        },
+    ))
+}
+
+fn typescript_index_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_typescript_runtime_module_index).then_some(
+        PolicyEffect::Add(if ctx.seen_count == 0 { 1.10 } else { 0.54 }),
+    )
+}
+
+fn typescript_index_repo_root_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_typescript_runtime_module_index
+        && ctx.seen_repo_root_runtime_configs > 0
+        && ctx.runtime_seen == 0)
+        .then_some(PolicyEffect::Add(0.36))
+}
+
+fn typescript_index_path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_runtime_config_artifacts
+        || !ctx.is_typescript_runtime_module_index
+        || !ctx.has_path_witness_source
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(
+        if ctx.seen_repo_root_runtime_configs > 0 && ctx.runtime_seen == 0 {
+            1.34
+        } else if ctx.seen_count == 0 {
+            0.30
+        } else {
+            0.14
+        },
+    ))
+}
+
+fn repo_root_artifact_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_repo_root_runtime_config_artifact).then_some(
+        PolicyEffect::Add(if ctx.seen_repo_root_runtime_configs == 0 {
+            2.40
+        } else {
+            0.18
+        }),
+    )
+}
+
+fn repo_root_artifact_path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_repo_root_runtime_config_artifact
+        && ctx.has_path_witness_source)
+        .then_some(PolicyEffect::Add(
+            if ctx.seen_repo_root_runtime_configs == 0 {
+                2.60
+            } else {
+                0.80
+            },
+        ))
+}
+
+fn rust_workspace_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.wants_rust_workspace_config
+        && ctx.is_rust_workspace_config)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            0.72
+        } else {
+            0.34
+        }))
+}
+
+fn python_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_runtime_config_artifacts || !ctx.is_python_runtime_config {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(if ctx.wants_python_workspace_config {
+        if ctx.seen_count == 0 { 0.24 } else { 0.12 }
+    } else if ctx.seen_count == 0 {
+        -0.34
+    } else {
+        -0.18
+    }))
+}
+
+fn exact_runtime_config_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_runtime_config_artifact
+        && ctx.has_exact_query_term_match)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            0.68
+        } else {
+            0.34
+        }))
+}
+
+fn doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && matches!(
+            ctx.class,
+            HybridSourceClass::Documentation | HybridSourceClass::Readme
+        ))
+    .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        -0.40
+    } else {
+        -0.18
+    }))
+}
+
+fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            -0.32
+        } else {
+            -0.18
+        }))
+}
+
+fn ci_penalty_without_runtime(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.seen_repo_root_runtime_configs > 0
+        && ctx.runtime_seen == 0
+        && ctx.is_ci_workflow)
+        .then_some(PolicyEffect::Add(-1.24))
+}
+
+fn tests_specs_penalty_without_runtime(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.seen_repo_root_runtime_configs > 0
+        && ctx.runtime_seen == 0
+        && matches!(
+            ctx.class,
+            HybridSourceClass::Tests | HybridSourceClass::Specs
+        ))
+    .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+        -1.34
+    } else {
+        -(0.88 + (0.28 * ctx.seen_count as f32))
+    }))
+}
+
+const RULES: &[ScoreRule<SelectionFacts>] = &[
+    ScoreRule::new(
+        "selection.runtime_config.artifact_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        artifact_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.server_or_cli_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        server_or_cli_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.main_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        main_penalty,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.main_without_runtime_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        main_without_runtime_penalty,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.repo_root_runtime_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        repo_root_runtime_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.path_witness_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        path_witness_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.typescript_index_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        typescript_index_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.typescript_index_repo_root_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        typescript_index_repo_root_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.typescript_index_path_witness_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        typescript_index_path_witness_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.repo_root_artifact_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        repo_root_artifact_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.repo_root_artifact_path_witness_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        repo_root_artifact_path_witness_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.rust_workspace_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        rust_workspace_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.python_adjustment",
+        PolicyStage::SelectionRuntimeConfig,
+        python_adjustment,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.exact_runtime_config_match_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        exact_runtime_config_match_bonus,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.doc_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        doc_penalty,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.repo_metadata_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        repo_metadata_penalty,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.ci_penalty_without_runtime",
+        PolicyStage::SelectionRuntimeConfig,
+        ci_penalty_without_runtime,
+    ),
+    ScoreRule::new(
+        "selection.runtime_config.tests_specs_penalty_without_runtime",
+        PolicyStage::SelectionRuntimeConfig,
+        tests_specs_penalty_without_runtime,
+    ),
+];
+
+pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
+    if !ctx.wants_runtime_config_artifacts {
+        return;
+    }
+
+    apply_score_rules(program, ctx, RULES);
+}
