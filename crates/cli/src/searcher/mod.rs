@@ -1102,34 +1102,9 @@ impl TextSearcher {
         limit: usize,
         intent: &HybridRankingIntent,
     ) -> FriggResult<SearchExecutionOutput> {
-        let widen_runtime_config_witness_pool = intent.wants_runtime_config_artifacts;
-        let widen_surface_witness_pool = intent.wants_laravel_ui_witnesses
-            || intent.wants_test_witness_recall
-            || intent.wants_runtime_config_artifacts
-            || intent.wants_entrypoint_build_flow;
-        let top_k = if widen_runtime_config_witness_pool
-            && (intent.wants_test_witness_recall || intent.wants_entrypoint_build_flow)
-        {
-            limit.saturating_mul(12).max(128)
-        } else if widen_runtime_config_witness_pool {
-            limit.saturating_mul(8).max(80)
-        } else if intent.wants_test_witness_recall || intent.wants_entrypoint_build_flow {
-            limit.saturating_mul(10).max(96)
-        } else if widen_surface_witness_pool {
-            limit.saturating_mul(6).max(64)
-        } else {
-            limit.saturating_mul(2).max(16)
-        };
-        let materialized_limit = if widen_runtime_config_witness_pool {
-            top_k
-        } else if widen_surface_witness_pool {
-            // Surface-heavy runtime queries rely on post-selection guardrails to recover
-            // companion witnesses, so materialize the full witness frontier instead of
-            // truncating before those guardrails can see the candidates.
-            top_k
-        } else {
-            limit.saturating_add(2).max(8).min(top_k)
-        };
+        let frontier = policy::plan_path_witness_frontier(intent, limit);
+        let top_k = frontier.top_k;
+        let materialized_limit = frontier.materialized_limit;
         let query_context = HybridPathWitnessQueryContext::new(query_text);
         let mut scored = Vec::<PathWitnessCandidate>::with_capacity(top_k);
         let base_repositories = candidate_universe
@@ -4477,7 +4452,9 @@ mod tests {
             ranked_paths
                 .iter()
                 .take(16)
-                .any(|path| required_backend_tests.iter().any(|required| required == path)),
+                .any(|path| required_backend_tests
+                    .iter()
+                    .any(|required| required == path)),
             "saved-wave entrypoint queries should recover a backend test witness under classic crowding: {ranked_paths:?}"
         );
 
@@ -4654,7 +4631,9 @@ mod tests {
             ranked_paths
                 .iter()
                 .take(16)
-                .any(|path| required_backend_tests.iter().any(|required| required == path)),
+                .any(|path| required_backend_tests
+                    .iter()
+                    .any(|required| required == path)),
             "saved-wave tests queries should recover a backend test witness under setup crowding: {ranked_paths:?}"
         );
 
@@ -9213,31 +9192,29 @@ mod tests {
             .map(|entry| entry.document.path.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Degraded);
-        assert!(output.note.semantic_enabled);
+        assert_eq!(output.note.semantic_status, HybridSemanticStatus::Unavailable);
+        assert!(!output.note.semantic_enabled);
         assert!(
             output
                 .note
                 .semantic_reason
                 .as_deref()
-                .is_some_and(
-                    |reason| reason.contains("snapshot-002") && reason.contains("snapshot-001")
-                ),
-            "split-snapshot fallback should name both latest and fallback snapshots"
+                .is_some_and(|reason| {
+                    reason.contains("snapshot-002") && reason.contains("no live semantic embeddings")
+                }),
+            "missing live semantic corpus should name the latest manifest snapshot"
         );
         assert!(
             paths.contains(&"src/current.rs"),
-            "current manifest path should remain visible under semantic fallback: {paths:?}"
+            "current manifest path should remain visible through lexical recovery when semantic is unavailable: {paths:?}"
         );
         assert!(
             !paths.contains(&"src/deleted.rs"),
-            "paths removed from the latest manifest must not resurface from an older semantic snapshot: {paths:?}"
+            "paths removed from the latest manifest must not resurface when semantic storage is unavailable: {paths:?}"
         );
         assert!(
-            output.matches.iter().any(|entry| {
-                entry.document.path == "src/current.rs" && entry.semantic_score > 0.0
-            }),
-            "fallback semantic snapshot should still contribute non-zero semantic score"
+            output.matches.iter().all(|entry| entry.semantic_score == 0.0),
+            "semantic-unavailable recovery should not report retained semantic scores"
         );
 
         cleanup_workspace(&root);
@@ -10472,7 +10449,23 @@ mod tests {
         manifest_entries.dedup_by(|left, right| left.path == right.path);
 
         storage.upsert_manifest(repository_id, snapshot_id, &manifest_entries)?;
-        storage.replace_semantic_embeddings_for_repository(repository_id, snapshot_id, records)?;
+        let mut grouped =
+            std::collections::BTreeMap::<(String, String), Vec<SemanticChunkEmbeddingRecord>>::new();
+        for record in records {
+            grouped
+                .entry((record.provider.clone(), record.model.clone()))
+                .or_default()
+                .push(record.clone());
+        }
+        for ((provider, model), group) in grouped {
+            storage.replace_semantic_embeddings_for_repository(
+                repository_id,
+                snapshot_id,
+                &provider,
+                &model,
+                &group,
+            )?;
+        }
 
         Ok(())
     }

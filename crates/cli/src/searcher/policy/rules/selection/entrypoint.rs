@@ -145,6 +145,46 @@ fn cli_test_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
         }))
 }
 
+fn cli_specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_entrypoint_build_flow || !ctx.query_mentions_cli || !ctx.is_cli_test_support {
+        return None;
+    }
+
+    let best_overlap = ctx
+        .specific_witness_path_overlap
+        .max(ctx.path_overlap)
+        .max(ctx.excerpt_overlap);
+    let delta = match best_overlap {
+        0 => {
+            if ctx.has_exact_query_term_match {
+                1.20
+            } else {
+                0.0
+            }
+        }
+        1 => 2.60,
+        _ => 4.20,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn cli_generic_support_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_entrypoint_build_flow
+        && ctx.query_mentions_cli
+        && ctx.is_cli_test_support
+        && ctx.specific_witness_path_overlap == 0
+        && ctx.path_overlap == 0
+        && ctx.excerpt_overlap == 0
+        && !ctx.has_exact_query_term_match
+        && !ctx.is_runtime_anchor_test_support)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            -1.20
+        } else {
+            -0.68
+        }))
+}
+
 fn build_flow_anchor_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_entrypoint_build_flow && ctx.excerpt_has_build_flow_anchor)
         .then_some(PolicyEffect::Add(0.16))
@@ -293,6 +333,16 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         "selection.entrypoint.cli_test_support_bonus",
         PolicyStage::SelectionEntrypoint,
         cli_test_support_bonus,
+    ),
+    ScoreRule::new(
+        "selection.entrypoint.cli_specific_overlap_bonus",
+        PolicyStage::SelectionEntrypoint,
+        cli_specific_overlap_bonus,
+    ),
+    ScoreRule::new(
+        "selection.entrypoint.cli_generic_support_penalty",
+        PolicyStage::SelectionEntrypoint,
+        cli_generic_support_penalty,
     ),
     ScoreRule::new(
         "selection.entrypoint.build_flow_anchor_bonus",

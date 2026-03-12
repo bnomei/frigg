@@ -248,7 +248,7 @@ pub(super) fn search_semantic_channel_hits(
     let mut roots_by_repository = BTreeMap::new();
     let mut latest_manifest_paths_by_repository = BTreeMap::new();
     let mut latest_snapshot_ids_by_repository = BTreeMap::new();
-    let mut degraded_reasons = Vec::new();
+    let degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
     for repo in repositories {
         if normalized_filters
@@ -312,31 +312,9 @@ pub(super) fn search_semantic_channel_hits(
             })?;
         let selected_snapshot_id = if latest_snapshot_has_embeddings {
             latest_snapshot.snapshot_id.clone()
-        } else if let Some(fallback_snapshot_id) = storage
-            .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
-                &repository_id,
-                provider.as_str(),
-                model,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic storage fallback snapshot lookup failed for repository '{repository_id}': {err}"
-                ))
-            })?
-        {
-            if fallback_snapshot_id != latest_snapshot.snapshot_id {
-                degraded_reasons.push(format!(
-                    "repository '{repository_id}' latest manifest snapshot '{}' has no semantic embeddings for provider '{}' model '{}'; using older semantic snapshot '{}'",
-                    latest_snapshot.snapshot_id,
-                    provider.as_str(),
-                    model,
-                    fallback_snapshot_id
-                ));
-            }
-            fallback_snapshot_id
         } else {
             unavailable_reasons.push(format!(
-                "repository '{repository_id}' latest manifest snapshot '{}' has no semantic embeddings for provider '{}' model '{}' on any snapshot",
+                "repository '{repository_id}' latest manifest snapshot '{}' has no live semantic embeddings for provider '{}' model '{}'",
                 latest_snapshot.snapshot_id,
                 provider.as_str(),
                 model

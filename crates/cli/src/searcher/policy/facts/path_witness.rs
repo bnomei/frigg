@@ -9,8 +9,8 @@ use super::super::super::query_terms::{
     hybrid_specific_witness_query_terms, path_has_exact_query_term_match,
 };
 use super::super::super::surfaces::{
-    HybridSourceClass, is_bench_support_path, is_entrypoint_runtime_path,
-    is_example_support_path, is_python_test_witness_path, is_runtime_adjacent_python_test_path,
+    HybridSourceClass, is_bench_support_path, is_entrypoint_runtime_path, is_example_support_path,
+    is_python_test_witness_path, is_runtime_adjacent_python_test_path,
     is_runtime_anchor_test_support_path, is_rust_workspace_config_path, is_test_support_path,
     is_typescript_runtime_module_index_path,
 };
@@ -157,7 +157,8 @@ impl PathWitnessFacts {
             is_python_test: projection.flags.is_python_test_witness
                 || is_python_test_witness_path(path),
             is_runtime_adjacent_python_test: is_runtime_adjacent_python_test_path(path),
-            is_example_support: projection.flags.is_example_support || is_example_support_path(path),
+            is_example_support: projection.flags.is_example_support
+                || is_example_support_path(path),
             is_bench_support: projection.flags.is_bench_support || is_bench_support_path(path),
             wants_example_or_bench_witnesses: intent.wants_examples || intent.wants_benchmarks,
             is_cli_test: projection.flags.is_cli_test_support,
@@ -278,8 +279,7 @@ mod tests {
 
     #[test]
     fn path_witness_facts_use_live_example_support_for_stale_projections() {
-        let query =
-            "tests fixtures integration entry point main app package platform runtime bytes stdin command line examples benches benchmark";
+        let query = "tests fixtures integration entry point main app package platform runtime bytes stdin command line examples benches benchmark";
         let intent = HybridRankingIntent::from_query(query);
         let query_context = PathWitnessQueryContext::new(query);
         let mut stale_example =

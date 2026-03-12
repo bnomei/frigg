@@ -210,7 +210,7 @@ pub(crate) fn ensure_sqlite_vec_pinned_version(runtime_version: &str) -> FriggRe
 
 fn create_sqlite_vec_table(conn: &Connection, expected_dimensions: usize) -> FriggResult<()> {
     let statement = format!(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS {VECTOR_TABLE_NAME} USING vec0(embedding float[{expected_dimensions}] distance_metric=cosine, repository_id text partition key, snapshot_id text partition key, provider text partition key, model text partition key, language text, +chunk_id text);"
+        "CREATE VIRTUAL TABLE IF NOT EXISTS {VECTOR_TABLE_NAME} USING vec0(embedding float[{expected_dimensions}] distance_metric=cosine, repository_id text partition key, provider text partition key, model text partition key, language text, +chunk_id text);"
     );
 
     conn.execute_batch(&statement).map_err(|err| {
@@ -247,7 +247,6 @@ fn sqlite_vec_table_has_expected_projection_schema(
     let required_fragments = [
         expected_dimensions_fragment.as_str(),
         "repository_id text partition key",
-        "snapshot_id text partition key",
         "provider text partition key",
         "model text partition key",
         "language text",
@@ -272,7 +271,7 @@ fn verify_sqlite_vec_table_schema(
     let schema_sql = read_vector_table_schema_sql(conn)?;
     if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/snapshot/provider/model partition keys and language/chunk_id metadata)"
+            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/provider/model partition keys and language/chunk_id metadata)"
         )));
     }
 

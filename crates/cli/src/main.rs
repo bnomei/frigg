@@ -20,6 +20,7 @@ use frigg::settings::{
     runtime_profile_for_transport,
 };
 use frigg::storage::{
+    DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS,
     DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend, ensure_provenance_db_parent_dir,
     resolve_provenance_db_path,
 };
@@ -32,16 +33,16 @@ use tracing_subscriber::{EnvFilter, fmt};
 mod cli_runtime;
 mod http_runtime;
 use cli_runtime::{
-    StorageBootstrapCommand, resolve_command_config, resolve_startup_config,
+    StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config, resolve_startup_config,
     resolve_watch_runtime_config, run_hybrid_playbook_command, run_reindex_command,
     run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
+    run_storage_maintenance_command,
     run_strict_startup_vector_readiness_gate,
 };
 #[cfg(test)]
 use cli_runtime::{
     ensure_storage_db_path_for_write, find_enclosing_git_root, resolve_semantic_runtime_config,
-    resolve_storage_db_path, resolve_watch_config,
-    run_semantic_runtime_startup_gate_with_credentials,
+    resolve_storage_db_path, resolve_watch_config, run_semantic_runtime_startup_gate_with_credentials,
 };
 use http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
 #[cfg(test)]
@@ -50,6 +51,10 @@ use http_runtime::{
     origin_header_allowed, parse_host_authority, parse_origin_authority,
     typed_access_denied_response,
 };
+#[cfg(test)]
+use serde_json::json;
+#[cfg(test)]
+use frigg::storage::SemanticChunkEmbeddingRecord;
 
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
@@ -150,6 +155,23 @@ enum Command {
         #[arg(long, default_value_t = false)]
         changed: bool,
     },
+    /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
+    RepairStorage,
+    /// Prune retained manifest snapshots and provenance events for each workspace root.
+    PruneStorage {
+        /// Number of latest manifest snapshots to retain per repository.
+        #[arg(
+            long = "keep-manifest-snapshots",
+            default_value_t = DEFAULT_RETAINED_MANIFEST_SNAPSHOTS
+        )]
+        keep_manifest_snapshots: usize,
+        /// Number of latest provenance events to retain per repository.
+        #[arg(
+            long = "keep-provenance-events",
+            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
+        )]
+        keep_provenance_events: usize,
+    },
     /// Execute markdown hybrid playbooks against the selected workspace root(s).
     PlaybookHybridRun {
         /// Directory containing executable markdown playbooks.
@@ -188,6 +210,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let config = resolve_command_config(&cli, command)?;
                 run_semantic_runtime_startup_gate(&config)?;
                 run_reindex_command(&config, changed)?
+            }
+            Command::RepairStorage => {
+                let config = resolve_command_config(&cli, command)?;
+                run_storage_maintenance_command(
+                    &config,
+                    StorageMaintenanceCommand::RepairSemanticVectorStore,
+                )?
+            }
+            Command::PruneStorage {
+                keep_manifest_snapshots,
+                keep_provenance_events,
+            } => {
+                let config = resolve_command_config(&cli, command)?;
+                run_storage_maintenance_command(
+                    &config,
+                    StorageMaintenanceCommand::Prune {
+                        keep_manifest_snapshots,
+                        keep_provenance_events,
+                    },
+                )?
             }
             Command::PlaybookHybridRun {
                 playbooks_root,
@@ -745,6 +787,36 @@ mod tests {
     }
 
     #[test]
+    fn repair_storage_command_resolution_keeps_semantic_runtime_unset() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(&cli, Command::RepairStorage)
+            .expect("repair-storage command should resolve base config");
+        assert!(!config.semantic_runtime.enabled);
+        assert!(config.semantic_runtime.provider.is_none());
+    }
+
+    #[test]
+    fn prune_storage_command_resolution_keeps_semantic_runtime_unset() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(
+            &cli,
+            Command::PruneStorage {
+                keep_manifest_snapshots: DEFAULT_RETAINED_MANIFEST_SNAPSHOTS,
+                keep_provenance_events: DEFAULT_RETAINED_PROVENANCE_EVENTS,
+            },
+        )
+        .expect("prune-storage command should resolve base config");
+        assert!(!config.semantic_runtime.enabled);
+        assert!(config.semantic_runtime.provider.is_none());
+    }
+
+    #[test]
     fn startup_config_applies_max_file_bytes_override() {
         let mut cli = base_cli();
         cli.max_file_bytes = Some(2 * 1024 * 1024);
@@ -1111,6 +1183,148 @@ mod tests {
     }
 
     #[test]
+    fn prune_storage_command_prunes_manifest_and_provenance_history() {
+        let workspace_root = temp_workspace_root("prune-storage-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+            .expect("init bootstrap should succeed before storage pruning");
+        let db_path = resolve_storage_db_path(&workspace_root, "prune-storage")
+            .expect("storage db path should resolve after init");
+        let storage = Storage::new(&db_path);
+        for idx in 1..=3 {
+            storage
+                .upsert_manifest(
+                    "repo-001",
+                    &format!("snapshot-00{idx}"),
+                    &[frigg::storage::ManifestEntry {
+                        path: "src/main.rs".to_owned(),
+                        sha256: format!("hash-{idx}"),
+                        size_bytes: 10 + idx as u64,
+                        mtime_ns: Some(100 + idx as u64),
+                    }],
+                )
+                .expect("manifest snapshots should seed before prune");
+        }
+        for idx in 0..4 {
+            storage
+                .append_provenance_event(
+                    &format!("trace-{idx}"),
+                    "read_file",
+                    &json!({ "idx": idx }),
+                )
+                .expect("provenance events should seed before prune");
+        }
+
+        run_storage_maintenance_command(
+            &config,
+            StorageMaintenanceCommand::Prune {
+                keep_manifest_snapshots: 1,
+                keep_provenance_events: 2,
+            },
+        )
+        .expect("prune-storage command should succeed");
+
+        assert!(
+            storage
+                .load_manifest_for_snapshot("snapshot-003")
+                .expect("latest manifest snapshot should remain readable")
+                .len()
+                == 1
+        );
+        assert!(
+            storage
+                .load_manifest_for_snapshot("snapshot-001")
+                .expect("oldest manifest snapshot lookup should succeed")
+                .is_empty()
+        );
+        assert_eq!(
+            storage
+                .load_recent_provenance_events(10)
+                .expect("recent provenance should remain readable")
+                .len(),
+            2
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn repair_storage_command_rebuilds_semantic_vectors() {
+        let workspace_root = temp_workspace_root("repair-storage-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+            .expect("init bootstrap should succeed before storage repair");
+        let db_path = resolve_storage_db_path(&workspace_root, "repair-storage")
+            .expect("storage db path should resolve after init");
+        let storage = Storage::new(&db_path);
+        storage
+            .upsert_manifest(
+                "repo-001",
+                "snapshot-001",
+                &[frigg::storage::ManifestEntry {
+                    path: "src/main.rs".to_owned(),
+                    sha256: "hash-main".to_owned(),
+                    size_bytes: 42,
+                    mtime_ns: Some(100),
+                }],
+            )
+            .expect("manifest snapshot should seed before repair");
+        storage
+            .replace_semantic_embeddings_for_repository(
+                "repo-001",
+                "snapshot-001",
+                "openai",
+                "text-embedding-3-small",
+                &[semantic_record("snapshot-001")],
+            )
+            .expect("semantic rows should seed before repair");
+
+        let conn = Connection::open(&db_path).expect("storage db should open for repair fixture");
+        conn.execute(
+            "DELETE FROM embedding_vectors WHERE repository_id = ?1 AND provider = ?2 AND model = ?3 AND chunk_id = ?4",
+            (
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+                "chunk-main",
+            ),
+        )
+        .expect("vector row corruption fixture should succeed");
+
+        let broken = storage
+            .collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )
+            .expect("broken semantic health should be readable");
+        assert!(!broken.vector_consistent);
+
+        run_storage_maintenance_command(
+            &config,
+            StorageMaintenanceCommand::RepairSemanticVectorStore,
+        )
+        .expect("repair-storage command should succeed");
+
+        let repaired = storage
+            .collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )
+            .expect("repaired semantic health should be readable");
+        assert!(repaired.vector_consistent);
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
     fn find_enclosing_git_root_returns_matching_ancestor() {
         let workspace_root = temp_workspace_root("git-root-match");
         let nested = workspace_root.join("nested").join("deeper");
@@ -1157,6 +1371,25 @@ mod tests {
             "fn main() { println!(\"hello from frigg\"); }\n",
         )
         .expect("workspace main source should be writable");
+    }
+
+    fn semantic_record(snapshot_id: &str) -> SemanticChunkEmbeddingRecord {
+        SemanticChunkEmbeddingRecord {
+            chunk_id: "chunk-main".to_owned(),
+            repository_id: "repo-001".to_owned(),
+            snapshot_id: snapshot_id.to_owned(),
+            path: "src/main.rs".to_owned(),
+            language: "rust".to_owned(),
+            chunk_index: 0,
+            start_line: 1,
+            end_line: 1,
+            provider: "openai".to_owned(),
+            model: "text-embedding-3-small".to_owned(),
+            trace_id: Some("trace-main".to_owned()),
+            content_hash_blake3: "hash-main".to_owned(),
+            content_text: "fn main() { println!(\"hello from frigg\"); }".to_owned(),
+            embedding: vec![0.25, 0.75],
+        }
     }
 
     fn cleanup_workspace(path: &Path) {

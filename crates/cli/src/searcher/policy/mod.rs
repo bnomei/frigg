@@ -1,5 +1,6 @@
 mod dsl;
 mod facts;
+mod frontier;
 mod kernel;
 mod post_selection;
 mod rules;
@@ -11,6 +12,7 @@ pub(super) use facts::{
     PathWitnessFacts, PathWitnessQueryContext, SelectionCandidate, SelectionFacts,
     SelectionQueryContext, SelectionState,
 };
+pub(super) use frontier::plan_path_witness_frontier;
 
 pub(super) fn hybrid_path_quality_multiplier_with_intent(
     path: &str,

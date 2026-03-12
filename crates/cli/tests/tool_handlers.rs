@@ -164,7 +164,19 @@ fn seed_semantic_embeddings(
         .initialize()
         .expect("semantic storage should initialize");
     storage
-        .replace_semantic_embeddings_for_repository(repository_id, snapshot_id, records)
+        .replace_semantic_embeddings_for_repository(
+            repository_id,
+            snapshot_id,
+            records
+                .first()
+                .map(|record| record.provider.as_str())
+                .expect("semantic seed records require a provider"),
+            records
+                .first()
+                .map(|record| record.model.as_str())
+                .expect("semantic seed records require a model"),
+            records,
+        )
         .expect("semantic embeddings should persist");
 }
 

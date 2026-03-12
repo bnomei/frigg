@@ -1,5 +1,9 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::path::Path;
+
+mod laravel;
+mod runtime;
 
 use super::super::HybridChannelHit;
 use super::super::HybridRankedEvidence;
@@ -15,6 +19,19 @@ use super::super::query_terms::{
     hybrid_path_has_exact_stem_match, hybrid_path_overlap_count, hybrid_query_exact_terms,
 };
 use super::super::surfaces::{self, HybridSourceClass};
+use super::{
+    SelectionCandidate, SelectionFacts, SelectionQueryContext, SelectionState,
+    hybrid_selection_score_from_context,
+};
+use laravel::{
+    apply_laravel_blade_surface_visibility, apply_laravel_entrypoint_visibility,
+    apply_laravel_layout_companion_visibility, apply_laravel_ui_test_harness_visibility,
+};
+use runtime::{
+    apply_ci_scripts_ops_visibility, apply_entrypoint_build_workflow_visibility,
+    apply_mixed_support_visibility, apply_runtime_companion_test_visibility,
+    apply_runtime_config_surface_selection,
+};
 
 type TransformFn =
     for<'a> fn(Vec<HybridRankedEvidence>, &PostSelectionContext<'a>) -> Vec<HybridRankedEvidence>;
@@ -75,9 +92,11 @@ pub(crate) struct PostSelectionContext<'a> {
     intent: &'a HybridRankingIntent,
     query_text: &'a str,
     exact_terms: Vec<String>,
+    selection_query_context: SelectionQueryContext,
     limit: usize,
     candidate_pool: &'a [HybridRankedEvidence],
     witness_hits: &'a [HybridChannelHit],
+    trace: RefCell<Option<PostSelectionTrace>>,
 }
 
 impl<'a> PostSelectionContext<'a> {
@@ -88,15 +107,95 @@ impl<'a> PostSelectionContext<'a> {
         candidate_pool: &'a [HybridRankedEvidence],
         witness_hits: &'a [HybridChannelHit],
     ) -> Self {
+        Self::with_trace(
+            intent,
+            query_text,
+            limit,
+            candidate_pool,
+            witness_hits,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_trace(
+        intent: &'a HybridRankingIntent,
+        query_text: &'a str,
+        limit: usize,
+        candidate_pool: &'a [HybridRankedEvidence],
+        witness_hits: &'a [HybridChannelHit],
+    ) -> Self {
+        Self::with_trace(
+            intent,
+            query_text,
+            limit,
+            candidate_pool,
+            witness_hits,
+            true,
+        )
+    }
+
+    fn with_trace(
+        intent: &'a HybridRankingIntent,
+        query_text: &'a str,
+        limit: usize,
+        candidate_pool: &'a [HybridRankedEvidence],
+        witness_hits: &'a [HybridChannelHit],
+        capture_trace: bool,
+    ) -> Self {
         Self {
             intent,
             query_text,
             exact_terms: hybrid_query_exact_terms(query_text),
+            selection_query_context: SelectionQueryContext::new(intent, query_text),
             limit,
             candidate_pool,
             witness_hits,
+            trace: RefCell::new(capture_trace.then(PostSelectionTrace::default)),
         }
     }
+
+    fn record_repair(
+        &self,
+        rule_id: &'static str,
+        action: PostSelectionRepairAction,
+        candidate_path: &str,
+        replaced_path: Option<String>,
+    ) {
+        let mut trace = self.trace.borrow_mut();
+        if let Some(trace) = trace.as_mut() {
+            trace.events.push(PostSelectionTraceEvent {
+                rule_id,
+                action,
+                candidate_path: candidate_path.to_owned(),
+                replaced_path,
+            });
+        }
+    }
+
+    #[cfg(test)]
+    fn trace_snapshot(&self) -> Option<PostSelectionTrace> {
+        self.trace.borrow().clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PostSelectionRepairAction {
+    Inserted,
+    Replaced,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PostSelectionTraceEvent {
+    rule_id: &'static str,
+    action: PostSelectionRepairAction,
+    candidate_path: String,
+    replaced_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PostSelectionTrace {
+    events: Vec<PostSelectionTraceEvent>,
 }
 
 pub(crate) fn apply(
@@ -109,914 +208,6 @@ pub(crate) fn apply(
 
     for rule in RULES {
         matches = (rule.apply)(matches, ctx);
-    }
-
-    matches
-}
-
-fn apply_runtime_config_surface_selection(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !(ctx.intent.wants_runtime_config_artifacts || ctx.intent.wants_entrypoint_build_flow) {
-        return matches;
-    }
-
-    let root_config_filter: fn(&str) -> bool = if ctx.intent.wants_runtime_config_artifacts {
-        is_repo_root_runtime_config_path
-    } else {
-        surfaces::is_runtime_config_artifact_path
-    };
-    let specific_surface_filter: fn(&str) -> bool = is_specific_runtime_config_surface_path;
-
-    if !matches
-        .iter()
-        .any(|entry| specific_surface_filter(&entry.document.path))
-    {
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
-            })
-            .filter(|entry| specific_surface_filter(&entry.document.path))
-            .max_by(|left, right| {
-                runtime_config_surface_guardrail_priority_for_path(&left.document.path)
-                    .cmp(&runtime_config_surface_guardrail_priority_for_path(
-                        &right.document.path,
-                    ))
-                    .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| specific_surface_filter(&hit.document.path))
-            .max_by(|left, right| {
-                runtime_config_surface_guardrail_priority_for_path(&left.document.path)
-                    .cmp(&runtime_config_surface_guardrail_priority_for_path(
-                        &right.document.path,
-                    ))
-                    .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-        let candidate =
-            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-                runtime_config_surface_guardrail_priority_for_path(&left.document.path)
-                    .cmp(&runtime_config_surface_guardrail_priority_for_path(
-                        &right.document.path,
-                    ))
-                    .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            });
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_runtime_config_guardrail_replacement,
-        );
-    }
-
-    if !matches
-        .iter()
-        .any(|entry| root_config_filter(&entry.document.path))
-    {
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
-            })
-            .filter(|entry| root_config_filter(&entry.document.path))
-            .max_by(|left, right| {
-                left.blended_score
-                    .total_cmp(&right.blended_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| root_config_filter(&hit.document.path))
-            .max_by(|left, right| {
-                left.raw_score
-                    .total_cmp(&right.raw_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-        let candidate =
-            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-                left.blended_score.total_cmp(&right.blended_score)
-            });
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_runtime_config_guardrail_replacement,
-        );
-    }
-
-    matches
-}
-
-fn apply_entrypoint_build_workflow_visibility(
-    matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_entrypoint_build_flow
-        || matches
-            .iter()
-            .any(|entry| surfaces::is_entrypoint_build_workflow_path(&entry.document.path))
-    {
-        return matches;
-    }
-
-    let grouped_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .filter(|entry| surfaces::is_entrypoint_build_workflow_path(&entry.document.path))
-        .max_by(|left, right| {
-            ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .cloned();
-    let witness_candidate = ctx
-        .witness_hits
-        .iter()
-        .filter(|hit| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == hit.document)
-        })
-        .filter(|hit| surfaces::is_entrypoint_build_workflow_path(&hit.document.path))
-        .max_by(|left, right| {
-            ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-            .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-    });
-
-    insert_guardrail_candidate(
-        matches,
-        candidate,
-        ctx.limit,
-        is_entrypoint_build_workflow_guardrail_replacement,
-    )
-}
-
-fn apply_ci_scripts_ops_visibility(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_ci_workflow_witnesses && !ctx.intent.wants_scripts_ops_witnesses {
-        return matches;
-    }
-
-    if ctx.intent.wants_scripts_ops_witnesses {
-        let selected_best = matches
-            .iter()
-            .filter(|entry| surfaces::is_scripts_ops_path(&entry.document.path))
-            .max_by(|left, right| {
-                scripts_ops_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-            })
-            .map(|entry| entry.document.path.as_str());
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
-            })
-            .filter(|entry| surfaces::is_scripts_ops_path(&entry.document.path))
-            .max_by(|left, right| {
-                scripts_ops_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| surfaces::is_scripts_ops_path(&hit.document.path))
-            .max_by(|left, right| {
-                scripts_ops_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-        let candidate =
-            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-                scripts_ops_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            });
-        let should_promote = match (candidate.as_ref(), selected_best) {
-            (Some(candidate), Some(selected_path)) => scripts_ops_guardrail_cmp(
-                &candidate.document.path,
-                selected_path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-            .is_gt(),
-            (Some(_), None) => true,
-            _ => false,
-        };
-        if should_promote {
-            matches = insert_guardrail_candidate(
-                matches,
-                candidate,
-                ctx.limit,
-                is_scripts_ops_guardrail_replacement,
-            );
-        }
-    }
-
-    if ctx.intent.wants_ci_workflow_witnesses
-        && !matches
-            .iter()
-            .any(|entry| surfaces::is_ci_workflow_path(&entry.document.path))
-    {
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
-            })
-            .filter(|entry| surfaces::is_ci_workflow_path(&entry.document.path))
-            .max_by(|left, right| {
-                ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-                    .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| surfaces::is_ci_workflow_path(&hit.document.path))
-            .max_by(|left, right| {
-                ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-                    .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-        let candidate =
-            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-                ci_workflow_guardrail_cmp(&left.document.path, &right.document.path, ctx.query_text)
-                    .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            });
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_ci_workflow_guardrail_replacement,
-        );
-    }
-
-    matches
-}
-
-fn apply_mixed_support_visibility(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_test_witness_recall
-        || !(ctx.intent.wants_examples || ctx.intent.wants_benchmarks)
-    {
-        return matches;
-    }
-
-    if ctx.intent.wants_examples && !matches.iter().any(is_example_support_document) {
-        let grouped_candidate = ctx
-            .candidate_pool
-            .iter()
-            .filter(|entry| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == entry.document)
-            })
-            .filter(|entry| surfaces::is_example_support_path(&entry.document.path))
-            .max_by(|left, right| {
-                example_support_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .cloned();
-        let witness_candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| surfaces::is_example_support_path(&hit.document.path))
-            .max_by(|left, right| {
-                example_support_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-        let candidate =
-            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-                example_support_guardrail_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    ctx.query_text,
-                    &ctx.exact_terms,
-                )
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            });
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_example_support_guardrail_replacement,
-        );
-    }
-
-    if ctx.intent.wants_benchmarks && !matches.iter().any(is_bench_support_document) {
-        let candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| surfaces::is_bench_support_path(&hit.document.path))
-            .max_by(|left, right| {
-                left.raw_score
-                    .total_cmp(&right.raw_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_plain_test_support_document,
-        );
-    }
-
-    if !matches.iter().any(is_plain_test_support_document) {
-        let candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| is_plain_test_support_path(&hit.document.path))
-            .max_by(|left, right| {
-                left.raw_score
-                    .total_cmp(&right.raw_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_bench_or_benchmark_support_document,
-        );
-    }
-
-    matches
-}
-
-fn apply_runtime_companion_test_visibility(
-    matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    let wants_runtime_companion_tests = ctx.intent.wants_test_witness_recall
-        || ctx.intent.wants_entrypoint_build_flow
-        || ctx.intent.wants_runtime_config_artifacts;
-    if !wants_runtime_companion_tests {
-        return matches;
-    }
-
-    let prefer_runtime_anchor_tests = !ctx.intent.wants_test_witness_recall;
-    let has_runtime_adjacent_python_test_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .any(|entry| surfaces::is_runtime_adjacent_python_test_path(&entry.document.path))
-        || ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .any(|hit| surfaces::is_runtime_adjacent_python_test_path(&hit.document.path));
-    let selected_test_filter = |path: &str| {
-        if !is_plain_test_support_path(path) {
-            return false;
-        }
-        if !prefer_runtime_anchor_tests {
-            return true;
-        }
-
-        hybrid_path_overlap_count(path, ctx.query_text) > 0
-            || hybrid_path_has_exact_stem_match(path, &ctx.exact_terms)
-            || surfaces::is_runtime_anchor_test_support_path(path)
-            || surfaces::is_cli_test_support_path(path)
-    };
-    let candidate_filter = |path: &str| {
-        if !selected_test_filter(path) {
-            return false;
-        }
-        if has_runtime_adjacent_python_test_candidate
-            && !surfaces::is_runtime_adjacent_python_test_path(path)
-            && !surfaces::is_cli_test_support_path(path)
-            && !surfaces::is_test_harness_path(path)
-            && (!prefer_runtime_anchor_tests
-                || !surfaces::is_runtime_anchor_test_support_path(path))
-        {
-            return false;
-        }
-        true
-    };
-    let selected_best = matches
-        .iter()
-        .filter(|entry| selected_test_filter(&entry.document.path))
-        .max_by(|left, right| {
-            test_support_candidate_cmp(
-                &left.document.path,
-                &right.document.path,
-                &matches,
-                ctx.candidate_pool,
-                ctx.query_text,
-                &ctx.exact_terms,
-                prefer_runtime_anchor_tests,
-            )
-        })
-        .map(|entry| entry.document.path.clone());
-
-    let grouped_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .filter(|entry| candidate_filter(&entry.document.path))
-        .max_by(|left, right| {
-            test_support_candidate_cmp(
-                &left.document.path,
-                &right.document.path,
-                &matches,
-                ctx.candidate_pool,
-                ctx.query_text,
-                &ctx.exact_terms,
-                prefer_runtime_anchor_tests,
-            )
-                .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .cloned();
-    let witness_candidate = ctx
-        .witness_hits
-        .iter()
-        .filter(|hit| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == hit.document)
-        })
-        .filter(|hit| candidate_filter(&hit.document.path))
-        .max_by(|left, right| {
-            test_support_candidate_cmp(
-                &left.document.path,
-                &right.document.path,
-                &matches,
-                ctx.candidate_pool,
-                ctx.query_text,
-                &ctx.exact_terms,
-                prefer_runtime_anchor_tests,
-            )
-                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        test_support_candidate_cmp(
-            &left.document.path,
-            &right.document.path,
-            &matches,
-            ctx.candidate_pool,
-            ctx.query_text,
-            &ctx.exact_terms,
-            prefer_runtime_anchor_tests,
-        )
-            .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-    });
-
-    let should_promote = match (candidate.as_ref(), selected_best.as_ref()) {
-        (Some(candidate), Some(selected_path)) => test_support_candidate_cmp(
-            &candidate.document.path,
-            selected_path,
-            &matches,
-            ctx.candidate_pool,
-            ctx.query_text,
-            &ctx.exact_terms,
-            prefer_runtime_anchor_tests,
-        )
-        .is_gt(),
-        (Some(_), None) => true,
-        _ => false,
-    };
-
-    if should_promote {
-        insert_test_support_guardrail_candidate(matches, candidate, ctx.limit, selected_best)
-    } else {
-        matches
-    }
-}
-
-fn apply_laravel_entrypoint_visibility(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_entrypoint_build_flow {
-        return matches;
-    }
-
-    if !matches
-        .iter()
-        .any(|entry| is_laravel_route_path(&entry.document.path))
-    {
-        let candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| is_laravel_route_path(&hit.document.path))
-            .max_by(|left, right| {
-                left.raw_score
-                    .total_cmp(&right.raw_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_laravel_entrypoint_guardrail_replacement,
-        );
-    }
-
-    if !matches
-        .iter()
-        .any(|entry| is_laravel_bootstrap_entrypoint_path(&entry.document.path))
-    {
-        let candidate = ctx
-            .witness_hits
-            .iter()
-            .filter(|hit| {
-                !matches
-                    .iter()
-                    .any(|selected| selected.document == hit.document)
-            })
-            .filter(|hit| is_laravel_bootstrap_entrypoint_path(&hit.document.path))
-            .max_by(|left, right| {
-                left.raw_score
-                    .total_cmp(&right.raw_score)
-                    .then_with(|| left.document.cmp(&right.document).reverse())
-            })
-            .map(hybrid_ranked_evidence_from_witness_hit);
-
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_laravel_entrypoint_guardrail_replacement,
-        );
-    }
-
-    matches
-}
-
-fn apply_laravel_blade_surface_visibility(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_laravel_ui_witnesses {
-        return matches;
-    }
-
-    let selected_best = matches
-        .iter()
-        .filter(|entry| is_promotable_laravel_blade_surface_path(&entry.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-        })
-        .map(|entry| entry.document.path.as_str());
-    let grouped_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .filter(|entry| is_promotable_laravel_blade_surface_path(&entry.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-            .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .cloned();
-    let witness_candidate = ctx
-        .witness_hits
-        .iter()
-        .filter(|hit| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == hit.document)
-        })
-        .filter(|hit| is_promotable_laravel_blade_surface_path(&hit.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-            .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-            .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        laravel_blade_surface_guardrail_cmp(
-            &left.document.path,
-            &right.document.path,
-            ctx.query_text,
-            &ctx.exact_terms,
-        )
-        .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-    });
-
-    let should_promote = match (candidate.as_ref(), selected_best) {
-        (Some(candidate), Some(selected_path)) => laravel_blade_surface_guardrail_cmp(
-            &candidate.document.path,
-            selected_path,
-            ctx.query_text,
-            &ctx.exact_terms,
-        )
-        .is_gt(),
-        (Some(_), None) => true,
-        _ => false,
-    };
-
-    if should_promote {
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_laravel_ui_guardrail_replacement,
-        );
-    }
-
-    matches
-}
-
-fn apply_laravel_ui_test_harness_visibility(
-    matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_laravel_ui_witnesses
-        || matches
-            .iter()
-            .any(|entry| surfaces::is_test_harness_path(&entry.document.path))
-    {
-        return matches;
-    }
-
-    let grouped_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .filter(|entry| surfaces::is_test_harness_path(&entry.document.path))
-        .max_by(|left, right| {
-            left.blended_score
-                .total_cmp(&right.blended_score)
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .cloned();
-    let witness_candidate = ctx
-        .witness_hits
-        .iter()
-        .filter(|hit| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == hit.document)
-        })
-        .filter(|hit| surfaces::is_test_harness_path(&hit.document.path))
-        .max_by(|left, right| {
-            left.raw_score
-                .total_cmp(&right.raw_score)
-                .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        left.blended_score.total_cmp(&right.blended_score)
-    });
-
-    insert_guardrail_candidate(
-        matches,
-        candidate,
-        ctx.limit,
-        is_laravel_ui_test_guardrail_replacement,
-    )
-}
-
-fn apply_laravel_layout_companion_visibility(
-    mut matches: Vec<HybridRankedEvidence>,
-    ctx: &PostSelectionContext<'_>,
-) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_laravel_layout_witnesses {
-        return matches;
-    }
-
-    let selected_best = matches
-        .iter()
-        .filter(|entry| is_layout_companion_blade_surface_path(&entry.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-        })
-        .map(|entry| entry.document.path.as_str());
-    let grouped_candidate = ctx
-        .candidate_pool
-        .iter()
-        .filter(|entry| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == entry.document)
-        })
-        .filter(|entry| is_layout_companion_blade_surface_path(&entry.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-            .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-            .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .cloned();
-    let witness_candidate = ctx
-        .witness_hits
-        .iter()
-        .filter(|hit| {
-            !matches
-                .iter()
-                .any(|selected| selected.document == hit.document)
-        })
-        .filter(|hit| is_layout_companion_blade_surface_path(&hit.document.path))
-        .max_by(|left, right| {
-            laravel_blade_surface_guardrail_cmp(
-                &left.document.path,
-                &right.document.path,
-                ctx.query_text,
-                &ctx.exact_terms,
-            )
-            .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-            .then_with(|| left.document.cmp(&right.document).reverse())
-        })
-        .map(hybrid_ranked_evidence_from_witness_hit);
-    let candidate = choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
-        laravel_blade_surface_guardrail_cmp(
-            &left.document.path,
-            &right.document.path,
-            ctx.query_text,
-            &ctx.exact_terms,
-        )
-        .then_with(|| left.blended_score.total_cmp(&right.blended_score))
-    });
-
-    let should_promote = match (candidate.as_ref(), selected_best) {
-        (Some(candidate), Some(selected_path)) => laravel_blade_surface_guardrail_cmp(
-            &candidate.document.path,
-            selected_path,
-            ctx.query_text,
-            &ctx.exact_terms,
-        )
-        .is_gt(),
-        (Some(_), None) => true,
-        _ => false,
-    };
-
-    if should_promote {
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx.limit,
-            is_laravel_ui_guardrail_replacement,
-        );
     }
 
     matches
@@ -1043,7 +234,8 @@ fn choose_best_candidate(
 fn insert_guardrail_candidate(
     mut matches: Vec<HybridRankedEvidence>,
     candidate: Option<HybridRankedEvidence>,
-    limit: usize,
+    ctx: &PostSelectionContext<'_>,
+    rule_id: &'static str,
     replacement_predicate: fn(&HybridRankedEvidence) -> bool,
 ) -> Vec<HybridRankedEvidence> {
     let Some(candidate) = candidate else {
@@ -1058,9 +250,25 @@ fn insert_guardrail_candidate(
         .map(|(index, _)| index);
 
     if let Some(index) = replacement_index {
+        let replaced_path = matches[index].document.path.clone();
         matches[index] = candidate;
-    } else if matches.len() < limit {
+        ctx.record_repair(
+            rule_id,
+            PostSelectionRepairAction::Replaced,
+            &matches[index].document.path,
+            Some(replaced_path),
+        );
+    } else if matches.len() < ctx.limit {
         matches.push(candidate);
+        let inserted = matches
+            .last()
+            .expect("guardrail insertion appended a candidate");
+        ctx.record_repair(
+            rule_id,
+            PostSelectionRepairAction::Inserted,
+            &inserted.document.path,
+            None,
+        );
     }
 
     matches
@@ -1069,7 +277,8 @@ fn insert_guardrail_candidate(
 fn insert_test_support_guardrail_candidate(
     mut matches: Vec<HybridRankedEvidence>,
     candidate: Option<HybridRankedEvidence>,
-    limit: usize,
+    ctx: &PostSelectionContext<'_>,
+    rule_id: &'static str,
     selected_best_path: Option<String>,
 ) -> Vec<HybridRankedEvidence> {
     let Some(candidate) = candidate else {
@@ -1093,9 +302,25 @@ fn insert_test_support_guardrail_candidate(
         });
 
     if let Some(index) = replacement_index {
+        let replaced_path = matches[index].document.path.clone();
         matches[index] = candidate;
-    } else if matches.len() < limit {
+        ctx.record_repair(
+            rule_id,
+            PostSelectionRepairAction::Replaced,
+            &matches[index].document.path,
+            Some(replaced_path),
+        );
+    } else if matches.len() < ctx.limit {
         matches.push(candidate);
+        let inserted = matches
+            .last()
+            .expect("guardrail insertion appended a test-support candidate");
+        ctx.record_repair(
+            rule_id,
+            PostSelectionRepairAction::Inserted,
+            &inserted.document.path,
+            None,
+        );
     }
 
     matches
@@ -1141,111 +366,158 @@ fn is_example_support_document(entry: &HybridRankedEvidence) -> bool {
     surfaces::is_example_support_path(&entry.document.path)
 }
 
-fn example_support_guardrail_cmp(
-    left: &str,
-    right: &str,
-    query_text: &str,
-    exact_terms: &[String],
-) -> Ordering {
-    hybrid_path_overlap_count(left, query_text)
-        .cmp(&hybrid_path_overlap_count(right, query_text))
-        .then_with(|| {
-            hybrid_path_has_exact_stem_match(left, exact_terms)
-                .cmp(&hybrid_path_has_exact_stem_match(right, exact_terms))
-        })
-        .then_with(|| {
-            right
-                .trim_start_matches("./")
-                .split('/')
-                .count()
-                .cmp(&left.trim_start_matches("./").split('/').count())
-        })
-}
-
-fn test_support_guardrail_cmp(
-    left: &str,
-    right: &str,
-    query_text: &str,
-    exact_terms: &[String],
-    prefer_runtime_anchor_tests: bool,
-) -> Ordering {
-    let left_overlap = hybrid_path_overlap_count(left, query_text);
-    let right_overlap = hybrid_path_overlap_count(right, query_text);
-    let left_priority = test_support_guardrail_priority(left, prefer_runtime_anchor_tests);
-    let right_priority = test_support_guardrail_priority(right, prefer_runtime_anchor_tests);
-    left_overlap
-        .cmp(&right_overlap)
-        .then_with(|| {
-            hybrid_path_has_exact_stem_match(left, exact_terms)
-                .cmp(&hybrid_path_has_exact_stem_match(right, exact_terms))
-        })
-        .then_with(|| left_priority.cmp(&right_priority))
-        .then_with(|| {
-            right
-                .trim_start_matches("./")
-                .split('/')
-                .count()
-                .cmp(&left.trim_start_matches("./").split('/').count())
-        })
-}
-
-fn test_support_candidate_cmp(
-    left: &str,
-    right: &str,
+fn selection_guardrail_state(
     matches: &[HybridRankedEvidence],
-    candidate_pool: &[HybridRankedEvidence],
-    query_text: &str,
-    exact_terms: &[String],
-    prefer_runtime_anchor_tests: bool,
-) -> Ordering {
-    let runtime_adjacent_cmp = surfaces::is_runtime_adjacent_python_test_path(left)
-        .cmp(&surfaces::is_runtime_adjacent_python_test_path(right));
-    let family_cmp = test_support_family_affinity(left, matches, candidate_pool)
-        .cmp(&test_support_family_affinity(right, matches, candidate_pool));
-    let guardrail_cmp = test_support_guardrail_cmp(
-        left,
-        right,
-        query_text,
-        exact_terms,
-        prefer_runtime_anchor_tests,
-    );
-
-    if prefer_runtime_anchor_tests {
-        guardrail_cmp
-            .then_with(|| runtime_adjacent_cmp)
-            .then_with(|| family_cmp)
-    } else {
-        runtime_adjacent_cmp
-            .then_with(|| family_cmp)
-            .then_with(|| guardrail_cmp)
-    }
+    ctx: &PostSelectionContext<'_>,
+) -> SelectionState {
+    SelectionState::from_selected(matches, ctx.intent, &ctx.selection_query_context)
 }
 
-fn test_support_guardrail_priority(path: &str, prefer_runtime_anchor_tests: bool) -> usize {
-    if prefer_runtime_anchor_tests {
-        if surfaces::is_runtime_anchor_test_support_path(path) {
-            if surfaces::is_runtime_adjacent_python_test_path(path) {
-                if is_non_prefix_python_test_module_path(path) {
+fn selection_guardrail_score(
+    entry: &HybridRankedEvidence,
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> f32 {
+    hybrid_selection_score_from_context(&selection_guardrail_facts(entry, state, ctx))
+}
+
+fn selection_guardrail_facts(
+    entry: &HybridRankedEvidence,
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> SelectionFacts {
+    let candidate =
+        SelectionCandidate::new(entry.clone(), ctx.intent, &ctx.selection_query_context);
+    SelectionFacts::from_candidate(&candidate, ctx.intent, &ctx.selection_query_context, state)
+}
+
+fn selection_guardrail_score_for_path(
+    path: &str,
+    matches: &[HybridRankedEvidence],
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> f32 {
+    matches
+        .iter()
+        .find(|entry| entry.document.path == path)
+        .map(|entry| selection_guardrail_score(entry, state, ctx))
+        .unwrap_or(f32::NEG_INFINITY)
+}
+
+fn selection_guardrail_cmp(
+    left: &HybridRankedEvidence,
+    right: &HybridRankedEvidence,
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> Ordering {
+    let left_facts = selection_guardrail_facts(left, state, ctx);
+    let right_facts = selection_guardrail_facts(right, state, ctx);
+
+    let score_cmp = hybrid_selection_score_from_context(&left_facts)
+        .total_cmp(&hybrid_selection_score_from_context(&right_facts));
+    let companion_cmp = if left_facts.wants_runtime_companion_tests
+        && right_facts.wants_runtime_companion_tests
+        && left_facts.is_test_support
+        && right_facts.is_test_support
+    {
+        let guardrail_cmp = left_facts
+            .path_overlap
+            .cmp(&right_facts.path_overlap)
+            .then_with(|| {
+                left_facts
+                    .has_exact_query_term_match
+                    .cmp(&right_facts.has_exact_query_term_match)
+            })
+            .then_with(|| {
+                companion_test_guardrail_priority(&left_facts)
+                    .cmp(&companion_test_guardrail_priority(&right_facts))
+            })
+            .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth));
+        if left_facts.prefer_runtime_anchor_tests || left_facts.wants_example_or_bench_witnesses {
+            guardrail_cmp
+                .then_with(|| {
+                    left_facts
+                        .is_runtime_adjacent_python_test
+                        .cmp(&right_facts.is_runtime_adjacent_python_test)
+                })
+                .then_with(|| {
+                    left_facts
+                        .runtime_family_prefix_overlap
+                        .cmp(&right_facts.runtime_family_prefix_overlap)
+                })
+        } else {
+            left_facts
+                .is_runtime_adjacent_python_test
+                .cmp(&right_facts.is_runtime_adjacent_python_test)
+                .then_with(|| {
+                    left_facts
+                        .runtime_family_prefix_overlap
+                        .cmp(&right_facts.runtime_family_prefix_overlap)
+                })
+                .then_with(|| guardrail_cmp)
+        }
+    } else {
+        Ordering::Equal
+    };
+
+    companion_cmp
+        .then(score_cmp)
+        .then_with(|| {
+            left_facts
+                .is_runtime_anchor_test_support
+                .cmp(&right_facts.is_runtime_anchor_test_support)
+        })
+        .then_with(|| {
+            left_facts
+                .is_runtime_adjacent_python_test
+                .cmp(&right_facts.is_runtime_adjacent_python_test)
+        })
+        .then_with(|| {
+            left_facts
+                .runtime_family_prefix_overlap
+                .cmp(&right_facts.runtime_family_prefix_overlap)
+        })
+        .then_with(|| {
+            left_facts
+                .has_exact_query_term_match
+                .cmp(&right_facts.has_exact_query_term_match)
+        })
+        .then_with(|| {
+            left_facts
+                .specific_witness_path_overlap
+                .cmp(&right_facts.specific_witness_path_overlap)
+        })
+        .then_with(|| left_facts.path_overlap.cmp(&right_facts.path_overlap))
+        .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth))
+        .then_with(|| left.blended_score.total_cmp(&right.blended_score))
+        .then_with(|| left.document.cmp(&right.document).reverse())
+}
+
+fn companion_test_guardrail_priority(facts: &SelectionFacts) -> usize {
+    if facts.prefer_runtime_anchor_tests {
+        if facts.is_runtime_anchor_test_support {
+            if facts.is_runtime_adjacent_python_test {
+                if facts.is_non_prefix_python_test_module {
                     4
                 } else {
                     5
                 }
-            } else if is_non_prefix_python_test_module_path(path) {
+            } else if facts.is_non_prefix_python_test_module {
                 3
             } else {
                 4
             }
-        } else if surfaces::is_cli_test_support_path(path) {
+        } else if facts.is_cli_test_support {
             3
         } else {
             0
         }
-    } else if surfaces::is_cli_test_support_path(path) || surfaces::is_test_harness_path(path) {
+    } else if facts.is_cli_test_support || facts.is_test_harness {
         2
-    } else if surfaces::is_runtime_adjacent_python_test_path(path) {
+    } else if facts.is_runtime_adjacent_python_test {
         2
-    } else if surfaces::is_runtime_anchor_test_support_path(path) {
-        if is_non_prefix_python_test_module_path(path) {
+    } else if facts.is_runtime_anchor_test_support {
+        if facts.is_non_prefix_python_test_module {
             1
         } else {
             2
@@ -1255,38 +527,18 @@ fn test_support_guardrail_priority(path: &str, prefer_runtime_anchor_tests: bool
     }
 }
 
-fn is_non_prefix_python_test_module_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    normalized.ends_with(".py")
-        && Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| !name.starts_with("test_"))
-}
-
-fn test_support_family_affinity(
-    path: &str,
-    matches: &[HybridRankedEvidence],
-    candidate_pool: &[HybridRankedEvidence],
-) -> usize {
-    matches
-        .iter()
-        .chain(candidate_pool.iter())
-        .filter(|entry| {
-            surfaces::is_entrypoint_runtime_path(&entry.document.path)
-                || surfaces::is_runtime_config_artifact_path(&entry.document.path)
-        })
-        .map(|entry| shared_path_prefix_segments(path, &entry.document.path))
-        .max()
-        .unwrap_or(0)
-}
-
-fn shared_path_prefix_segments(left: &str, right: &str) -> usize {
-    left.trim_start_matches("./")
-        .split('/')
-        .zip(right.trim_start_matches("./").split('/'))
-        .take_while(|(left, right)| left == right)
-        .count()
+fn selection_guardrail_cmp_from_hit(
+    left: &HybridChannelHit,
+    right: &HybridChannelHit,
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> Ordering {
+    selection_guardrail_cmp(
+        &hybrid_ranked_evidence_from_witness_hit(left),
+        &hybrid_ranked_evidence_from_witness_hit(right),
+        state,
+        ctx,
+    )
 }
 
 fn is_promotable_laravel_blade_surface_path(path: &str) -> bool {
@@ -1297,8 +549,18 @@ fn is_layout_companion_blade_surface_path(path: &str) -> bool {
     is_promotable_laravel_blade_surface_path(path) && !is_laravel_layout_blade_view_path(path)
 }
 
+fn is_benchmark_test_support_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    is_plain_test_support_path(&normalized)
+        && (normalized.starts_with("benchmark/") || normalized.contains("/benchmark/"))
+}
+
+fn is_bench_support_candidate_path(path: &str) -> bool {
+    surfaces::is_bench_support_path(path) || is_benchmark_test_support_path(path)
+}
+
 fn is_bench_support_document(entry: &HybridRankedEvidence) -> bool {
-    surfaces::is_bench_support_path(&entry.document.path)
+    is_bench_support_candidate_path(&entry.document.path)
 }
 
 fn is_example_support_guardrail_replacement(entry: &HybridRankedEvidence) -> bool {
@@ -1755,6 +1017,29 @@ mod tests {
         apply(matches, &ctx)
     }
 
+    fn apply_context_with_trace(
+        matches: Vec<HybridRankedEvidence>,
+        candidate_pool: &[HybridRankedEvidence],
+        witness_hits: &[HybridChannelHit],
+        intent: &HybridRankingIntent,
+        query_text: &str,
+        limit: usize,
+    ) -> (Vec<HybridRankedEvidence>, PostSelectionTrace) {
+        let ctx = PostSelectionContext::new_with_trace(
+            intent,
+            query_text,
+            limit,
+            candidate_pool,
+            witness_hits,
+        );
+        let final_matches = apply(matches, &ctx);
+        let trace = ctx
+            .trace_snapshot()
+            .expect("trace capture should be enabled");
+
+        (final_matches, trace)
+    }
+
     #[test]
     fn post_selection_policy_runtime_config_recovers_specific_surface_and_root_manifest_without_exceeding_limit()
      {
@@ -1891,7 +1176,9 @@ mod tests {
         let witness_hits = vec![make_witness("backend/pyproject.toml", 0.86)];
         let intent = HybridRankingIntent::from_query("entry point bootstrap app startup cli main");
         assert!(intent.wants_entrypoint_build_flow);
-        assert!(surfaces::is_runtime_config_artifact_path("backend/pyproject.toml"));
+        assert!(surfaces::is_runtime_config_artifact_path(
+            "backend/pyproject.toml"
+        ));
         assert!(is_runtime_config_guardrail_replacement(&make_ranked(
             "README.md",
             0.78,
@@ -1915,6 +1202,45 @@ mod tests {
             "final paths: {paths:?}"
         );
         assert!(!paths.contains(&"README.md"), "final paths: {paths:?}");
+    }
+
+    #[test]
+    fn post_selection_policy_runtime_config_trace_records_root_manifest_replacement() {
+        let matches = vec![
+            make_ranked("backend/app.py", 0.96),
+            make_ranked("backend/cli.py", 0.92),
+            make_ranked("README.md", 0.78),
+        ];
+        let witness_hits = vec![make_witness("backend/pyproject.toml", 0.86)];
+        let intent = HybridRankingIntent::from_query("entry point bootstrap app startup cli main");
+
+        let (final_matches, trace) = apply_context_with_trace(
+            matches,
+            &[],
+            &witness_hits,
+            &intent,
+            "entry point bootstrap app startup cli main",
+            3,
+        );
+        let paths: Vec<_> = final_matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect();
+
+        assert!(
+            paths.contains(&"backend/pyproject.toml"),
+            "final paths: {paths:?}"
+        );
+        assert!(!paths.contains(&"README.md"), "final paths: {paths:?}");
+        assert_eq!(
+            trace.events,
+            vec![PostSelectionTraceEvent {
+                rule_id: "post_selection.runtime_config",
+                action: PostSelectionRepairAction::Replaced,
+                candidate_path: "backend/pyproject.toml".to_owned(),
+                replaced_path: Some("README.md".to_owned()),
+            }]
+        );
     }
 
     #[test]
@@ -2019,9 +1345,14 @@ mod tests {
             .map(|entry| entry.document.path.as_str())
             .collect();
 
-        assert!(paths.contains(&"platform/main.roc"), "final paths: {paths:?}");
         assert!(
-            paths.iter().any(|path| surfaces::is_example_support_path(path)),
+            paths.contains(&"platform/main.roc"),
+            "final paths: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| surfaces::is_example_support_path(path)),
             "final paths: {paths:?}"
         );
     }
@@ -2066,7 +1397,10 @@ mod tests {
             make_ranked("classic/original_autogpt/autogpt/app/main.py", 0.97),
             make_ranked("autogpt_platform/backend/backend/app.py", 0.95),
             make_ranked("autogpt_platform/backend/backend/cli.py", 0.94),
-            make_ranked("autogpt_platform/backend/backend/copilot/executor/__main__.py", 0.92),
+            make_ranked(
+                "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                0.92,
+            ),
             make_ranked("autogpt_platform/backend/pyproject.toml", 0.90),
         ];
         let witness_hits = vec![make_witness(
@@ -2104,42 +1438,40 @@ mod tests {
     fn post_selection_policy_entrypoint_queries_prefer_prefix_python_tests_over_loose_suffix_tests()
     {
         let matches = vec![
-            make_ranked("autogpt_platform/backend/backend/copilot/executor/__main__.py", 0.96),
+            make_ranked(
+                "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+                0.96,
+            ),
             make_ranked("autogpt_platform/backend/backend/app.py", 0.92),
             make_ranked("autogpt_platform/backend/backend/cli.py", 0.89),
         ];
         let witness_hits = vec![
-            make_witness("autogpt_platform/backend/backend/copilot/service_test.py", 0.90),
-            make_witness("autogpt_platform/backend/backend/blocks/mcp/test_server.py", 0.88),
+            make_witness(
+                "autogpt_platform/backend/backend/copilot/service_test.py",
+                0.90,
+            ),
+            make_witness(
+                "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+                0.88,
+            ),
         ];
         let intent = HybridRankingIntent::from_query("entry point bootstrap app startup cli main");
         assert!(intent.wants_entrypoint_build_flow);
         assert!(!intent.wants_test_witness_recall);
-        assert!(test_support_candidate_cmp(
-            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
-            "autogpt_platform/backend/backend/copilot/service_test.py",
-            &matches,
-            &matches,
+        let ctx = PostSelectionContext::new(
+            &intent,
             "entry point bootstrap app startup cli main",
-            &hybrid_query_exact_terms("entry point bootstrap app startup cli main"),
-            !intent.wants_test_witness_recall,
-        )
-        .is_gt());
+            3,
+            &matches,
+            &witness_hits,
+        );
+        let state = selection_guardrail_state(&matches, &ctx);
+        let preferred = hybrid_ranked_evidence_from_witness_hit(&witness_hits[1]);
+        let loose = hybrid_ranked_evidence_from_witness_hit(&witness_hits[0]);
+        assert!(selection_guardrail_cmp(&preferred, &loose, &state, &ctx).is_gt());
         let chosen_witness = witness_hits
             .iter()
-            .max_by(|left, right| {
-                test_support_candidate_cmp(
-                    &left.document.path,
-                    &right.document.path,
-                    &matches,
-                    &matches,
-                    "entry point bootstrap app startup cli main",
-                    &hybrid_query_exact_terms("entry point bootstrap app startup cli main"),
-                    !intent.wants_test_witness_recall,
-                )
-                .then_with(|| left.raw_score.total_cmp(&right.raw_score))
-                .then_with(|| left.document.cmp(&right.document).reverse())
-            })
+            .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, &ctx))
             .expect("witness candidate should exist");
         assert_eq!(
             chosen_witness.document.path,
@@ -2148,7 +1480,8 @@ mod tests {
         let inserted = insert_test_support_guardrail_candidate(
             matches.clone(),
             Some(hybrid_ranked_evidence_from_witness_hit(chosen_witness)),
-            3,
+            &ctx,
+            "post_selection.runtime_companion_tests",
             None,
         );
         let inserted_paths: Vec<_> = inserted
@@ -2160,14 +1493,7 @@ mod tests {
             "inserted paths: {inserted_paths:?}"
         );
 
-        let ctx = PostSelectionContext::new(
-            &intent,
-            "entry point bootstrap app startup cli main",
-            3,
-            &[],
-            &witness_hits,
-        );
-        let final_matches = apply_runtime_companion_test_visibility(matches, &ctx);
+        let final_matches = apply_runtime_companion_test_visibility(matches.clone(), &ctx);
         let paths: Vec<_> = final_matches
             .iter()
             .map(|entry| entry.document.path.as_str())
@@ -2259,7 +1585,10 @@ mod tests {
         ];
         let witness_hits = vec![
             make_witness("autogpt_platform/backend/backend/api/test_helpers.py", 0.84),
-            make_witness("autogpt_platform/backend/backend/blocks/mcp/test_e2e.py", 0.82),
+            make_witness(
+                "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+                0.82,
+            ),
         ];
         let intent = HybridRankingIntent::from_query("config setup pyproject tests helpers e2e");
 
@@ -2288,7 +1617,10 @@ mod tests {
             make_ranked("classic/original_autogpt/setup.py", 0.88),
         ];
         let witness_hits = vec![
-            make_witness("classic/original_autogpt/tests/integration/test_setup.py", 0.90),
+            make_witness(
+                "classic/original_autogpt/tests/integration/test_setup.py",
+                0.90,
+            ),
             make_witness("autogpt_platform/backend/backend/api/test_helpers.py", 0.86),
         ];
         let intent = HybridRankingIntent::from_query(
@@ -2346,5 +1678,42 @@ mod tests {
         assert!(paths.contains(&"resources/views/components/button.blade.php"));
         assert!(paths.contains(&"tests/TestCase.php"));
         assert!(!paths.contains(&"app/Livewire/ButtonPanel.php"));
+    }
+
+    #[test]
+    fn post_selection_policy_laravel_harness_trace_records_replacement() {
+        let matches = vec![
+            make_ranked("resources/views/components/button.blade.php", 0.95),
+            make_ranked("app/Livewire/ButtonPanel.php", 0.88),
+        ];
+        let candidate_pool = vec![make_ranked("tests/TestCase.php", 0.84)];
+        let intent = HybridRankingIntent::from_query("blade component button view");
+
+        let (final_matches, trace) = apply_context_with_trace(
+            matches,
+            &candidate_pool,
+            &[],
+            &intent,
+            "blade component button harness",
+            2,
+        );
+        let paths: Vec<_> = final_matches
+            .iter()
+            .map(|entry| entry.document.path.as_str())
+            .collect();
+
+        assert_eq!(final_matches.len(), 2);
+        assert!(paths.contains(&"resources/views/components/button.blade.php"));
+        assert!(paths.contains(&"tests/TestCase.php"));
+        assert!(!paths.contains(&"app/Livewire/ButtonPanel.php"));
+        assert_eq!(
+            trace.events,
+            vec![PostSelectionTraceEvent {
+                rule_id: "post_selection.laravel_ui_test_harness",
+                action: PostSelectionRepairAction::Replaced,
+                candidate_path: "tests/TestCase.php".to_owned(),
+                replaced_path: Some("app/Livewire/ButtonPanel.php".to_owned()),
+            }]
+        );
     }
 }

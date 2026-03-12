@@ -137,7 +137,6 @@ pub struct FriggMcpServer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceSemanticRefreshPlan {
     latest_snapshot_id: String,
-    compatible_snapshot_id: String,
     reason: &'static str,
 }
 
@@ -4493,6 +4492,13 @@ impl FriggMcpServer {
         let model_ref = model
             .as_deref()
             .expect("semantic model should exist after config validation");
+        let semantic_health = storage_reader
+            .collect_semantic_storage_health_for_repository_model(
+                &workspace.repository_id,
+                provider_ref,
+                model_ref,
+            )
+            .ok();
         let semantic_state = freshness.semantic.clone();
         match semantic_state {
             RepositorySemanticFreshness::MissingManifestSnapshot => {
@@ -4528,6 +4534,22 @@ impl FriggMcpServer {
                 let snapshot_id = freshness
                     .snapshot_id
                     .expect("ready semantic freshness should carry a snapshot id");
+                if semantic_health
+                    .as_ref()
+                    .is_some_and(|health| !health.vector_consistent)
+                {
+                    return WorkspaceIndexComponentSummary {
+                        state: WorkspaceIndexComponentState::Error,
+                        reason: Some("semantic_vector_partition_out_of_sync".to_owned()),
+                        snapshot_id: Some(snapshot_id),
+                        compatible_snapshot_id: None,
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        artifact_count: semantic_health
+                            .as_ref()
+                            .map(|health| health.live_embedding_rows),
+                    };
+                }
                 WorkspaceIndexComponentSummary {
                     state: WorkspaceIndexComponentState::Ready,
                     reason: None,
@@ -4535,49 +4557,31 @@ impl FriggMcpServer {
                     compatible_snapshot_id: None,
                     provider: provider.clone(),
                     model: model.clone(),
-                    artifact_count: storage_reader
-                        .count_semantic_embeddings_for_repository_snapshot_model(
-                            &workspace.repository_id,
-                            &snapshot_id,
-                            provider_ref,
-                            model_ref,
-                        )
-                        .ok(),
-                }
-            }
-            RepositorySemanticFreshness::MissingForActiveModel => {
-                let snapshot_id = freshness.snapshot_id.clone();
-                let compatible_snapshot_id = storage_reader
-                    .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
-                        &workspace.repository_id,
-                        provider_ref,
-                        model_ref,
-                    )
-                    .ok()
-                    .flatten();
-                WorkspaceIndexComponentSummary {
-                    state: if compatible_snapshot_id.is_some() {
-                        WorkspaceIndexComponentState::Stale
-                    } else {
-                        WorkspaceIndexComponentState::Missing
-                    },
-                    reason: Some("semantic_snapshot_missing_for_active_model".to_owned()),
-                    snapshot_id,
-                    compatible_snapshot_id: compatible_snapshot_id.clone(),
-                    provider: provider.clone(),
-                    model: model.clone(),
-                    artifact_count: compatible_snapshot_id.as_ref().and_then(
-                        |fallback_snapshot_id| {
+                    artifact_count: semantic_health
+                        .as_ref()
+                        .map(|health| health.live_embedding_rows)
+                        .or_else(|| {
                             storage_reader
                                 .count_semantic_embeddings_for_repository_snapshot_model(
                                     &workspace.repository_id,
-                                    fallback_snapshot_id,
+                                    &snapshot_id,
                                     provider_ref,
                                     model_ref,
                                 )
                                 .ok()
-                        },
-                    ),
+                        }),
+                }
+            }
+            RepositorySemanticFreshness::MissingForActiveModel => {
+                let snapshot_id = freshness.snapshot_id.clone();
+                WorkspaceIndexComponentSummary {
+                    state: WorkspaceIndexComponentState::Missing,
+                    reason: Some("semantic_snapshot_missing_for_active_model".to_owned()),
+                    snapshot_id,
+                    compatible_snapshot_id: None,
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    artifact_count: None,
                 }
             }
             RepositorySemanticFreshness::Disabled => WorkspaceIndexComponentSummary {
@@ -4625,26 +4629,14 @@ impl FriggMcpServer {
             return None;
         }
 
-        let provider = self.config.semantic_runtime.provider?;
-        let model = self.config.semantic_runtime.normalized_model()?;
         self.config.semantic_runtime.validate().ok()?;
         let freshness = self
             .workspace_repository_freshness_status(workspace, &self.config.semantic_runtime)
             .ok()?;
         let latest_snapshot_id = freshness.snapshot_id?;
-        let storage = Storage::new(&workspace.db_path);
-        let compatible_snapshot_id = storage
-            .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
-                &workspace.repository_id,
-                provider.as_str(),
-                model,
-            )
-            .ok()
-            .flatten()?;
         match (freshness.manifest.clone(), freshness.semantic.clone()) {
             (RepositoryManifestFreshness::StaleSnapshot, _) => Some(WorkspaceSemanticRefreshPlan {
                 latest_snapshot_id,
-                compatible_snapshot_id,
                 reason: "stale_manifest_snapshot",
             }),
             (
@@ -4652,7 +4644,6 @@ impl FriggMcpServer {
                 RepositorySemanticFreshness::MissingForActiveModel,
             ) => Some(WorkspaceSemanticRefreshPlan {
                 latest_snapshot_id,
-                compatible_snapshot_id,
                 reason: "semantic_snapshot_missing_for_active_model",
             }),
             _ => None,
@@ -4674,7 +4665,7 @@ impl FriggMcpServer {
             &workspace.repository_id,
             &workspace.root,
             &workspace.db_path,
-            ReindexMode::ChangedOnly,
+            ReindexMode::Full,
             &self.config.semantic_runtime,
             &credentials,
         )
@@ -4689,11 +4680,21 @@ impl FriggMcpServer {
         if plan.reason != "semantic_snapshot_missing_for_active_model" {
             return;
         }
+        if self
+            .runtime_task_registry
+            .read()
+            .expect("runtime task registry poisoned")
+            .has_active_task_for_repository(
+                crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
+                &workspace.repository_id,
+            )
+        {
+            return;
+        }
         if let Err(err) = self.refresh_workspace_semantic_snapshot_with_plan(workspace, &plan) {
             warn!(
                 repository_id = workspace.repository_id,
                 snapshot_id = %plan.latest_snapshot_id,
-                compatible_snapshot_id = %plan.compatible_snapshot_id,
                 reason = plan.reason,
                 error = %err,
                 "workspace semantic refresh failed during attach"
@@ -4713,7 +4714,17 @@ impl FriggMcpServer {
             return;
         }
 
-        if should_refresh_semantic {
+        let semantic_refresh_already_running = should_refresh_semantic
+            && self
+                .runtime_task_registry
+                .read()
+                .expect("runtime task registry poisoned")
+                .has_active_task_for_repository(
+                    crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
+                    &workspace.repository_id,
+                );
+
+        if should_refresh_semantic && !semantic_refresh_already_running {
             let server = self.clone();
             let workspace = workspace.clone();
             let semantic_plan = semantic_plan.clone();
@@ -4727,8 +4738,9 @@ impl FriggMcpServer {
                     "semantic_attach_refresh",
                     semantic_plan.as_ref().map(|plan| {
                         format!(
-                            "attach root {} reason {}",
+                            "attach root {} snapshot {} reason {}",
                             workspace.root.display(),
+                            plan.latest_snapshot_id,
                             plan.reason
                         )
                     }),
@@ -10214,6 +10226,8 @@ mod runtime_gate_tests {
             .replace_semantic_embeddings_for_repository(
                 &workspace.repository_id,
                 "snapshot-001",
+                "openai",
+                "text-embedding-3-small",
                 &[semantic_record(
                     &workspace.repository_id,
                     "snapshot-001",
@@ -10232,7 +10246,6 @@ mod runtime_gate_tests {
             .workspace_semantic_refresh_plan(&workspace)
             .expect("latest snapshot without active-model semantic rows should trigger refresh");
         assert_eq!(plan.latest_snapshot_id, "snapshot-002");
-        assert_eq!(plan.compatible_snapshot_id, "snapshot-001");
         assert_eq!(plan.reason, "semantic_snapshot_missing_for_active_model");
 
         let _ = fs::remove_dir_all(workspace_root);

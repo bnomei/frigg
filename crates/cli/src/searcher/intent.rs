@@ -426,10 +426,6 @@ impl QueryContext {
         ])
     }
 
-    fn mentions_cli_context(&self) -> bool {
-        self.has_any(&["cli", "command-line", "command line"])
-    }
-
     fn mentions_laravel_ui(&self) -> bool {
         self.has_any(&["blade", "livewire", "flux"])
             && (self.has_blade_ui_surface_terms() || self.has_blade_form_action_terms())
@@ -902,26 +898,29 @@ fn apply_entrypoint_build_flow_terms(
         "starts and builds",
         "build pipeline",
         "pipeline runner",
-    ]) || (context.has_any(&[
-        "start",
-        "starts",
-        "startup",
-        "entrypoint",
-        "boot",
-        "bootstrap",
-    ]) && context.has_any(&[
-        "build",
-        "builds",
-        "builder",
-        "construct",
-        "constructs",
-        "wire",
-        "wires",
-        "wiring",
-        "runner",
-        "pipeline",
-    ])) || (context.has_any(&["route", "routes", "middleware", "provider", "providers"])
-        && context.has_any(&["bootstrap", "entrypoint", "entry point", "app"])))
+    ]) || (context.has_any(&["entrypoint", "entry point", "entry-point"])
+        && context.has_any(&["cli", "command", "commands", "bin"]))
+        || (context.has_any(&[
+            "start",
+            "starts",
+            "startup",
+            "entrypoint",
+            "boot",
+            "bootstrap",
+        ]) && context.has_any(&[
+            "build",
+            "builds",
+            "builder",
+            "construct",
+            "constructs",
+            "wire",
+            "wires",
+            "wiring",
+            "runner",
+            "pipeline",
+        ]))
+        || (context.has_any(&["route", "routes", "middleware", "provider", "providers"])
+            && context.has_any(&["bootstrap", "entrypoint", "entry point", "app"])))
     {
         return false;
     }
@@ -1000,57 +999,96 @@ fn apply_navigation_fallback_terms(
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestWitnessFocusMode {
+    WitnessFocused,
+    RuntimeBridge,
+}
+
 fn apply_test_witness_focus(context: &QueryContext, builder: &mut SearchIntentBuilder) -> bool {
-    let runtime_config_query_with_incidental_tests = builder
-        .has_artifact_bias(ArtifactBias::RuntimeConfigArtifact)
-        && !context.has_strong_test_focus_terms();
-    let allow_readme_for_strong_test_focus = context.has_strong_test_focus_terms();
-    if runtime_config_query_with_incidental_tests {
+    let Some(mode) = test_witness_focus_mode(context, builder) else {
         return false;
-    }
-
-    let has_test_or_cli_signal = builder.has_goal(SearchGoal::Tests);
-    let bridge_docs_contract_runtime_tests = builder.has_goal(SearchGoal::Tests)
-        && (builder.has_goal(SearchGoal::Contracts)
-            || builder.has_goal(SearchGoal::ErrorTaxonomy)
-            || builder.has_goal(SearchGoal::ToolContracts))
-        && context.has_any(&["runtime helper", "runtime helpers", "helper", "call site"]);
-    let laravel_ui_with_path_hints = builder.has_goal(SearchGoal::Tests)
-        && builder.has_artifact_bias(ArtifactBias::LaravelUi)
-        && builder.has_goal(SearchGoal::Documentation)
-        && !builder.has_goal(SearchGoal::Readme)
-        && !builder.has_goal(SearchGoal::Contracts)
-        && !builder.has_goal(SearchGoal::ErrorTaxonomy)
-        && !builder.has_goal(SearchGoal::ToolContracts);
-    let docs_with_strong_test_focus = builder.has_goal(SearchGoal::Tests)
-        && builder.has_goal(SearchGoal::Documentation)
-        && context.has_strong_test_focus_terms()
-        && (!builder.has_goal(SearchGoal::Readme) || allow_readme_for_strong_test_focus)
-        && !builder.has_goal(SearchGoal::Contracts)
-        && !builder.has_goal(SearchGoal::ErrorTaxonomy)
-        && !builder.has_goal(SearchGoal::ToolContracts);
-
-    if !(has_test_or_cli_signal
-        && (bridge_docs_contract_runtime_tests
-            || laravel_ui_with_path_hints
-            || docs_with_strong_test_focus
-            || (!builder.has_goal(SearchGoal::Documentation)
-                && (!builder.has_goal(SearchGoal::Readme) || allow_readme_for_strong_test_focus)
-                && !builder.has_goal(SearchGoal::Contracts)
-                && !builder.has_goal(SearchGoal::ErrorTaxonomy)
-                && !builder.has_goal(SearchGoal::ToolContracts))))
-    {
-        return false;
-    }
+    };
 
     builder.insert_artifact_bias(ArtifactBias::TestWitness);
-    if !bridge_docs_contract_runtime_tests {
-        builder.strictness = Some(PlannerStrictness::WitnessFocused);
-    } else {
-        builder.insert_goal(SearchGoal::RuntimeWitnesses);
-        builder.strictness = Some(PlannerStrictness::Broad);
+    match mode {
+        TestWitnessFocusMode::WitnessFocused => {
+            builder.strictness = Some(PlannerStrictness::WitnessFocused);
+        }
+        TestWitnessFocusMode::RuntimeBridge => {
+            builder.insert_goal(SearchGoal::RuntimeWitnesses);
+            builder.strictness = Some(PlannerStrictness::Broad);
+        }
     }
+
     true
+}
+
+fn test_witness_focus_mode(
+    context: &QueryContext,
+    builder: &SearchIntentBuilder,
+) -> Option<TestWitnessFocusMode> {
+    if should_skip_test_witness_focus(context, builder) || !builder.has_goal(SearchGoal::Tests) {
+        return None;
+    }
+
+    if is_runtime_bridge_test_focus(context, builder) {
+        return Some(TestWitnessFocusMode::RuntimeBridge);
+    }
+
+    let allow_readme = context.has_strong_test_focus_terms();
+    if is_laravel_ui_path_hint_test_focus(builder)
+        || is_docs_with_strong_test_focus(context, builder, allow_readme)
+        || is_plain_test_focus(builder, allow_readme)
+    {
+        Some(TestWitnessFocusMode::WitnessFocused)
+    } else {
+        None
+    }
+}
+
+fn should_skip_test_witness_focus(context: &QueryContext, builder: &SearchIntentBuilder) -> bool {
+    builder.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact)
+        && !context.has_strong_test_focus_terms()
+}
+
+fn is_runtime_bridge_test_focus(context: &QueryContext, builder: &SearchIntentBuilder) -> bool {
+    has_contract_or_error_focus(builder)
+        && context.has_any(&["runtime helper", "runtime helpers", "helper", "call site"])
+}
+
+fn is_laravel_ui_path_hint_test_focus(builder: &SearchIntentBuilder) -> bool {
+    builder.has_artifact_bias(ArtifactBias::LaravelUi)
+        && builder.has_goal(SearchGoal::Documentation)
+        && !builder.has_goal(SearchGoal::Readme)
+        && !has_contract_or_error_focus(builder)
+}
+
+fn is_docs_with_strong_test_focus(
+    context: &QueryContext,
+    builder: &SearchIntentBuilder,
+    allow_readme: bool,
+) -> bool {
+    builder.has_goal(SearchGoal::Documentation)
+        && context.has_strong_test_focus_terms()
+        && test_witness_focus_readme_allowed(builder, allow_readme)
+        && !has_contract_or_error_focus(builder)
+}
+
+fn is_plain_test_focus(builder: &SearchIntentBuilder, allow_readme: bool) -> bool {
+    !builder.has_goal(SearchGoal::Documentation)
+        && test_witness_focus_readme_allowed(builder, allow_readme)
+        && !has_contract_or_error_focus(builder)
+}
+
+fn test_witness_focus_readme_allowed(builder: &SearchIntentBuilder, allow_readme: bool) -> bool {
+    !builder.has_goal(SearchGoal::Readme) || allow_readme
+}
+
+fn has_contract_or_error_focus(builder: &SearchIntentBuilder) -> bool {
+    builder.has_goal(SearchGoal::Contracts)
+        || builder.has_goal(SearchGoal::ErrorTaxonomy)
+        || builder.has_goal(SearchGoal::ToolContracts)
 }
 
 static SEARCH_INTENT_RULES: &[SearchIntentRule] = &[
@@ -1300,9 +1338,19 @@ mod tests {
     }
 
     #[test]
+    fn cli_entrypoint_queries_activate_entrypoint_build_flow_without_build_terms() {
+        let intent = SearchIntent::from_query("ruff analyze ruff cli entrypoint");
+
+        assert!(intent.has_goal(SearchGoal::EntryPointBuildFlow));
+        assert!(!intent.has_goal(SearchGoal::Tests));
+        assert!(!intent.has_artifact_bias(ArtifactBias::TestWitness));
+    }
+
+    #[test]
     fn strong_python_test_focus_queries_keep_test_witness_recall_even_with_setup_readme_terms() {
-        let intent =
-            SearchIntent::from_query("tests fixtures integration helpers e2e config setup pyproject");
+        let intent = SearchIntent::from_query(
+            "tests fixtures integration helpers e2e config setup pyproject",
+        );
 
         assert!(intent.has_goal(SearchGoal::Tests));
         assert!(intent.has_goal(SearchGoal::Onboarding));

@@ -226,6 +226,18 @@ async fn run_supervisor(
                 warn!(root_idx, "built-in watch mode resolved invalid root index");
                 continue;
             };
+            if class == WatchRefreshClass::SemanticFollowup
+                && task_registry
+                    .read()
+                    .expect("watch runtime task registry poisoned")
+                    .has_active_task_for_repository(
+                        RuntimeTaskKind::SemanticRefresh,
+                        &repository.repository_id,
+                    )
+            {
+                scheduler.mark_succeeded(root_idx, class, now);
+                continue;
+            }
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),

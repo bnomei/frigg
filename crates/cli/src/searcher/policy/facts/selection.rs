@@ -20,7 +20,8 @@ use super::super::super::surfaces::{
     is_frontend_runtime_noise_path, is_generic_runtime_witness_doc_path,
     is_loose_python_test_module_path, is_navigation_reference_doc_path, is_navigation_runtime_path,
     is_non_code_test_doc_path, is_python_entrypoint_runtime_path, is_python_runtime_config_path,
-    is_python_test_witness_path, is_repo_metadata_path, is_runtime_config_artifact_path,
+    is_python_test_witness_path, is_repo_metadata_path, is_runtime_adjacent_python_test_path,
+    is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
     is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
     is_typescript_runtime_module_index_path,
 };
@@ -74,6 +75,7 @@ impl SelectionQueryContext {
 
 pub(crate) struct SelectionStaticFeatures {
     pub(crate) class: HybridSourceClass,
+    pub(crate) path_depth: usize,
     pub(crate) path_overlap: usize,
     pub(crate) blade_specific_path_overlap: usize,
     pub(crate) specific_witness_path_overlap: usize,
@@ -137,6 +139,7 @@ impl SelectionCandidate {
                     .path
                     .trim_start_matches("./")
                     .contains('/');
+        let path_depth = path_depth(&evidence.document.path);
         let is_typescript_runtime_module_index =
             is_typescript_runtime_module_index_path(&evidence.document.path);
         let excerpt_overlap = if query_context.query_has_identifier_anchor
@@ -172,6 +175,7 @@ impl SelectionCandidate {
             evidence,
             static_features: SelectionStaticFeatures {
                 class,
+                path_depth,
                 path_overlap,
                 blade_specific_path_overlap,
                 specific_witness_path_overlap,
@@ -196,6 +200,7 @@ impl SelectionCandidate {
 pub(crate) struct SelectionState {
     seen_classes: BTreeMap<HybridSourceClass, usize>,
     seen_laravel_ui_surfaces: BTreeMap<LaravelUiSurfaceClass, usize>,
+    runtime_anchor_paths: Vec<String>,
     seen_ci_workflows: usize,
     seen_example_support: usize,
     seen_bench_support: usize,
@@ -205,6 +210,19 @@ pub(crate) struct SelectionState {
 }
 
 impl SelectionState {
+    pub(crate) fn from_selected(
+        selected: &[HybridRankedEvidence],
+        intent: &HybridRankingIntent,
+        query_context: &SelectionQueryContext,
+    ) -> Self {
+        let mut state = Self::default();
+        for evidence in selected {
+            let candidate = SelectionCandidate::new(evidence.clone(), intent, query_context);
+            state.observe(&candidate);
+        }
+        state
+    }
+
     pub(crate) fn observe(&mut self, candidate: &SelectionCandidate) {
         *self
             .seen_classes
@@ -215,6 +233,12 @@ impl SelectionState {
         }
         if candidate.static_features.is_ci_workflow {
             self.seen_ci_workflows += 1;
+        }
+        if is_entrypoint_runtime_path(&candidate.evidence.document.path)
+            || is_runtime_config_artifact_path(&candidate.evidence.document.path)
+        {
+            self.runtime_anchor_paths
+                .push(candidate.evidence.document.path.clone());
         }
         if candidate.static_features.is_example_support {
             self.seen_example_support += 1;
@@ -244,10 +268,12 @@ impl SelectionState {
 pub(crate) struct SelectionFacts {
     pub(crate) base_score: f32,
     pub(crate) class: HybridSourceClass,
+    pub(crate) path_depth: usize,
     pub(crate) path_overlap: usize,
     pub(crate) excerpt_overlap: usize,
     pub(crate) blade_specific_path_overlap: usize,
     pub(crate) specific_witness_path_overlap: usize,
+    pub(crate) runtime_family_prefix_overlap: usize,
     pub(crate) seen_count: usize,
     pub(crate) runtime_seen: usize,
     pub(crate) seen_ci_workflows: usize,
@@ -268,6 +294,8 @@ pub(crate) struct SelectionFacts {
     pub(crate) query_mentions_cli: bool,
     pub(crate) query_has_identifier_anchor: bool,
     pub(crate) query_has_specific_blade_anchors: bool,
+    pub(crate) wants_runtime_companion_tests: bool,
+    pub(crate) prefer_runtime_anchor_tests: bool,
     pub(crate) wants_example_or_bench_witnesses: bool,
     pub(crate) penalize_generic_runtime_docs: bool,
     pub(crate) wants_python_witnesses: bool,
@@ -309,6 +337,9 @@ pub(crate) struct SelectionFacts {
     pub(crate) is_bench_support: bool,
     pub(crate) is_test_support: bool,
     pub(crate) is_cli_test_support: bool,
+    pub(crate) is_runtime_anchor_test_support: bool,
+    pub(crate) is_runtime_adjacent_python_test: bool,
+    pub(crate) is_non_prefix_python_test_module: bool,
     pub(crate) is_test_harness: bool,
     pub(crate) is_non_code_test_doc: bool,
     pub(crate) is_generic_runtime_witness_doc: bool,
@@ -372,15 +403,28 @@ impl SelectionFacts {
         let is_frontend_runtime_noise = is_frontend_runtime_noise_path(&evidence.document.path)
             && !(is_repo_root_runtime_config_artifact
                 && (intent.wants_entrypoint_build_flow || intent.wants_runtime_config_artifacts));
+        let wants_runtime_companion_tests = intent.wants_test_witness_recall
+            || intent.wants_entrypoint_build_flow
+            || intent.wants_runtime_config_artifacts;
+        let prefer_runtime_anchor_tests =
+            wants_runtime_companion_tests && !intent.wants_test_witness_recall;
+        let runtime_family_prefix_overlap = state
+            .runtime_anchor_paths
+            .iter()
+            .map(|path| shared_path_prefix_segments(&evidence.document.path, path))
+            .max()
+            .unwrap_or(0);
 
         Self {
             base_score: evidence.blended_score
                 * hybrid_path_quality_multiplier_with_intent(&evidence.document.path, intent),
             class,
+            path_depth: candidate.static_features.path_depth,
             path_overlap: candidate.static_features.path_overlap,
             excerpt_overlap: candidate.static_features.excerpt_overlap,
             blade_specific_path_overlap: candidate.static_features.blade_specific_path_overlap,
             specific_witness_path_overlap: candidate.static_features.specific_witness_path_overlap,
+            runtime_family_prefix_overlap,
             seen_count,
             runtime_seen,
             seen_ci_workflows: state.seen_ci_workflows,
@@ -411,6 +455,8 @@ impl SelectionFacts {
             query_mentions_cli: query_context.query_mentions_cli,
             query_has_identifier_anchor: query_context.query_has_identifier_anchor,
             query_has_specific_blade_anchors: query_context.query_has_specific_blade_anchors,
+            wants_runtime_companion_tests,
+            prefer_runtime_anchor_tests,
             wants_example_or_bench_witnesses: query_context.wants_example_or_bench_witnesses,
             penalize_generic_runtime_docs: query_context.penalize_generic_runtime_docs,
             wants_python_witnesses: query_context.wants_python_witnesses,
@@ -458,6 +504,15 @@ impl SelectionFacts {
             is_bench_support,
             is_test_support,
             is_cli_test_support: is_cli_test_support_path(&evidence.document.path),
+            is_runtime_anchor_test_support: is_runtime_anchor_test_support_path(
+                &evidence.document.path,
+            ),
+            is_runtime_adjacent_python_test: is_runtime_adjacent_python_test_path(
+                &evidence.document.path,
+            ),
+            is_non_prefix_python_test_module: is_non_prefix_python_test_module_path(
+                &evidence.document.path,
+            ),
             is_test_harness: is_test_harness_path(&evidence.document.path),
             is_non_code_test_doc: is_non_code_test_doc_path(&evidence.document.path),
             is_generic_runtime_witness_doc: is_generic_runtime_witness_doc_path(
@@ -523,10 +578,12 @@ impl Default for SelectionFacts {
         Self {
             base_score: 1.0,
             class: HybridSourceClass::Other,
+            path_depth: 0,
             path_overlap: 0,
             excerpt_overlap: 0,
             blade_specific_path_overlap: 0,
             specific_witness_path_overlap: 0,
+            runtime_family_prefix_overlap: 0,
             seen_count: 0,
             runtime_seen: 0,
             seen_ci_workflows: 0,
@@ -547,6 +604,8 @@ impl Default for SelectionFacts {
             query_mentions_cli: false,
             query_has_identifier_anchor: false,
             query_has_specific_blade_anchors: false,
+            wants_runtime_companion_tests: false,
+            prefer_runtime_anchor_tests: false,
             wants_example_or_bench_witnesses: false,
             penalize_generic_runtime_docs: false,
             wants_python_witnesses: false,
@@ -588,6 +647,9 @@ impl Default for SelectionFacts {
             is_bench_support: false,
             is_test_support: false,
             is_cli_test_support: false,
+            is_runtime_anchor_test_support: false,
+            is_runtime_adjacent_python_test: false,
+            is_non_prefix_python_test_module: false,
             is_test_harness: false,
             is_non_code_test_doc: false,
             is_generic_runtime_witness_doc: false,
@@ -687,4 +749,28 @@ fn blade_component_specific_path_overlap_count(path: &str, specific_terms: &[Str
         .iter()
         .filter(|term| path_terms.iter().any(|path_term| path_term == *term))
         .count()
+}
+
+fn path_depth(path: &str) -> usize {
+    path.trim_start_matches("./")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .count()
+}
+
+fn shared_path_prefix_segments(left: &str, right: &str) -> usize {
+    left.trim_start_matches("./")
+        .split('/')
+        .zip(right.trim_start_matches("./").split('/'))
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn is_non_prefix_python_test_module_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    normalized.ends_with(".py")
+        && Path::new(&normalized)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| !name.starts_with("test_"))
 }

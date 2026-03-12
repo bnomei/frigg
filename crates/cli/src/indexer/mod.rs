@@ -28,7 +28,9 @@ use crate::languages::{
     symbol_from_node, tree_sitter_language_for_path,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{ManifestEntry, SemanticChunkEmbeddingRecord, Storage};
+use crate::storage::{
+    DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, ManifestEntry, SemanticChunkEmbeddingRecord, Storage,
+};
 use blake3::Hasher;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
@@ -1182,6 +1184,21 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
 
     if semantic_runtime.enabled {
         let storage = Storage::new(db_path);
+        let provider = semantic_runtime.provider.ok_or_else(|| {
+            FriggError::Internal(
+                "semantic runtime provider missing after validation".to_owned(),
+            )
+        })?;
+        let model = semantic_runtime.normalized_model().ok_or_else(|| {
+            FriggError::Internal("semantic runtime model missing after validation".to_owned())
+        })?;
+        let current_semantic_head = storage
+            .load_semantic_head_for_repository_model(repository_id, provider.as_str(), model)?;
+        let semantic_head_snapshot_id = current_semantic_head
+            .as_ref()
+            .map(|head| head.covered_snapshot_id.as_str());
+        let requires_full_semantic_refresh = semantic_head_snapshot_id != Some(snapshot_id.as_str())
+            && semantic_head_snapshot_id != previous_snapshot_id.as_deref();
         let semantic_result = match mode {
             ReindexMode::Full => build_semantic_embedding_records(
                 repository_id,
@@ -1196,11 +1213,32 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
                 storage.replace_semantic_embeddings_for_repository(
                     repository_id,
                     &snapshot_id,
+                    provider.as_str(),
+                    model,
                     &semantic_records,
                 )
             }),
             ReindexMode::ChangedOnly => {
-                if files_changed > 0 || files_deleted > 0 || previous_manifest.is_none() {
+                if requires_full_semantic_refresh {
+                    build_semantic_embedding_records(
+                        repository_id,
+                        workspace_root,
+                        &snapshot_id,
+                        &current_manifest,
+                        semantic_runtime,
+                        credentials,
+                        executor,
+                    )
+                    .and_then(|semantic_records| {
+                        storage.replace_semantic_embeddings_for_repository(
+                            repository_id,
+                            &snapshot_id,
+                            provider.as_str(),
+                            model,
+                            &semantic_records,
+                        )
+                    })
+                } else if files_changed > 0 || files_deleted > 0 || previous_manifest.is_none() {
                     let semantic_manifest = manifest_diff
                         .added
                         .iter()
@@ -1239,6 +1277,8 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
                             repository_id,
                             previous_snapshot_id,
                             &snapshot_id,
+                            provider.as_str(),
+                            model,
                             &changed_paths,
                             &deleted_paths,
                             &semantic_records,
@@ -1260,6 +1300,9 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
             return Err(err);
         }
     }
+
+    Storage::new(db_path)
+        .prune_repository_snapshots(repository_id, DEFAULT_RETAINED_MANIFEST_SNAPSHOTS)?;
 
     Ok(ReindexSummary {
         repository_id: repository_id.to_owned(),
@@ -1304,7 +1347,7 @@ mod tests {
     use crate::settings::{
         SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider,
     };
-    use crate::storage::Storage;
+    use crate::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
 
     #[derive(Debug, Default)]
     struct FixtureSemanticEmbeddingExecutor;
@@ -2101,6 +2144,114 @@ mod tests {
             }),
             "stale semantic chunks for modified paths should be removed from the advanced snapshot"
         );
+
+        cleanup_workspace(&workspace_root);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> FriggResult<()> {
+        let db_path = temp_db_path("semantic-changed-only-bounded");
+        let workspace_root = temp_workspace_root("semantic-changed-only-bounded");
+        prepare_workspace(
+            &workspace_root,
+            &[
+                ("src/main.rs", "pub fn main_api() { println!(\"main\"); }\n"),
+                ("src/lib.rs", "pub fn changed_lib_0() -> u64 { 0 }\n"),
+            ],
+        )?;
+
+        let semantic_runtime = semantic_runtime_enabled_openai();
+        let credentials = SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        };
+
+        let first = reindex_repository_with_semantic_executor(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            ReindexMode::Full,
+            &semantic_runtime,
+            &credentials,
+            &FixtureSemanticEmbeddingExecutor,
+        )?;
+        let storage = Storage::new(&db_path);
+        let baseline_health = storage.collect_semantic_storage_health_for_repository_model(
+            "repo-001",
+            "openai",
+            "text-embedding-3-small",
+        )?;
+        assert!(baseline_health.vector_consistent);
+        assert_eq!(
+            baseline_health.covered_snapshot_id.as_deref(),
+            Some(first.snapshot_id.as_str())
+        );
+
+        for idx in 1usize..=12 {
+            fs::write(
+                workspace_root.join("src/lib.rs"),
+                format!("pub fn changed_lib_{idx}() -> u64 {{ {idx} }}\n"),
+            )
+            .map_err(FriggError::Io)?;
+
+            let executor = CountingSemanticEmbeddingExecutor::default();
+            let summary = reindex_repository_with_semantic_executor(
+                "repo-001",
+                &workspace_root,
+                &db_path,
+                ReindexMode::ChangedOnly,
+                &semantic_runtime,
+                &credentials,
+                &executor,
+            )?;
+            let observed_inputs = executor.observed_inputs();
+            assert_eq!(observed_inputs.len(), 1);
+            assert!(
+                observed_inputs[0].contains(&format!("changed_lib_{idx}")),
+                "changed-only semantic indexing should only re-embed the touched file"
+            );
+
+            let semantic_rows = storage
+                .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+            assert!(
+                semantic_rows
+                    .iter()
+                    .any(|record| record.path == "src/main.rs" && record.content_text.contains("main_api")),
+                "unchanged live semantic rows should remain present after cycle {idx}"
+            );
+            assert!(
+                semantic_rows.iter().any(|record| {
+                    record.path == "src/lib.rs"
+                        && record.content_text.contains(&format!("changed_lib_{idx}"))
+                }),
+                "changed live semantic row should update after cycle {idx}"
+            );
+            assert!(
+                semantic_rows.iter().all(|record| {
+                    !(record.path == "src/lib.rs"
+                        && record.content_text.contains(&format!("changed_lib_{}", idx.saturating_sub(1))))
+                }),
+                "stale changed-only content should not survive cycle {idx}"
+            );
+
+            let health = storage.collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )?;
+            assert!(health.vector_consistent);
+            assert_eq!(
+                health.covered_snapshot_id.as_deref(),
+                Some(summary.snapshot_id.as_str())
+            );
+            assert_eq!(health.live_embedding_rows, baseline_health.live_embedding_rows);
+            assert!(
+                health.retained_manifest_snapshots <= DEFAULT_RETAINED_MANIFEST_SNAPSHOTS,
+                "manifest retention should stay bounded after cycle {idx}"
+            );
+        }
 
         cleanup_workspace(&workspace_root);
         cleanup_db(&db_path);

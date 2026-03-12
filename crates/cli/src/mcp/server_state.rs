@@ -195,6 +195,27 @@ impl RuntimeTaskRegistry {
         tasks
     }
 
+    pub fn has_active_task(
+        &self,
+        kind: RuntimeTaskKind,
+        repository_id: &str,
+        phase: &str,
+    ) -> bool {
+        self.active.values().any(|task| {
+            task.kind == kind && task.repository_id == repository_id && task.phase == phase
+        })
+    }
+
+    pub fn has_active_task_for_repository(
+        &self,
+        kind: RuntimeTaskKind,
+        repository_id: &str,
+    ) -> bool {
+        self.active
+            .values()
+            .any(|task| task.kind == kind && task.repository_id == repository_id)
+    }
+
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }

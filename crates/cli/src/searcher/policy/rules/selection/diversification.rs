@@ -49,6 +49,45 @@ fn example_support_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
         }))
 }
 
+fn mixed_query_first_example_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_test_witness_recall
+        || !ctx.wants_example_or_bench_witnesses
+        || !ctx.is_example_support
+        || ctx.seen_example_support > 0
+    {
+        return None;
+    }
+
+    let best_overlap = ctx.path_overlap.max(ctx.specific_witness_path_overlap);
+    let delta = match best_overlap {
+        0 => {
+            if ctx.has_exact_query_term_match {
+                0.86
+            } else {
+                0.48
+            }
+        }
+        1 => 1.18,
+        _ => 1.72,
+    };
+
+    Some(PolicyEffect::Add(delta))
+}
+
+fn mixed_query_example_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.wants_test_witness_recall
+        || !ctx.wants_example_or_bench_witnesses
+        || !ctx.is_example_support
+        || ctx.seen_example_support == 0
+        || ctx.path_overlap > 0
+        || ctx.has_exact_query_term_match
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(-(1.00 * ctx.seen_example_support as f32)))
+}
+
 fn mixed_query_first_bench_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     if !ctx.wants_test_witness_recall
         || !ctx.wants_example_or_bench_witnesses
@@ -163,6 +202,16 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         "selection.diversification.example_support_penalty",
         PolicyStage::SelectionDiversification,
         example_support_penalty,
+    ),
+    ScoreRule::new(
+        "selection.diversification.mixed_query_first_example_bonus",
+        PolicyStage::SelectionDiversification,
+        mixed_query_first_example_bonus,
+    ),
+    ScoreRule::new(
+        "selection.diversification.mixed_query_example_repeat_penalty",
+        PolicyStage::SelectionDiversification,
+        mixed_query_example_repeat_penalty,
     ),
     ScoreRule::new(
         "selection.diversification.mixed_query_first_bench_bonus",

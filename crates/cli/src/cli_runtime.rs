@@ -6,6 +6,15 @@ pub(super) enum StorageBootstrapCommand {
     Verify,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum StorageMaintenanceCommand {
+    RepairSemanticVectorStore,
+    Prune {
+        keep_manifest_snapshots: usize,
+        keep_provenance_events: usize,
+    },
+}
+
 #[derive(Debug)]
 pub(super) enum SemanticStartupGateError {
     InvalidConfig(SemanticRuntimeStartupError),
@@ -60,7 +69,10 @@ pub(super) fn resolve_command_config(
     command: Command,
 ) -> Result<FriggConfig, Box<dyn Error>> {
     match command {
-        Command::Init | Command::Verify => resolve_base_config(cli, true, None),
+        Command::Init
+        | Command::Verify
+        | Command::RepairStorage
+        | Command::PruneStorage { .. } => resolve_base_config(cli, true, None),
         Command::Reindex { .. } => resolve_startup_config(cli, RuntimeTransportKind::Stdio),
         Command::PlaybookHybridRun { .. } => {
             let mut config = resolve_base_config(cli, true, None)?;
@@ -183,6 +195,123 @@ pub(super) fn run_storage_bootstrap_command(
         "{command_name} summary status=ok repositories={}",
         repositories.len()
     );
+    Ok(())
+}
+
+pub(super) fn run_storage_maintenance_command(
+    config: &FriggConfig,
+    command: StorageMaintenanceCommand,
+) -> Result<(), Box<dyn Error>> {
+    let repositories = config.repositories();
+    let command_name = match command {
+        StorageMaintenanceCommand::RepairSemanticVectorStore => "repair-storage",
+        StorageMaintenanceCommand::Prune { .. } => "prune-storage",
+    };
+    let mut total_repaired = 0usize;
+    let mut total_manifest_snapshots_deleted = 0usize;
+    let mut total_provenance_events_deleted = 0usize;
+
+    for repo in &repositories {
+        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
+            io::Error::other(format!(
+                "{command_name} summary status=failed repository_id={} error=workspace root lookup failed",
+                repo.repository_id.0
+            ))
+        })?;
+        let db_path = resolve_storage_db_path(root, command_name)?;
+        let storage = Storage::new(&db_path);
+
+        match command {
+            StorageMaintenanceCommand::RepairSemanticVectorStore => {
+                if let Err(err) = storage.repair_semantic_vector_store() {
+                    println!(
+                        "{command_name} summary status=failed repositories={} repository_id={} root={} db={} error={}",
+                        repositories.len(),
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display(),
+                        err
+                    );
+                    return Err(Box::new(io::Error::other(format!(
+                        "{command_name} failed for repository_id={} root={} db={}: {err}",
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display()
+                    ))));
+                }
+
+                total_repaired += 1;
+                println!(
+                    "{command_name} ok repository_id={} root={} db={} repaired=semantic_vectors",
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display()
+                );
+            }
+            StorageMaintenanceCommand::Prune {
+                keep_manifest_snapshots,
+                keep_provenance_events,
+            } => {
+                let deleted_manifest_snapshots = storage
+                    .prune_repository_snapshots(&repo.repository_id.0, keep_manifest_snapshots)
+                    .map_err(|err| {
+                        io::Error::other(format!(
+                            "{command_name} failed for repository_id={} root={} db={}: {err}",
+                            repo.repository_id.0,
+                            root.display(),
+                            db_path.display()
+                        ))
+                    })?;
+                let deleted_provenance_events = storage
+                    .prune_provenance_events(keep_provenance_events)
+                    .map_err(|err| {
+                        io::Error::other(format!(
+                            "{command_name} failed for repository_id={} root={} db={}: {err}",
+                            repo.repository_id.0,
+                            root.display(),
+                            db_path.display()
+                        ))
+                    })?;
+
+                total_manifest_snapshots_deleted += deleted_manifest_snapshots;
+                total_provenance_events_deleted += deleted_provenance_events;
+                println!(
+                    "{command_name} ok repository_id={} root={} db={} keep_manifest_snapshots={} keep_provenance_events={} manifest_snapshots_deleted={} provenance_events_deleted={}",
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display(),
+                    keep_manifest_snapshots,
+                    keep_provenance_events,
+                    deleted_manifest_snapshots,
+                    deleted_provenance_events
+                );
+            }
+        }
+    }
+
+    match command {
+        StorageMaintenanceCommand::RepairSemanticVectorStore => {
+            println!(
+                "{command_name} summary status=ok repositories={} repaired={}",
+                repositories.len(),
+                total_repaired
+            );
+        }
+        StorageMaintenanceCommand::Prune {
+            keep_manifest_snapshots,
+            keep_provenance_events,
+        } => {
+            println!(
+                "{command_name} summary status=ok repositories={} keep_manifest_snapshots={} keep_provenance_events={} manifest_snapshots_deleted={} provenance_events_deleted={}",
+                repositories.len(),
+                keep_manifest_snapshots,
+                keep_provenance_events,
+                total_manifest_snapshots_deleted,
+                total_provenance_events_deleted
+            );
+        }
+    }
+
     Ok(())
 }
 

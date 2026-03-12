@@ -228,7 +228,7 @@ Notes:
 - For Codex-style stdio MCP clients, prefer launching `frigg` with no startup `--workspace-root` args. That lets the MCP handshake complete before session-local workspace attach/status logic runs.
 - If Frigg starts without startup roots, the session stays detached until `workspace_attach` is called explicitly.
 - `workspace_current` is the read-only runtime status tool: it returns the session default repository, all attached repositories, runtime profile, watch/index health, active or recent runtime tasks, and recent provenance summaries.
-- Repository index `health.lexical` and `health.semantic` in `workspace_current` now reuse the same shared snapshot freshness semantics as watch/search startup status: expect reasons such as `missing_manifest_snapshot`, `stale_manifest_snapshot`, `manifest_valid_no_semantic_eligible_entries`, and `semantic_snapshot_missing_for_active_model`.
+- Repository index `health.lexical` and `health.semantic` in `workspace_current` now reuse the same shared snapshot freshness semantics as watch/search startup status and can also surface live semantic integrity drift: expect reasons such as `missing_manifest_snapshot`, `stale_manifest_snapshot`, `manifest_valid_no_semantic_eligible_entries`, `semantic_snapshot_missing_for_active_model`, and `semantic_vector_partition_out_of_sync` when the live semantic corpus and derived sqlite-vec rows drift apart.
 - Built-in watch runtime tasks now distinguish `watch_manifest_fast` (`changed_reindex`) from `watch_semantic_followup` (`semantic_refresh`) in `workspace_current.runtime.active_tasks` and `workspace_current.runtime.recent_tasks`.
 - When `RUST_LOG` is unset, stdio MCP launches default to an `error` tracing filter so raw clients do not need to drain routine startup/watch logs from stderr.
 - Set `RUST_LOG=info` or `RUST_LOG=debug` if you want startup and watch diagnostics over stdio.
@@ -337,17 +337,21 @@ frigg
 ```
 
 Important:
-- run a full `reindex` once when turning semantic runtime on for an already indexed workspace,
-- do not use `reindex --changed` for the first semantic backfill if nothing changed on disk,
-- after the first semantic population, `reindex --changed` is fine for incremental updates.
+- run one `reindex` pass after turning semantic runtime on for an already indexed workspace,
+- `reindex --changed` is allowed for the first semantic backfill: if the active `(repository, provider, model)` tuple has no live semantic head yet, Frigg escalates that pass to a full semantic rebuild even when the manifest snapshot is reused,
+- after the first semantic population, `reindex --changed` continues to advance the same live corpus incrementally.
 - if you enabled semantics in Codex config, run the full `reindex` before expecting `search_hybrid` to contribute semantic scores in MCP sessions.
+- semantic storage is one live corpus per `(repository, provider, model)` keyed by `semantic_head`; changed-only refreshes advance that corpus in place instead of keeping steady-state semantic snapshot partitions.
+- Frigg no longer falls back to older semantic snapshots. If the active manifest snapshot is not covered for the active provider/model, runtime health and search surface that missing live corpus directly.
+- Manifest snapshot retention is bounded to the latest `8` per repository by default while protecting any active `semantic_head` snapshot, and provenance retention is bounded to the latest `10_000` events.
+- `embedding_vectors` is a derived sqlite-vec live projection, not a snapshot-partitioned source of truth. If `workspace_current` or repository health reports `semantic_vector_partition_out_of_sync`, use the storage repair surface to rebuild sqlite-vec from the live semantic corpus.
 
 Semantic reindex troubleshooting:
 - semantic embedding failures now report `batch_index`, `total_batches`, `batch_size`, first/last chunk anchors, and sanitized request metrics such as `inputs`, `input_chars_total`, `body_bytes`, and `body_blake3`,
 - those diagnostics are intentionally content-safe: they do not include raw chunk text or API keys,
 - if a full semantic reindex still fails, use that batch context first before blaming `search_hybrid` ranking, because Frigg may still have zero persisted semantic embeddings.
-- if `search_hybrid` reports `semantic_status=degraded` with a reason that mentions a newer manifest snapshot and an older semantic snapshot, Frigg recovered from split snapshot state by using stale semantic embeddings; update to the fixed build and run a fresh full `frigg reindex --workspace-root .` to realign semantic storage.
-- if `search_hybrid` reports `semantic_status=unavailable`, Frigg could not find a semantic corpus for the active repository/provider/model combination and ranked the result set from lexical and graph signals only.
+- if `workspace_current` or repository health reports `semantic_vector_partition_out_of_sync`, the live semantic corpus and derived sqlite-vec projection diverged; run the storage repair surface to rebuild sqlite-vec from the live semantic corpus before blaming ranking.
+- if `search_hybrid` reports `semantic_status=unavailable`, Frigg could not find a live semantic corpus for the active repository/provider/model combination and ranked the result set from lexical and graph signals only.
 
 If semantic runtime is enabled correctly and embeddings exist, `search_hybrid` can return non-zero semantic scores.
 If startup succeeds but `search_hybrid` still reports `metadata.semantic_status=disabled`, the running Frigg process is not seeing the semantic runtime env/config you expect.

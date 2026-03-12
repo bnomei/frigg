@@ -1,5 +1,6 @@
 pub(crate) mod base;
 pub(crate) mod ci_scripts_ops;
+pub(crate) mod companion_tests;
 pub(crate) mod contracts;
 pub(crate) mod diversification;
 pub(crate) mod entrypoint;
@@ -23,6 +24,7 @@ pub(crate) fn evaluate(ctx: &SelectionFacts, trace: bool) -> PolicyEvaluation {
     novelty::apply(&mut program, ctx);
     runtime_witness::apply(&mut program, ctx);
     runtime_config::apply(&mut program, ctx);
+    companion_tests::apply(&mut program, ctx);
     laravel_ui::apply(&mut program, ctx);
     test_witness::apply(&mut program, ctx);
     navigation::apply(&mut program, ctx);
@@ -209,5 +211,46 @@ mod tests {
                 .contains(&"selection.diversification.mixed_query_first_plain_test_bonus")
         );
         assert!(bench_ids.contains(&"selection.diversification.mixed_query_bench_repeat_penalty"));
+    }
+
+    #[test]
+    fn policy_trace_selection_mixed_query_first_example_bonus_fires() {
+        let ctx = SelectionFacts {
+            wants_test_witness_recall: true,
+            wants_example_or_bench_witnesses: true,
+            is_example_support: true,
+            path_overlap: 1,
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true);
+        let rule_ids = trace_rule_ids(&evaluation);
+
+        assert!(rule_ids.contains(&"selection.diversification.mixed_query_first_example_bonus"));
+    }
+
+    #[test]
+    fn policy_trace_selection_runtime_companion_rules_prefer_runtime_adjacent_python_tests() {
+        let ctx = SelectionFacts {
+            wants_entrypoint_build_flow: true,
+            wants_runtime_companion_tests: true,
+            prefer_runtime_anchor_tests: true,
+            is_test_support: true,
+            is_runtime_anchor_test_support: true,
+            is_runtime_adjacent_python_test: true,
+            is_non_prefix_python_test_module: true,
+            runtime_family_prefix_overlap: 3,
+            path_depth: 6,
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true);
+        let rule_ids = trace_rule_ids(&evaluation);
+
+        assert!(rule_ids.contains(&"selection.companion.runtime_anchor_bonus"));
+        assert!(rule_ids.contains(&"selection.companion.runtime_adjacent_python_bonus"));
+        assert!(rule_ids.contains(&"selection.companion.non_prefix_python_bonus"));
+        assert!(rule_ids.contains(&"selection.companion.family_affinity_bonus"));
+        assert!(rule_ids.contains(&"selection.companion.deeper_path_bonus"));
     }
 }
