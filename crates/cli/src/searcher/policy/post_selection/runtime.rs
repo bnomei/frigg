@@ -898,6 +898,17 @@ pub(super) fn apply_runtime_companion_test_visibility(
         })
         .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
         .map(|entry| entry.document.path.clone());
+    let selected_best = selected_best.or_else(|| {
+        matches
+            .iter()
+            .filter(|entry| {
+                is_plain_test_support_path(&entry.document.path)
+                    && (!prefer_non_scripts_plain_tests
+                        || !surfaces::is_scripts_ops_path(&entry.document.path))
+            })
+            .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
+            .map(|entry| entry.document.path.clone())
+    });
 
     let grouped_candidate = ctx
         .candidate_pool

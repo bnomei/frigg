@@ -785,6 +785,79 @@ fn post_selection_policy_entrypoint_queries_prefer_prefix_python_tests_over_loos
 }
 
 #[test]
+fn post_selection_policy_test_focus_queries_recover_runtime_subject_surface_under_test_crowding()
+ {
+    let matches = vec![
+        make_ranked("tests/unit/auth_controller_test.rs", 0.98),
+        make_ranked("tests/unit/auth_controller_variant_00_test.rs", 0.97),
+        make_ranked("tests/unit/auth_controller_variant_01_test.rs", 0.96),
+    ];
+    let candidate_pool = vec![make_ranked("src/auth_controller.rs", 0.90)];
+    let intent = HybridRankingIntent::from_query("auth controller test coverage");
+    assert!(intent.wants_test_witness_recall);
+
+    let final_matches = apply_context(
+        matches,
+        &candidate_pool,
+        &[],
+        &intent,
+        "auth controller test coverage",
+        3,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"src/auth_controller.rs"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&"tests/unit/auth_controller_variant_01_test.rs"),
+        "runtime subject recovery should evict the weakest generic test crowding entry: {paths:?}"
+    );
+}
+
+#[test]
+fn post_selection_policy_test_focus_queries_recover_runtime_subject_surface_from_witness_hits() {
+    let matches = vec![
+        make_ranked("tests/unit/auth_controller_test.rs", 0.98),
+        make_ranked("tests/unit/auth_controller_variant_00_test.rs", 0.97),
+        make_ranked("tests/unit/auth_controller_variant_01_test.rs", 0.96),
+    ];
+    let witness_hits = vec![make_witness("src/auth_controller.rs", 0.32)];
+    let intent = HybridRankingIntent::from_query("auth controller test coverage");
+    assert!(intent.wants_test_witness_recall);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &[],
+        &witness_hits,
+        &intent,
+        "auth controller test coverage",
+        3,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"src/auth_controller.rs"),
+        "final paths: {paths:?}; trace events: {}",
+        trace.events.len()
+    );
+    assert!(
+        trace.events.iter().any(|event| {
+            event.rule_id == "post_selection.runtime_companion_surface"
+                && matches!(event.action, PostSelectionRepairAction::Replaced)
+        }),
+        "runtime companion surface rule should record a replacement repair"
+    );
+}
+
+#[test]
 fn post_selection_policy_entrypoint_queries_promote_cli_command_entrypoints_over_web_runtime_noise()
 {
     let matches = vec![

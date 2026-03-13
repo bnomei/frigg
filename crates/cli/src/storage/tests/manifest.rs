@@ -288,3 +288,185 @@ fn delete_snapshot_removes_path_witness_projection_rows() -> FriggResult<()> {
     cleanup_db(&db_path);
     Ok(())
 }
+
+#[test]
+fn test_subject_projection_replace_and_load_roundtrip() -> FriggResult<()> {
+    let db_path = temp_db_path("test-subject-projection-roundtrip");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.replace_test_subject_projections_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &[
+            test_subject_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "tests/unit/user_service_test.rs",
+                "src/user_service.rs",
+                r#"["user","service"]"#,
+                19,
+                r#"{"exact_stem_match":true}"#,
+            ),
+            test_subject_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "tests/integration/auth_spec.py",
+                "src/auth.py",
+                r#"["auth"]"#,
+                12,
+                r#"{"same_language":true}"#,
+            ),
+        ],
+    )?;
+
+    let rows =
+        storage.load_test_subject_projections_for_repository_snapshot("repo-1", "snapshot-001")?;
+    assert_eq!(
+        rows,
+        vec![
+            test_subject_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "tests/integration/auth_spec.py",
+                "src/auth.py",
+                r#"["auth"]"#,
+                12,
+                r#"{"same_language":true}"#,
+            ),
+            test_subject_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "tests/unit/user_service_test.rs",
+                "src/user_service.rs",
+                r#"["user","service"]"#,
+                19,
+                r#"{"exact_stem_match":true}"#,
+            ),
+        ]
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn entrypoint_surface_projection_replace_and_load_roundtrip() -> FriggResult<()> {
+    let db_path = temp_db_path("entrypoint-surface-projection-roundtrip");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.replace_entrypoint_surface_projections_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &[
+            entrypoint_surface_projection_record(
+                "repo-1",
+                "snapshot-001",
+                ".github/workflows/ci.yml",
+                "project",
+                "project",
+                r#"["ci","workflow"]"#,
+                r#"["automation","workflow"]"#,
+                r#"{"is_ci_workflow":true}"#,
+            ),
+            entrypoint_surface_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "src/main.rs",
+                "runtime",
+                "runtime",
+                r#"["main"]"#,
+                r#"["entrypoint","runtime"]"#,
+                r#"{"is_runtime_entrypoint":true}"#,
+            ),
+        ],
+    )?;
+
+    let rows = storage
+        .load_entrypoint_surface_projections_for_repository_snapshot("repo-1", "snapshot-001")?;
+    assert_eq!(
+        rows,
+        vec![
+            entrypoint_surface_projection_record(
+                "repo-1",
+                "snapshot-001",
+                ".github/workflows/ci.yml",
+                "project",
+                "project",
+                r#"["ci","workflow"]"#,
+                r#"["automation","workflow"]"#,
+                r#"{"is_ci_workflow":true}"#,
+            ),
+            entrypoint_surface_projection_record(
+                "repo-1",
+                "snapshot-001",
+                "src/main.rs",
+                "runtime",
+                "runtime",
+                r#"["main"]"#,
+                r#"["entrypoint","runtime"]"#,
+                r#"{"is_runtime_entrypoint":true}"#,
+            ),
+        ]
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn delete_snapshot_removes_overlay_projection_rows() -> FriggResult<()> {
+    let db_path = temp_db_path("overlay-projection-delete-snapshot");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
+    storage.replace_test_subject_projections_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &[test_subject_projection_record(
+            "repo-1",
+            "snapshot-001",
+            "tests/unit/user_service_test.rs",
+            "src/user_service.rs",
+            r#"["user","service"]"#,
+            19,
+            r#"{"exact_stem_match":true}"#,
+        )],
+    )?;
+    storage.replace_entrypoint_surface_projections_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &[entrypoint_surface_projection_record(
+            "repo-1",
+            "snapshot-001",
+            "src/main.rs",
+            "runtime",
+            "runtime",
+            r#"["main"]"#,
+            r#"["entrypoint","runtime"]"#,
+            r#"{"is_runtime_entrypoint":true}"#,
+        )],
+    )?;
+
+    storage.delete_snapshot("snapshot-001")?;
+
+    assert!(
+        storage
+            .load_test_subject_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .is_empty()
+    );
+    assert!(
+        storage
+            .load_entrypoint_surface_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .is_empty()
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}

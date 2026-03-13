@@ -400,6 +400,68 @@ fn hybrid_ranking_semantic_ok_empty_channel_when_active_index_is_filtered_out() 
 }
 
 #[test]
+fn hybrid_ranking_semantic_reports_unsupported_language_filter_as_unavailable() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-semantic-unsupported-language-filter");
+    prepare_workspace(
+        &root,
+        &[("src/lib.rs", "pub fn rust_only() { let _ = \"needle\"; }\n")],
+    )?;
+    seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/lib.rs"])?;
+    seed_semantic_embeddings(
+        &root,
+        "repo-001",
+        "snapshot-001",
+        &[semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/lib.rs",
+            0,
+            vec![1.0, 0.0],
+        )],
+    )?;
+
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.semantic_runtime = semantic_runtime_enabled(false);
+    let searcher = TextSearcher::new(config);
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let semantic_executor = MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]);
+
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "needle".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(true),
+        },
+        SearchFilters {
+            repository_id: None,
+            language: Some("typescript".to_owned()),
+        },
+        &credentials,
+        &semantic_executor,
+    )?;
+
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Unavailable);
+    assert!(!output.note.semantic_enabled);
+    assert_eq!(output.note.semantic_hit_count, 0);
+    assert_eq!(output.note.semantic_match_count, 0);
+    assert_eq!(
+        output.note.semantic_reason.as_deref(),
+        Some("requested language filter 'typescript' does not support semantic_chunking")
+    );
+    assert!(
+        output.matches.is_empty(),
+        "unsupported semantic language filters should skip semantic retrieval and keep the result set bounded"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_manifest_lacks_embeddings()
 -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-semantic-fallback-split-snapshot");
@@ -743,6 +805,8 @@ fn graph_channel_falls_back_to_exact_stem_candidates_when_lexical_paths_have_no_
             line: 1,
             column: 1,
             excerpt: "OrderHandler handle listener overview".to_owned(),
+            witness_score_hint_millis: None,
+            witness_provenance_ids: None,
         }],
         5,
     )?;

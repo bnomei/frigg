@@ -5,6 +5,7 @@ use rmcp::model::{
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::languages::{LanguageSupportCapability, SymbolLanguage};
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 
 pub(crate) const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
@@ -16,6 +17,7 @@ pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 struct LanguageSupportEntry {
     id: &'static str,
     display_name: &'static str,
+    capabilities: Value,
     search_outline: &'static str,
     navigation: &'static str,
     semantic_retrieval: &'static str,
@@ -23,90 +25,20 @@ struct LanguageSupportEntry {
 }
 
 fn support_matrix_json() -> String {
-    let languages = vec![
-        LanguageSupportEntry {
-            id: "rust",
-            display_name: "Rust",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "php",
-            display_name: "PHP",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "blade",
-            display_name: "Blade",
-            search_outline: "supported_template_surface",
-            navigation: "bounded_source_template_navigation",
-            semantic_retrieval: "bounded_template_retrieval",
-            capability_note: "template_metadata_livewire_flux",
-        },
-        LanguageSupportEntry {
-            id: "typescript_tsx",
-            display_name: "TypeScript / TSX",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "python",
-            display_name: "Python",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "go",
-            display_name: "Go",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "kotlin",
-            display_name: "Kotlin / KTS",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "lua",
-            display_name: "Lua",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "roc",
-            display_name: "Roc",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-        LanguageSupportEntry {
-            id: "nim",
-            display_name: "Nim",
-            search_outline: "supported_source_language",
-            navigation: "read_only_source_graph_or_artifact_assisted",
-            semantic_retrieval: "optional_when_enabled",
-            capability_note: "general_source_support",
-        },
-    ];
+    let languages = SymbolLanguage::ALL
+        .into_iter()
+        .map(|language| LanguageSupportEntry {
+            id: support_matrix_language_id(language),
+            display_name: language.display_name(),
+            capabilities: language_capabilities_json(language),
+            search_outline: support_matrix_search_outline(language),
+            navigation: support_matrix_navigation(language),
+            semantic_retrieval: support_matrix_semantic_retrieval(language),
+            capability_note: support_matrix_capability_note(language),
+        })
+        .collect::<Vec<_>>();
     serde_json::to_string_pretty(&json!({
-        "schema_id": "frigg.policy.support_matrix.v2",
+        "schema_id": "frigg.policy.support_matrix.v4",
         "product": "frigg",
         "product_boundary": "local-first deterministic code-evidence engine delivered through MCP",
         "stable_core": [
@@ -121,36 +53,93 @@ fn support_matrix_json() -> String {
             "external SCIP ingestion",
             "built-in watch mode"
         ],
-        "advanced_consumers": [
-            "explore",
-            "deep_search_*",
-            "self-improvement loop"
-        ],
+        "advanced_consumers": support_matrix_advanced_consumers(),
         "language_support_notes": [
             "Frigg currently supports the listed languages for source-backed search, outline, structural, and hybrid retrieval workflows.",
             "Navigation stays read-only and may combine source heuristics, graph evidence, and optional external artifacts.",
             "Semantic retrieval is optional acceleration only and never the grounding layer."
         ],
+        "capability_tiers": {
+            "core": "capability is part of FRIGG's stable read-only core contract for that language",
+            "optional_accelerator": "capability is an optional accelerator that only contributes when runtime configuration and repository state make it available",
+            "unsupported": "capability is not currently provided for that language in the runtime registry"
+        },
         "languages": languages
     }))
     .expect("support matrix JSON should serialize")
 }
 
-fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
+fn support_matrix_language_id(language: SymbolLanguage) -> &'static str {
+    match language {
+        SymbolLanguage::TypeScript => "typescript_tsx",
+        other => other.as_str(),
+    }
+}
+
+fn support_matrix_search_outline(language: SymbolLanguage) -> &'static str {
+    match language {
+        SymbolLanguage::Blade => "supported_template_surface",
+        _ => "supported_source_language",
+    }
+}
+
+fn support_matrix_navigation(language: SymbolLanguage) -> &'static str {
+    match language {
+        SymbolLanguage::Blade => "bounded_source_template_navigation",
+        _ => "read_only_source_graph_or_artifact_assisted",
+    }
+}
+
+fn support_matrix_semantic_retrieval(language: SymbolLanguage) -> &'static str {
+    if language.supports_semantic_chunking() {
+        "optional_when_enabled"
+    } else {
+        "unsupported"
+    }
+}
+
+fn support_matrix_capability_note(language: SymbolLanguage) -> &'static str {
+    match language {
+        SymbolLanguage::Blade => "template_metadata_livewire_flux",
+        _ => "general_source_support",
+    }
+}
+
+fn language_capabilities_json(language: SymbolLanguage) -> Value {
+    let mut capabilities = Map::new();
+    for capability in LanguageSupportCapability::ALL {
+        capabilities.insert(
+            capability.as_str().to_owned(),
+            Value::String(language.capability_tier(capability).as_str().to_owned()),
+        );
+    }
+    Value::Object(capabilities)
+}
+
+fn extended_only_tool_names() -> Vec<String> {
     let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
     let extended = manifest_for_tool_surface_profile(ToolSurfaceProfile::Extended);
-    let extended_only = extended
+    extended
         .tool_names
-        .iter()
+        .into_iter()
         .filter(|tool_name| !core.tool_names.contains(tool_name))
-        .cloned()
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn support_matrix_advanced_consumers() -> Vec<String> {
+    let mut consumers = extended_only_tool_names();
+    consumers.push("self_improvement_loop".to_owned());
+    consumers
+}
+
+fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
+    let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
         "default_profile": ToolSurfaceProfile::Core.as_str(),
         "active_profile": active_profile.as_str(),
         "core_tools": core.tool_names,
-        "extended_only_tools": extended_only,
+        "extended_only_tools": extended_only_tool_names(),
         "guidance": [
             "Use shell tools for trivial local literal scans and one-off file reads in the checked-out workspace.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
@@ -280,6 +269,11 @@ pub(crate) fn read_guidance_prompt(
             ),
             PromptMessage::new_resource_link(
                 PromptMessageRole::Assistant,
+                RawResource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
+                    .no_annotation(),
+            ),
+            PromptMessage::new_resource_link(
+                PromptMessageRole::Assistant,
                 RawResource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
                     .no_annotation(),
             ),
@@ -294,6 +288,7 @@ mod tests {
         ROUTING_GUIDE_PROMPT_NAME, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
         read_guidance_prompt, read_policy_resource,
     };
+    use crate::languages::{LanguageSupportCapability, SymbolLanguage};
     use crate::mcp::tool_surface::ToolSurfaceProfile;
     use rmcp::model::ResourceContents;
     use serde_json::{Value, json};
@@ -313,6 +308,19 @@ mod tests {
             serde_json::from_str::<Value>(&json).expect("support matrix JSON should parse");
         assert!(parsed.get("next_language_priority").is_none());
         assert!(parsed.get("language_rollout_policy").is_none());
+        assert_eq!(parsed["schema_id"], json!("frigg.policy.support_matrix.v4"));
+        assert_eq!(
+            parsed["capability_tiers"]["core"].as_str(),
+            Some(
+                "capability is part of FRIGG's stable read-only core contract for that language"
+            )
+        );
+        assert_eq!(
+            parsed["capability_tiers"]["optional_accelerator"].as_str(),
+            Some(
+                "capability is an optional accelerator that only contributes when runtime configuration and repository state make it available"
+            )
+        );
         for language_id in [
             "rust",
             "php",
@@ -344,6 +352,99 @@ mod tests {
                         && entry["capability_note"] == json!("template_metadata_livewire_flux")
                 })
         );
+        assert_eq!(
+            parsed["languages"]
+                .as_array()
+                .expect("languages should be an array")
+                .iter()
+                .find(|entry| entry["id"] == json!("typescript_tsx"))
+                .and_then(|entry| entry.get("capabilities"))
+                .and_then(|value| value.get("semantic_chunking"))
+                .and_then(|value| value.as_str()),
+            Some("unsupported")
+        );
+        assert_eq!(
+            parsed["languages"]
+                .as_array()
+                .expect("languages should be an array")
+                .iter()
+                .find(|entry| entry["id"] == json!("rust"))
+                .and_then(|entry| entry.get("capabilities"))
+                .and_then(|value| value.get("precise_artifact_assist"))
+                .and_then(|value| value.as_str()),
+            Some("optional_accelerator")
+        );
+    }
+
+    #[test]
+    fn support_matrix_capabilities_match_language_registry() {
+        let json = resource_text(SUPPORT_MATRIX_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("support matrix JSON should parse");
+        let languages = parsed["languages"]
+            .as_array()
+            .expect("languages should be an array");
+
+        for language in SymbolLanguage::ALL {
+            let expected_id = if matches!(language, SymbolLanguage::TypeScript) {
+                "typescript_tsx"
+            } else {
+                language.as_str()
+            };
+            let entry = languages
+                .iter()
+                .find(|entry| entry["id"] == json!(expected_id))
+                .unwrap_or_else(|| panic!("expected {expected_id} to be listed"));
+            for capability in LanguageSupportCapability::ALL {
+                let expected = language.capability_tier(capability).as_str();
+                assert_eq!(
+                    entry["capabilities"][capability.as_str()].as_str(),
+                    Some(expected),
+                    "expected {expected_id} capability {} to match the registry",
+                    capability.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn support_matrix_advanced_consumers_follow_extended_tool_surface_manifest() {
+        let json = resource_text(SUPPORT_MATRIX_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("support matrix JSON should parse");
+        let advanced_consumers = parsed["advanced_consumers"]
+            .as_array()
+            .expect("advanced_consumers should be an array");
+        let core =
+            crate::mcp::tool_surface::manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+        let extended = crate::mcp::tool_surface::manifest_for_tool_surface_profile(
+            ToolSurfaceProfile::Extended,
+        );
+
+        for tool_name in extended
+            .tool_names
+            .iter()
+            .filter(|tool_name| !core.tool_names.contains(tool_name))
+        {
+            assert!(
+                advanced_consumers
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(tool_name.as_str())),
+                "expected advanced_consumers to include extended-only tool {tool_name}"
+            );
+        }
+        assert!(
+            !advanced_consumers
+                .iter()
+                .any(|entry| entry.as_str() == Some("search_text")),
+            "stable-core tools must not leak into advanced_consumers"
+        );
+        assert!(
+            advanced_consumers
+                .iter()
+                .any(|entry| entry.as_str() == Some("self_improvement_loop")),
+            "support matrix should keep non-tool advanced consumers explicit"
+        );
     }
 
     #[test]
@@ -361,6 +462,45 @@ mod tests {
     }
 
     #[test]
+    fn tool_surface_policy_matches_profile_manifests() {
+        let json = resource_text(TOOL_SURFACE_RESOURCE_URI, ToolSurfaceProfile::Extended);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("tool surface policy JSON should parse");
+        let core =
+            crate::mcp::tool_surface::manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+        let extended = crate::mcp::tool_surface::manifest_for_tool_surface_profile(
+            ToolSurfaceProfile::Extended,
+        );
+        let expected_extended_only = extended
+            .tool_names
+            .iter()
+            .filter(|tool_name| !core.tool_names.contains(tool_name))
+            .cloned()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parsed["default_profile"].as_str(),
+            Some(ToolSurfaceProfile::Core.as_str())
+        );
+        assert_eq!(
+            parsed["core_tools"].as_array(),
+            Some(
+                &core
+                    .tool_names
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!(
+            parsed["extended_only_tools"].as_array(),
+            Some(&expected_extended_only)
+        );
+    }
+
+    #[test]
     fn routing_prompt_links_policy_resources() {
         let prompt = read_guidance_prompt(
             ROUTING_GUIDE_PROMPT_NAME,
@@ -371,6 +511,6 @@ mod tests {
             ToolSurfaceProfile::Extended,
         )
         .expect("routing prompt should exist");
-        assert_eq!(prompt.messages.len(), 3);
+        assert_eq!(prompt.messages.len(), 4);
     }
 }

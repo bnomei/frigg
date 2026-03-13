@@ -8,7 +8,9 @@ mod supervisor;
 #[path = "watch/tests.rs"]
 mod tests;
 
-pub use supervisor::{WatchRuntime, maybe_start_watch_runtime};
+pub use supervisor::{
+    RepositoryCacheInvalidationCallback, WatchRuntime, maybe_start_watch_runtime,
+};
 
 #[cfg(test)]
 pub(crate) use crate::workspace_ignores::build_root_ignore_matcher;

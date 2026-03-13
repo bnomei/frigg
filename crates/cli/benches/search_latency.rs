@@ -27,6 +27,8 @@ const BENCH_GRAPH_QUERY: &str = "OrderHandler handle listener";
 const BENCH_PATH_WITNESS_QUERY: &str =
     "entry point bootstrap build flow command runner main config";
 const BENCH_BENCHMARK_WITNESS_QUERY: &str = "benchmark latest report budget metrics";
+const BENCH_TEST_SUBJECT_QUERY: &str = "auth controller test coverage";
+const BENCH_TEST_SUBJECT_LIMIT: usize = 5;
 
 static BENCH_ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 static BENCH_INDEXED_ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -102,6 +104,7 @@ fn search_latency_benchmarks(c: &mut Criterion) {
     assert_hybrid_graph_target_evidence_workload(&searcher);
     assert_hybrid_benchmark_witness_workload(&witness_searcher);
     assert_hybrid_path_witness_build_flow_workload(&witness_searcher);
+    assert_hybrid_test_subject_recall_workload(&witness_searcher);
     assert_hybrid_semantic_toggle_off_workload(&searcher);
     assert_hybrid_semantic_degraded_workload(&semantic_searcher);
     write_search_stage_attribution_snapshot(vec![
@@ -151,6 +154,16 @@ fn search_latency_benchmarks(c: &mut Criterion) {
             SearchHybridQuery {
                 query: BENCH_PATH_WITNESS_QUERY.to_owned(),
                 limit: BENCH_PATH_WITNESS_LIMIT,
+                weights: Default::default(),
+                semantic: Some(false),
+            },
+        ),
+        hybrid_stage_snapshot(
+            &witness_searcher,
+            "search_latency/hybrid/test-subject-recall",
+            SearchHybridQuery {
+                query: BENCH_TEST_SUBJECT_QUERY.to_owned(),
+                limit: BENCH_TEST_SUBJECT_LIMIT,
                 weights: Default::default(),
                 semantic: Some(false),
             },
@@ -382,6 +395,21 @@ fn search_latency_benchmarks(c: &mut Criterion) {
         });
     });
 
+    group.bench_function(BenchmarkId::new("hybrid", "test-subject-recall"), |b| {
+        let query = SearchHybridQuery {
+            query: BENCH_TEST_SUBJECT_QUERY.to_owned(),
+            limit: BENCH_TEST_SUBJECT_LIMIT,
+            weights: Default::default(),
+            semantic: Some(false),
+        };
+        b.iter(|| {
+            let output = witness_searcher
+                .search_hybrid_with_filters(query.clone(), SearchFilters::default())
+                .expect("hybrid test-subject benchmark should not fail");
+            criterion::black_box(output);
+        });
+    });
+
     group.finish();
 }
 
@@ -521,6 +549,7 @@ fn populate_repo_fixture(root: &Path, repo_idx: usize, include_witness_fixtures:
             "src-tauri/src/modules",
             "src-tauri/src/models",
             "src-tauri/src/commands",
+            "tests/unit",
         ] {
             fs::create_dir_all(root.join(rel_path))
                 .expect("path-witness benchmark fixture directory should be creatable");
@@ -584,9 +613,34 @@ fn populate_repo_fixture(root: &Path, repo_idx: usize, include_witness_fixtures:
                        - name: Publish release artifacts\n\
                          run: echo publish release artifacts\n",
             ),
+            (
+                "src/auth_controller.rs",
+                "pub fn auth_controller() {\n\
+                 // auth controller test coverage runtime subject fixture\n\
+                 }\n",
+            ),
+            (
+                "tests/unit/auth_controller_test.rs",
+                "#[test]\n\
+                 fn auth_controller_test() {\n\
+                 // auth controller test coverage runtime subject fixture\n\
+                 }\n",
+            ),
         ] {
             fs::write(root.join(rel_path), content)
                 .expect("path-witness benchmark fixture file should be writable");
+        }
+
+        for index in 0..12 {
+            let rel_path = format!("tests/unit/auth_controller_variant_{index:02}_test.rs");
+            let content = format!(
+                "#[test]\n\
+                 fn auth_controller_variant_{index:02}_test() {{\n\
+                 // auth controller test coverage crowding fixture variant {index:02}\n\
+                 }}\n"
+            );
+            fs::write(root.join(rel_path), content)
+                .expect("test-subject benchmark fixture file should be writable");
         }
     }
 }
@@ -839,6 +893,59 @@ fn assert_hybrid_path_witness_build_flow_workload(searcher: &TextSearcher) {
     assert!(
         stage_attribution.witness_scoring.output_count > 0,
         "path-witness benchmark should report witness scoring output: {stage_attribution:?}"
+    );
+}
+
+fn assert_hybrid_test_subject_recall_workload(searcher: &TextSearcher) {
+    let query = SearchHybridQuery {
+        query: BENCH_TEST_SUBJECT_QUERY.to_owned(),
+        limit: BENCH_TEST_SUBJECT_LIMIT,
+        weights: Default::default(),
+        semantic: Some(false),
+    };
+    let first = searcher
+        .search_hybrid_with_filters(query.clone(), SearchFilters::default())
+        .expect("hybrid test-subject benchmark fixture should be searchable");
+    let second = searcher
+        .search_hybrid_with_filters(query, SearchFilters::default())
+        .expect("hybrid test-subject benchmark fixture should be deterministic");
+
+    let ranked_paths = first
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ranked_paths
+            .iter()
+            .take(BENCH_TEST_SUBJECT_LIMIT)
+            .any(|path| *path == "src/auth_controller.rs"),
+        "test-subject workload should surface the runtime subject under test near the top: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths
+            .iter()
+            .take(BENCH_TEST_SUBJECT_LIMIT)
+            .any(|path| path.starts_with("tests/unit/auth_controller")),
+        "test-subject workload should retain at least one matching test-family witness near the top: {ranked_paths:?}"
+    );
+    assert_eq!(first.note.semantic_status, HybridSemanticStatus::Disabled);
+    assert!(!first.note.semantic_enabled);
+    assert_eq!(
+        first.matches, second.matches,
+        "hybrid test-subject workload should be deterministic across repeated runs"
+    );
+    assert_eq!(
+        first.note, second.note,
+        "hybrid test-subject workload should emit deterministic note metadata"
+    );
+    let stage_attribution = first
+        .stage_attribution
+        .as_ref()
+        .expect("hybrid test-subject workload should expose stage attribution");
+    assert!(
+        stage_attribution.witness_scoring.output_count > 0,
+        "test-subject workload should report witness scoring output: {stage_attribution:?}"
     );
 }
 

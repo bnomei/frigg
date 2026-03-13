@@ -14,6 +14,11 @@ use crate::mcp::types::{
 
 use super::*;
 
+struct ResolvedDeepSearchPlaybookStep<'a> {
+    step: &'a DeepSearchPlaybookStep,
+    tool: DeepSearchStepTool,
+}
+
 impl DeepSearchHarness {
     pub fn new(server: FriggMcpServer) -> Self {
         Self { server }
@@ -59,16 +64,11 @@ impl DeepSearchHarness {
         &self,
         playbook: &DeepSearchPlaybook,
     ) -> FriggResult<DeepSearchTraceArtifact> {
+        let resolved_steps = resolve_playbook_steps(playbook)?;
         let mut trace_steps = Vec::with_capacity(playbook.steps.len());
-        for (step_index, step) in playbook.steps.iter().enumerate() {
-            if !DEEP_SEARCH_ALLOWED_STEP_TOOLS.contains(&step.tool_name.as_str()) {
-                return Err(FriggError::InvalidInput(format!(
-                    "unsupported tool in playbook step '{}': {}",
-                    step.step_id, step.tool_name
-                )));
-            }
-            let params_json = canonical_json_string(&step.params)?;
-            let outcome = self.run_step(step).await;
+        for (step_index, step) in resolved_steps.into_iter().enumerate() {
+            let params_json = canonical_json_string(&step.step.params)?;
+            let outcome = self.run_resolved_step(&step).await;
             if let DeepSearchTraceOutcome::Err {
                 message,
                 error_code: Some(error_code),
@@ -78,14 +78,14 @@ impl DeepSearchHarness {
                 if error_code == "invalid_params" {
                     return Err(FriggError::InvalidInput(format!(
                         "deep-search playbook step '{}' failed with invalid_params: {message}",
-                        step.step_id
+                        step.step.step_id
                     )));
                 }
             }
             trace_steps.push(DeepSearchTraceStep {
                 step_index,
-                step_id: step.step_id.clone(),
-                tool_name: step.tool_name.clone(),
+                step_id: step.step.step_id.clone(),
+                tool_name: step.tool.as_str().to_owned(),
                 params_json,
                 outcome,
             });
@@ -180,10 +180,28 @@ impl DeepSearchHarness {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) async fn run_step(&self, step: &DeepSearchPlaybookStep) -> DeepSearchTraceOutcome {
-        let result = match step.tool_name.as_str() {
-            "list_repositories" => {
-                let params = decode_params::<ListRepositoriesParams>(&step.params);
+        let resolved = match resolve_step_tool(step) {
+            Ok(tool) => ResolvedDeepSearchPlaybookStep { step, tool },
+            Err(error) => {
+                return DeepSearchTraceOutcome::Err {
+                    code: "INVALID_PARAMS".to_owned(),
+                    message: error.to_string(),
+                    error_code: Some("invalid_params".to_owned()),
+                };
+            }
+        };
+        self.run_resolved_step(&resolved).await
+    }
+
+    async fn run_resolved_step(
+        &self,
+        step: &ResolvedDeepSearchPlaybookStep<'_>,
+    ) -> DeepSearchTraceOutcome {
+        let result = match step.tool {
+            DeepSearchStepTool::ListRepositories => {
+                let params = decode_params::<ListRepositoriesParams>(&step.step.params);
                 match params {
                     Ok(params) => match self.server.list_repositories(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
@@ -192,8 +210,8 @@ impl DeepSearchHarness {
                     Err(err) => Err(err),
                 }
             }
-            "read_file" => {
-                let params = decode_params::<ReadFileParams>(&step.params);
+            DeepSearchStepTool::ReadFile => {
+                let params = decode_params::<ReadFileParams>(&step.step.params);
                 match params {
                     Ok(params) => match self.server.read_file(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
@@ -202,8 +220,8 @@ impl DeepSearchHarness {
                     Err(err) => Err(err),
                 }
             }
-            "search_text" => {
-                let params = decode_params::<SearchTextParams>(&step.params);
+            DeepSearchStepTool::SearchText => {
+                let params = decode_params::<SearchTextParams>(&step.step.params);
                 match params {
                     Ok(params) => match self.server.search_text(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
@@ -212,8 +230,8 @@ impl DeepSearchHarness {
                     Err(err) => Err(err),
                 }
             }
-            "search_symbol" => {
-                let params = decode_params::<SearchSymbolParams>(&step.params);
+            DeepSearchStepTool::SearchSymbol => {
+                let params = decode_params::<SearchSymbolParams>(&step.step.params);
                 match params {
                     Ok(params) => match self.server.search_symbol(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
@@ -222,8 +240,8 @@ impl DeepSearchHarness {
                     Err(err) => Err(err),
                 }
             }
-            "find_references" => {
-                let params = decode_params::<FindReferencesParams>(&step.params);
+            DeepSearchStepTool::FindReferences => {
+                let params = decode_params::<FindReferencesParams>(&step.step.params);
                 match params {
                     Ok(params) => match self.server.find_references(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
@@ -232,15 +250,11 @@ impl DeepSearchHarness {
                     Err(err) => Err(err),
                 }
             }
-            _ => Err(DeepSearchStepError::invalid_params(format!(
-                "unsupported tool in playbook step '{}': {}",
-                step.step_id, step.tool_name
-            ))),
         };
 
         match result {
             Ok(response) => {
-                let normalized = normalize_trace_response_for_tool(&step.tool_name, response);
+                let normalized = normalize_trace_response_for_tool(step.tool.as_str(), response);
                 match canonical_json_string(&normalized) {
                     Ok(response_json) => DeepSearchTraceOutcome::Ok { response_json },
                     Err(err) => DeepSearchTraceOutcome::Err {
@@ -285,6 +299,29 @@ fn normalize_list_repositories_response(response: Value) -> Value {
         .collect::<Vec<_>>();
 
     json!({ "repositories": normalized })
+}
+
+fn resolve_playbook_steps<'a>(
+    playbook: &'a DeepSearchPlaybook,
+) -> FriggResult<Vec<ResolvedDeepSearchPlaybookStep<'a>>> {
+    playbook
+        .steps
+        .iter()
+        .map(|step| {
+            resolve_step_tool(step).map(|tool| ResolvedDeepSearchPlaybookStep { step, tool })
+        })
+        .collect()
+}
+
+fn resolve_step_tool(step: &DeepSearchPlaybookStep) -> FriggResult<DeepSearchStepTool> {
+    DeepSearchStepTool::from_tool_name(step.tool_name.as_str()).ok_or_else(|| {
+        FriggError::InvalidInput(format!(
+            "unsupported tool in playbook step '{}': {} (allowed tools: {})",
+            step.step_id,
+            step.tool_name,
+            allowed_step_tools().join(", ")
+        ))
+    })
 }
 
 #[derive(Debug)]

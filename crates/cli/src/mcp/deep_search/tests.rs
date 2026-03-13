@@ -1,9 +1,10 @@
 use super::runtime::{decode_params, diff_trace_artifacts, normalize_trace_response_for_tool};
 use super::{
-    DeepSearchHarness, DeepSearchPlaybookStep, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
-    DeepSearchTraceStep,
+    DeepSearchHarness, DeepSearchPlaybook, DeepSearchPlaybookStep, DeepSearchTraceArtifact,
+    DeepSearchTraceOutcome, DeepSearchTraceStep, allowed_step_tools,
 };
 use crate::domain::FriggError;
+use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{ReadFileParams, SearchTextParams};
 use crate::settings::FriggConfig;
 use serde_json::{Value, json};
@@ -191,6 +192,62 @@ fn playbook_suite_decode_params_wraps_type_errors_as_invalid_params() {
     assert_eq!(error.error_code.as_deref(), Some("invalid_params"));
     assert!(error.message.contains("invalid playbook step params"));
     assert!(error.message.contains("expected a string"));
+}
+
+#[test]
+fn playbook_suite_allowed_step_tools_remain_subset_of_core_manifest() {
+    let core_tools = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core)
+        .tool_names
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    for tool_name in allowed_step_tools() {
+        assert!(
+            core_tools.contains(*tool_name),
+            "deep-search allowed step tool must remain in the stable core surface: {tool_name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn playbook_suite_validates_all_step_tools_before_executing_any_step() {
+    let harness = test_harness();
+    let playbook = DeepSearchPlaybook {
+        playbook_id: "preflight-tool-validation".to_owned(),
+        steps: vec![
+            DeepSearchPlaybookStep {
+                step_id: "tool-001".to_owned(),
+                tool_name: "search_text".to_owned(),
+                params: json!({
+                    "query": "",
+                    "repository_id": "repo-001",
+                }),
+            },
+            DeepSearchPlaybookStep {
+                step_id: "tool-002".to_owned(),
+                tool_name: "write_file".to_owned(),
+                params: json!({ "path": "src/lib.rs" }),
+            },
+        ],
+    };
+
+    let error = harness
+        .run_playbook(&playbook)
+        .await
+        .expect_err("unsupported step tools should be rejected before executing earlier steps");
+    let message = invalid_input_message(error);
+
+    assert!(
+        message.contains("tool-002"),
+        "preflight validation should point at the unsupported step, got: {message}"
+    );
+    assert!(
+        message.contains("allowed tools:"),
+        "preflight validation should surface the stable-core allowlist, got: {message}"
+    );
+    assert!(
+        !message.contains("failed with invalid_params"),
+        "unsupported-tool validation should happen before earlier step execution, got: {message}"
+    );
 }
 
 #[test]

@@ -143,6 +143,13 @@ impl ValidatedManifestCandidateCache {
         );
     }
 
+    pub(crate) fn is_dirty_root(&self, root: &Path) -> bool {
+        matches!(
+            self.entries.get(&Self::cache_key(root)),
+            Some(ValidatedManifestCandidateCacheEntry::Dirty)
+        )
+    }
+
     fn cache_key(root: &Path) -> ValidatedManifestCandidateCacheKey {
         ValidatedManifestCandidateCacheKey {
             root: root.to_path_buf(),

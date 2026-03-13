@@ -1,6 +1,39 @@
 use super::*;
 
 impl FriggMcpServer {
+    pub(super) fn invalidate_repository_search_response_caches(&self, repository_id: &str) {
+        self.search_text_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !response_cache_scopes_include_repository(
+                    repository_id,
+                    &key.scoped_repository_ids,
+                    &key.freshness_scopes,
+                )
+            });
+        self.search_hybrid_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !response_cache_scopes_include_repository(
+                    repository_id,
+                    &key.scoped_repository_ids,
+                    &key.freshness_scopes,
+                )
+            });
+        self.search_symbol_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !response_cache_scopes_include_repository(
+                    repository_id,
+                    &key.scoped_repository_ids,
+                    &key.freshness_scopes,
+                )
+            });
+    }
+
     pub(super) async fn search_text_impl(
         &self,
         params: SearchTextParams,
@@ -55,14 +88,23 @@ impl FriggMcpServer {
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
-                let cache_key = SearchTextResponseCacheKey {
-                    scoped_repository_ids: scoped_repository_ids.clone(),
-                    query: query.clone(),
-                    pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
-                    path_regex: params_for_blocking.path_regex.clone(),
-                    limit,
-                };
-                if let Some(cached) = server.cached_search_text_response(&cache_key) {
+                let cache_freshness = server.repository_response_cache_freshness(
+                    &scoped_workspaces,
+                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                )?;
+                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                    SearchTextResponseCacheKey {
+                        scoped_repository_ids: scoped_repository_ids.clone(),
+                        freshness_scopes: freshness_scopes.clone(),
+                        query: query.clone(),
+                        pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
+                        path_regex: params_for_blocking.path_regex.clone(),
+                        limit,
+                    }
+                });
+                if let Some(cache_key) = cache_key.as_ref()
+                    && let Some(cached) = server.cached_search_text_response(cache_key)
+                {
                     response_source_refs = cached.source_refs.clone();
                     diagnostics_count = cached
                         .source_refs
@@ -130,6 +172,7 @@ impl FriggMcpServer {
                 };
                 response_source_refs = json!({
                     "scoped_repository_ids": scoped_repository_ids.clone(),
+                    "freshness_basis": cache_freshness.basis.clone(),
                     "total_matches": response.total_matches,
                     "diagnostics_count": diagnostics_count,
                     "diagnostics": {
@@ -138,7 +181,9 @@ impl FriggMcpServer {
                         "total": diagnostics_count,
                     },
                 });
-                server.cache_search_text_response(cache_key, &response, &response_source_refs);
+                if let Some(cache_key) = cache_key {
+                    server.cache_search_text_response(cache_key, &response, &response_source_refs);
+                }
 
                 Ok(Json(response))
             })();
@@ -215,7 +260,6 @@ impl FriggMcpServer {
                 if query.is_empty() {
                     return Err(Self::invalid_params("query must not be empty", None));
                 }
-
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
@@ -252,17 +296,26 @@ impl FriggMcpServer {
                     });
                     weights
                 };
-                let cache_key = SearchHybridResponseCacheKey {
-                    scoped_repository_ids: scoped_repository_ids.clone(),
-                    query: query.clone(),
-                    language: params_for_blocking.language.clone(),
-                    limit,
-                    semantic: params_for_blocking.semantic,
-                    lexical_weight_bits: weights.lexical.to_bits(),
-                    graph_weight_bits: weights.graph.to_bits(),
-                    semantic_weight_bits: weights.semantic.to_bits(),
-                };
-                if let Some(cached) = server.cached_search_hybrid_response(&cache_key) {
+                let cache_freshness = server.repository_response_cache_freshness(
+                    &scoped_workspaces,
+                    RepositoryResponseCacheFreshnessMode::SemanticAware,
+                )?;
+                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                    SearchHybridResponseCacheKey {
+                        scoped_repository_ids: scoped_repository_ids.clone(),
+                        freshness_scopes: freshness_scopes.clone(),
+                        query: query.clone(),
+                        language: params_for_blocking.language.clone(),
+                        limit,
+                        semantic: params_for_blocking.semantic,
+                        lexical_weight_bits: weights.lexical.to_bits(),
+                        graph_weight_bits: weights.graph.to_bits(),
+                        semantic_weight_bits: weights.semantic.to_bits(),
+                    }
+                });
+                if let Some(cache_key) = cache_key.as_ref()
+                    && let Some(cached) = server.cached_search_hybrid_response(cache_key)
+                {
                     response_source_refs = cached.source_refs.clone();
                     return Ok(Json(cached.response));
                 }
@@ -316,6 +369,15 @@ impl FriggMcpServer {
                     semantic_reason.as_deref(),
                     semantic_hit_count,
                     semantic_match_count,
+                );
+                let semantic_language_capability = params_for_blocking.language.as_deref().map(
+                    |raw_language| {
+                        Self::search_hybrid_language_capability_metadata(
+                            raw_language,
+                            semantic_status.as_deref(),
+                            semantic_reason.as_deref(),
+                        )
+                    },
                 );
                 channel_metadata = Some(Self::search_hybrid_channels_metadata(
                     &search_output.channel_results,
@@ -375,6 +437,19 @@ impl FriggMcpServer {
                         .expect("search_hybrid metadata payload should be an object")
                         .insert("stage_attribution".to_owned(), stage_attribution);
                 }
+                if let Some(language_capability) = semantic_language_capability.clone() {
+                    metadata_payload
+                        .as_object_mut()
+                        .expect("search_hybrid metadata payload should be an object")
+                        .insert("semantic_capability".to_owned(), language_capability);
+                }
+                metadata_payload
+                    .as_object_mut()
+                    .expect("search_hybrid metadata payload should be an object")
+                    .insert(
+                        "freshness_basis".to_owned(),
+                        cache_freshness.basis.clone(),
+                    );
                 let metadata = Some(metadata_payload);
 
                 let response = SearchHybridResponse {
@@ -391,6 +466,7 @@ impl FriggMcpServer {
                 };
                 let mut response_source_refs_value = json!({
                     "scoped_repository_ids": scoped_repository_ids.clone(),
+                    "freshness_basis": cache_freshness.basis.clone(),
                     "diagnostics_count": diagnostics_count,
                     "diagnostics": {
                         "walk": walk_diagnostics_count,
@@ -414,8 +490,16 @@ impl FriggMcpServer {
                         .expect("search_hybrid source refs should be an object")
                         .insert("stage_attribution".to_owned(), stage_attribution);
                 }
+                if let Some(language_capability) = semantic_language_capability {
+                    response_source_refs_value
+                        .as_object_mut()
+                        .expect("search_hybrid source refs should be an object")
+                        .insert("semantic_capability".to_owned(), language_capability);
+                }
                 response_source_refs = response_source_refs_value;
-                server.cache_search_hybrid_response(cache_key, &response, &response_source_refs);
+                if let Some(cache_key) = cache_key {
+                    server.cache_search_hybrid_response(cache_key, &response, &response_source_refs);
+                }
 
                 Ok(Json(response))
             })();
@@ -513,24 +597,22 @@ impl FriggMcpServer {
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
-                let cache_key = SearchSymbolResponseCacheKey {
-                    scoped_repository_ids: scoped_repository_ids_for_cache,
-                    query: query.clone(),
-                    path_class: path_class_filter.map(|value| value.as_str().to_owned()),
-                    path_regex: params_for_blocking.path_regex.clone(),
-                    limit,
-                };
-                let cache_is_fresh = scoped_workspaces.iter().all(|workspace| {
-                    server
-                        .workspace_repository_freshness_status(
-                            workspace,
-                            &server.config.semantic_runtime,
-                        )
-                        .map(|status| matches!(status.manifest, RepositoryManifestFreshness::Ready))
-                        .unwrap_or(false)
+                let cache_freshness = server.repository_response_cache_freshness(
+                    &scoped_workspaces,
+                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                )?;
+                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                    SearchSymbolResponseCacheKey {
+                        scoped_repository_ids: scoped_repository_ids_for_cache,
+                        freshness_scopes: freshness_scopes.clone(),
+                        query: query.clone(),
+                        path_class: path_class_filter.map(|value| value.as_str().to_owned()),
+                        path_regex: params_for_blocking.path_regex.clone(),
+                        limit,
+                    }
                 });
-                if cache_is_fresh
-                    && let Some(cached) = server.cached_search_symbol_response(&cache_key)
+                if let Some(cache_key) = cache_key.as_ref()
+                    && let Some(cached) = server.cached_search_symbol_response(cache_key)
                 {
                     scoped_repository_ids = cached.scoped_repository_ids;
                     diagnostics_count = cached.diagnostics_count;
@@ -729,6 +811,7 @@ impl FriggMcpServer {
 
                 let metadata = json!({
                     "source": "tree_sitter",
+                    "freshness_basis": cache_freshness.basis.clone(),
                     "diagnostics_count": diagnostics_count,
                     "diagnostics": {
                         "manifest_walk": manifest_walk_diagnostics_count,
@@ -747,16 +830,18 @@ impl FriggMcpServer {
                     metadata,
                     note,
                 };
-                server.cache_search_symbol_response(
-                    cache_key,
-                    &response,
-                    &scoped_repository_ids,
-                    diagnostics_count,
-                    manifest_walk_diagnostics_count,
-                    manifest_read_diagnostics_count,
-                    symbol_extraction_diagnostics_count,
-                    limit,
-                );
+                if let Some(cache_key) = cache_key {
+                    server.cache_search_symbol_response(
+                        cache_key,
+                        &response,
+                        &scoped_repository_ids,
+                        diagnostics_count,
+                        manifest_walk_diagnostics_count,
+                        manifest_read_diagnostics_count,
+                        symbol_extraction_diagnostics_count,
+                        limit,
+                    );
+                }
                 Ok(Json(response))
             })();
 
@@ -1302,6 +1387,91 @@ impl FriggMcpServer {
         }
     }
 
+    fn search_hybrid_semantic_accelerator_state(
+        language: SymbolLanguage,
+        semantic_status: Option<&str>,
+        semantic_reason: Option<&str>,
+    ) -> &'static str {
+        if language.capability_tier(LanguageSupportCapability::SemanticChunking).as_str()
+            == "unsupported"
+        {
+            return "unsupported_language";
+        }
+
+        match semantic_status {
+            Some("disabled") => match semantic_reason {
+                Some("semantic channel disabled by request toggle") => "disabled_by_request",
+                _ => "disabled_in_config",
+            },
+            Some("unavailable") => "repository_unavailable",
+            Some("degraded") => "degraded_runtime",
+            Some("ok") => "active",
+            _ => "eligible",
+        }
+    }
+
+    fn search_hybrid_language_capability_metadata(
+        raw_language: &str,
+        semantic_status: Option<&str>,
+        semantic_reason: Option<&str>,
+    ) -> Value {
+        let requested_language = raw_language.trim().to_ascii_lowercase();
+        let Some(language) = SymbolLanguage::parse_alias(&requested_language) else {
+            return json!({
+                "requested_language": requested_language,
+                "semantic_chunking": "unknown_filter_value",
+                "semantic_accelerator": {
+                    "tier": "unknown_filter_value",
+                    "state": "unknown_filter_value",
+                },
+            });
+        };
+
+        let mut capabilities = serde_json::Map::new();
+        for capability in LanguageSupportCapability::ALL {
+            capabilities.insert(
+                capability.as_str().to_owned(),
+                Value::String(language.capability_tier(capability).as_str().to_owned()),
+            );
+        }
+
+        Value::Object(serde_json::Map::from_iter([
+            (
+                "requested_language".to_owned(),
+                Value::String(language.as_str().to_owned()),
+            ),
+            (
+                "display_name".to_owned(),
+                Value::String(language.display_name().to_owned()),
+            ),
+            (
+                "semantic_chunking".to_owned(),
+                Value::String(
+                    language
+                        .capability_tier(LanguageSupportCapability::SemanticChunking)
+                        .as_str()
+                        .to_owned(),
+                ),
+            ),
+            (
+                "semantic_accelerator".to_owned(),
+                json!({
+                    "tier": language
+                        .capability_tier(LanguageSupportCapability::SemanticChunking)
+                        .as_str(),
+                    "state": Self::search_hybrid_semantic_accelerator_state(
+                        language,
+                        semantic_status,
+                        semantic_reason,
+                    ),
+                    "status": semantic_status,
+                    "reason": semantic_reason,
+                }),
+            ),
+            ("capabilities".to_owned(), Value::Object(capabilities)),
+        ]))
+    }
+
     fn search_hybrid_channel_result(
         channel_results: &[ChannelResult],
         channel: EvidenceChannel,
@@ -1417,24 +1587,18 @@ impl FriggMcpServer {
         }
     }
 
-    fn cached_search_text_response(
+    pub(super) fn cached_search_text_response(
         &self,
         cache_key: &SearchTextResponseCacheKey,
     ) -> Option<CachedSearchTextResponse> {
-        let mut cache = self
-            .search_text_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.search_text_response_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
-    fn cache_search_text_response(
+    pub(super) fn cache_search_text_response(
         &self,
         cache_key: SearchTextResponseCacheKey,
         response: &SearchTextResponse,
@@ -1448,29 +1612,22 @@ impl FriggMcpServer {
                 CachedSearchTextResponse {
                     response: response.clone(),
                     source_refs: source_refs.clone(),
-                    generated_at: Instant::now(),
                 },
             );
     }
 
-    fn cached_search_hybrid_response(
+    pub(super) fn cached_search_hybrid_response(
         &self,
         cache_key: &SearchHybridResponseCacheKey,
     ) -> Option<CachedSearchHybridResponse> {
-        let mut cache = self
-            .search_hybrid_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.search_hybrid_response_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
-    fn cache_search_hybrid_response(
+    pub(super) fn cache_search_hybrid_response(
         &self,
         cache_key: SearchHybridResponseCacheKey,
         response: &SearchHybridResponse,
@@ -1484,29 +1641,22 @@ impl FriggMcpServer {
                 CachedSearchHybridResponse {
                     response: response.clone(),
                     source_refs: source_refs.clone(),
-                    generated_at: Instant::now(),
                 },
             );
     }
 
-    fn cached_search_symbol_response(
+    pub(super) fn cached_search_symbol_response(
         &self,
         cache_key: &SearchSymbolResponseCacheKey,
     ) -> Option<CachedSearchSymbolResponse> {
-        let mut cache = self
-            .search_symbol_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.search_symbol_response_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
-    fn cache_search_symbol_response(
+    pub(super) fn cache_search_symbol_response(
         &self,
         cache_key: SearchSymbolResponseCacheKey,
         response: &SearchSymbolResponse,
@@ -1530,7 +1680,6 @@ impl FriggMcpServer {
                     manifest_read_diagnostics_count,
                     symbol_extraction_diagnostics_count,
                     effective_limit,
-                    generated_at: Instant::now(),
                 },
             );
     }

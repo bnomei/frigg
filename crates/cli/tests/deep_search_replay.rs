@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::types::{
     DeepSearchPlaybookContract, DeepSearchPlaybookStepContract, DeepSearchReplayParams,
-    DeepSearchRunParams,
+    DeepSearchRunParams, DeepSearchTraceArtifactContract,
 };
 use frigg::mcp::{DeepSearchHarness, DeepSearchTraceOutcome, FriggMcpServer};
 use frigg::settings::FriggConfig;
@@ -245,6 +245,53 @@ async fn deep_search_replay_runtime_handler_rejects_unsupported_step_tool_with_i
     assert!(
         error.message.contains("unsupported tool"),
         "expected unsupported tool diagnostics, got: {}",
+        error.message
+    );
+
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test]
+async fn deep_search_replay_runtime_handler_rejects_unsupported_step_tool_during_replay() {
+    let workspace_root = temp_workspace_root("runtime-replay-unsupported-step");
+    prepare_workspace(&workspace_root);
+    let server = build_runtime_server(&workspace_root);
+
+    let playbook = DeepSearchPlaybookContract {
+        playbook_id: "unsupported-step-tool-replay".to_owned(),
+        steps: vec![DeepSearchPlaybookStepContract {
+            step_id: "tool-001".to_owned(),
+            tool_name: "write_file".to_owned(),
+            params: json!({ "path": "src/lib.rs" }),
+        }],
+    };
+    let error = match server
+        .deep_search_replay(Parameters(DeepSearchReplayParams {
+            playbook,
+            expected_trace_artifact: DeepSearchTraceArtifactContract {
+                trace_schema: "frigg.deep_search.trace.v1".to_owned(),
+                playbook_id: "unsupported-step-tool-replay".to_owned(),
+                step_count: 0,
+                steps: Vec::new(),
+            },
+        }))
+        .await
+    {
+        Ok(_) => panic!("unsupported replay step tool should fail with typed invalid_params"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(retryable_tag(&error), Some(false));
+    assert!(
+        error.message.contains("unsupported tool"),
+        "expected unsupported tool diagnostics, got: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("allowed tools"),
+        "expected replay rejection to surface the stable-core allowlist, got: {}",
         error.message
     );
 

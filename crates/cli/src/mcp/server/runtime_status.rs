@@ -1,6 +1,13 @@
 use super::*;
 
 impl FriggMcpServer {
+    fn workspace_has_dirty_root(&self, workspace: &AttachedWorkspace) -> bool {
+        self.validated_manifest_candidate_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_dirty_root(&workspace.root)
+    }
+
     pub(super) fn workspace_storage_summary(
         workspace: &AttachedWorkspace,
     ) -> WorkspaceStorageSummary {
@@ -106,8 +113,14 @@ impl FriggMcpServer {
     }
 
     pub(super) fn repository_summary(&self, workspace: &AttachedWorkspace) -> RepositorySummary {
-        if let Some(summary) = self.cached_repository_summary(&workspace.repository_id) {
+        let dirty_root = self.workspace_has_dirty_root(workspace);
+        if !dirty_root
+            && let Some(summary) = self.cached_repository_summary(&workspace.repository_id)
+        {
             return summary;
+        }
+        if dirty_root {
+            self.invalidate_repository_summary_cache(&workspace.repository_id);
         }
 
         let storage = Self::workspace_storage_summary(workspace);
@@ -119,7 +132,9 @@ impl FriggMcpServer {
             storage: Some(storage),
             health: Some(health),
         };
-        self.cache_repository_summary(&workspace.repository_id, &summary);
+        if !dirty_root {
+            self.cache_repository_summary(&workspace.repository_id, &summary);
+        }
         summary
     }
 
@@ -140,7 +155,37 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         semantic_runtime: &SemanticRuntimeConfig,
     ) -> Result<crate::manifest_validation::RepositoryFreshnessStatus, String> {
+        if !workspace.db_path.is_file() {
+            return Ok(crate::manifest_validation::RepositoryFreshnessStatus {
+                snapshot_id: None,
+                manifest_entry_count: None,
+                manifest: RepositoryManifestFreshness::MissingSnapshot,
+                semantic: if semantic_runtime.enabled {
+                    RepositorySemanticFreshness::MissingManifestSnapshot
+                } else {
+                    RepositorySemanticFreshness::Disabled
+                },
+                validated_manifest_digests: None,
+                semantic_target: None,
+            });
+        }
+
         let storage = Storage::new(&workspace.db_path);
+        if matches!(storage.schema_version(), Ok(0)) {
+            return Ok(crate::manifest_validation::RepositoryFreshnessStatus {
+                snapshot_id: None,
+                manifest_entry_count: None,
+                manifest: RepositoryManifestFreshness::MissingSnapshot,
+                semantic: if semantic_runtime.enabled {
+                    RepositorySemanticFreshness::MissingManifestSnapshot
+                } else {
+                    RepositorySemanticFreshness::Disabled
+                },
+                validated_manifest_digests: None,
+                semantic_target: None,
+            });
+        }
+
         repository_freshness_status(
             &storage,
             &workspace.repository_id,
@@ -149,6 +194,125 @@ impl FriggMcpServer {
             |_| false,
         )
         .map_err(|err| err.to_string())
+    }
+
+    pub(super) fn repository_response_cache_freshness(
+        &self,
+        workspaces: &[AttachedWorkspace],
+        mode: RepositoryResponseCacheFreshnessMode,
+    ) -> Result<RepositoryResponseCacheFreshness, ErrorData> {
+        let semantic_runtime = self.cache_freshness_runtime(mode);
+        let mut cacheable = true;
+        let mut scopes = Vec::with_capacity(workspaces.len());
+        let mut repositories = Vec::with_capacity(workspaces.len());
+
+        for workspace in workspaces {
+            let status = self
+                .workspace_repository_freshness_status(workspace, &semantic_runtime)
+                .map_err(|err| {
+                    Self::internal(
+                        format!(
+                            "failed to compute response cache freshness for repository '{}': {err}",
+                            workspace.repository_id
+                        ),
+                        None,
+                    )
+                })?;
+            let dirty_root = self
+                .validated_manifest_candidate_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_dirty_root(&workspace.root);
+
+            let manifest = Self::repository_manifest_freshness_label(&status.manifest);
+            let semantic = Self::repository_semantic_freshness_label(&status.semantic);
+            let snapshot_id = status.snapshot_id.clone();
+            let semantic_target = status.semantic_target.clone();
+
+            repositories.push(json!({
+                "repository_id": workspace.repository_id,
+                "snapshot_id": snapshot_id,
+                "manifest": manifest,
+                "semantic": semantic,
+                "dirty_root": dirty_root,
+                "provider": semantic_target.as_ref().map(|target| target.provider.clone()),
+                "model": semantic_target.as_ref().map(|target| target.model.clone()),
+            }));
+
+            if dirty_root || !matches!(status.manifest, RepositoryManifestFreshness::Ready) {
+                cacheable = false;
+                continue;
+            }
+            let Some(snapshot_id) = status.snapshot_id else {
+                cacheable = false;
+                continue;
+            };
+
+            scopes.push(RepositoryFreshnessCacheScope {
+                repository_id: workspace.repository_id.clone(),
+                snapshot_id,
+                semantic_state: matches!(mode, RepositoryResponseCacheFreshnessMode::SemanticAware)
+                    .then(|| semantic.to_owned()),
+                semantic_provider: matches!(
+                    mode,
+                    RepositoryResponseCacheFreshnessMode::SemanticAware
+                )
+                .then(|| {
+                    semantic_target
+                        .as_ref()
+                        .map(|target| target.provider.clone())
+                })
+                .flatten(),
+                semantic_model: matches!(mode, RepositoryResponseCacheFreshnessMode::SemanticAware)
+                    .then(|| semantic_target.as_ref().map(|target| target.model.clone()))
+                    .flatten(),
+            });
+        }
+
+        scopes.sort();
+
+        Ok(RepositoryResponseCacheFreshness {
+            scopes: cacheable.then_some(scopes),
+            basis: json!({
+                "mode": mode.as_str(),
+                "cacheable": cacheable,
+                "repositories": repositories,
+            }),
+        })
+    }
+
+    fn cache_freshness_runtime(
+        &self,
+        mode: RepositoryResponseCacheFreshnessMode,
+    ) -> SemanticRuntimeConfig {
+        let mut runtime = self.config.semantic_runtime.clone();
+        if matches!(mode, RepositoryResponseCacheFreshnessMode::ManifestOnly) {
+            runtime.enabled = false;
+        }
+        runtime
+    }
+
+    fn repository_manifest_freshness_label(
+        freshness: &RepositoryManifestFreshness,
+    ) -> &'static str {
+        match freshness {
+            RepositoryManifestFreshness::MissingSnapshot => "missing_snapshot",
+            RepositoryManifestFreshness::StaleSnapshot => "stale_snapshot",
+            RepositoryManifestFreshness::Ready => "ready",
+        }
+    }
+
+    fn repository_semantic_freshness_label(
+        freshness: &RepositorySemanticFreshness,
+    ) -> &'static str {
+        match freshness {
+            RepositorySemanticFreshness::Disabled => "disabled",
+            RepositorySemanticFreshness::MissingManifestSnapshot => "missing_manifest_snapshot",
+            RepositorySemanticFreshness::StaleManifestSnapshot => "stale_manifest_snapshot",
+            RepositorySemanticFreshness::NoEligibleEntries => "no_eligible_entries",
+            RepositorySemanticFreshness::MissingForActiveModel => "missing_for_active_model",
+            RepositorySemanticFreshness::Ready => "ready",
+        }
     }
 
     pub(super) fn workspace_manifest_entry_count(workspace: &AttachedWorkspace) -> Option<usize> {
@@ -183,6 +347,19 @@ impl FriggMcpServer {
                 }
             };
         let manifest_entry_count = Self::workspace_manifest_entry_count(workspace);
+        let dirty_root = self.workspace_has_dirty_root(workspace);
+        if dirty_root && freshness.snapshot_id.is_some() {
+            return WorkspaceIndexComponentSummary {
+                state: WorkspaceIndexComponentState::Stale,
+                reason: Some("dirty_root".to_owned()),
+                snapshot_id: freshness.snapshot_id,
+                compatible_snapshot_id: None,
+                provider: None,
+                model: None,
+                artifact_count: manifest_entry_count
+                    .or_else(|| freshness.validated_manifest_digests.as_ref().map(Vec::len)),
+            };
+        }
         let manifest_state = freshness.manifest.clone();
         let (state, reason) = match manifest_state {
             RepositoryManifestFreshness::MissingSnapshot => (

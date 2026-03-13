@@ -22,6 +22,10 @@ pub struct TextMatch {
     pub line: usize,
     pub column: usize,
     pub excerpt: String,
+    #[serde(skip, default)]
+    pub witness_score_hint_millis: Option<u32>,
+    #[serde(skip, default)]
+    pub witness_provenance_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

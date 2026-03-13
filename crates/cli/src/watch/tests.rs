@@ -39,6 +39,20 @@ fn test_validated_manifest_candidate_cache() -> Arc<RwLock<ValidatedManifestCand
     Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()))
 }
 
+fn test_repository_cache_invalidation_log() -> Arc<RwLock<Vec<String>>> {
+    Arc::new(RwLock::new(Vec::new()))
+}
+
+fn test_repository_cache_invalidation_callback(
+    log: Arc<RwLock<Vec<String>>>,
+) -> RepositoryCacheInvalidationCallback {
+    Arc::new(move |repository_id: &str| {
+        log.write()
+            .expect("test repository cache invalidation log poisoned")
+            .push(repository_id.to_owned());
+    })
+}
+
 fn init_storage(workspace_root: &Path) -> PathBuf {
     let db_path =
         ensure_provenance_db_parent_dir(workspace_root).expect("db path should be creatable");
@@ -89,6 +103,30 @@ async fn wait_for_snapshot_id_change(
 
         if tokio::time::Instant::now() >= deadline {
             return None;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_for_repository_invalidation_count(
+    log: &Arc<RwLock<Vec<String>>>,
+    expected_minimum: usize,
+    timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if log
+            .read()
+            .expect("test repository cache invalidation log poisoned")
+            .len()
+            >= expected_minimum
+        {
+            return true;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return false;
         }
 
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -580,6 +618,7 @@ async fn watch_runtime_initial_sync_reindexes_when_manifest_missing() {
         RuntimeTransportKind::Stdio,
         test_runtime_task_registry(),
         test_validated_manifest_candidate_cache(),
+        None,
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
@@ -621,6 +660,7 @@ async fn watch_runtime_initial_sync_respects_gitignored_contracts_and_excludes_t
         RuntimeTransportKind::Stdio,
         test_runtime_task_registry(),
         test_validated_manifest_candidate_cache(),
+        None,
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
@@ -682,6 +722,7 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
         RuntimeTransportKind::Stdio,
         test_runtime_task_registry(),
         test_validated_manifest_candidate_cache(),
+        None,
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
@@ -727,6 +768,7 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
         RuntimeTransportKind::Stdio,
         test_runtime_task_registry(),
         test_validated_manifest_candidate_cache(),
+        None,
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
@@ -772,6 +814,77 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
             .iter()
             .map(|entry| (entry.path.clone(), entry.excerpt.clone()))
             .collect::<Vec<_>>()
+    );
+
+    drop(runtime);
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initial_sync_and_notify()
+{
+    let workspace_root = temp_workspace_root("notify-cache-invalidation");
+    fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+    fs::write(workspace_root.join("src.rs"), "fn alpha() {}\n")
+        .expect("source file should be writable");
+
+    let db_path = init_storage(&workspace_root);
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("config should load from workspace root");
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+    };
+
+    let invalidation_log = test_repository_cache_invalidation_log();
+    let runtime = maybe_start_watch_runtime(
+        &config,
+        RuntimeTransportKind::Stdio,
+        test_runtime_task_registry(),
+        test_validated_manifest_candidate_cache(),
+        Some(test_repository_cache_invalidation_callback(Arc::clone(
+            &invalidation_log,
+        ))),
+    )
+    .expect("watch runtime should start")
+    .expect("watch runtime should be enabled");
+
+    wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
+        .await
+        .expect("initial sync should create a manifest snapshot");
+    assert!(
+        wait_for_repository_invalidation_count(&invalidation_log, 1, Duration::from_secs(5)).await,
+        "initial sync should invalidate repository-scoped caches"
+    );
+
+    let initial_count = invalidation_log
+        .read()
+        .expect("test repository cache invalidation log poisoned")
+        .len();
+    fs::write(
+        workspace_root.join("added.rs"),
+        "pub fn watch_notify_cache_invalidation() {}\n",
+    )
+    .expect("creating a new source file should trigger notify backend");
+
+    assert!(
+        wait_for_repository_invalidation_count(
+            &invalidation_log,
+            initial_count + 1,
+            Duration::from_secs(5),
+        )
+        .await,
+        "notify-driven dirty or refresh transitions should invalidate repository-scoped caches"
+    );
+    assert!(
+        invalidation_log
+            .read()
+            .expect("test repository cache invalidation log poisoned")
+            .iter()
+            .all(|repository_id| repository_id == "repo-001"),
+        "callback should only receive the affected repository id"
     );
 
     drop(runtime);

@@ -16,6 +16,7 @@ use crate::storage::{
 };
 use regex::Regex;
 
+use super::build_hybrid_path_witness_hits_with_intent;
 use crate::searcher::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridPathWitnessQueryContext,
     HybridRankingIntent, HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS,
@@ -25,8 +26,9 @@ use crate::searcher::{
     ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
     build_hybrid_lexical_hits_for_query, build_hybrid_lexical_recall_regex,
     build_regex_prefilter_plan, compile_safe_regex, hybrid_lexical_recall_tokens,
-    hybrid_path_witness_recall_score_for_projection, hybrid_source_class, normalize_search_filters,
-    rank_hybrid_evidence, rank_hybrid_evidence_for_query,
+    hybrid_path_witness_recall_score, hybrid_path_witness_recall_score_for_projection,
+    hybrid_source_class, normalize_search_filters, rank_hybrid_evidence,
+    rank_hybrid_evidence_for_query,
 };
 
 use super::graph_channel;
@@ -34,6 +36,7 @@ use super::graph_channel;
 mod ecosystem_ranking;
 mod entrypoint_ranking;
 mod laravel_path_witness;
+mod overlay_projection;
 mod python_ranking;
 mod rust_ranking;
 mod semantic;
@@ -324,6 +327,8 @@ fn text_match(
         line,
         column,
         excerpt: excerpt.to_owned(),
+        witness_score_hint_millis: None,
+        witness_provenance_ids: None,
     }
 }
 

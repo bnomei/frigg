@@ -253,25 +253,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     run_strict_startup_vector_readiness_gate(&config)?;
     run_semantic_runtime_startup_gate(&config)?;
     let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
+    let runtime_watch_active = watch_runtime_config
+        .watch
+        .enabled_for_transport(transport_kind);
+    let runtime_profile = runtime_profile_for_transport(transport_kind, runtime_watch_active);
     let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
     let validated_manifest_candidate_cache =
         Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
-    let _watch_runtime = maybe_start_watch_runtime(
-        &watch_runtime_config,
-        transport_kind,
-        Arc::clone(&runtime_task_registry),
-        Arc::clone(&validated_manifest_candidate_cache),
-    )?;
-    let runtime_watch_active = _watch_runtime.is_some();
-    let runtime_profile = runtime_profile_for_transport(transport_kind, runtime_watch_active);
-
     let server = FriggMcpServer::new_with_runtime(
         config,
         runtime_profile,
         runtime_watch_active,
+        Arc::clone(&runtime_task_registry),
+        Arc::clone(&validated_manifest_candidate_cache),
+    );
+    let _watch_runtime = maybe_start_watch_runtime(
+        &watch_runtime_config,
+        transport_kind,
         runtime_task_registry,
         validated_manifest_candidate_cache,
-    );
+        Some(server.repository_cache_invalidation_callback()),
+    )?;
     if let Some(runtime) = http_runtime {
         serve_http(runtime, server).await?;
     } else {

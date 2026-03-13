@@ -301,6 +301,44 @@ const MIGRATIONS: &[Migration] = &[
             ON semantic_chunk_embedding (repository_id, snapshot_id, provider, model, chunk_id);
         "#,
     },
+    Migration {
+        version: 7,
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS test_subject_projection (
+              repository_id TEXT NOT NULL,
+              snapshot_id TEXT NOT NULL,
+              test_path TEXT NOT NULL,
+              subject_path TEXT NOT NULL,
+              shared_terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              flags_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, test_path, subject_path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_test_subject_projection_repo_snapshot_test
+            ON test_subject_projection (repository_id, snapshot_id, test_path, subject_path);
+
+            CREATE INDEX IF NOT EXISTS idx_test_subject_projection_repo_snapshot_subject
+            ON test_subject_projection (repository_id, snapshot_id, subject_path, test_path);
+
+            CREATE TABLE IF NOT EXISTS entrypoint_surface_projection (
+              repository_id TEXT NOT NULL,
+              snapshot_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              path_class TEXT NOT NULL,
+              source_class TEXT NOT NULL,
+              path_terms_json TEXT NOT NULL,
+              surface_terms_json TEXT NOT NULL,
+              flags_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_entrypoint_surface_projection_repo_snapshot_path
+            ON entrypoint_surface_projection (repository_id, snapshot_id, path);
+        "#,
+    },
 ];
 
 const REQUIRED_TABLES: &[&str] = &[
@@ -313,6 +351,8 @@ const REQUIRED_TABLES: &[&str] = &[
     "semantic_chunk",
     "semantic_chunk_embedding",
     "path_witness_projection",
+    "test_subject_projection",
+    "entrypoint_surface_projection",
 ];
 
 pub const DEFAULT_VECTOR_DIMENSIONS: usize = 1_536;
@@ -456,6 +496,29 @@ pub struct PathWitnessProjectionRecord {
     pub path_class: String,
     pub source_class: String,
     pub path_terms_json: String,
+    pub flags_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestSubjectProjectionRecord {
+    pub repository_id: String,
+    pub snapshot_id: String,
+    pub test_path: String,
+    pub subject_path: String,
+    pub shared_terms_json: String,
+    pub score_hint: usize,
+    pub flags_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntrypointSurfaceProjectionRecord {
+    pub repository_id: String,
+    pub snapshot_id: String,
+    pub path: String,
+    pub path_class: String,
+    pub source_class: String,
+    pub path_terms_json: String,
+    pub surface_terms_json: String,
     pub flags_json: String,
 }
 
@@ -742,6 +805,26 @@ impl Storage {
         })?;
 
         tx.execute(
+            "DELETE FROM test_subject_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete test subject projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM entrypoint_surface_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete entrypoint surface projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
             "DELETE FROM file_manifest WHERE snapshot_id = ?1",
             [snapshot_id],
         )
@@ -911,6 +994,346 @@ impl Storage {
             .map_err(|err| {
                 FriggError::Internal(format!(
                     "failed to decode path witness projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        Ok(rows)
+    }
+
+    pub fn replace_test_subject_projections_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        records: &[TestSubjectProjectionRecord],
+    ) -> FriggResult<()> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id must not be empty".to_owned(),
+            ));
+        }
+        let snapshot_id = snapshot_id.trim();
+        if snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "snapshot_id must not be empty".to_owned(),
+            ));
+        }
+
+        let mut conn = open_connection(&self.db_path)?;
+        let tx = conn.transaction().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to start test subject projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM test_subject_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
+            (repository_id, snapshot_id),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to clear test subject projection rows for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        let mut ordered_records = records.to_vec();
+        ordered_records.sort_by(|left, right| {
+            left.test_path
+                .cmp(&right.test_path)
+                .then(left.subject_path.cmp(&right.subject_path))
+        });
+        ordered_records.dedup_by(|left, right| {
+            left.test_path == right.test_path && left.subject_path == right.subject_path
+        });
+
+        let mut insert_stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO test_subject_projection (
+                  repository_id,
+                  snapshot_id,
+                  test_path,
+                  subject_path,
+                  shared_terms_json,
+                  score_hint,
+                  flags_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare test subject projection insert for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        for record in ordered_records {
+            insert_stmt
+                .execute((
+                    repository_id,
+                    snapshot_id,
+                    record.test_path,
+                    record.subject_path,
+                    record.shared_terms_json,
+                    usize_to_i64(record.score_hint, "score_hint")?,
+                    record.flags_json,
+                ))
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "failed to insert test subject projection row for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                    ))
+                })?;
+        }
+        drop(insert_stmt);
+
+        tx.commit().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to commit test subject projection replace for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    pub fn load_test_subject_projections_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+    ) -> FriggResult<Vec<TestSubjectProjectionRecord>> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id must not be empty".to_owned(),
+            ));
+        }
+        let snapshot_id = snapshot_id.trim();
+        if snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "snapshot_id must not be empty".to_owned(),
+            ));
+        }
+
+        let conn = open_connection(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT repository_id, snapshot_id, test_path, subject_path, shared_terms_json, score_hint, flags_json
+                FROM test_subject_projection
+                WHERE repository_id = ?1 AND snapshot_id = ?2
+                ORDER BY test_path ASC, subject_path ASC
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare test subject projection load query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        let raw_rows = stmt
+            .query_map((repository_id, snapshot_id), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query test subject projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode test subject projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        let rows = raw_rows
+            .into_iter()
+            .map(
+                |(
+                    repository_id,
+                    snapshot_id,
+                    test_path,
+                    subject_path,
+                    shared_terms_json,
+                    score_hint,
+                    flags_json,
+                )| {
+                    let decoded_score_hint =
+                        i64_to_u64(score_hint, "score_hint").map_err(|err| {
+                            FriggError::Internal(format!(
+                                "failed to decode test subject projection score_hint for repository '{repository_id}' snapshot '{snapshot_id}' path pair '{test_path}' -> '{subject_path}': {err}"
+                            ))
+                        })? as usize;
+                    Ok(TestSubjectProjectionRecord {
+                        repository_id,
+                        snapshot_id,
+                        test_path,
+                        subject_path,
+                        shared_terms_json,
+                        score_hint: decoded_score_hint,
+                        flags_json,
+                    })
+                },
+            )
+            .collect::<FriggResult<Vec<_>>>()?;
+
+        Ok(rows)
+    }
+
+    pub fn replace_entrypoint_surface_projections_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        records: &[EntrypointSurfaceProjectionRecord],
+    ) -> FriggResult<()> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id must not be empty".to_owned(),
+            ));
+        }
+        let snapshot_id = snapshot_id.trim();
+        if snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "snapshot_id must not be empty".to_owned(),
+            ));
+        }
+
+        let mut conn = open_connection(&self.db_path)?;
+        let tx = conn.transaction().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to start entrypoint surface projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM entrypoint_surface_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
+            (repository_id, snapshot_id),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to clear entrypoint surface projection rows for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        let mut ordered_records = records.to_vec();
+        ordered_records.sort_by(|left, right| left.path.cmp(&right.path));
+        ordered_records.dedup_by(|left, right| left.path == right.path);
+
+        let mut insert_stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO entrypoint_surface_projection (
+                  repository_id,
+                  snapshot_id,
+                  path,
+                  path_class,
+                  source_class,
+                  path_terms_json,
+                  surface_terms_json,
+                  flags_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare entrypoint surface projection insert for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        for record in ordered_records {
+            insert_stmt
+                .execute((
+                    repository_id,
+                    snapshot_id,
+                    record.path,
+                    record.path_class,
+                    record.source_class,
+                    record.path_terms_json,
+                    record.surface_terms_json,
+                    record.flags_json,
+                ))
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "failed to insert entrypoint surface projection row for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                    ))
+                })?;
+        }
+        drop(insert_stmt);
+
+        tx.commit().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to commit entrypoint surface projection replace for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    pub fn load_entrypoint_surface_projections_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+    ) -> FriggResult<Vec<EntrypointSurfaceProjectionRecord>> {
+        let repository_id = repository_id.trim();
+        if repository_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id must not be empty".to_owned(),
+            ));
+        }
+        let snapshot_id = snapshot_id.trim();
+        if snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "snapshot_id must not be empty".to_owned(),
+            ));
+        }
+
+        let conn = open_connection(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT repository_id, snapshot_id, path, path_class, source_class, path_terms_json, surface_terms_json, flags_json
+                FROM entrypoint_surface_projection
+                WHERE repository_id = ?1 AND snapshot_id = ?2
+                ORDER BY path ASC
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare entrypoint surface projection load query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        let rows = stmt
+            .query_map((repository_id, snapshot_id), |row| {
+                Ok(EntrypointSurfaceProjectionRecord {
+                    repository_id: row.get(0)?,
+                    snapshot_id: row.get(1)?,
+                    path: row.get(2)?,
+                    path_class: row.get(3)?,
+                    source_class: row.get(4)?,
+                    path_terms_json: row.get(5)?,
+                    surface_terms_json: row.get(6)?,
+                    flags_json: row.get(7)?,
+                })
+            })
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query entrypoint surface projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode entrypoint surface projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
                 ))
             })?;
 

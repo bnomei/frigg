@@ -109,6 +109,8 @@ fn storage_hot_path_benchmarks() {
                     BENCH_REPOSITORY_ID,
                     Some(BENCH_SEMANTIC_PREVIOUS_SNAPSHOT_ID),
                     BENCH_SEMANTIC_CURRENT_SNAPSHOT_ID,
+                    BENCH_SEMANTIC_PROVIDER,
+                    BENCH_SEMANTIC_MODEL,
                     &hot_state.semantic_delta.changed_paths,
                     &hot_state.semantic_delta.deleted_paths,
                     &hot_state.semantic_delta.delta_records,
@@ -368,6 +370,8 @@ fn seed_semantic_delta_state(storage: &Storage) -> SemanticDeltaState {
         .replace_semantic_embeddings_for_repository(
             BENCH_REPOSITORY_ID,
             BENCH_SEMANTIC_PREVIOUS_SNAPSHOT_ID,
+            BENCH_SEMANTIC_PROVIDER,
+            BENCH_SEMANTIC_MODEL,
             &base_records,
         )
         .expect("benchmark semantic fixture should seed base snapshot");
@@ -587,6 +591,8 @@ fn apply_semantic_delta_and_assert(state: &HotStorageState) {
             BENCH_REPOSITORY_ID,
             Some(BENCH_SEMANTIC_PREVIOUS_SNAPSHOT_ID),
             BENCH_SEMANTIC_CURRENT_SNAPSHOT_ID,
+            BENCH_SEMANTIC_PROVIDER,
+            BENCH_SEMANTIC_MODEL,
             &state.semantic_delta.changed_paths,
             &state.semantic_delta.deleted_paths,
             &state.semantic_delta.delta_records,

@@ -26,6 +26,9 @@ use super::repository::{
 use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
 
 const WATCH_TICK_MS: u64 = 50;
+
+pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
+
 enum SupervisorCommand {
     Event(Event),
     InitialSync {
@@ -56,6 +59,7 @@ pub fn maybe_start_watch_runtime(
     transport: RuntimeTransportKind,
     task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    repository_cache_invalidation_callback: Option<RepositoryCacheInvalidationCallback>,
 ) -> FriggResult<Option<WatchRuntime>> {
     if !config.watch.enabled_for_transport(transport) {
         info!(
@@ -106,6 +110,7 @@ pub fn maybe_start_watch_runtime(
         semantic_credentials.clone(),
         task_registry,
         validated_manifest_candidate_cache,
+        repository_cache_invalidation_callback,
         command_rx,
         command_tx.clone(),
     ));
@@ -157,6 +162,7 @@ async fn run_supervisor(
     semantic_credentials: SemanticRuntimeCredentials,
     task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    repository_cache_invalidation_callback: Option<RepositoryCacheInvalidationCallback>,
     mut command_rx: mpsc::UnboundedReceiver<SupervisorCommand>,
     command_tx: mpsc::UnboundedSender<SupervisorCommand>,
 ) {
@@ -178,6 +184,7 @@ async fn run_supervisor(
                         &repositories,
                         &mut scheduler,
                         &validated_manifest_candidate_cache,
+                        repository_cache_invalidation_callback.as_ref(),
                         event,
                         now,
                         debounce,
@@ -196,6 +203,7 @@ async fn run_supervisor(
                             root_idx,
                             class,
                             result,
+                            repository_cache_invalidation_callback.as_ref(),
                             now,
                             retry,
                             &semantic_runtime,
@@ -322,6 +330,7 @@ fn handle_notify_event(
     repositories: &[WatchedRepository],
     scheduler: &mut WatchSchedulerState,
     validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
+    repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
     event: Event,
     now: Instant,
     debounce: Duration,
@@ -330,6 +339,7 @@ fn handle_notify_event(
         return;
     }
 
+    let mut invalidated_root_indices = Vec::new();
     for path in event.paths {
         let Some(root_idx) = repository_index_for_path(repositories, &path) else {
             continue;
@@ -343,6 +353,12 @@ fn handle_notify_event(
             .write()
             .expect("validated manifest candidate cache poisoned")
             .mark_dirty_root(&repositories[root_idx].root);
+        if !invalidated_root_indices.contains(&root_idx) {
+            if let Some(callback) = repository_cache_invalidation_callback {
+                callback(&repositories[root_idx].repository_id);
+            }
+            invalidated_root_indices.push(root_idx);
+        }
         info!(
             repository_id = %repositories[root_idx].repository_id,
             path = %path.display(),
@@ -357,6 +373,7 @@ fn handle_reindex_completed(
     root_idx: usize,
     class: WatchRefreshClass,
     result: Result<crate::indexer::ReindexSummary, String>,
+    repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
     now: Instant,
     retry: Duration,
     semantic_runtime: &SemanticRuntimeConfig,
@@ -373,6 +390,9 @@ fn handle_reindex_completed(
     match result {
         Ok(summary) => {
             scheduler.mark_succeeded(root_idx, class, now);
+            if let Some(callback) = repository_cache_invalidation_callback {
+                callback(&repository.repository_id);
+            }
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),

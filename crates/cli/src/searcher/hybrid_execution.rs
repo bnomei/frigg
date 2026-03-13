@@ -9,19 +9,18 @@ use crate::domain::{
     ChannelHealth, ChannelHealthStatus, ChannelResult, ChannelStats, EvidenceChannel, FriggError,
     FriggResult, model::TextMatch,
 };
-use crate::languages::SymbolLanguage;
+use crate::languages::{LanguageSupportCapability, SymbolLanguage};
 use crate::settings::SemanticRuntimeCredentials;
 
 use super::{
     HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankingIntent,
-    RepositoryCandidateUniverse, SearchCandidateFile, SearchCandidateUniverse,
     SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput,
     SearchHybridQuery, SearchStageAttribution, SearchStageSample, SearchTextQuery, TextSearcher,
     build_hybrid_lexical_hits_with_intent, build_hybrid_lexical_recall_regex,
     build_hybrid_path_witness_hits_with_intent, empty_channel_result,
     hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
-    hybrid_path_has_exact_stem_match, hybrid_path_witness_recall_score, hybrid_query_exact_terms,
-    match_count_for_hits, merge_hybrid_lexical_search_output, normalize_search_filters,
+    hybrid_path_has_exact_stem_match, hybrid_query_exact_terms, match_count_for_hits,
+    merge_hybrid_lexical_search_output, normalize_search_filters,
     rank_hybrid_anchor_evidence_for_query_with_witness, retain_semantic_hits_for_query,
     search_diagnostics_to_channel_diagnostics, search_graph_channel_hits,
     search_semantic_channel_hits, sort_search_diagnostics_deterministically,
@@ -115,8 +114,9 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     let freshness_validation_elapsed_us = candidate_universe_build.freshness_validation_elapsed_us;
     let candidate_universe = candidate_universe_build.universe;
     let path_witness_lexical_universe = path_witness_query_context.as_ref().and_then(|context| {
-        build_path_witness_lexical_seed_universe(
+        searcher.build_overlay_aware_path_witness_seed_universe(
             &candidate_universe,
+            &normalized_filters,
             &ranking_intent,
             context,
             path_witness_working_limit,
@@ -176,11 +176,28 @@ pub(super) fn search_hybrid_with_filters_using_executor(
 
     let semantic_started_at = Instant::now();
     let strict_semantic = searcher.config.semantic_runtime.strict_mode;
+    let unsupported_semantic_language = normalized_filters
+        .language
+        .as_ref()
+        .copied()
+        .filter(|language| {
+            language.capability_tier(LanguageSupportCapability::SemanticChunking).as_str()
+                == "unsupported"
+        });
     let semantic_channel_result = if matches!(query.semantic, Some(false)) {
         empty_channel_result(
             EvidenceChannel::Semantic,
             ChannelHealthStatus::Disabled,
             Some("semantic channel disabled by request toggle".to_owned()),
+        )
+    } else if let Some(language) = unsupported_semantic_language {
+        empty_channel_result(
+            EvidenceChannel::Semantic,
+            ChannelHealthStatus::Unavailable,
+            Some(format!(
+                "requested language filter '{}' does not support semantic_chunking",
+                language.as_str()
+            )),
         )
     } else if !searcher.config.semantic_runtime.enabled {
         empty_channel_result(
@@ -715,66 +732,6 @@ fn prefers_compact_lexical_seed_set(intent: &HybridRankingIntent, exact_terms: &
         && !intent.wants_examples
         && !intent.wants_jobs_listeners_witnesses
         && !intent.wants_commands_middleware_witnesses
-}
-
-fn build_path_witness_lexical_seed_universe(
-    candidate_universe: &SearchCandidateUniverse,
-    intent: &HybridRankingIntent,
-    query_context: &HybridPathWitnessQueryContext,
-    lexical_limit: usize,
-) -> Option<SearchCandidateUniverse> {
-    let per_repository_limit = lexical_limit.saturating_div(2).saturating_add(4).max(10);
-    let repositories = candidate_universe
-        .repositories
-        .iter()
-        .filter_map(|repository| {
-            let mut scored = repository
-                .candidates
-                .iter()
-                .filter_map(|candidate| {
-                    let score = hybrid_path_witness_recall_score(
-                        &candidate.relative_path,
-                        intent,
-                        query_context,
-                    )?;
-                    Some((score, candidate))
-                })
-                .collect::<Vec<_>>();
-            if scored.is_empty() {
-                return None;
-            }
-
-            scored.sort_by(|left, right| {
-                right
-                    .0
-                    .total_cmp(&left.0)
-                    .then_with(|| left.1.relative_path.cmp(&right.1.relative_path))
-                    .then_with(|| left.1.absolute_path.cmp(&right.1.absolute_path))
-            });
-            let candidates = scored
-                .into_iter()
-                .take(per_repository_limit)
-                .map(|(_, candidate)| SearchCandidateFile {
-                    relative_path: candidate.relative_path.clone(),
-                    absolute_path: candidate.absolute_path.clone(),
-                })
-                .collect::<Vec<_>>();
-            Some(RepositoryCandidateUniverse {
-                repository_id: repository.repository_id.clone(),
-                root: repository.root.clone(),
-                snapshot_id: repository.snapshot_id.clone(),
-                candidates,
-            })
-        })
-        .collect::<Vec<_>>();
-    if repositories.is_empty() {
-        return None;
-    }
-
-    Some(SearchCandidateUniverse {
-        repositories,
-        diagnostics: candidate_universe.diagnostics.clone(),
-    })
 }
 
 fn search_regex_with_universe(

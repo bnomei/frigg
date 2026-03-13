@@ -2,29 +2,41 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
-use crate::indexer::FileMetadataDigest;
+use crate::domain::model::TextMatch;
+use crate::indexer::{FileMetadataDigest, ReindexMode, reindex_repository};
 use crate::mcp::RuntimeTaskRegistry;
+use crate::mcp::server_cache::{
+    FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey,
+    RepositoryFreshnessCacheScope, SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey,
+    SearchTextResponseCacheKey,
+};
+use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
-    RuntimeTaskKind, RuntimeTaskStatus, WorkspaceIndexComponentState, WorkspaceResolveMode,
+    FindDeclarationsResponse, GoToDefinitionResponse, RuntimeTaskKind, RuntimeTaskStatus,
+    SearchHybridResponse, SearchSymbolResponse, SearchTextResponse, WorkspaceIndexComponentState,
+    WorkspaceResolveMode,
 };
 use crate::searcher::ValidatedManifestCandidateCache;
 use crate::settings::{
-    FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
+    FriggConfig, RuntimeProfile, RuntimeTransportKind, SemanticRuntimeConfig,
+    SemanticRuntimeProvider, WatchConfig, WatchMode,
 };
 use crate::storage::{
     DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, Storage,
 };
+use crate::watch::maybe_start_watch_runtime;
 use protobuf::{EnumOrUnknown, Message};
 use rmcp::model::ErrorCode;
 use scip::types::{
     Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
     SymbolInformation as ScipSymbolInformationProto,
 };
+use serde_json::Value;
 
-use super::FriggMcpServer;
+use super::{FriggMcpServer, RepositoryResponseCacheFreshnessMode};
 
 fn fixture_config() -> FriggConfig {
     let workspace_root = std::env::current_dir()
@@ -35,6 +47,18 @@ fn fixture_config() -> FriggConfig {
 
 fn to_set(values: Vec<String>) -> BTreeSet<String> {
     values.into_iter().collect()
+}
+
+fn extended_only_tool_names() -> Vec<String> {
+    let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core)
+        .tool_names
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    manifest_for_tool_surface_profile(ToolSurfaceProfile::Extended)
+        .tool_names
+        .into_iter()
+        .filter(|tool_name| !core.contains(tool_name))
+        .collect()
 }
 
 fn temp_workspace_root(test_name: &str) -> PathBuf {
@@ -48,12 +72,90 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
+fn rewrite_fixture_file_with_mtime_tick(path: &Path, contents: &str) {
+    let before = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(FriggMcpServer::system_time_to_unix_nanos);
+    for _ in 0..8 {
+        std::thread::sleep(Duration::from_millis(2));
+        fs::write(path, contents).expect("failed to rewrite fixture file");
+        let after = fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(FriggMcpServer::system_time_to_unix_nanos);
+        if after != before {
+            return;
+        }
+    }
+
+    panic!("fixture file mtime did not advance after rewrite");
+}
+
 fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
     SemanticRuntimeConfig {
         enabled: true,
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
+    }
+}
+
+async fn wait_for_repository_answer_cache_eviction(
+    server: &FriggMcpServer,
+    repository_id: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let summary_evicted = server.cached_repository_summary(repository_id).is_none();
+        let text_evicted = server
+            .search_text_response_cache
+            .read()
+            .expect("search text response cache should not be poisoned")
+            .is_empty();
+        let hybrid_evicted = server
+            .search_hybrid_response_cache
+            .read()
+            .expect("search hybrid response cache should not be poisoned")
+            .is_empty();
+        let symbol_evicted = server
+            .search_symbol_response_cache
+            .read()
+            .expect("search symbol response cache should not be poisoned")
+            .is_empty();
+        let definition_evicted = server
+            .go_to_definition_response_cache
+            .read()
+            .expect("go-to-definition response cache should not be poisoned")
+            .is_empty();
+        let declarations_evicted = server
+            .find_declarations_response_cache
+            .read()
+            .expect("find declarations response cache should not be poisoned")
+            .is_empty();
+        let heuristic_evicted = server
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .is_empty();
+
+        if summary_evicted
+            && text_evicted
+            && hybrid_evicted
+            && symbol_evicted
+            && definition_evicted
+            && declarations_evicted
+            && heuristic_evicted
+        {
+            return true;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -158,9 +260,9 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
     let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, false);
     let names = to_set(server.runtime_registered_tool_names());
 
-    for tool_name in FriggMcpServer::EXTENDED_ONLY_TOOL_NAMES {
+    for tool_name in extended_only_tool_names() {
         assert!(
-            !names.contains(tool_name),
+            !names.contains(&tool_name),
             "extended-only tool should not be registered by default: {tool_name}"
         );
     }
@@ -175,9 +277,9 @@ fn extended_only_tools_are_registered_when_runtime_option_enabled() {
     let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, true);
     let names = to_set(server.runtime_registered_tool_names());
 
-    for tool_name in FriggMcpServer::EXTENDED_ONLY_TOOL_NAMES {
+    for tool_name in extended_only_tool_names() {
         assert!(
-            names.contains(tool_name),
+            names.contains(&tool_name),
             "extended-only tool should be registered when enabled: {tool_name}"
         );
     }
@@ -271,6 +373,665 @@ fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
             .has_entry_for_root(&root)
     );
 
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
+    let workspace_root = temp_workspace_root("attach-invalidates-only-attached-answer-caches");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Cached;\n")
+        .expect("failed to write workspace root fixture");
+    let root = workspace_root
+        .canonicalize()
+        .expect("workspace root should canonicalize");
+
+    let server = FriggMcpServer::new_with_runtime(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+        RuntimeProfile::StdioEphemeral,
+        false,
+        Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
+    );
+
+    let scope = |repository_id: &str, snapshot_id: &str| RepositoryFreshnessCacheScope {
+        repository_id: repository_id.to_owned(),
+        snapshot_id: snapshot_id.to_owned(),
+        semantic_state: None,
+        semantic_provider: None,
+        semantic_model: None,
+    };
+    let repo_001_scope = scope("repo-001", "snapshot-001");
+    let repo_002_scope = scope("repo-002", "snapshot-002");
+
+    let empty_text_response = SearchTextResponse {
+        total_matches: 0,
+        matches: Vec::<TextMatch>::new(),
+    };
+    let empty_hybrid_response = SearchHybridResponse {
+        matches: Vec::new(),
+        semantic_requested: None,
+        semantic_enabled: None,
+        semantic_status: None,
+        semantic_reason: None,
+        semantic_hit_count: None,
+        semantic_match_count: None,
+        warning: None,
+        metadata: None,
+        note: None,
+    };
+    let empty_symbol_response = SearchSymbolResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+    let empty_navigation_response = GoToDefinitionResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+    let empty_declarations_response = FindDeclarationsResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+
+    server.cache_search_text_response(
+        SearchTextResponseCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            query: "needle".to_owned(),
+            pattern_type: "literal",
+            path_regex: None,
+            limit: 10,
+        },
+        &empty_text_response,
+        &Value::Null,
+    );
+    server.cache_search_text_response(
+        SearchTextResponseCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            query: "needle".to_owned(),
+            pattern_type: "literal",
+            path_regex: None,
+            limit: 10,
+        },
+        &empty_text_response,
+        &Value::Null,
+    );
+    server.cache_search_hybrid_response(
+        SearchHybridResponseCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            query: "runtime".to_owned(),
+            language: None,
+            limit: 10,
+            semantic: None,
+            lexical_weight_bits: 0,
+            graph_weight_bits: 0,
+            semantic_weight_bits: 0,
+        },
+        &empty_hybrid_response,
+        &Value::Null,
+    );
+    server.cache_search_hybrid_response(
+        SearchHybridResponseCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            query: "runtime".to_owned(),
+            language: None,
+            limit: 10,
+            semantic: None,
+            lexical_weight_bits: 0,
+            graph_weight_bits: 0,
+            semantic_weight_bits: 0,
+        },
+        &empty_hybrid_response,
+        &Value::Null,
+    );
+    server.cache_search_symbol_response(
+        SearchSymbolResponseCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            query: "User".to_owned(),
+            path_class: None,
+            path_regex: None,
+            limit: 10,
+        },
+        &empty_symbol_response,
+        &["repo-001".to_owned()],
+        0,
+        0,
+        0,
+        0,
+        10,
+    );
+    server.cache_search_symbol_response(
+        SearchSymbolResponseCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            query: "User".to_owned(),
+            path_class: None,
+            path_regex: None,
+            limit: 10,
+        },
+        &empty_symbol_response,
+        &["repo-002".to_owned()],
+        0,
+        0,
+        0,
+        0,
+        10,
+    );
+    server.cache_go_to_definition_response(
+        GoToDefinitionResponseCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            repository_id: Some("repo-001".to_owned()),
+            symbol: Some("User".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 10,
+        },
+        &empty_navigation_response,
+        &["repo-001".to_owned()],
+        None,
+        None,
+        None,
+        None,
+        10,
+        0,
+        0,
+        0,
+    );
+    server.cache_go_to_definition_response(
+        GoToDefinitionResponseCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            repository_id: Some("repo-002".to_owned()),
+            symbol: Some("User".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 10,
+        },
+        &empty_navigation_response,
+        &["repo-002".to_owned()],
+        None,
+        None,
+        None,
+        None,
+        10,
+        0,
+        0,
+        0,
+    );
+    server.cache_find_declarations_response(
+        FindDeclarationsResponseCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            repository_id: Some("repo-001".to_owned()),
+            symbol: Some("User".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 10,
+        },
+        &empty_declarations_response,
+        &["repo-001".to_owned()],
+        None,
+        None,
+        None,
+        None,
+        10,
+        0,
+        0,
+        0,
+    );
+    server.cache_find_declarations_response(
+        FindDeclarationsResponseCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            repository_id: Some("repo-002".to_owned()),
+            symbol: Some("User".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 10,
+        },
+        &empty_declarations_response,
+        &["repo-002".to_owned()],
+        None,
+        None,
+        None,
+        None,
+        10,
+        0,
+        0,
+        0,
+    );
+    server.cache_heuristic_references(
+        HeuristicReferenceCacheKey {
+            repository_id: "repo-001".to_owned(),
+            symbol_id: "symbol-001".to_owned(),
+            corpus_signature: "corpus-001".to_owned(),
+            scip_signature: "scip-001".to_owned(),
+        },
+        Vec::new(),
+        0,
+        0,
+        0,
+    );
+    server.cache_heuristic_references(
+        HeuristicReferenceCacheKey {
+            repository_id: "repo-002".to_owned(),
+            symbol_id: "symbol-002".to_owned(),
+            corpus_signature: "corpus-002".to_owned(),
+            scip_signature: "scip-002".to_owned(),
+        },
+        Vec::new(),
+        0,
+        0,
+        0,
+    );
+
+    let _ = server
+        .attach_workspace_internal(&root, true, WorkspaceResolveMode::GitRoot)
+        .expect("workspace attach should succeed");
+
+    assert_eq!(
+        server
+            .search_text_response_cache
+            .read()
+            .expect("search text cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .search_hybrid_response_cache
+            .read()
+            .expect("search hybrid cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .search_symbol_response_cache
+            .read()
+            .expect("search symbol cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .go_to_definition_response_cache
+            .read()
+            .expect("go_to_definition cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .find_declarations_response_cache
+            .read()
+            .expect("find_declarations cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert!(
+        server
+            .search_text_response_cache
+            .read()
+            .expect("search text cache should not be poisoned")
+            .keys()
+            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
+        "search text cache should retain only unaffected repository entries"
+    );
+    assert!(
+        server
+            .search_hybrid_response_cache
+            .read()
+            .expect("search hybrid cache should not be poisoned")
+            .keys()
+            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
+        "search hybrid cache should retain only unaffected repository entries"
+    );
+    assert!(
+        server
+            .search_symbol_response_cache
+            .read()
+            .expect("search symbol cache should not be poisoned")
+            .keys()
+            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
+        "search symbol cache should retain only unaffected repository entries"
+    );
+    assert!(
+        server
+            .go_to_definition_response_cache
+            .read()
+            .expect("go_to_definition cache should not be poisoned")
+            .keys()
+            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
+        "go_to_definition cache should retain only unaffected repository entries"
+    );
+    assert!(
+        server
+            .find_declarations_response_cache
+            .read()
+            .expect("find_declarations cache should not be poisoned")
+            .keys()
+            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
+        "find_declarations cache should retain only unaffected repository entries"
+    );
+    assert!(
+        server
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .keys()
+            .all(|key| key.repository_id == "repo-002"),
+        "heuristic reference cache should retain only unaffected repository entries"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn watch_notify_invalidates_live_server_answer_caches() {
+    let workspace_root = temp_workspace_root("watch-invalidates-live-answer-caches");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct WatchCache;\n",
+    )
+    .expect("failed to write workspace root fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("runtime gate tests should build a valid FriggConfig");
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+    };
+
+    let declared_repository = config
+        .repositories()
+        .into_iter()
+        .next()
+        .expect("watch cache test should define one repository");
+    let declared_root = PathBuf::from(&declared_repository.root_path);
+    let db_path = crate::storage::ensure_provenance_db_parent_dir(&declared_root)
+        .expect("manifest storage path should work");
+    Storage::new(&db_path)
+        .initialize()
+        .expect("manifest storage should initialize");
+    reindex_repository(
+        &declared_repository.repository_id.0,
+        &declared_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+    )
+    .expect("baseline changed-only reindex should succeed");
+
+    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+    let validated_manifest_candidate_cache =
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+    let server = FriggMcpServer::new_with_runtime(
+        config.clone(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::clone(&runtime_task_registry),
+        Arc::clone(&validated_manifest_candidate_cache),
+    );
+    let runtime = maybe_start_watch_runtime(
+        &config,
+        RuntimeTransportKind::Stdio,
+        runtime_task_registry,
+        validated_manifest_candidate_cache,
+        Some(server.repository_cache_invalidation_callback()),
+    )
+    .expect("watch runtime should start")
+    .expect("watch runtime should be enabled");
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("runtime server should expose the startup workspace");
+    let summary = server.repository_summary(&workspace);
+    let lexical_snapshot_id = summary
+        .health
+        .as_ref()
+        .and_then(|health| health.lexical.snapshot_id.clone())
+        .expect("baseline repository summary should report a lexical snapshot id");
+    let scope = RepositoryFreshnessCacheScope {
+        repository_id: workspace.repository_id.clone(),
+        snapshot_id: lexical_snapshot_id,
+        semantic_state: None,
+        semantic_provider: None,
+        semantic_model: None,
+    };
+    let empty_text_response = SearchTextResponse {
+        total_matches: 0,
+        matches: Vec::<TextMatch>::new(),
+    };
+    let empty_hybrid_response = SearchHybridResponse {
+        matches: Vec::new(),
+        semantic_requested: None,
+        semantic_enabled: None,
+        semantic_status: None,
+        semantic_reason: None,
+        semantic_hit_count: None,
+        semantic_match_count: None,
+        warning: None,
+        metadata: None,
+        note: None,
+    };
+    let empty_symbol_response = SearchSymbolResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+    let empty_navigation_response = GoToDefinitionResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+    let empty_declarations_response = FindDeclarationsResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+    let empty_source_refs = serde_json::json!({});
+
+    server.cache_search_text_response(
+        SearchTextResponseCacheKey {
+            scoped_repository_ids: vec![workspace.repository_id.clone()],
+            freshness_scopes: vec![scope.clone()],
+            query: "watch-cache".to_owned(),
+            pattern_type: "literal",
+            path_regex: None,
+            limit: 5,
+        },
+        &empty_text_response,
+        &empty_source_refs,
+    );
+    server.cache_search_hybrid_response(
+        SearchHybridResponseCacheKey {
+            scoped_repository_ids: vec![workspace.repository_id.clone()],
+            freshness_scopes: vec![scope.clone()],
+            query: "watch-cache".to_owned(),
+            language: None,
+            limit: 5,
+            semantic: Some(false),
+            lexical_weight_bits: 0.0f32.to_bits(),
+            graph_weight_bits: 0.0f32.to_bits(),
+            semantic_weight_bits: 0.0f32.to_bits(),
+        },
+        &empty_hybrid_response,
+        &empty_source_refs,
+    );
+    server.cache_search_symbol_response(
+        SearchSymbolResponseCacheKey {
+            scoped_repository_ids: vec![workspace.repository_id.clone()],
+            freshness_scopes: vec![scope.clone()],
+            query: "WatchCache".to_owned(),
+            path_class: None,
+            path_regex: None,
+            limit: 5,
+        },
+        &empty_symbol_response,
+        &[workspace.repository_id.clone()],
+        0,
+        0,
+        0,
+        0,
+        5,
+    );
+    server.cache_go_to_definition_response(
+        GoToDefinitionResponseCacheKey {
+            scoped_repository_ids: vec![workspace.repository_id.clone()],
+            freshness_scopes: vec![scope.clone()],
+            repository_id: Some(workspace.repository_id.clone()),
+            symbol: Some("WatchCache".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 5,
+        },
+        &empty_navigation_response,
+        &[workspace.repository_id.clone()],
+        Some("WatchCache"),
+        None,
+        Some("heuristic"),
+        Some("fixture"),
+        5,
+        0,
+        0,
+        0,
+    );
+    server.cache_find_declarations_response(
+        FindDeclarationsResponseCacheKey {
+            scoped_repository_ids: vec![workspace.repository_id.clone()],
+            freshness_scopes: vec![scope.clone()],
+            repository_id: Some(workspace.repository_id.clone()),
+            symbol: Some("WatchCache".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: 5,
+        },
+        &empty_declarations_response,
+        &[workspace.repository_id.clone()],
+        Some("WatchCache"),
+        None,
+        Some("heuristic"),
+        Some("fixture"),
+        5,
+        0,
+        0,
+        0,
+    );
+    server.cache_heuristic_references(
+        HeuristicReferenceCacheKey {
+            repository_id: workspace.repository_id.clone(),
+            symbol_id: "WatchCache".to_owned(),
+            corpus_signature: "corpus-001".to_owned(),
+            scip_signature: "scip-001".to_owned(),
+        },
+        Vec::new(),
+        0,
+        0,
+        0,
+    );
+
+    assert!(
+        server
+            .cached_repository_summary(&workspace.repository_id)
+            .is_some()
+    );
+    assert_eq!(
+        server
+            .search_text_response_cache
+            .read()
+            .expect("search text response cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .search_hybrid_response_cache
+            .read()
+            .expect("search hybrid response cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .search_symbol_response_cache
+            .read()
+            .expect("search symbol response cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .go_to_definition_response_cache
+            .read()
+            .expect("go-to-definition response cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .find_declarations_response_cache
+            .read()
+            .expect("find declarations response cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .len(),
+        1
+    );
+
+    fs::write(
+        workspace_root.join("src/watch_cache.rs"),
+        "pub fn watch_cache_dirty_event() {}\n",
+    )
+    .expect("creating a new source file should trigger notify backend");
+
+    assert!(
+        wait_for_repository_answer_cache_eviction(
+            &server,
+            &workspace.repository_id,
+            Duration::from_secs(5),
+        )
+        .await,
+        "watch notify should evict live repository-scoped answer caches"
+    );
+
+    drop(runtime);
+    tokio::time::sleep(Duration::from_millis(25)).await;
     let _ = fs::remove_dir_all(workspace_root);
 }
 
@@ -457,6 +1218,319 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
 }
 
 #[test]
+fn repository_response_cache_freshness_returns_ready_manifest_scope() {
+    let workspace_root = temp_workspace_root("response-cache-freshness-ready");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+
+    let freshness = server
+        .repository_response_cache_freshness(
+            &[workspace.clone()],
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("manifest freshness should compute");
+
+    let scopes = freshness
+        .scopes
+        .as_ref()
+        .expect("ready manifest snapshot should be cacheable");
+    assert_eq!(scopes.len(), 1);
+    assert_eq!(scopes[0].repository_id, workspace.repository_id);
+    assert_eq!(scopes[0].snapshot_id, "snapshot-001");
+    assert_eq!(scopes[0].semantic_state, None);
+    assert_eq!(
+        freshness.basis.get("cacheable").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/manifest")
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/dirty_root")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn repository_response_cache_freshness_marks_dirty_root_uncacheable() {
+    let workspace_root = temp_workspace_root("response-cache-freshness-dirty-root");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Dirty;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    server
+        .validated_manifest_candidate_cache
+        .write()
+        .expect("validated manifest candidate cache should not be poisoned")
+        .mark_dirty_root(&workspace.root);
+
+    let freshness = server
+        .repository_response_cache_freshness(
+            &[workspace],
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("manifest freshness should compute");
+
+    assert!(
+        freshness.scopes.is_none(),
+        "dirty roots must bypass repository answer caches even when the latest snapshot is still valid"
+    );
+    assert_eq!(
+        freshness.basis.get("cacheable").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/manifest")
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/dirty_root")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn repository_response_cache_freshness_marks_missing_snapshot_uncacheable() {
+    let workspace_root = temp_workspace_root("response-cache-freshness-missing");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Missing;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    let db_path = crate::storage::ensure_provenance_db_parent_dir(&workspace_root)
+        .expect("provenance db parent dir should be creatable for missing-snapshot test");
+    Storage::new(db_path)
+        .initialize()
+        .expect("storage should initialize for missing-snapshot freshness checks");
+
+    let freshness = server
+        .repository_response_cache_freshness(
+            &[workspace],
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("manifest freshness should compute");
+
+    assert!(
+        freshness.scopes.is_none(),
+        "missing manifest snapshots must bypass repository answer caches"
+    );
+    assert_eq!(
+        freshness.basis.get("cacheable").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/manifest")
+            .and_then(Value::as_str),
+        Some("missing_snapshot")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/dirty_root")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn repository_response_cache_freshness_marks_stale_snapshot_uncacheable() {
+    let workspace_root = temp_workspace_root("response-cache-freshness-stale");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    let source_path = workspace_root.join("src/lib.rs");
+    fs::write(&source_path, "pub struct Stale;\n").expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    rewrite_fixture_file_with_mtime_tick(&source_path, "pub struct StaleAfterEdit;\n");
+
+    let freshness = server
+        .repository_response_cache_freshness(
+            &[workspace],
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("manifest freshness should compute");
+
+    assert!(
+        freshness.scopes.is_none(),
+        "stale manifest snapshots must bypass repository answer caches"
+    );
+    assert_eq!(
+        freshness.basis.get("cacheable").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/manifest")
+            .and_then(Value::as_str),
+        Some("stale_snapshot")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/dirty_root")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn repository_response_cache_freshness_includes_semantic_scope_metadata() {
+    let workspace_root = temp_workspace_root("response-cache-freshness-semantic-aware");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Semantic;\n")
+        .expect("failed to write source fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.semantic_runtime = semantic_runtime_enabled_openai();
+    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    Storage::new(&workspace.db_path)
+        .replace_semantic_embeddings_for_repository(
+            &workspace.repository_id,
+            "snapshot-001",
+            "openai",
+            "text-embedding-3-small",
+            &[semantic_record(
+                &workspace.repository_id,
+                "snapshot-001",
+                "src/lib.rs",
+            )],
+        )
+        .expect("semantic embeddings should persist");
+
+    let freshness = server
+        .repository_response_cache_freshness(
+            &[workspace.clone()],
+            RepositoryResponseCacheFreshnessMode::SemanticAware,
+        )
+        .expect("semantic-aware freshness should compute");
+
+    let scopes = freshness
+        .scopes
+        .as_ref()
+        .expect("ready semantic snapshot should remain cacheable");
+    assert_eq!(scopes.len(), 1);
+    assert_eq!(scopes[0].repository_id, workspace.repository_id);
+    assert_eq!(scopes[0].snapshot_id, "snapshot-001");
+    assert_eq!(scopes[0].semantic_state.as_deref(), Some("ready"));
+    assert_eq!(scopes[0].semantic_provider.as_deref(), Some("openai"));
+    assert_eq!(
+        scopes[0].semantic_model.as_deref(),
+        Some("text-embedding-3-small")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/semantic")
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
     let workspace_root = temp_workspace_root("workspace-lexical-invalid-semantic-config");
     fs::create_dir_all(workspace_root.join("src"))
@@ -498,6 +1572,73 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
         semantic.reason.as_deref(),
         Some("semantic_runtime_invalid_config")
     );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
+    let workspace_root = temp_workspace_root("repository-summary-dirty-root-bypass");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct DirtySummary;\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    let workspace = server
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+
+    let initial = server.repository_summary(&workspace);
+    let initial_lexical = initial
+        .health
+        .as_ref()
+        .expect("repository summary should expose health")
+        .lexical
+        .clone();
+    assert_eq!(initial_lexical.state, WorkspaceIndexComponentState::Ready);
+    assert_eq!(initial_lexical.reason, None);
+    assert_eq!(initial_lexical.snapshot_id.as_deref(), Some("snapshot-001"));
+
+    server
+        .validated_manifest_candidate_cache
+        .write()
+        .expect("validated manifest candidate cache should not be poisoned")
+        .mark_dirty_root(&workspace.root);
+
+    let refreshed = server.repository_summary(&workspace);
+    let refreshed_lexical = refreshed
+        .health
+        .as_ref()
+        .expect("repository summary should expose health")
+        .lexical
+        .clone();
+    assert_eq!(refreshed_lexical.state, WorkspaceIndexComponentState::Stale);
+    assert_eq!(refreshed_lexical.reason.as_deref(), Some("dirty_root"));
+    assert_eq!(
+        refreshed_lexical.snapshot_id.as_deref(),
+        Some("snapshot-001")
+    );
+    assert_eq!(refreshed_lexical.artifact_count, Some(1));
 
     let _ = fs::remove_dir_all(workspace_root);
 }

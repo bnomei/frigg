@@ -3,13 +3,56 @@ use serde_json::Value;
 
 use crate::mcp::server::FriggMcpServer;
 
-const DEEP_SEARCH_ALLOWED_STEP_TOOLS: [&str; 5] = [
-    "list_repositories",
-    "read_file",
-    "search_text",
-    "search_symbol",
-    "find_references",
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeepSearchStepTool {
+    ListRepositories,
+    ReadFile,
+    SearchText,
+    SearchSymbol,
+    FindReferences,
+}
+
+impl DeepSearchStepTool {
+    const ALL: [Self; 5] = [
+        Self::ListRepositories,
+        Self::ReadFile,
+        Self::SearchText,
+        Self::SearchSymbol,
+        Self::FindReferences,
+    ];
+
+    fn from_tool_name(tool_name: &str) -> Option<Self> {
+        match tool_name {
+            "list_repositories" => Some(Self::ListRepositories),
+            "read_file" => Some(Self::ReadFile),
+            "search_text" => Some(Self::SearchText),
+            "search_symbol" => Some(Self::SearchSymbol),
+            "find_references" => Some(Self::FindReferences),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ListRepositories => "list_repositories",
+            Self::ReadFile => "read_file",
+            Self::SearchText => "search_text",
+            Self::SearchSymbol => "search_symbol",
+            Self::FindReferences => "find_references",
+        }
+    }
+}
+
+pub(crate) fn allowed_step_tools() -> &'static [&'static str] {
+    const ALLOWED_STEP_TOOLS: [&str; 5] = [
+        DeepSearchStepTool::ALL[0].as_str(),
+        DeepSearchStepTool::ALL[1].as_str(),
+        DeepSearchStepTool::ALL[2].as_str(),
+        DeepSearchStepTool::ALL[3].as_str(),
+        DeepSearchStepTool::ALL[4].as_str(),
+    ];
+    &ALLOWED_STEP_TOOLS
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchPlaybook {

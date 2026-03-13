@@ -23,6 +23,8 @@ fn initialize_applies_base_schema_and_version() -> FriggResult<()> {
         "semantic_chunk",
         "semantic_chunk_embedding",
         "path_witness_projection",
+        "test_subject_projection",
+        "entrypoint_surface_projection",
     ] {
         assert!(
             table_exists(&conn, table)?,
@@ -149,6 +151,9 @@ fn initialize_creates_hotpath_indexes_for_snapshot_and_provenance_queries() -> F
     for index_name in [
         "idx_snapshot_repository_created_snapshot",
         "idx_provenance_tool_created_trace",
+        "idx_test_subject_projection_repo_snapshot_test",
+        "idx_test_subject_projection_repo_snapshot_subject",
+        "idx_entrypoint_surface_projection_repo_snapshot_path",
     ] {
         assert!(
             index_exists(&conn, index_name)?,

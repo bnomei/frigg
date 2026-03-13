@@ -20,11 +20,12 @@ use crate::indexer::{
     resolve_php_target_evidence_edges, search_structural_in_source,
 };
 use crate::languages::{
-    FLUX_REGISTRY_VERSION, HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
-    extract_blade_source_evidence_from_source, heuristic_implementation_strategy,
-    heuristic_rust_implementation_candidates, mark_local_flux_overlays, parse_rust_impl_signature,
-    parse_supported_language, resolve_blade_relation_evidence_edges,
-    rust_source_suffix_looks_like_call, supported_language_for_path,
+    FLUX_REGISTRY_VERSION, HeuristicImplementationStrategy, LanguageCapability,
+    LanguageSupportCapability, SymbolLanguage, extract_blade_source_evidence_from_source,
+    heuristic_implementation_strategy, heuristic_rust_implementation_candidates,
+    mark_local_flux_overlays, parse_rust_impl_signature, parse_supported_language,
+    resolve_blade_relation_evidence_edges, rust_source_suffix_looks_like_call,
+    supported_language_for_path,
 };
 use crate::manifest_validation::{
     RepositoryManifestFreshness, RepositorySemanticFreshness, repository_freshness_status,
@@ -70,8 +71,10 @@ use crate::mcp::server_cache::{
     CachedFindDeclarationsResponse, CachedGoToDefinitionResponse, CachedHeuristicReferences,
     CachedRepositorySummary, CachedSearchHybridResponse, CachedSearchSymbolResponse,
     CachedSearchTextResponse, FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey,
-    HeuristicReferenceCacheKey, SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey,
-    SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
+    HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope, RepositoryResponseCacheFreshness,
+    RepositoryResponseCacheFreshnessMode, SearchHybridResponseCacheKey,
+    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
+    response_cache_scopes_include_repository,
 };
 use crate::mcp::server_state::{
     CachedPreciseGraph, DeterministicSignatureHasher, ExploreExecution, FindReferencesExecution,
@@ -85,6 +88,7 @@ use crate::mcp::server_state::{
 use crate::mcp::tool_surface::{
     TOOL_SURFACE_PROFILE_ENV, ToolSurfaceParityDiff, ToolSurfaceProfile,
     active_runtime_tool_surface_profile, diff_runtime_against_profile_manifest,
+    manifest_for_tool_surface_profile,
 };
 use crate::mcp::types::{
     CallHierarchyMatch, DeepSearchComposeCitationsParams, DeepSearchComposeCitationsResponse,
@@ -153,12 +157,6 @@ pub struct FriggMcpServer {
 }
 
 impl FriggMcpServer {
-    const EXTENDED_ONLY_TOOL_NAMES: [&str; 4] = [
-        "explore",
-        "deep_search_compose_citations",
-        "deep_search_replay",
-        "deep_search_run",
-    ];
     const PROVENANCE_MAX_TEXT_CHARS: usize = 512;
     const PROVENANCE_BEST_EFFORT_ENV: &str = "FRIGG_MCP_PROVENANCE_BEST_EFFORT";
     const FIND_REFERENCES_MAX_SCIP_ARTIFACTS: usize = 2_048;
@@ -177,13 +175,20 @@ impl FriggMcpServer {
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
     const RUNTIME_RECENT_PROVENANCE_LIMIT: usize = 8;
     const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
-    const SEARCH_RESPONSE_CACHE_TTL: Duration = Duration::from_secs(1);
-
-    fn filtered_tool_router(enable_extended_tools: bool) -> ToolRouter<Self> {
+    fn filtered_tool_router(profile: ToolSurfaceProfile) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
-        if !enable_extended_tools {
-            for tool_name in Self::EXTENDED_ONLY_TOOL_NAMES {
-                router.remove_route(tool_name);
+        let allowed_tools = manifest_for_tool_surface_profile(profile)
+            .tool_names
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for tool_name in router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect::<Vec<_>>()
+        {
+            if !allowed_tools.contains(&tool_name) {
+                router.remove_route(&tool_name);
             }
         }
         router
@@ -1659,6 +1664,14 @@ impl FriggMcpServer {
         (Some(metadata), note)
     }
 
+    fn metadata_with_freshness_basis(mut metadata: Value, freshness_basis: &Value) -> Value {
+        metadata
+            .as_object_mut()
+            .expect("metadata payload should be an object")
+            .insert("freshness_basis".to_owned(), freshness_basis.clone());
+        metadata
+    }
+
     fn precise_call_site_fields(
         root: &Path,
         occurrence: &crate::graph::PreciseOccurrenceRecord,
@@ -2032,7 +2045,7 @@ impl FriggMcpServer {
         };
         Self {
             config: Arc::new(config),
-            tool_router: Self::filtered_tool_router(enable_extended_tools),
+            tool_router: Self::filtered_tool_router(tool_surface_profile),
             tool_surface_profile,
             runtime_profile,
             runtime_watch_active,
@@ -2126,6 +2139,17 @@ impl FriggMcpServer {
             provenance_best_effort: self.provenance_best_effort,
             provenance_enabled: self.provenance_enabled,
         }
+    }
+
+    pub fn repository_cache_invalidation_callback(
+        &self,
+    ) -> crate::watch::RepositoryCacheInvalidationCallback {
+        let server = self.clone();
+        Arc::new(move |repository_id: &str| {
+            server.invalidate_repository_summary_cache(repository_id);
+            server.invalidate_repository_search_response_caches(repository_id);
+            server.invalidate_repository_navigation_response_caches(repository_id);
+        })
     }
 
     pub async fn serve_stdio(self) -> Result<(), rmcp::RmcpError> {
@@ -2287,30 +2311,8 @@ impl FriggMcpServer {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
-        self.search_text_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        self.search_hybrid_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        self.search_symbol_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        self.go_to_definition_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        self.find_declarations_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-        self.heuristic_reference_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+        self.invalidate_repository_search_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
         self.maybe_refresh_workspace_semantic_snapshot(&workspace);
 
         let mut repository = self.repository_summary(&workspace);

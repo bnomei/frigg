@@ -9,6 +9,36 @@ use crate::mcp::types::{
     SearchSymbolResponse, SearchTextResponse,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepositoryResponseCacheFreshnessMode {
+    ManifestOnly,
+    SemanticAware,
+}
+
+impl RepositoryResponseCacheFreshnessMode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ManifestOnly => "manifest_only",
+            Self::SemanticAware => "semantic_aware",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RepositoryFreshnessCacheScope {
+    pub(crate) repository_id: String,
+    pub(crate) snapshot_id: String,
+    pub(crate) semantic_state: Option<String>,
+    pub(crate) semantic_provider: Option<String>,
+    pub(crate) semantic_model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RepositoryResponseCacheFreshness {
+    pub(crate) scopes: Option<Vec<RepositoryFreshnessCacheScope>>,
+    pub(crate) basis: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceSemanticRefreshPlan {
     pub(crate) latest_snapshot_id: String,
@@ -24,6 +54,7 @@ pub(crate) struct CachedRepositorySummary {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchTextResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
     pub(crate) query: String,
     pub(crate) pattern_type: &'static str,
     pub(crate) path_regex: Option<String>,
@@ -34,12 +65,12 @@ pub(crate) struct SearchTextResponseCacheKey {
 pub(crate) struct CachedSearchTextResponse {
     pub(crate) response: SearchTextResponse,
     pub(crate) source_refs: Value,
-    pub(crate) generated_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchHybridResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
     pub(crate) query: String,
     pub(crate) language: Option<String>,
     pub(crate) limit: usize,
@@ -53,12 +84,12 @@ pub(crate) struct SearchHybridResponseCacheKey {
 pub(crate) struct CachedSearchHybridResponse {
     pub(crate) response: SearchHybridResponse,
     pub(crate) source_refs: Value,
-    pub(crate) generated_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchSymbolResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
     pub(crate) query: String,
     pub(crate) path_class: Option<String>,
     pub(crate) path_regex: Option<String>,
@@ -74,11 +105,12 @@ pub(crate) struct CachedSearchSymbolResponse {
     pub(crate) manifest_read_diagnostics_count: usize,
     pub(crate) symbol_extraction_diagnostics_count: usize,
     pub(crate) effective_limit: usize,
-    pub(crate) generated_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct GoToDefinitionResponseCacheKey {
+    pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
     pub(crate) repository_id: Option<String>,
     pub(crate) symbol: Option<String>,
     pub(crate) path: Option<String>,
@@ -99,11 +131,12 @@ pub(crate) struct CachedGoToDefinitionResponse {
     pub(crate) precise_artifacts_ingested: usize,
     pub(crate) precise_artifacts_failed: usize,
     pub(crate) match_count: usize,
-    pub(crate) generated_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FindDeclarationsResponseCacheKey {
+    pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
     pub(crate) repository_id: Option<String>,
     pub(crate) symbol: Option<String>,
     pub(crate) path: Option<String>,
@@ -124,7 +157,6 @@ pub(crate) struct CachedFindDeclarationsResponse {
     pub(crate) precise_artifacts_ingested: usize,
     pub(crate) precise_artifacts_failed: usize,
     pub(crate) match_count: usize,
-    pub(crate) generated_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -141,5 +173,17 @@ pub(crate) struct CachedHeuristicReferences {
     pub(crate) source_read_diagnostics_count: usize,
     pub(crate) source_files_loaded: usize,
     pub(crate) source_bytes_loaded: u64,
-    pub(crate) generated_at: Instant,
+}
+
+pub(crate) fn response_cache_scopes_include_repository(
+    repository_id: &str,
+    scoped_repository_ids: &[String],
+    freshness_scopes: &[RepositoryFreshnessCacheScope],
+) -> bool {
+    scoped_repository_ids
+        .iter()
+        .any(|candidate| candidate == repository_id)
+        || freshness_scopes
+            .iter()
+            .any(|scope| scope.repository_id == repository_id)
 }

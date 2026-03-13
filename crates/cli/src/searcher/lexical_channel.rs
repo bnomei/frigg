@@ -59,11 +59,20 @@ pub(super) fn build_hybrid_path_witness_hits_with_intent(
         EvidenceChannel::PathSurfaceWitness,
         EvidenceAnchorKind::PathWitness,
     );
-    for hit in &mut hits {
+    for (hit, found) in hits.iter_mut().zip(matches.iter()) {
         hit.provenance_ids = vec![format!(
             "path_witness:{}:{}:{}",
             hit.document.path, hit.document.line, hit.document.column
         )];
+        if let Some(score_hint_millis) = found.witness_score_hint_millis {
+            hit.raw_score = score_hint_millis as f32 / 1000.0;
+        }
+        if let Some(extra_provenance_ids) = &found.witness_provenance_ids {
+            hit.provenance_ids
+                .extend(extra_provenance_ids.iter().cloned());
+            hit.provenance_ids.sort();
+            hit.provenance_ids.dedup();
+        }
     }
     hits
 }
@@ -86,9 +95,17 @@ fn build_hybrid_hits_from_matches_with_intent(
         .map(|found| {
             let key = (found.repository_id.clone(), found.path.clone());
             let frequency = *frequency_by_document.get(&key).unwrap_or(&1.0);
-            let raw_score = frequency.sqrt()
+            let computed_raw_score = frequency.sqrt()
                 * hybrid_path_quality_multiplier_with_intent(&found.path, intent)
                 * hybrid_excerpt_alignment_multiplier(&found.excerpt, intent, query_text);
+            let raw_score = if matches!(channel, EvidenceChannel::PathSurfaceWitness) {
+                found
+                    .witness_score_hint_millis
+                    .map(|millis| millis as f32 / 1000.0)
+                    .unwrap_or(computed_raw_score)
+            } else {
+                computed_raw_score
+            };
             let anchor = EvidenceAnchor::new(
                 anchor_kind,
                 found.line,
@@ -354,5 +371,37 @@ mod tests {
         let anchor = best_path_witness_anchor_in_reader("docs/overview.md", source, &query_context);
 
         assert_eq!(anchor, Some((2, "header line".to_owned())));
+    }
+
+    #[test]
+    fn path_witness_hits_preserve_score_hints_and_overlay_provenance() {
+        let hits = build_hybrid_path_witness_hits_with_intent(
+            &[TextMatch {
+                repository_id: "repo-001".to_owned(),
+                path: "tests/unit/user_service_test.rs".to_owned(),
+                line: 7,
+                column: 1,
+                excerpt: "fn user_service_test() {}".to_owned(),
+                witness_score_hint_millis: Some(4_200),
+                witness_provenance_ids: Some(vec![
+                    "overlay:test_subject:tests/unit/user_service_test.rs->src/user_service.rs"
+                        .to_owned(),
+                ]),
+            }],
+            &HybridRankingIntent::from_query("user service tests"),
+            "user service tests",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].raw_score, 4.2);
+        assert!(
+            hits[0]
+                .provenance_ids
+                .iter()
+                .any(|id| id == "path_witness:tests/unit/user_service_test.rs:7:1")
+        );
+        assert!(hits[0].provenance_ids.iter().any(|id| {
+            id == "overlay:test_subject:tests/unit/user_service_test.rs->src/user_service.rs"
+        }));
     }
 }

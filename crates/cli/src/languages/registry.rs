@@ -171,6 +171,58 @@ impl LanguageCapability {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LanguageCapabilityTier {
+    Core,
+    OptionalAccelerator,
+    Unsupported,
+}
+
+impl LanguageCapabilityTier {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::OptionalAccelerator => "optional_accelerator",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LanguageSupportCapability {
+    DocumentSymbols,
+    StructuralSearch,
+    SymbolCorpus,
+    SourceFilter,
+    Navigation,
+    PreciseArtifactAssist,
+    SemanticChunking,
+}
+
+impl LanguageSupportCapability {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::DocumentSymbols,
+        Self::StructuralSearch,
+        Self::SymbolCorpus,
+        Self::SourceFilter,
+        Self::Navigation,
+        Self::PreciseArtifactAssist,
+        Self::SemanticChunking,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::DocumentSymbols => "document_symbols",
+            Self::StructuralSearch => "structural_search",
+            Self::SymbolCorpus => "symbol_corpus",
+            Self::SourceFilter => "source_filter",
+            Self::Navigation => "navigation",
+            Self::PreciseArtifactAssist => "precise_artifact_assist",
+            Self::SemanticChunking => "semantic_chunking",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolLanguage {
@@ -188,6 +240,19 @@ pub enum SymbolLanguage {
 }
 
 impl SymbolLanguage {
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Rust,
+        Self::Php,
+        Self::Blade,
+        Self::TypeScript,
+        Self::Python,
+        Self::Go,
+        Self::Kotlin,
+        Self::Lua,
+        Self::Roc,
+        Self::Nim,
+    ];
+
     pub fn from_path(path: &Path) -> Option<Self> {
         if blade::is_blade_path(path) {
             return Some(Self::Blade);
@@ -280,6 +345,67 @@ impl SymbolLanguage {
             LanguageCapability::StructuralSearch => STRUCTURAL_SEARCH_LANGUAGES.contains(&self),
             LanguageCapability::SymbolCorpus => SYMBOL_CORPUS_LANGUAGES.contains(&self),
             LanguageCapability::SourceFilter => DOCUMENT_SYMBOLS_LANGUAGES.contains(&self),
+        }
+    }
+
+    pub(crate) const fn supports_semantic_chunking(self) -> bool {
+        matches!(self, Self::Rust | Self::Php | Self::Blade)
+    }
+
+    pub(crate) fn capability_tier(
+        self,
+        capability: LanguageSupportCapability,
+    ) -> LanguageCapabilityTier {
+        match capability {
+            LanguageSupportCapability::DocumentSymbols => {
+                if self.supports(LanguageCapability::DocumentSymbols) {
+                    LanguageCapabilityTier::Core
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::StructuralSearch => {
+                if self.supports(LanguageCapability::StructuralSearch) {
+                    LanguageCapabilityTier::Core
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::SymbolCorpus => {
+                if self.supports(LanguageCapability::SymbolCorpus) {
+                    LanguageCapabilityTier::Core
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::SourceFilter => {
+                if self.supports(LanguageCapability::SourceFilter) {
+                    LanguageCapabilityTier::Core
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::Navigation => {
+                if self.supports(LanguageCapability::SymbolCorpus) {
+                    LanguageCapabilityTier::Core
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::PreciseArtifactAssist => {
+                if self.supports(LanguageCapability::SymbolCorpus) {
+                    LanguageCapabilityTier::OptionalAccelerator
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
+            LanguageSupportCapability::SemanticChunking => {
+                if self.supports_semantic_chunking() {
+                    LanguageCapabilityTier::OptionalAccelerator
+                } else {
+                    LanguageCapabilityTier::Unsupported
+                }
+            }
         }
     }
 }

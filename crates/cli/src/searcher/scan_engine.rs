@@ -90,6 +90,8 @@ where
                             excerpt: excerpt_for_line
                                 .get_or_insert_with(|| line.to_owned())
                                 .clone(),
+                            witness_score_hint_millis: None,
+                            witness_provenance_ids: None,
                         };
 
                         if use_bounded_retention {
@@ -168,6 +170,8 @@ where
                         line: line_number,
                         column,
                         excerpt: excerpt_for_line.get_or_insert_with(|| line.clone()).clone(),
+                        witness_score_hint_millis: None,
+                        witness_provenance_ids: None,
                     };
 
                     if use_bounded_retention {
@@ -281,6 +285,8 @@ where
                             excerpt: excerpt_for_line
                                 .get_or_insert_with(|| line.to_owned())
                                 .clone(),
+                            witness_score_hint_millis: None,
+                            witness_provenance_ids: None,
                         };
                         retain_bounded_match(&mut matches, query.limit, candidate);
                     }
@@ -358,6 +364,8 @@ where
                         line: line_number,
                         column,
                         excerpt: excerpt_for_line.get_or_insert_with(|| line.clone()).clone(),
+                        witness_score_hint_millis: None,
+                        witness_provenance_ids: None,
                     };
                     retain_bounded_match(&mut matches, query.limit, candidate);
                 }
@@ -462,6 +470,8 @@ where
                         excerpt: excerpt_for_line
                             .get_or_insert_with(|| line.to_owned())
                             .clone(),
+                        witness_score_hint_millis: None,
+                        witness_provenance_ids: None,
                     };
 
                     if use_bounded_retention {

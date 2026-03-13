@@ -36,10 +36,10 @@ pub(crate) use php::{
     symbol_indices_by_name as php_symbol_indices_by_name,
 };
 pub(crate) use registry::{
-    HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
-    heuristic_implementation_strategy, parse_supported_language, parser_for_path,
-    semantic_chunk_language_for_path, supported_language_for_path, symbol_from_node,
-    tree_sitter_language_for_path,
+    HeuristicImplementationStrategy, LanguageCapability, LanguageSupportCapability,
+    SymbolLanguage, heuristic_implementation_strategy, parse_supported_language,
+    parser_for_path, semantic_chunk_language_for_path, supported_language_for_path,
+    symbol_from_node, tree_sitter_language_for_path,
 };
 #[allow(unused_imports)]
 pub(crate) use rust::{
@@ -55,9 +55,10 @@ mod tests {
     use super::blade::{blade_component_name_for_path, blade_view_name_for_path};
     use super::php::php_class_like_name_candidates;
     use super::php::{PhpNameResolutionContext, php_name_resolution_context_from_root};
+    use super::registry::LanguageCapabilityTier;
     use super::{
-        HeuristicImplementationStrategy, LanguageCapability, SymbolLanguage,
-        heuristic_implementation_strategy, parse_supported_language,
+        HeuristicImplementationStrategy, LanguageCapability, LanguageSupportCapability,
+        SymbolLanguage, heuristic_implementation_strategy, parse_supported_language,
         semantic_chunk_language_for_path, supported_language_for_path,
     };
     use tree_sitter::Parser;
@@ -187,6 +188,27 @@ mod tests {
                 LanguageCapability::DocumentSymbols
             ),
             Some(SymbolLanguage::Nim)
+        );
+    }
+
+    #[test]
+    fn capability_tiers_distinguish_core_and_optional_accelerators() {
+        assert_eq!(
+            SymbolLanguage::Rust.capability_tier(LanguageSupportCapability::DocumentSymbols),
+            LanguageCapabilityTier::Core
+        );
+        assert_eq!(
+            SymbolLanguage::Rust.capability_tier(LanguageSupportCapability::PreciseArtifactAssist),
+            LanguageCapabilityTier::OptionalAccelerator
+        );
+        assert_eq!(
+            SymbolLanguage::Blade.capability_tier(LanguageSupportCapability::SemanticChunking),
+            LanguageCapabilityTier::OptionalAccelerator
+        );
+        assert_eq!(
+            SymbolLanguage::TypeScript
+                .capability_tier(LanguageSupportCapability::SemanticChunking),
+            LanguageCapabilityTier::Unsupported
         );
     }
 

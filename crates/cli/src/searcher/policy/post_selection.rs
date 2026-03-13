@@ -223,10 +223,20 @@ fn is_specific_runtime_config_surface_path(path: &str) -> bool {
 }
 
 fn is_runtime_companion_surface_candidate_path(path: &str) -> bool {
+    if surfaces::is_runtime_config_artifact_path(path)
+        || surfaces::is_entrypoint_runtime_path(path)
+        || surfaces::is_ci_workflow_path(path)
+        || surfaces::is_test_support_path(path)
+        || surfaces::is_test_harness_path(path)
+    {
+        return false;
+    }
+
     surfaces::is_kotlin_android_ui_runtime_surface_path(path)
-        && !surfaces::is_runtime_config_artifact_path(path)
-        && !surfaces::is_entrypoint_runtime_path(path)
-        && !surfaces::is_ci_workflow_path(path)
+        || (matches!(
+            surfaces::hybrid_source_class(path),
+            HybridSourceClass::Runtime
+        ) && !surfaces::is_frontend_runtime_noise_path(path))
 }
 
 fn is_plain_test_support_path(path: &str) -> bool {
@@ -512,6 +522,7 @@ fn is_runtime_companion_surface_guardrail_replacement(entry: &HybridRankedEviden
         surfaces::hybrid_source_class(&entry.document.path),
         HybridSourceClass::Project
             | HybridSourceClass::Support
+            | HybridSourceClass::Tests
             | HybridSourceClass::Specs
             | HybridSourceClass::Documentation
             | HybridSourceClass::Readme

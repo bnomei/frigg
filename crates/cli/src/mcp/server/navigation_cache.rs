@@ -1,21 +1,42 @@
 use super::*;
 
 impl FriggMcpServer {
+    pub(super) fn invalidate_repository_navigation_response_caches(&self, repository_id: &str) {
+        self.go_to_definition_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !response_cache_scopes_include_repository(
+                    repository_id,
+                    &key.scoped_repository_ids,
+                    &key.freshness_scopes,
+                )
+            });
+        self.find_declarations_response_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !response_cache_scopes_include_repository(
+                    repository_id,
+                    &key.scoped_repository_ids,
+                    &key.freshness_scopes,
+                )
+            });
+        self.heuristic_reference_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| key.repository_id != repository_id);
+    }
+
     pub(super) fn cached_go_to_definition_response(
         &self,
         cache_key: &GoToDefinitionResponseCacheKey,
     ) -> Option<CachedGoToDefinitionResponse> {
-        let mut cache = self
-            .go_to_definition_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.go_to_definition_response_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
     pub(super) fn cache_go_to_definition_response(
@@ -48,7 +69,6 @@ impl FriggMcpServer {
                     precise_artifacts_ingested,
                     precise_artifacts_failed,
                     match_count,
-                    generated_at: Instant::now(),
                 },
             );
     }
@@ -57,17 +77,11 @@ impl FriggMcpServer {
         &self,
         cache_key: &FindDeclarationsResponseCacheKey,
     ) -> Option<CachedFindDeclarationsResponse> {
-        let mut cache = self
-            .find_declarations_response_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.find_declarations_response_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
     pub(super) fn cache_find_declarations_response(
@@ -100,7 +114,6 @@ impl FriggMcpServer {
                     precise_artifacts_ingested,
                     precise_artifacts_failed,
                     match_count,
-                    generated_at: Instant::now(),
                 },
             );
     }
@@ -109,17 +122,11 @@ impl FriggMcpServer {
         &self,
         cache_key: &HeuristicReferenceCacheKey,
     ) -> Option<CachedHeuristicReferences> {
-        let mut cache = self
-            .heuristic_reference_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get_mut(cache_key)?;
-        if entry.generated_at.elapsed() > Self::SEARCH_RESPONSE_CACHE_TTL {
-            cache.remove(cache_key);
-            return None;
-        }
-        entry.generated_at = Instant::now();
-        Some(entry.clone())
+        self.heuristic_reference_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key)
+            .cloned()
     }
 
     pub(super) fn cache_heuristic_references(
@@ -140,7 +147,6 @@ impl FriggMcpServer {
                     source_read_diagnostics_count,
                     source_files_loaded,
                     source_bytes_loaded,
-                    generated_at: Instant::now(),
                 },
             );
     }

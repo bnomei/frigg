@@ -980,6 +980,49 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
     assert_eq!(
         structured
             .get("metadata")
+            .and_then(|value| value.get("semantic_capability"))
+            .and_then(|value| value.get("requested_language"))
+            .and_then(|value| value.as_str()),
+        Some("rust")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_capability"))
+            .and_then(|value| value.get("semantic_chunking"))
+            .and_then(|value| value.as_str()),
+        Some("optional_accelerator")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_capability"))
+            .and_then(|value| value.get("capabilities"))
+            .and_then(|value| value.get("symbol_corpus"))
+            .and_then(|value| value.as_str()),
+        Some("core")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_capability"))
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("tier"))
+            .and_then(|value| value.as_str()),
+        Some("optional_accelerator")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
+            .and_then(|value| value.get("semantic_capability"))
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.as_str()),
+        Some("disabled_by_request")
+    );
+    assert_eq!(
+        structured
+            .get("metadata")
             .and_then(|value| value.get("channels"))
             .and_then(|value| value.get("lexical_manifest"))
             .and_then(|value| value.get("status"))
@@ -1118,16 +1161,35 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             .and_then(|value| value.as_str()),
         "metadata-only semantic status should remain deterministic"
     );
-    assert_eq!(
-        structured
-            .get("metadata")
-            .and_then(|value| value.get("stage_attribution")),
-        second
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("stage_attribution")),
-        "cached search_hybrid responses should keep stage attribution stable within the session"
-    );
+    let freshness_cacheable = structured
+        .get("metadata")
+        .and_then(|value| value.get("freshness_basis"))
+        .and_then(|value| value.get("cacheable"))
+        .and_then(|value| value.as_bool());
+    if freshness_cacheable == Some(true) {
+        assert_eq!(
+            structured
+                .get("metadata")
+                .and_then(|value| value.get("stage_attribution")),
+            second
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("stage_attribution")),
+            "cacheable search_hybrid responses should keep stage attribution stable within the session"
+        );
+    } else {
+        assert!(
+            second
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("stage_attribution"))
+                .and_then(|value| value.get("scan"))
+                .and_then(|value| value.get("elapsed_us"))
+                .and_then(|value| value.as_u64())
+                .is_some(),
+            "non-cacheable search_hybrid responses should still report stage attribution on repeated calls"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1173,7 +1235,7 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         .search_hybrid(Parameters(SearchHybridParams {
             query: "hello from fixture".to_owned(),
             repository_id: Some("repo-001".to_owned()),
-            language: None,
+            language: Some("rust".to_owned()),
             limit: Some(10),
             weights: None,
             semantic: Some(true),
@@ -1251,6 +1313,110 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
                 "semantic retrieval is degraded; semantic contribution may be partial"
             )),
         "degraded search_hybrid response should emit a clear warning"
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_chunking"))
+            .and_then(|value| value.as_str()),
+        Some("optional_accelerator")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.as_str()),
+        Some("degraded_runtime")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str()),
+        Some("degraded")
+    );
+}
+
+#[tokio::test]
+async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unavailable() {
+    let mut config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+        .expect("fixture root must produce valid config");
+    config.semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::OpenAi),
+        model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    };
+    let server = server_for_config(config);
+
+    let response = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("typescript".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(true),
+        }))
+        .await
+        .expect("unsupported semantic language filters should degrade to metadata, not fail")
+        .0;
+
+    let metadata = response
+        .metadata
+        .as_ref()
+        .expect("search_hybrid should emit structured metadata");
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_chunking"))
+            .and_then(|value| value.as_str()),
+        Some("unsupported")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("capabilities"))
+            .and_then(|value| value.get("symbol_corpus"))
+            .and_then(|value| value.as_str()),
+        Some("core")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("tier"))
+            .and_then(|value| value.as_str()),
+        Some("unsupported")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_capability")
+            .and_then(|value| value.get("semantic_accelerator"))
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.as_str()),
+        Some("unsupported_language")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_status")
+            .and_then(|value| value.as_str()),
+        Some("unavailable")
+    );
+    assert_eq!(
+        metadata
+            .get("semantic_reason")
+            .and_then(|value| value.as_str()),
+        Some("requested language filter 'typescript' does not support semantic_chunking")
+    );
+    assert!(
+        metadata
+            .get("warning")
+            .and_then(|value| value.as_str())
+            .is_some_and(|warning| warning.contains("semantic retrieval is unavailable")),
+        "unsupported semantic language filters should surface an unavailable warning"
     );
 }
 
@@ -2152,6 +2318,134 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
 }
 
 #[tokio::test]
+async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+    let workspace_root = temp_workspace_root("search-text-stale-manifest-edit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let lib_path = src_root.join("lib.rs");
+    fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .search_text(Parameters(SearchTextParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            path_regex: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("initial search_text call should succeed")
+        .0;
+    assert_eq!(first.total_matches, 1);
+    assert_eq!(first.matches[0].path, "src/lib.rs");
+
+    rewrite_file_with_new_mtime(&lib_path, "pub fn beta_beta() {}\n");
+
+    let second = server
+        .search_text(Parameters(SearchTextParams {
+            query: "beta_beta".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            path_regex: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("search_text should bypass stale cache after edit")
+        .0;
+    assert_eq!(second.total_matches, 1);
+    assert_eq!(second.matches[0].path, "src/lib.rs");
+    assert!(second.matches[0].excerpt.contains("beta_beta"));
+
+    let stale = server
+        .search_text(Parameters(SearchTextParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            path_regex: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("search_text should not reuse stale cached matches")
+        .0;
+    assert_eq!(stale.total_matches, 0);
+    assert!(stale.matches.is_empty());
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+    let workspace_root = temp_workspace_root("search-hybrid-stale-manifest-edit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let lib_path = src_root.join("lib.rs");
+    fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+        }))
+        .await
+        .expect("initial search_hybrid call should succeed")
+        .0;
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].path, "src/lib.rs");
+
+    rewrite_file_with_new_mtime(&lib_path, "pub fn beta_beta() {}\n");
+
+    let second = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "beta_beta".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+        }))
+        .await
+        .expect("search_hybrid should bypass stale cache after edit")
+        .0;
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].path, "src/lib.rs");
+    assert!(second.matches[0].excerpt.contains("beta_beta"));
+    assert_eq!(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("freshness_basis"))
+            .and_then(|value| value.get("cacheable"))
+            .and_then(|value| value.as_bool()),
+        Some(false),
+        "stale manifest-backed queries should surface non-cacheable freshness metadata until a fresh snapshot exists"
+    );
+
+    let stale = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "alpha".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+        }))
+        .await
+        .expect("search_hybrid should not reuse stale cached matches")
+        .0;
+    assert!(stale.matches.is_empty());
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_find_references_returns_heuristic_metadata_and_matches() {
     let workspace_root = temp_workspace_root("find-references");
     let src_root = workspace_root.join("src");
@@ -3044,6 +3338,80 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
 }
 
 #[tokio::test]
+async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+    let workspace_root = temp_workspace_root("go-to-definition-stale-manifest-edit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let lib_path = src_root.join("lib.rs");
+    fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("alpha".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("initial go_to_definition call should succeed")
+        .0;
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].symbol, "alpha");
+    assert_eq!(first.matches[0].path, "src/lib.rs");
+
+    rewrite_file_with_new_mtime(&lib_path, "pub fn beta_beta() {}\n");
+
+    let second = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("beta_beta".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("go_to_definition should bypass stale cache after edit")
+        .0;
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].symbol, "beta_beta");
+    assert_eq!(second.matches[0].path, "src/lib.rs");
+    assert_eq!(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("freshness_basis"))
+            .and_then(|value| value.get("cacheable"))
+            .and_then(|value| value.as_bool()),
+        Some(false),
+        "stale manifest-backed navigation should surface non-cacheable freshness metadata until a fresh snapshot exists"
+    );
+
+    let stale = match server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("alpha".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+    {
+        Ok(_) => panic!("go_to_definition should not reuse stale cached matches"),
+        Err(error) => error,
+    };
+    assert_eq!(error_code_tag(&stale), Some("resource_not_found"));
+    assert_eq!(retryable_tag(&stale), Some(false));
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_column() {
     let workspace_root = temp_workspace_root("go-to-definition-location-same-line");
     let src_root = workspace_root.join("src");
@@ -3414,6 +3782,80 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
     assert_eq!(note_json["precision"], "heuristic");
     assert_eq!(note_json["declaration_mode"], "definition_anchor_v1");
     assert_eq!(note_json["fallback_reason"], "precise_absent");
+}
+
+#[tokio::test]
+async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+    let workspace_root = temp_workspace_root("find-declarations-stale-manifest-edit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    let lib_path = src_root.join("lib.rs");
+    fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
+    seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
+
+    let server = server_for_workspace_root(&workspace_root);
+    let first = server
+        .find_declarations(Parameters(FindDeclarationsParams {
+            symbol: Some("alpha".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("initial find_declarations call should succeed")
+        .0;
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].symbol, "alpha");
+    assert_eq!(first.matches[0].path, "src/lib.rs");
+
+    rewrite_file_with_new_mtime(&lib_path, "pub fn beta_beta() {}\n");
+
+    let second = server
+        .find_declarations(Parameters(FindDeclarationsParams {
+            symbol: Some("beta_beta".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+        .expect("find_declarations should bypass stale cache after edit")
+        .0;
+    assert_eq!(second.matches.len(), 1);
+    assert_eq!(second.matches[0].symbol, "beta_beta");
+    assert_eq!(second.matches[0].path, "src/lib.rs");
+    assert_eq!(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("freshness_basis"))
+            .and_then(|value| value.get("cacheable"))
+            .and_then(|value| value.as_bool()),
+        Some(false),
+        "stale manifest-backed declaration lookup should surface non-cacheable freshness metadata until a fresh snapshot exists"
+    );
+
+    let stale = match server
+        .find_declarations(Parameters(FindDeclarationsParams {
+            symbol: Some("alpha".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(10),
+        }))
+        .await
+    {
+        Ok(_) => panic!("find_declarations should not reuse stale cached matches"),
+        Err(error) => error,
+    };
+    assert_eq!(error_code_tag(&stale), Some("resource_not_found"));
+    assert_eq!(retryable_tag(&stale), Some(false));
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
