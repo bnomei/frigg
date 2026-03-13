@@ -6,7 +6,7 @@ It helps agents and developer tools answer code questions with reproducible, sou
 Frigg is:
 - engine-first: deterministic local evidence from manifests, search, graph overlays, and optional semantics.
 - MCP-delivered: a small, explicit read-only tool surface with versioned JSON schemas.
-- CLI-operated: one deployable binary (`frigg`) built from a Rust workspace.
+- CLI-operated: one deployable binary (`frigg`) built and shipped as one Rust package.
 
 ## Product Rings
 
@@ -33,36 +33,17 @@ Important, but not the product core:
 - the self-improvement loop under [`skills/`](./skills/)
 - external replay, holdout, and repo-scanning harnesses under [`var/self-improvement/`](./var/self-improvement/)
 
-## Support Matrix
+## Supported Languages
 
-Frigg is intentionally conservative about first-class support claims.
+Frigg currently supports Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim.
 
-| Surface | Search + outline | Navigation | Semantic retrieval | Status |
-| --- | --- | --- | --- | --- |
-| Rust | first-class | first-class | first-class when enabled | first-class |
-| PHP | first-class | first-class | first-class when enabled | first-class |
-| Blade | first-class template surface | bounded source/template navigation and structural search | bounded template retrieval; no Laravel runtime overlays | first-class template surface |
-| TypeScript / TSX | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Python | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Go | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Kotlin / KTS | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Lua | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Roc | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
-| Nim | baseline runtime symbol, outline, and structural support | bounded heuristic/source navigation; precise SCIP parity not claimed | experimental when enabled; not semantic-parity | baseline runtime surface |
+Support is capability-based, not badge-based:
+- supported source files participate in text, symbol, structural, and hybrid retrieval
+- read-only navigation may combine source heuristics, graph evidence, and optional external artifacts depending on what the repository provides
+- semantic retrieval is optional and never the grounding layer
+- Blade adds bounded template-aware metadata and relations without booting Laravel or emulating a full framework runtime
 
-If a language or framework is not marked first-class here, Frigg should not market it as if it already has parity.
-
-## Language Onboarding Policy
-
-New languages move through staged capability upgrades instead of being announced as first-class early.
-
-- `witness_only`: path/surface evidence or external artifacts may be useful, but Frigg does not claim first-class runtime support yet.
-- `runtime_l1_l2`: runtime symbol, outline, and heuristic navigation behavior is stable enough for public use.
-- `precise_l3`: precise SCIP-backed navigation is validated and part of the supported story.
-- `semantic_parity`: semantic chunking, indexing, ranking, watch/reindex behavior, and provenance all align with the first-class languages.
-
-Current next-language priority: TypeScript / TSX.
-Python, Go, Kotlin / KTS, Lua, Roc, and Nim now share the same baseline runtime surface, but TypeScript / TSX stays ahead in the follow-on queue for precise and semantic-parity work.
+External SCIP artifacts can improve navigation where available, but they do not change the supported-language list by themselves.
 
 ## Core Concepts
 
@@ -71,6 +52,14 @@ Python, Go, Kotlin / KTS, Lua, Roc, and Nim now share the same baseline runtime 
 - `snapshots + file manifests`: persisted index state used for deterministic reindex behavior.
 - `provenance events`: stored tool-call evidence for replay/debugging.
 - `deterministic contracts`: versioned tool schemas and error taxonomy in `contracts/`.
+
+## Documentation Map
+
+- `docs/index.md`: durable documentation entry point.
+- `README.md`: product boundary, install, and quickstart.
+- `docs/architecture.md`: durable engine/runtime boundaries, package shape, and terminology.
+- `docs/overview.md`: design background and system tradeoffs.
+- `specs/`: bounded implementation history and work waves, not the product contract.
 
 ## Evidence Channels
 
@@ -211,9 +200,8 @@ mv index.scip .frigg/scip/python.scip
 Notes:
 - regenerate these artifacts when the source changes materially
 - if navigation metadata reports `precise_absence_reason=no_scip_artifacts_discovered`, check `.frigg/scip/` first
-- today Frigg's strongest validated runtime/query surface is Rust, PHP, and Blade for source-backed symbol/search workflows; TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim now ship baseline runtime symbol/outline/structural support, while precise SCIP-backed navigation remains validated for Rust and PHP
-- TypeScript / TSX precise parity remains the next follow-on priority, and the other baseline runtime languages are still not claimed as precise-parity or semantic-parity surfaces
-- generating a `.scip` artifact for TypeScript / TSX, Python, Go, Kotlin, Lua, Roc, or Nim does not by itself make those languages first-class in Frigg's public support matrix
+- Frigg currently supports Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim for source-backed search, outline, and hybrid retrieval workflows
+- external SCIP artifacts can improve navigation evidence when they are present, but they do not change Frigg's supported-language list by themselves
 
 ### 4) Run as MCP server
 
@@ -428,7 +416,7 @@ Noise-control tip:
 - `outgoing_calls` is callable-only. Occurrence-derived precise recovery emits `relation="calls"` for surviving callable targets and does not widen the result set to locals, fields, constants, or type-only references.
 - Navigation, call-hierarchy, document-symbol, and structural-search responses now expose typed `metadata` objects alongside the backward-compatible JSON-string `note`.
 - `document_symbols` now returns hierarchical `children` instead of a flat list with empty containers only.
-- `document_symbols` and `search_structural` now accept Rust, PHP, and Blade, plus baseline TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim source files. Blade responses include additive `metadata.blade` summaries for normalized template relations, literal Livewire tags and `wire:*` directives, and Flux tag or hint discovery.
+- `document_symbols` and `search_structural` now accept Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim source files. Blade responses include additive `metadata.blade` summaries for normalized template relations, literal Livewire tags and `wire:*` directives, and Flux tag or hint discovery.
 - Blade, Livewire, and Flux support is source-only and bounded. Frigg does not boot Laravel and does not claim route, provider, container, policy, validation, or Eloquent overlays in this slice.
 
 Advanced runtime tools (only added when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`):
@@ -451,7 +439,7 @@ Advanced runtime tools (only added when `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended
 - Resource: `frigg://policy/tool-surface.json`
 - Resource: `frigg://guidance/shell-vs-frigg.md`
 - Prompt: `frigg-routing-guide`
-- These MCP surfaces publish the staged language policy, core-vs-extended tool boundary, and routing guidance without adding more runtime tools.
+- These MCP surfaces publish supported-language capability notes, the core-vs-extended tool boundary, and routing guidance without adding more runtime tools.
 
 Schema files:
 - `contracts/tools/v1/list_repositories.v1.schema.json`
