@@ -1,6 +1,7 @@
-use super::super::super::dsl::{ScoreRule, apply_score_rules};
+use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;
+use super::super::super::predicates::selection as pred;
 use super::super::super::trace::{PolicyEffect, PolicyStage};
 use crate::searcher::surfaces::HybridSourceClass;
 
@@ -146,10 +147,6 @@ fn cli_test_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn cli_specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_entrypoint_build_flow || !ctx.query_mentions_cli || !ctx.is_cli_test_support {
-        return None;
-    }
-
     let best_overlap = ctx
         .specific_witness_path_overlap
         .max(ctx.path_overlap)
@@ -249,147 +246,291 @@ fn loose_python_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 const RULES: &[ScoreRule<SelectionFacts>] = &[
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.runtime_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+        ]),
         runtime_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.workflow_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_entrypoint_build_workflow_leaf(),
+        ]),
         workflow_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.workflow_without_runtime_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_entrypoint_build_workflow_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+        ]),
         workflow_without_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.laravel_core_provider_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_laravel_core_provider_leaf(),
+        ]),
         laravel_core_provider_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.laravel_provider_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::is_laravel_provider_leaf(),
+            ],
+            &[],
+            &[pred::is_laravel_core_provider_leaf()],
+        ),
         laravel_provider_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.laravel_route_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_laravel_route_leaf(),
+        ]),
         laravel_route_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.laravel_bootstrap_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_laravel_bootstrap_entrypoint_leaf(),
+        ]),
         laravel_bootstrap_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.laravel_bootstrap_specific_overlap_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_laravel_bootstrap_entrypoint_leaf(),
+            pred::specific_witness_path_overlap_leaf(),
+        ]),
         laravel_bootstrap_specific_overlap_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.runtime_config_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_runtime_config_artifact_leaf(),
+        ]),
         runtime_config_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.typescript_index_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+        ]),
         typescript_index_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.repo_root_runtime_config_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_repo_root_runtime_config_artifact_leaf(),
+        ]),
         repo_root_runtime_config_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.repo_root_runtime_config_after_runtime_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::is_repo_root_runtime_config_artifact_leaf(),
+                pred::runtime_seen_positive_leaf(),
+            ],
+            &[],
+            &[pred::has_seen_repo_root_runtime_config_leaf()],
+        ),
         repo_root_runtime_config_after_runtime_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.path_witness_runtime_config_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_runtime_config_artifact_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         path_witness_runtime_config_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.path_witness_repo_root_runtime_config_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_repo_root_runtime_config_artifact_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         path_witness_repo_root_runtime_config_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.path_witness_typescript_index_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         path_witness_typescript_index_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.python_config_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_python_runtime_config_leaf(),
+        ]),
         python_config_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.cli_test_support_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::query_mentions_cli_leaf(),
+            pred::is_cli_test_support_leaf(),
+        ]),
         cli_test_support_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.cli_specific_overlap_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::query_mentions_cli_leaf(),
+            pred::is_cli_test_support_leaf(),
+        ]),
         cli_specific_overlap_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.cli_generic_support_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::query_mentions_cli_leaf(),
+                pred::is_cli_test_support_leaf(),
+            ],
+            &[],
+            &[pred::is_runtime_anchor_test_support_leaf()],
+        ),
         cli_generic_support_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.build_flow_anchor_bonus",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::excerpt_has_build_flow_anchor_leaf(),
+        ]),
         build_flow_anchor_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.test_double_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::excerpt_has_test_double_anchor_leaf(),
+        ]),
         test_double_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.cli_runtime_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::query_mentions_cli_leaf(),
+                pred::class_is_runtime_leaf(),
+            ],
+            &[],
+            &[pred::is_cli_test_support_leaf()],
+        ),
         cli_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.non_entry_runtime_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::class_is_runtime_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_entrypoint_runtime_leaf(),
+                pred::is_runtime_config_artifact_leaf(),
+            ],
+        ),
         non_entry_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.tests_specs_without_runtime_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::runtime_seen_is_zero_leaf(),
+            ],
+            &[pred::class_is_tests_leaf(), pred::class_is_specs_leaf()],
+            &[],
+        ),
         tests_specs_without_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.reference_doc_without_runtime_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_entrypoint_reference_doc_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+        ]),
         reference_doc_without_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.frontend_noise_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_frontend_runtime_noise_leaf(),
+        ]),
         frontend_noise_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.entrypoint.loose_python_test_penalty",
         PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_loose_python_test_module_leaf(),
+        ]),
         loose_python_test_penalty,
     ),
 ];
 
-pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
-    if !ctx.wants_entrypoint_build_flow {
-        return;
-    }
+pub(crate) const RULE_SET: ScoreRuleSet<SelectionFacts> = ScoreRuleSet::new(RULES);
 
-    apply_score_rules(program, ctx, RULES);
+pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
+    apply_score_rule_sets(program, ctx, &[RULE_SET]);
 }

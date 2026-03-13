@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::ManifestEntry;
 use crate::workspace_ignores::{
     build_root_ignore_matcher, hard_excluded_runtime_path, should_ignore_runtime_path,
 };

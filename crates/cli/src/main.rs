@@ -33,17 +33,19 @@ use tracing_subscriber::{EnvFilter, fmt};
 mod cli_runtime;
 mod http_runtime;
 use cli_runtime::{
-    StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config, resolve_startup_config,
-    resolve_watch_runtime_config, run_hybrid_playbook_command, run_reindex_command,
-    run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
-    run_storage_maintenance_command,
-    run_strict_startup_vector_readiness_gate,
+    StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
+    resolve_startup_config, resolve_watch_runtime_config, run_hybrid_playbook_command,
+    run_reindex_command, run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
+    run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
 };
 #[cfg(test)]
 use cli_runtime::{
     ensure_storage_db_path_for_write, find_enclosing_git_root, resolve_semantic_runtime_config,
-    resolve_storage_db_path, resolve_watch_config, run_semantic_runtime_startup_gate_with_credentials,
+    resolve_storage_db_path, resolve_watch_config,
+    run_semantic_runtime_startup_gate_with_credentials,
 };
+#[cfg(test)]
+use frigg::storage::SemanticChunkEmbeddingRecord;
 use http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
 #[cfg(test)]
 use http_runtime::{
@@ -53,8 +55,6 @@ use http_runtime::{
 };
 #[cfg(test)]
 use serde_json::json;
-#[cfg(test)]
-use frigg::storage::SemanticChunkEmbeddingRecord;
 
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]

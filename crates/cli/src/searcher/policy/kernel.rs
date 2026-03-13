@@ -29,6 +29,7 @@ impl PolicyProgram {
         &mut self,
         rule_id: &'static str,
         stage: PolicyStage,
+        predicate_ids: &[&'static str],
         effect: PolicyEffect,
     ) {
         let before = self.score;
@@ -40,6 +41,7 @@ impl PolicyProgram {
             trace.push(PolicyRuleTrace {
                 rule_id,
                 stage,
+                predicate_ids: predicate_ids.to_vec(),
                 effect,
                 before,
                 after: self.score,
@@ -62,10 +64,16 @@ mod tests {
     #[test]
     fn policy_trace_records_add_and_mul_effects() {
         let mut program = PolicyProgram::with_trace(2.0);
-        program.apply_effect("test.add", PolicyStage::PathQuality, PolicyEffect::Add(3.0));
+        program.apply_effect(
+            "test.add",
+            PolicyStage::PathQuality,
+            &[],
+            PolicyEffect::Add(3.0),
+        );
         program.apply_effect(
             "test.mul",
             PolicyStage::PathQuality,
+            &[],
             PolicyEffect::Multiply(2.0),
         );
         let evaluation = program.finish();
@@ -73,6 +81,7 @@ mod tests {
         assert_eq!(evaluation.score, 10.0);
         assert_eq!(trace.rules.len(), 2);
         assert_eq!(trace.rules[0].rule_id, "test.add");
+        assert!(trace.rules[0].predicate_ids.is_empty());
         assert_eq!(trace.rules[1].rule_id, "test.mul");
     }
 }

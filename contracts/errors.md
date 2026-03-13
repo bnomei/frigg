@@ -64,7 +64,7 @@ Use this template to pin deterministic mappings for each public tool.
 | `incoming_calls` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
 | `outgoing_calls` | invalid symbol/location payload | `invalid_params` | `false` | `-32602` | `symbol` OR (`path`,`line`) |
 | `outgoing_calls` | resolved symbol/location missing in scope | `resource_not_found` | `false` | `-32004` | `repository_id`, `symbol` OR (`path`,`line`) |
-| `document_symbols` | unsupported file extension (non-Rust/PHP/Blade) | `invalid_params` | `false` | `-32602` | `path`, `supported_extensions` |
+| `document_symbols` | unsupported file extension (outside the supported document-symbol language set) | `invalid_params` | `false` | `-32602` | `path`, `supported_extensions` |
 | `document_symbols` | source file exceeds configured byte budget | `invalid_params` | `false` | `-32602` | `path`, `bytes`, `max_bytes`, `config_max_file_bytes` |
 | `document_symbols` | file path/repository not found | `resource_not_found` | `false` | `-32004` | `repository_id`, `path` |
 | `search_structural` | empty/oversized query, unsupported language, invalid `path_regex`, invalid tree-sitter query | `invalid_params` | `false` | `-32602` | `query` and/or `language` and/or `path_regex` |

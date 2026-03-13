@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     hybrid_path_overlap_tokens, hybrid_source_class, is_bench_support_path, is_ci_workflow_path,
     is_cli_test_support_path, is_entrypoint_build_workflow_path, is_entrypoint_runtime_path,
-    is_example_support_path, is_frontend_runtime_noise_path, is_laravel_blade_component_path,
+    is_example_support_path, is_frontend_runtime_noise_path,
+    is_kotlin_android_ui_runtime_surface_path, is_laravel_blade_component_path,
     is_laravel_bootstrap_entrypoint_path, is_laravel_command_or_middleware_path,
     is_laravel_core_provider_path, is_laravel_form_action_blade_path,
     is_laravel_job_or_listener_path, is_laravel_layout_blade_view_path,
@@ -25,6 +26,7 @@ pub(super) struct PathWitnessProjectionFlags {
     pub(super) is_entrypoint_build_workflow: bool,
     pub(super) is_ci_workflow: bool,
     pub(super) is_runtime_config_artifact: bool,
+    pub(super) is_kotlin_android_ui_runtime_surface: bool,
     pub(super) is_python_runtime_config: bool,
     pub(super) is_python_test_witness: bool,
     pub(super) is_example_support: bool,
@@ -123,15 +125,18 @@ pub(super) fn decode_path_witness_projection_record(
         SourceClass::Playbooks => SourceClass::Project,
         other => other,
     };
-    let flags = serde_json::from_str(&record.flags_json).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to decode stored path witness flags for '{}': {err}",
-            record.path
-        ))
-    })?;
+    let _stored_flags: PathWitnessProjectionFlags = serde_json::from_str(&record.flags_json)
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to decode stored path witness flags for '{}': {err}",
+                record.path
+            ))
+        })?;
     // Path tokenization evolves with generic recall heuristics. Recompute from the live path so
-    // ranking does not depend on stale stored projection terms from older Frigg versions.
+    // ranking does not depend on stale stored projection terms or path-derived flags from older
+    // Frigg versions.
     let path_terms = hybrid_path_overlap_tokens(&record.path);
+    let flags = build_path_witness_projection_flags(&record.path);
 
     Ok(StoredPathWitnessProjection {
         path: record.path.clone(),
@@ -157,6 +162,7 @@ fn build_path_witness_projection_flags(path: &str) -> PathWitnessProjectionFlags
         is_entrypoint_build_workflow: is_entrypoint_build_workflow_path(path),
         is_ci_workflow: is_ci_workflow_path(path),
         is_runtime_config_artifact: is_runtime_config_artifact_path(path),
+        is_kotlin_android_ui_runtime_surface: is_kotlin_android_ui_runtime_surface_path(path),
         is_python_runtime_config: is_python_runtime_config_path(path),
         is_python_test_witness: is_python_test_witness_path(path),
         is_example_support: is_example_support_path(path),
@@ -221,6 +227,29 @@ mod tests {
         assert_ne!(
             decoded.path_terms, stale_terms,
             "decoded path terms should not trust stale stored tokenization"
+        );
+    }
+
+    #[test]
+    fn decode_path_witness_projection_record_recomputes_live_flags_for_runtime_config_artifacts() {
+        let path = "app/src/main/AndroidManifest.xml";
+        let record = PathWitnessProjectionRecord {
+            repository_id: "repo".to_owned(),
+            snapshot_id: "snapshot".to_owned(),
+            path: path.to_owned(),
+            path_class: PathClass::Project.as_str().to_owned(),
+            source_class: SourceClass::Project.as_str().to_owned(),
+            path_terms_json: "[]".to_owned(),
+            flags_json: serde_json::to_string(&PathWitnessProjectionFlags::default())
+                .expect("flags json"),
+        };
+
+        let decoded =
+            decode_path_witness_projection_record(&record).expect("decode should succeed");
+
+        assert!(
+            decoded.flags.is_runtime_config_artifact,
+            "live decoding should recover Android and Gradle runtime config flags"
         );
     }
 }

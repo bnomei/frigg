@@ -1,213 +1,32 @@
-use crate::domain::{PathClass, SourceClass};
-use crate::path_class::classify_repository_path;
-use std::path::Path;
+use crate::domain::SourceClass;
 
-pub(super) type HybridSourceClass = SourceClass;
+#[path = "surfaces/artifacts.rs"]
+mod artifacts;
+#[path = "surfaces/runtime.rs"]
+mod runtime;
+#[path = "surfaces/support.rs"]
+mod support;
+#[path = "surfaces/tokens.rs"]
+mod tokens;
 
-pub(super) fn hybrid_source_class(path: &str) -> HybridSourceClass {
-    if is_error_contract_path(path) {
-        return HybridSourceClass::ErrorContracts;
-    }
-    if is_tool_contract_path(path) {
-        return HybridSourceClass::ToolContracts;
-    }
-    if path.starts_with("benchmarks/") {
-        return HybridSourceClass::BenchmarkDocs;
-    }
-    if is_readme_path(path) {
-        return HybridSourceClass::Readme;
-    }
-    if path.starts_with("docs/") {
-        return HybridSourceClass::Documentation;
-    }
-    if path.starts_with("fixtures/") {
-        return HybridSourceClass::Fixtures;
-    }
-    if is_ci_workflow_path(path) {
-        return HybridSourceClass::Support;
-    }
-    if path.starts_with("specs/") {
-        return HybridSourceClass::Specs;
-    }
-    if is_test_support_path(path) {
-        return HybridSourceClass::Tests;
-    }
+pub(in crate::searcher) type HybridSourceClass = SourceClass;
 
-    match classify_repository_path(path) {
-        PathClass::Runtime => HybridSourceClass::Runtime,
-        PathClass::Project => HybridSourceClass::Project,
-        PathClass::Support => HybridSourceClass::Support,
-    }
-}
-
-pub(super) fn is_example_support_path(path: &str) -> bool {
-    path.starts_with("examples/") || path.contains("/examples/")
-}
-
-pub(super) fn is_bench_support_path(path: &str) -> bool {
-    path.starts_with("benches/")
-        || path.contains("/benches/")
-        || path.starts_with("bench/")
-        || path.contains("/bench/")
-}
-
-pub(super) fn is_test_harness_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    matches!(
-        Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some(
-            "createsapplication.php"
-                | "dusktestcase.php"
-                | "pest.php"
-                | "testcase.php"
-                | "conftest.py"
-        )
-    )
-}
-
-pub(super) fn is_test_support_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    normalized.starts_with("tests/")
-        || normalized.contains("/tests/")
-        || normalized.starts_with("test/")
-        || normalized.contains("/test/")
-        || normalized.ends_with("_test.go")
-        || normalized.ends_with("_test.rs")
-        || normalized.ends_with("_tests.rs")
-        || is_python_named_test_module_path(&normalized)
-}
-
-pub(super) fn is_runtime_anchor_test_support_path(path: &str) -> bool {
-    if !is_test_support_path(path) {
-        return false;
-    }
-
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    let Some(stem) = Path::new(&normalized)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|stem| normalize_runtime_anchor_test_stem(stem))
-    else {
-        return false;
-    };
-
-    matches!(
-        stem.as_str(),
-        "app"
-            | "bootstrap"
-            | "cli"
-            | "daemon"
-            | "main"
-            | "manage"
-            | "run"
-            | "server"
-            | "service"
-            | "worker"
-    )
-}
-
-pub(super) fn is_cli_test_support_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    is_test_support_path(&normalized)
-        && (normalized.starts_with("tests/cli/")
-            || normalized.contains("/tests/cli/")
-            || normalized.starts_with("test/cli/")
-            || normalized.contains("/test/cli/")
-            || normalized.ends_with("/cli.rs")
-            || normalized.contains("/cli/"))
-}
-
-pub(super) fn has_generic_runtime_anchor_stem(path: &str) -> bool {
-    Path::new(path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|stem| stem.trim().to_ascii_lowercase())
-        .is_some_and(|stem| matches!(stem.as_str(), "server" | "discoverer"))
-}
-
-pub(super) fn is_error_contract_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if !(normalized.starts_with("contracts/") || normalized.contains("/contracts/")) {
-        return false;
-    }
-
-    let Some(stem) = Path::new(&normalized)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-    else {
-        return false;
-    };
-
-    hybrid_identifier_tokens(stem)
-        .into_iter()
-        .any(|token| matches!(token.as_str(), "error" | "errors" | "failure" | "failures"))
-}
-
-pub(super) fn is_tool_contract_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    normalized.starts_with("contracts/tools/") || normalized.contains("/contracts/tools/")
-}
-
-pub(super) fn is_readme_path(path: &str) -> bool {
-    path == "README.md" || path.ends_with("/README.md")
-}
-
-pub(super) fn is_generic_runtime_witness_doc_path(path: &str) -> bool {
-    if is_readme_path(path) {
-        return true;
-    }
-
-    let normalized = path.trim_start_matches("./");
-    let Some(file_name) = Path::new(normalized)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_ascii_lowercase())
-    else {
-        return false;
-    };
-
-    matches!(
-        file_name.as_str(),
-        "index.md" | "overview.md" | "examples.md"
-    ) && (normalized == format!("docs/{file_name}")
-        || normalized.ends_with(&format!("/docs/{file_name}")))
-}
-
-pub(super) fn is_repo_metadata_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./");
-    let Some(file_name) = Path::new(normalized)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_ascii_lowercase())
-    else {
-        return false;
-    };
-
-    matches!(
-        file_name.as_str(),
-        "composer.json"
-            | "cargo.toml"
-            | "cargo.lock"
-            | "package.json"
-            | "package-lock.json"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-            | "pyproject.toml"
-            | "poetry.lock"
-    )
-}
+pub(in crate::searcher) use artifacts::*;
+pub(in crate::searcher) use runtime::*;
+pub(in crate::searcher) use support::*;
 
 #[cfg(test)]
 mod tests {
     use crate::domain::SourceClass;
 
     use super::{
-        hybrid_source_class, is_entrypoint_runtime_path, is_go_entrypoint_runtime_path,
-        is_python_test_witness_path, is_runtime_adjacent_python_test_path,
-        is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
-        is_rust_workspace_config_path, is_test_support_path, is_typescript_runtime_module_index_path,
+        hybrid_source_class, is_cli_command_entrypoint_path, is_entrypoint_runtime_path,
+        is_fixture_support_path, is_frontend_runtime_noise_path, is_go_entrypoint_runtime_path,
+        is_kotlin_android_entrypoint_runtime_path, is_kotlin_android_ui_runtime_surface_path,
+        is_python_test_witness_path, is_root_scoped_runtime_config_path,
+        is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
+        is_runtime_config_artifact_path, is_rust_workspace_config_path, is_test_support_path,
+        is_typescript_runtime_module_index_path,
     };
 
     #[test]
@@ -256,6 +75,46 @@ mod tests {
             assert!(
                 is_runtime_config_artifact_path(path),
                 "{path} should participate in runtime config artifact ranking"
+            );
+        }
+    }
+
+    #[test]
+    fn nim_runtime_config_paths_are_detected_as_runtime_config_artifacts() {
+        for path in ["cligen.nimble", "packages/tooling/tooling.nimble"] {
+            assert!(
+                is_runtime_config_artifact_path(path),
+                "{path} should be detected as a Nim runtime config artifact"
+            );
+        }
+
+        for path in ["cligen.nim", "examples/linect.nims"] {
+            assert!(
+                !is_runtime_config_artifact_path(path),
+                "{path} should not be treated as a Nim runtime config artifact"
+            );
+        }
+    }
+
+    #[test]
+    fn lua_runtime_config_paths_are_detected_as_runtime_config_artifacts() {
+        for path in [
+            ".luarc.json",
+            ".luarc.jsonc",
+            ".luarc.doc.json",
+            "lua-language-server-scm-1.rockspec",
+            "rocks/my-tool-1.rockspec",
+        ] {
+            assert!(
+                is_runtime_config_artifact_path(path),
+                "{path} should be detected as a Lua runtime config artifact"
+            );
+        }
+
+        for path in ["main.lua", "script/core/command/getConfig.lua"] {
+            assert!(
+                !is_runtime_config_artifact_path(path),
+                "{path} should not be treated as a Lua runtime config artifact"
             );
         }
     }
@@ -358,6 +217,65 @@ mod tests {
     }
 
     #[test]
+    fn kotlin_android_entrypoint_runtime_paths_detect_activities_and_navigation() {
+        for path in [
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoActivity.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoApplication.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavGraph.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt",
+            "feature/src/main/java/com/example/app/MainActivity.java",
+        ] {
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be detected as an Android runtime entrypoint"
+            );
+        }
+
+        for path in [
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/util/CoroutinesUtils.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskViewModel.kt",
+            "app/src/test/java/com/example/android/architecture/blueprints/todoapp/TodoActivityTest.kt",
+            "feature/src/debug/java/com/example/app/MainActivity.java",
+        ] {
+            assert!(
+                !is_entrypoint_runtime_path(path),
+                "{path} should not be detected as an Android runtime entrypoint"
+            );
+        }
+    }
+
+    #[test]
+    fn kotlin_android_ui_runtime_surface_paths_detect_screens_and_viewmodels() {
+        for path in [
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskScreen.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskViewModel.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/statistics/StatisticsScreen.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/tasks/TasksViewModel.kt",
+        ] {
+            assert!(
+                is_kotlin_android_ui_runtime_surface_path(path),
+                "{path} should be detected as a Kotlin UI runtime surface"
+            );
+        }
+
+        for path in [
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/util/CoroutinesUtils.kt",
+            "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskScreenTest.kt",
+            "app/src/main/kotlin/cn/ppps/forwarder/database/viewmodel/BaseViewModelFactory.kt",
+            "app/src/main/kotlin/cn/ppps/forwarder/workers/LockScreenWorker.kt",
+            "app/src/main/kotlin/cn/ppps/forwarder/fragment/condition/LockScreenFragment.kt",
+            "app/src/main/kotlin/cn/ppps/forwarder/entity/condition/LockScreenSetting.kt",
+            "app/src/main/kotlin/cn/ppps/forwarder/utils/ProximitySensorScreenHelper.kt",
+        ] {
+            assert!(
+                !is_kotlin_android_ui_runtime_surface_path(path),
+                "{path} should not be detected as a Kotlin UI runtime surface"
+            );
+        }
+    }
+
+    #[test]
     fn go_command_entrypoint_and_test_paths_are_detected() {
         for path in [
             "main.go",
@@ -398,6 +316,60 @@ mod tests {
             assert!(
                 !is_go_entrypoint_runtime_path(path),
                 "{path} should not be detected as a Go entrypoint witness"
+            );
+        }
+    }
+
+    #[test]
+    fn kotlin_android_entrypoint_runtime_paths_detect_android_startup_surfaces() {
+        for path in [
+            "app/src/main/java/com/example/android/todoapp/TodoActivity.kt",
+            "app/src/main/java/com/example/android/todoapp/TodoApplication.kt",
+            "app/src/main/java/com/example/android/todoapp/TodoNavGraph.kt",
+            "app/src/main/java/com/example/android/todoapp/TodoNavigation.kt",
+        ] {
+            assert!(
+                is_kotlin_android_entrypoint_runtime_path(path),
+                "{path} should be detected as a Kotlin Android entrypoint witness"
+            );
+            assert!(
+                is_entrypoint_runtime_path(path),
+                "{path} should be treated as a runtime entrypoint"
+            );
+        }
+
+        for path in [
+            "app/src/main/java/com/example/android/todoapp/TodoTheme.kt",
+            "app/src/main/java/com/example/android/todoapp/data/DefaultTaskRepository.kt",
+            "app/src/main/java/com/example/android/todoapp/util/CoroutinesUtils.kt",
+            "app/src/androidTest/java/com/example/android/todoapp/TodoActivityTest.kt",
+        ] {
+            assert!(
+                !is_kotlin_android_entrypoint_runtime_path(path),
+                "{path} should not be detected as a Kotlin Android entrypoint witness"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_command_entrypoint_paths_detect_loader_trees_across_languages() {
+        for path in [
+            "cmd/frpc/main.go",
+            "cmd/frps/root.go",
+            "packages/cli/src/server.ts",
+            "backend/cli.py",
+            "bin/server.js",
+        ] {
+            assert!(
+                is_cli_command_entrypoint_path(path),
+                "{path} should be treated as a CLI or command entrypoint"
+            );
+        }
+
+        for path in ["web/frps/src/main.ts", "pkg/config/source/aggregator.go"] {
+            assert!(
+                !is_cli_command_entrypoint_path(path),
+                "{path} should not be treated as a CLI or command entrypoint"
             );
         }
     }
@@ -454,6 +426,160 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_artifacts_inside_test_trees_do_not_count_as_test_support() {
+        for path in [
+            "tests/sagemaker/scripts/pytorch/requirements.txt",
+            "tests/cli/pyproject.toml",
+            "test/runtime/setup.py",
+        ] {
+            assert!(
+                is_runtime_config_artifact_path(path),
+                "{path} should still be treated as a runtime config artifact"
+            );
+            assert!(
+                !is_test_support_path(path),
+                "{path} should not be treated as test support"
+            );
+        }
+    }
+
+    #[test]
+    fn android_runtime_config_artifacts_detect_gradle_and_manifest_surfaces() {
+        for path in [
+            "app/src/main/AndroidManifest.xml",
+            "app/build.gradle.kts",
+            "build.gradle.kts",
+            "gradle.properties",
+            "gradle/init.gradle.kts",
+            "settings.gradle.kts",
+        ] {
+            assert!(
+                is_runtime_config_artifact_path(path),
+                "{path} should be treated as an Android or Gradle runtime config artifact"
+            );
+        }
+
+        for path in [
+            "renovate.json",
+            "app/src/main/java/com/example/android/architecture/blueprints/todoapp/util/CoroutinesUtils.kt",
+        ] {
+            assert!(
+                !is_runtime_config_artifact_path(path),
+                "{path} should not be treated as a runtime config artifact"
+            );
+        }
+    }
+
+    #[test]
+    fn root_scoped_runtime_config_paths_include_tool_subdirectories() {
+        for path in [
+            ".cargo/config.toml",
+            "gradle/init.gradle.kts",
+            "gradle/wrapper/gradle-wrapper.properties",
+            "settings.gradle.kts",
+        ] {
+            assert!(
+                is_root_scoped_runtime_config_path(path),
+                "{path} should be treated as a root-scoped runtime config artifact"
+            );
+        }
+
+        for path in [
+            "app/src/main/AndroidManifest.xml",
+            "packages/tooling/gradle/wrapper/gradle-wrapper.properties",
+        ] {
+            assert!(
+                !is_root_scoped_runtime_config_path(path),
+                "{path} should not be treated as a root-scoped runtime config artifact"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_fixture_directories_surface_as_fixtures_not_tests() {
+        for path in [
+            "tests/fixtures/config.json",
+            "tests/fixtures/sample/input.txt",
+            "resources/test/fixtures/isort/pyproject.toml",
+        ] {
+            assert!(
+                is_fixture_support_path(path),
+                "{path} should be treated as a fixture surface"
+            );
+            assert!(
+                !is_test_support_path(path),
+                "{path} should not be treated as test support"
+            );
+            assert_eq!(
+                hybrid_source_class(path),
+                SourceClass::Fixtures,
+                "{path} should surface through the fixtures source class"
+            );
+        }
+    }
+
+    #[test]
+    fn non_code_assets_inside_test_trees_do_not_count_as_test_support() {
+        for path in [
+            "tests/trainer/distributed/accelerate_configs/deepspeed_zero2.yaml",
+            "tests/data/expected.json",
+            "test/runtime/sample.txt",
+        ] {
+            assert!(
+                !is_test_support_path(path),
+                "{path} should not be treated as test support"
+            );
+        }
+
+        for path in [
+            "tests/cli/test_chat.py",
+            "tests/generation/__init__.py",
+            "tests/fixtures.rs",
+            "tests/scripts/license-checks.sh",
+            "tests/syntax-tests/regression_test.sh",
+        ] {
+            assert!(
+                is_test_support_path(path),
+                "{path} should remain test support"
+            );
+        }
+
+        for path in [
+            "tests/syntax-tests/source/bash/simple.sh",
+            "tests/syntax-tests/highlighted/javascript/test.js",
+        ] {
+            assert!(
+                !is_test_support_path(path),
+                "{path} should remain fixture-like test data, not test support"
+            );
+        }
+    }
+
+    #[test]
+    fn web_typescript_surfaces_count_as_frontend_runtime_noise() {
+        for path in ["web/frps/tsconfig.json", "docs/frontend/openapi.json"] {
+            assert!(
+                is_frontend_runtime_noise_path(path),
+                "{path} should be treated as frontend runtime noise"
+            );
+        }
+
+        for path in [
+            "web/frps/src/main.ts",
+            "web/frps/src/api/server.ts",
+            "web/frps/src/router/index.ts",
+            "web/server/main.go",
+            "cmd/web/root.go",
+            "src/web/server.rs",
+        ] {
+            assert!(
+                !is_frontend_runtime_noise_path(path),
+                "{path} should remain available until stronger frontend evidence exists"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_adjacent_python_test_paths_distinguish_nested_runtime_modules_from_test_trees() {
         for path in [
             "autogpt_platform/backend/backend/api/test_helpers.py",
@@ -503,508 +629,4 @@ mod tests {
             );
         }
     }
-}
-
-pub(super) fn is_python_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "__main__.py" | "main.py" | "app.py" | "manage.py" | "cli.py" | "run.py"
-    ) || [
-        "/__main__.py",
-        "/main.py",
-        "/app.py",
-        "/manage.py",
-        "/cli.py",
-        "/run.py",
-    ]
-    .iter()
-    .any(|suffix| normalized.ends_with(suffix))
-}
-
-pub(super) fn is_lua_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if !normalized.ends_with(".lua") || is_test_support_path(&normalized) {
-        return false;
-    }
-
-    let candidate = Path::new(&normalized);
-    let Some(stem) = candidate
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|stem| stem.trim().to_ascii_lowercase())
-    else {
-        return false;
-    };
-    let parts = candidate
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-    let is_repo_root_file = parts.len() == 1;
-    if is_repo_root_file {
-        return matches!(
-            stem.as_str(),
-            "main" | "init" | "app" | "bootstrap" | "cli" | "run" | "server"
-        );
-    }
-
-    let has_loader_root = parts
-        .iter()
-        .take(parts.len().saturating_sub(1))
-        .any(|part| matches!(*part, "bin" | "cli" | "cmd" | "lua" | "script" | "scripts"));
-    if !has_loader_root {
-        return false;
-    }
-
-    let has_cli_context = parts
-        .iter()
-        .any(|part| matches!(*part, "cli" | "command" | "commands"));
-    if has_cli_context {
-        return true;
-    }
-
-    let has_runtime_context = parts
-        .iter()
-        .any(|part| matches!(*part, "daemon" | "server" | "service" | "worker"));
-    has_runtime_context
-        && matches!(
-            stem.as_str(),
-            "bootstrap" | "cli" | "daemon" | "init" | "main" | "run" | "server" | "service"
-        )
-}
-
-pub(super) fn is_typescript_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if is_test_support_path(&normalized) {
-        return false;
-    }
-
-    let candidate = Path::new(&normalized);
-    let Some(extension) = candidate.extension().and_then(|ext| ext.to_str()) else {
-        return false;
-    };
-    if !matches!(
-        extension,
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
-    ) {
-        return false;
-    }
-
-    let Some(stem) = candidate.file_stem().and_then(|stem| stem.to_str()) else {
-        return false;
-    };
-    let stem = stem.trim().to_ascii_lowercase();
-    if matches!(
-        stem.as_str(),
-        "main" | "server" | "cli" | "app" | "bootstrap"
-    ) {
-        return true;
-    }
-
-    let looks_like_runtime_tree =
-        matches!(classify_repository_path(&normalized), PathClass::Runtime)
-            || normalized.starts_with("app/")
-            || normalized.contains("/app/")
-            || normalized.contains("/lib/");
-    if !looks_like_runtime_tree {
-        return false;
-    }
-
-    let Some(parent_name) = candidate
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-    else {
-        return false;
-    };
-    if parent_name != "src" {
-        return false;
-    }
-    if stem != "index" {
-        return false;
-    }
-
-    hybrid_identifier_tokens(&normalized)
-        .into_iter()
-        .any(|token| {
-            matches!(
-                token.as_str(),
-                "app" | "bootstrap" | "cli" | "daemon" | "server" | "service" | "worker"
-            )
-        })
-}
-
-pub(super) fn is_typescript_runtime_module_index_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if is_test_support_path(&normalized)
-        || is_example_support_path(&normalized)
-        || is_bench_support_path(&normalized)
-    {
-        return false;
-    }
-
-    let candidate = Path::new(&normalized);
-    let Some(extension) = candidate.extension().and_then(|ext| ext.to_str()) else {
-        return false;
-    };
-    if !matches!(
-        extension,
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts"
-    ) {
-        return false;
-    }
-
-    let looks_like_runtime_tree =
-        matches!(classify_repository_path(&normalized), PathClass::Runtime)
-            || normalized.starts_with("app/")
-            || normalized.contains("/app/")
-            || normalized.contains("/lib/");
-    if !looks_like_runtime_tree {
-        return false;
-    }
-
-    let Some(stem) = candidate.file_stem().and_then(|stem| stem.to_str()) else {
-        return false;
-    };
-    if !stem.eq_ignore_ascii_case("index") {
-        return false;
-    }
-
-    let path_tokens = hybrid_identifier_tokens(&normalized);
-    if path_tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "bench"
-                | "benches"
-                | "config"
-                | "configs"
-                | "fixture"
-                | "fixtures"
-                | "mock"
-                | "mocks"
-                | "spec"
-                | "specs"
-                | "stories"
-                | "story"
-                | "test"
-                | "tests"
-        )
-    }) {
-        return false;
-    }
-
-    true
-}
-
-pub(super) fn is_go_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if !normalized.ends_with(".go") || normalized.ends_with("_test.go") {
-        return false;
-    }
-    if is_test_support_path(&normalized) {
-        return false;
-    }
-
-    if normalized == "main.go" || normalized.ends_with("/main.go") {
-        return true;
-    }
-
-    (normalized.starts_with("cmd/") || normalized.contains("/cmd/"))
-        && Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("root.go"))
-}
-
-pub(super) fn is_roc_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if !normalized.ends_with(".roc") || is_test_support_path(&normalized) {
-        return false;
-    }
-
-    normalized == "main.roc"
-        || normalized == "platform/main.roc"
-        || normalized.ends_with("/platform/main.roc")
-}
-
-pub(super) fn is_python_runtime_config_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    matches!(
-        Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some("pyproject.toml" | "setup.py")
-    )
-}
-
-fn is_python_named_test_module_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    let Some(file_name) = Path::new(&normalized)
-        .file_name()
-        .and_then(|name| name.to_str())
-    else {
-        return false;
-    };
-
-    normalized.ends_with(".py")
-        && (file_name.starts_with("test_") || file_name.ends_with("_test.py"))
-}
-
-fn normalize_runtime_anchor_test_stem(stem: &str) -> String {
-    let normalized = stem.trim().to_ascii_lowercase();
-    normalized
-        .strip_prefix("test_")
-        .or_else(|| normalized.strip_prefix("tests_"))
-        .or_else(|| normalized.strip_suffix("_test"))
-        .or_else(|| normalized.strip_suffix("_tests"))
-        .unwrap_or(normalized.as_str())
-        .to_owned()
-}
-
-pub(super) fn is_rust_workspace_config_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if normalized == ".cargo/config.toml" || normalized.ends_with("/.cargo/config.toml") {
-        return true;
-    }
-
-    matches!(
-        Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some("cargo.toml" | "cargo.lock" | "rust-toolchain.toml" | "rustfmt.toml" | "clippy.toml")
-    )
-}
-
-pub(super) fn is_runtime_config_artifact_path(path: &str) -> bool {
-    if is_rust_workspace_config_path(path) {
-        return true;
-    }
-
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    matches!(
-        Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some(
-            "pyproject.toml"
-                | "setup.py"
-                | "cargo.toml"
-                | "package.json"
-                | "package-lock.json"
-                | "pnpm-lock.yaml"
-                | "yarn.lock"
-                | "composer.json"
-                | "composer.lock"
-                | "tsconfig.json"
-                | "go.mod"
-                | "go.sum"
-                | "requirements.txt"
-                | "pipfile"
-                | "mix.exs"
-        )
-    )
-}
-
-pub(super) fn is_python_test_witness_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    let Some(file_name) = Path::new(&normalized)
-        .file_name()
-        .and_then(|name| name.to_str())
-    else {
-        return false;
-    };
-
-    normalized.ends_with(".py")
-        && (normalized.contains("/tests/")
-            || normalized.starts_with("tests/")
-            || file_name == "conftest.py"
-            || is_python_named_test_module_path(path))
-}
-
-pub(super) fn is_runtime_adjacent_python_test_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    is_python_test_witness_path(path)
-        && !normalized.starts_with("tests/")
-        && !normalized.contains("/tests/")
-        && !normalized.starts_with("test/")
-        && !normalized.contains("/test/")
-}
-
-pub(super) fn is_loose_python_test_module_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    normalized.ends_with(".py")
-        && !is_python_test_witness_path(path)
-        && (normalized.starts_with("test/") || normalized.contains("/test/"))
-}
-
-pub(super) fn is_non_code_test_doc_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if !is_test_support_path(&normalized) {
-        return false;
-    }
-
-    matches!(
-        Path::new(&normalized)
-            .extension()
-            .and_then(|ext| ext.to_str()),
-        Some("md" | "markdown" | "rst" | "txt" | "adoc")
-    )
-}
-
-pub(super) fn is_frontend_runtime_noise_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    if normalized.contains("/frontend/") {
-        return true;
-    }
-
-    matches!(
-        Path::new(&normalized)
-            .file_name()
-            .and_then(|name| name.to_str()),
-        Some(
-            "package.json"
-                | "package-lock.json"
-                | "pnpm-lock.yaml"
-                | "yarn.lock"
-                | "openapi.json"
-                | "contributing.md"
-                | "claude.md"
-                | "hierarchy.md"
-        )
-    )
-}
-
-pub(super) fn is_navigation_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./");
-    let path_class = classify_repository_path(normalized);
-    if !matches!(path_class, PathClass::Runtime | PathClass::Support) {
-        return false;
-    }
-
-    let Some(stem) = Path::new(normalized)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|stem| stem.to_ascii_lowercase())
-    else {
-        return false;
-    };
-
-    hybrid_identifier_tokens(&stem).into_iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "api"
-                | "client"
-                | "discoverer"
-                | "handler"
-                | "handlers"
-                | "protocol"
-                | "route"
-                | "router"
-                | "routes"
-                | "server"
-                | "transport"
-        )
-    })
-}
-
-pub(super) fn is_navigation_reference_doc_path(path: &str) -> bool {
-    matches!(
-        hybrid_source_class(path),
-        HybridSourceClass::Documentation | HybridSourceClass::Readme | HybridSourceClass::Specs
-    )
-}
-
-pub(super) fn is_entrypoint_runtime_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./");
-    matches!(normalized, "src/main.rs" | "src/lib.rs")
-        || normalized.ends_with("/src/main.rs")
-        || normalized.ends_with("/src/lib.rs")
-        || is_go_entrypoint_runtime_path(normalized)
-        || is_roc_entrypoint_runtime_path(normalized)
-        || is_lua_entrypoint_runtime_path(normalized)
-        || is_python_entrypoint_runtime_path(normalized)
-        || is_typescript_entrypoint_runtime_path(normalized)
-}
-
-pub(super) fn is_entrypoint_reference_doc_path(path: &str) -> bool {
-    path.starts_with("specs/")
-        || matches!(hybrid_source_class(path), HybridSourceClass::Documentation)
-}
-
-pub(super) fn is_ci_workflow_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./");
-    normalized.starts_with(".github/workflows/")
-        && matches!(
-            Path::new(normalized)
-                .extension()
-                .and_then(|ext| ext.to_str()),
-            Some("yml" | "yaml")
-        )
-}
-
-pub(super) fn is_entrypoint_build_workflow_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./");
-    if !is_ci_workflow_path(normalized) {
-        return false;
-    }
-
-    let Some(stem) = Path::new(normalized)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-    else {
-        return false;
-    };
-
-    hybrid_identifier_tokens(stem).into_iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "build" | "bundle" | "deploy" | "pages" | "publish" | "release"
-        )
-    })
-}
-
-pub(super) fn is_scripts_ops_path(path: &str) -> bool {
-    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
-    normalized == "justfile"
-        || normalized == "makefile"
-        || normalized.starts_with("scripts/")
-        || normalized.starts_with("xtask/")
-        || normalized.contains("/scripts/")
-}
-
-fn hybrid_identifier_tokens(raw: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut previous_was_lowercase = false;
-
-    for ch in raw.chars() {
-        if ch == '_' || ch == '-' || ch == ' ' {
-            push_hybrid_identifier_token(&mut tokens, &mut current);
-            previous_was_lowercase = false;
-            continue;
-        }
-        if !ch.is_ascii_alphanumeric() {
-            push_hybrid_identifier_token(&mut tokens, &mut current);
-            previous_was_lowercase = false;
-            continue;
-        }
-        if ch.is_ascii_uppercase() && previous_was_lowercase {
-            push_hybrid_identifier_token(&mut tokens, &mut current);
-        }
-        current.push(ch.to_ascii_lowercase());
-        previous_was_lowercase = ch.is_ascii_lowercase();
-    }
-
-    push_hybrid_identifier_token(&mut tokens, &mut current);
-    tokens
-}
-
-fn push_hybrid_identifier_token(tokens: &mut Vec<String>, current: &mut String) {
-    let normalized = current
-        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
-        .to_ascii_lowercase();
-    if normalized.len() >= 2 {
-        tokens.push(normalized);
-    }
-    current.clear();
 }

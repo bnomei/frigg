@@ -3,6 +3,7 @@ mod facts;
 mod frontier;
 mod kernel;
 mod post_selection;
+mod predicates;
 mod rules;
 mod trace;
 

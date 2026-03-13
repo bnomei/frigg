@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use crate::workspace_ignores::hard_excluded_runtime_path;
 use ignore::WalkBuilder;
 
-use super::surfaces::{is_ci_workflow_path, is_entrypoint_build_workflow_path};
+use super::surfaces::{
+    is_ci_workflow_path, is_entrypoint_build_workflow_path, is_root_scoped_runtime_config_path,
+};
 use super::{
     HybridRankingIntent, NormalizedSearchFilters, SearchDiagnostic, SearchDiagnosticKind,
     SearchExecutionDiagnostics, SearchTextQuery,
@@ -139,6 +141,65 @@ pub(super) fn hidden_workflow_candidates_for_repository(
             }
         }
 
+        file_candidates.push((rel_path, path.to_path_buf()));
+    }
+
+    file_candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    file_candidates
+}
+
+pub(super) fn root_scoped_runtime_config_candidates_for_repository(
+    root: &Path,
+    _filters: &NormalizedSearchFilters,
+    intent: &HybridRankingIntent,
+    diagnostics: &mut SearchExecutionDiagnostics,
+) -> Vec<(String, PathBuf)> {
+    if !intent.wants_entrypoint_build_flow && !intent.wants_runtime_config_artifacts {
+        return Vec::new();
+    }
+
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .standard_filters(true)
+        .hidden(false)
+        .require_git(false)
+        // Root-scoped runtime config may live one tool directory below the root, for example
+        // `gradle/wrapper/gradle-wrapper.properties`.
+        .max_depth(Some(3));
+    let walker = builder.build();
+    let mut file_candidates = Vec::new();
+    let repository_id = root.to_string_lossy().into_owned();
+
+    for dent in walker {
+        let dent = match dent {
+            Ok(entry) => entry,
+            Err(err) => {
+                diagnostics.entries.push(SearchDiagnostic {
+                    repository_id: repository_id.clone(),
+                    path: None,
+                    kind: SearchDiagnosticKind::Walk,
+                    message: err.to_string(),
+                });
+                continue;
+            }
+        };
+        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = dent.path();
+        if hard_excluded_runtime_path(root, path) {
+            continue;
+        }
+
+        let rel_path = normalize_repository_relative_path(root, path);
+        if !is_root_scoped_runtime_config_path(&rel_path) {
+            continue;
+        }
+
+        // Language filters only match source files, but root-scoped config artifacts remain
+        // relevant for language-profiled entrypoint/config queries.
         file_candidates.push((rel_path, path.to_path_buf()));
     }
 

@@ -15,6 +15,9 @@ pub(crate) enum PolicyStage {
     SelectionEntrypoint,
     SelectionDiversification,
     SelectionTail,
+    PostSelectionRuntime,
+    PostSelectionMixedSupport,
+    PostSelectionLaravel,
 }
 
 #[allow(dead_code)]
@@ -29,6 +32,7 @@ pub(crate) enum PolicyEffect {
 pub(crate) struct PolicyRuleTrace {
     pub rule_id: &'static str,
     pub stage: PolicyStage,
+    pub predicate_ids: Vec<&'static str>,
     pub effect: PolicyEffect,
     pub before: f32,
     pub after: f32,

@@ -10,8 +10,8 @@ use super::super::super::query_terms::{
     hybrid_canonical_match_multiplier, hybrid_excerpt_has_build_flow_anchor,
     hybrid_excerpt_has_exact_identifier_anchor, hybrid_excerpt_has_test_double_anchor,
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count_with_terms,
-    hybrid_query_exact_terms, hybrid_query_overlap_terms, hybrid_specific_witness_query_terms,
-    path_has_exact_query_term_match,
+    hybrid_query_exact_terms, hybrid_query_mentions_cli_command, hybrid_query_overlap_terms,
+    hybrid_specific_witness_query_terms, path_has_exact_query_term_match,
 };
 use super::super::super::surfaces::{
     HybridSourceClass, has_generic_runtime_anchor_stem, hybrid_source_class, is_bench_support_path,
@@ -20,10 +20,10 @@ use super::super::super::surfaces::{
     is_frontend_runtime_noise_path, is_generic_runtime_witness_doc_path,
     is_loose_python_test_module_path, is_navigation_reference_doc_path, is_navigation_runtime_path,
     is_non_code_test_doc_path, is_python_entrypoint_runtime_path, is_python_runtime_config_path,
-    is_python_test_witness_path, is_repo_metadata_path, is_runtime_adjacent_python_test_path,
-    is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
-    is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
-    is_typescript_runtime_module_index_path,
+    is_python_test_witness_path, is_repo_metadata_path, is_root_scoped_runtime_config_path,
+    is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
+    is_runtime_config_artifact_path, is_rust_workspace_config_path, is_scripts_ops_path,
+    is_test_harness_path, is_test_support_path, is_typescript_runtime_module_index_path,
 };
 use super::super::hybrid_path_quality_multiplier_with_intent;
 
@@ -48,8 +48,7 @@ impl SelectionQueryContext {
         let query_overlap_terms = hybrid_query_overlap_terms(query_text);
         let blade_component_specific_terms = blade_component_specific_query_terms(query_text);
         let specific_witness_terms = hybrid_specific_witness_query_terms(query_text);
-        let query_mentions_cli = query_overlap_terms.iter().any(|token| token == "cli")
-            || query_text.to_ascii_lowercase().contains("cli");
+        let query_mentions_cli = hybrid_query_mentions_cli_command(query_text);
         let query_has_identifier_anchor = query_overlap_terms.len() > exact_terms.len();
         let query_has_specific_blade_anchors =
             intent.wants_laravel_ui_witnesses && !specific_witness_terms.is_empty();
@@ -133,12 +132,7 @@ impl SelectionCandidate {
             .iter()
             .any(|source| source.starts_with("path_witness:"));
         let is_repo_root_runtime_config_artifact =
-            is_runtime_config_artifact_path(&evidence.document.path)
-                && !evidence
-                    .document
-                    .path
-                    .trim_start_matches("./")
-                    .contains('/');
+            is_root_scoped_runtime_config_path(&evidence.document.path);
         let path_depth = path_depth(&evidence.document.path);
         let is_typescript_runtime_module_index =
             is_typescript_runtime_module_index_path(&evidence.document.path);
@@ -370,7 +364,435 @@ pub(crate) struct SelectionFacts {
     pub(crate) laravel_surface_seen: usize,
 }
 
+#[allow(dead_code)]
+pub(crate) struct SelectionIntentView<'a> {
+    facts: &'a SelectionFacts,
+}
+
+#[allow(dead_code)]
+impl SelectionIntentView<'_> {
+    pub(crate) fn wants_class(&self) -> bool {
+        self.facts.wants_class
+    }
+
+    pub(crate) fn wants_runtime_witnesses(&self) -> bool {
+        self.facts.wants_runtime_witnesses
+    }
+
+    pub(crate) fn wants_entrypoint_build_flow(&self) -> bool {
+        self.facts.wants_entrypoint_build_flow
+    }
+
+    pub(crate) fn wants_runtime_config_artifacts(&self) -> bool {
+        self.facts.wants_runtime_config_artifacts
+    }
+
+    pub(crate) fn wants_test_witness_recall(&self) -> bool {
+        self.facts.wants_test_witness_recall
+    }
+
+    pub(crate) fn wants_example_or_bench_witnesses(&self) -> bool {
+        self.facts.wants_example_or_bench_witnesses
+    }
+
+    pub(crate) fn wants_examples(&self) -> bool {
+        self.facts.wants_examples
+    }
+
+    pub(crate) fn wants_benchmarks(&self) -> bool {
+        self.facts.wants_benchmarks
+    }
+
+    pub(crate) fn wants_rust_workspace_config(&self) -> bool {
+        self.facts.wants_rust_workspace_config
+    }
+
+    pub(crate) fn wants_python_workspace_config(&self) -> bool {
+        self.facts.wants_python_workspace_config
+    }
+
+    pub(crate) fn wants_python_witnesses(&self) -> bool {
+        self.facts.wants_python_witnesses
+    }
+
+    pub(crate) fn wants_mcp_runtime_surface(&self) -> bool {
+        self.facts.wants_mcp_runtime_surface
+    }
+
+    pub(crate) fn wants_runtime_companion_tests(&self) -> bool {
+        self.facts.wants_runtime_companion_tests
+    }
+
+    pub(crate) fn prefer_runtime_anchor_tests(&self) -> bool {
+        self.facts.prefer_runtime_anchor_tests
+    }
+
+    pub(crate) fn penalize_generic_runtime_docs(&self) -> bool {
+        self.facts.penalize_generic_runtime_docs
+    }
+
+    pub(crate) fn wants_laravel_ui_witnesses(&self) -> bool {
+        self.facts.wants_laravel_ui_witnesses
+    }
+
+    pub(crate) fn wants_blade_component_witnesses(&self) -> bool {
+        self.facts.wants_blade_component_witnesses
+    }
+
+    pub(crate) fn wants_laravel_form_action_witnesses(&self) -> bool {
+        self.facts.wants_laravel_form_action_witnesses
+    }
+
+    pub(crate) fn wants_livewire_view_witnesses(&self) -> bool {
+        self.facts.wants_livewire_view_witnesses
+    }
+
+    pub(crate) fn wants_commands_middleware_witnesses(&self) -> bool {
+        self.facts.wants_commands_middleware_witnesses
+    }
+
+    pub(crate) fn wants_jobs_listeners_witnesses(&self) -> bool {
+        self.facts.wants_jobs_listeners_witnesses
+    }
+
+    pub(crate) fn wants_laravel_layout_witnesses(&self) -> bool {
+        self.facts.wants_laravel_layout_witnesses
+    }
+
+    pub(crate) fn wants_navigation_fallbacks(&self) -> bool {
+        self.facts.wants_navigation_fallbacks
+    }
+
+    pub(crate) fn wants_ci_workflow_witnesses(&self) -> bool {
+        self.facts.wants_ci_workflow_witnesses
+    }
+
+    pub(crate) fn wants_scripts_ops_witnesses(&self) -> bool {
+        self.facts.wants_scripts_ops_witnesses
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct SelectionQueryView<'a> {
+    facts: &'a SelectionFacts,
+}
+
+#[allow(dead_code)]
+impl SelectionQueryView<'_> {
+    pub(crate) fn mentions_cli(&self) -> bool {
+        self.facts.query_mentions_cli
+    }
+
+    pub(crate) fn has_exact_terms(&self) -> bool {
+        self.facts.query_has_exact_terms
+    }
+
+    pub(crate) fn has_identifier_anchor(&self) -> bool {
+        self.facts.query_has_identifier_anchor
+    }
+
+    pub(crate) fn has_specific_blade_anchors(&self) -> bool {
+        self.facts.query_has_specific_blade_anchors
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct SelectionCandidateView<'a> {
+    facts: &'a SelectionFacts,
+}
+
+#[allow(dead_code)]
+impl SelectionCandidateView<'_> {
+    pub(crate) fn class(&self) -> HybridSourceClass {
+        self.facts.class
+    }
+
+    pub(crate) fn path_overlap(&self) -> usize {
+        self.facts.path_overlap
+    }
+
+    pub(crate) fn excerpt_overlap(&self) -> usize {
+        self.facts.excerpt_overlap
+    }
+
+    pub(crate) fn specific_witness_path_overlap(&self) -> usize {
+        self.facts.specific_witness_path_overlap
+    }
+
+    pub(crate) fn blade_specific_path_overlap(&self) -> usize {
+        self.facts.blade_specific_path_overlap
+    }
+
+    pub(crate) fn has_exact_query_term_match(&self) -> bool {
+        self.facts.has_exact_query_term_match
+    }
+
+    pub(crate) fn excerpt_has_exact_identifier_anchor(&self) -> bool {
+        self.facts.excerpt_has_exact_identifier_anchor
+    }
+
+    pub(crate) fn excerpt_has_build_flow_anchor(&self) -> bool {
+        self.facts.excerpt_has_build_flow_anchor
+    }
+
+    pub(crate) fn excerpt_has_test_double_anchor(&self) -> bool {
+        self.facts.excerpt_has_test_double_anchor
+    }
+
+    pub(crate) fn has_path_witness_source(&self) -> bool {
+        self.facts.has_path_witness_source
+    }
+
+    pub(crate) fn is_runtime_config_artifact(&self) -> bool {
+        self.facts.is_runtime_config_artifact
+    }
+
+    pub(crate) fn is_repo_root_runtime_config_artifact(&self) -> bool {
+        self.facts.is_repo_root_runtime_config_artifact
+    }
+
+    pub(crate) fn is_typescript_runtime_module_index(&self) -> bool {
+        self.facts.is_typescript_runtime_module_index
+    }
+
+    pub(crate) fn is_entrypoint_runtime(&self) -> bool {
+        self.facts.is_entrypoint_runtime
+    }
+
+    pub(crate) fn is_entrypoint_build_workflow(&self) -> bool {
+        self.facts.is_entrypoint_build_workflow
+    }
+
+    pub(crate) fn is_python_runtime_config(&self) -> bool {
+        self.facts.is_python_runtime_config
+    }
+
+    pub(crate) fn is_python_entrypoint_runtime(&self) -> bool {
+        self.facts.is_python_entrypoint_runtime
+    }
+
+    pub(crate) fn is_python_test_witness(&self) -> bool {
+        self.facts.is_python_test_witness
+    }
+
+    pub(crate) fn is_loose_python_test_module(&self) -> bool {
+        self.facts.is_loose_python_test_module
+    }
+
+    pub(crate) fn is_ci_workflow(&self) -> bool {
+        self.facts.is_ci_workflow
+    }
+
+    pub(crate) fn is_navigation_runtime(&self) -> bool {
+        self.facts.is_navigation_runtime
+    }
+
+    pub(crate) fn is_navigation_reference_doc(&self) -> bool {
+        self.facts.is_navigation_reference_doc
+    }
+
+    pub(crate) fn is_example_support(&self) -> bool {
+        self.facts.is_example_support
+    }
+
+    pub(crate) fn is_bench_support(&self) -> bool {
+        self.facts.is_bench_support
+    }
+
+    pub(crate) fn is_test_support(&self) -> bool {
+        self.facts.is_test_support
+    }
+
+    pub(crate) fn is_examples_rs(&self) -> bool {
+        self.facts.is_examples_rs
+    }
+
+    pub(crate) fn path_stem_is_server_or_cli(&self) -> bool {
+        self.facts.path_stem_is_server_or_cli
+    }
+
+    pub(crate) fn path_stem_is_main(&self) -> bool {
+        self.facts.path_stem_is_main
+    }
+
+    pub(crate) fn is_cli_test_support(&self) -> bool {
+        self.facts.is_cli_test_support
+    }
+
+    pub(crate) fn is_runtime_anchor_test_support(&self) -> bool {
+        self.facts.is_runtime_anchor_test_support
+    }
+
+    pub(crate) fn is_test_harness(&self) -> bool {
+        self.facts.is_test_harness
+    }
+
+    pub(crate) fn is_non_code_test_doc(&self) -> bool {
+        self.facts.is_non_code_test_doc
+    }
+
+    pub(crate) fn is_generic_runtime_witness_doc(&self) -> bool {
+        self.facts.is_generic_runtime_witness_doc
+    }
+
+    pub(crate) fn is_repo_metadata(&self) -> bool {
+        self.facts.is_repo_metadata
+    }
+
+    pub(crate) fn has_generic_runtime_anchor_stem(&self) -> bool {
+        self.facts.has_generic_runtime_anchor_stem
+    }
+
+    pub(crate) fn is_frontend_runtime_noise(&self) -> bool {
+        self.facts.is_frontend_runtime_noise
+    }
+
+    pub(crate) fn is_rust_workspace_config(&self) -> bool {
+        self.facts.is_rust_workspace_config
+    }
+
+    pub(crate) fn is_scripts_ops(&self) -> bool {
+        self.facts.is_scripts_ops
+    }
+
+    pub(crate) fn is_runtime_adjacent_python_test(&self) -> bool {
+        self.facts.is_runtime_adjacent_python_test
+    }
+
+    pub(crate) fn is_non_prefix_python_test_module(&self) -> bool {
+        self.facts.is_non_prefix_python_test_module
+    }
+
+    pub(crate) fn runtime_family_prefix_overlap(&self) -> usize {
+        self.facts.runtime_family_prefix_overlap
+    }
+
+    pub(crate) fn path_depth(&self) -> usize {
+        self.facts.path_depth
+    }
+
+    pub(crate) fn is_laravel_non_livewire_blade_view(&self) -> bool {
+        self.facts.is_laravel_non_livewire_blade_view
+    }
+
+    pub(crate) fn is_laravel_livewire_view(&self) -> bool {
+        self.facts.is_laravel_livewire_view
+    }
+
+    pub(crate) fn is_laravel_blade_component(&self) -> bool {
+        self.facts.is_laravel_blade_component
+    }
+
+    pub(crate) fn is_laravel_nested_blade_component(&self) -> bool {
+        self.facts.is_laravel_nested_blade_component
+    }
+
+    pub(crate) fn is_laravel_form_action_blade(&self) -> bool {
+        self.facts.is_laravel_form_action_blade
+    }
+
+    pub(crate) fn is_laravel_livewire_component(&self) -> bool {
+        self.facts.is_laravel_livewire_component
+    }
+
+    pub(crate) fn is_laravel_view_component_class(&self) -> bool {
+        self.facts.is_laravel_view_component_class
+    }
+
+    pub(crate) fn is_laravel_command_or_middleware(&self) -> bool {
+        self.facts.is_laravel_command_or_middleware
+    }
+
+    pub(crate) fn is_laravel_job_or_listener(&self) -> bool {
+        self.facts.is_laravel_job_or_listener
+    }
+
+    pub(crate) fn is_laravel_layout_blade_view(&self) -> bool {
+        self.facts.is_laravel_layout_blade_view
+    }
+
+    pub(crate) fn is_laravel_core_provider(&self) -> bool {
+        self.facts.is_laravel_core_provider
+    }
+
+    pub(crate) fn is_laravel_provider(&self) -> bool {
+        self.facts.is_laravel_provider
+    }
+
+    pub(crate) fn is_laravel_route(&self) -> bool {
+        self.facts.is_laravel_route
+    }
+
+    pub(crate) fn is_laravel_bootstrap_entrypoint(&self) -> bool {
+        self.facts.is_laravel_bootstrap_entrypoint
+    }
+
+    pub(crate) fn laravel_surface(&self) -> Option<LaravelUiSurfaceClass> {
+        self.facts.laravel_surface
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct SelectionStateView<'a> {
+    facts: &'a SelectionFacts,
+}
+
+#[allow(dead_code)]
+impl SelectionStateView<'_> {
+    pub(crate) fn seen_count(&self) -> usize {
+        self.facts.seen_count
+    }
+
+    pub(crate) fn runtime_seen(&self) -> usize {
+        self.facts.runtime_seen
+    }
+
+    pub(crate) fn seen_ci_workflows(&self) -> usize {
+        self.facts.seen_ci_workflows
+    }
+
+    pub(crate) fn seen_example_support(&self) -> usize {
+        self.facts.seen_example_support
+    }
+
+    pub(crate) fn seen_bench_support(&self) -> usize {
+        self.facts.seen_bench_support
+    }
+
+    pub(crate) fn seen_plain_test_support(&self) -> usize {
+        self.facts.seen_plain_test_support
+    }
+
+    pub(crate) fn seen_repo_root_runtime_configs(&self) -> usize {
+        self.facts.seen_repo_root_runtime_configs
+    }
+
+    pub(crate) fn seen_typescript_runtime_module_indexes(&self) -> usize {
+        self.facts.seen_typescript_runtime_module_indexes
+    }
+
+    pub(crate) fn laravel_surface_seen(&self) -> usize {
+        self.facts.laravel_surface_seen
+    }
+}
+
 impl SelectionFacts {
+    pub(crate) fn intent(&self) -> SelectionIntentView<'_> {
+        SelectionIntentView { facts: self }
+    }
+
+    pub(crate) fn query(&self) -> SelectionQueryView<'_> {
+        SelectionQueryView { facts: self }
+    }
+
+    pub(crate) fn candidate(&self) -> SelectionCandidateView<'_> {
+        SelectionCandidateView { facts: self }
+    }
+
+    pub(crate) fn state(&self) -> SelectionStateView<'_> {
+        SelectionStateView { facts: self }
+    }
+
     pub(crate) fn from_candidate(
         candidate: &SelectionCandidate,
         intent: &HybridRankingIntent,

@@ -44,6 +44,9 @@ pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<Strin
         "benchmark",
         "benchmarks",
         "build",
+        "cli",
+        "command",
+        "commands",
         "component",
         "components",
         "create",
@@ -98,6 +101,40 @@ pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<Strin
                 .any(|generic| generic == &term.as_str())
         })
         .collect()
+}
+
+pub(super) fn hybrid_query_has_kotlin_android_ui_terms(query_text: &str) -> bool {
+    let exact_terms = hybrid_query_exact_terms(query_text);
+    if exact_terms.iter().any(|term| {
+        matches!(
+            term.as_str(),
+            "ui" | "compose" | "screen" | "fragment" | "layout" | "viewmodel"
+        )
+    }) {
+        return true;
+    }
+
+    let has_view = exact_terms.iter().any(|term| term == "view");
+    let has_model = exact_terms.iter().any(|term| term == "model");
+    has_view && has_model
+}
+
+pub(super) fn hybrid_query_mentions_cli_command(query_text: &str) -> bool {
+    let mut current = String::new();
+
+    for ch in query_text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            current.push(ch.to_ascii_lowercase());
+            continue;
+        }
+
+        if matches!(current.as_str(), "cli" | "cmd" | "command" | "commands") {
+            return true;
+        }
+        current.clear();
+    }
+
+    matches!(current.as_str(), "cli" | "cmd" | "command" | "commands")
 }
 
 pub(super) fn path_has_exact_query_term_match(path: &str, exact_terms: &[String]) -> bool {
@@ -282,7 +319,7 @@ fn push_hybrid_query_overlap_terms(
     if current.is_empty() {
         return;
     }
-    if let Some(token) = normalize_hybrid_recall_token(current) {
+    if let Some(token) = normalize_hybrid_overlap_token(current) {
         if seen.insert(token.clone()) {
             tokens.push(token);
         }
@@ -304,7 +341,7 @@ pub(super) fn hybrid_path_overlap_tokens(path: &str) -> Vec<String> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or(raw_component);
-        if let Some(token) = normalize_hybrid_recall_token(normalized_component) {
+        if let Some(token) = normalize_hybrid_overlap_token(normalized_component) {
             if !is_low_signal_path_overlap_token(&token) && seen.insert(token.clone()) {
                 tokens.push(token);
             }
@@ -341,14 +378,42 @@ fn is_low_signal_path_overlap_token(token: &str) -> bool {
 }
 
 fn push_hybrid_identifier_token(tokens: &mut Vec<String>, current: &mut String) {
-    if let Some(token) = normalize_hybrid_recall_token(current) {
+    if let Some(token) = normalize_hybrid_overlap_token(current) {
         tokens.push(token);
     }
     current.clear();
 }
 
+fn normalize_hybrid_overlap_token(token: &str) -> Option<String> {
+    let normalized = token.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "cmd" | "pkg") {
+        return Some(normalized);
+    }
+
+    normalize_hybrid_recall_token(&normalized)
+}
+
 fn hybrid_terms_overlap(left: &str, right: &str) -> bool {
     if left == right {
+        return true;
+    }
+
+    const TERM_ALIASES: &[(&str, &[&str])] = &[
+        ("cmd", &["command", "commands"]),
+        ("command", &["cmd"]),
+        ("commands", &["cmd"]),
+        ("pkg", &["package", "packages"]),
+        ("package", &["pkg"]),
+        ("packages", &["pkg"]),
+    ];
+
+    let aliases_overlap = |candidate: &str, query: &str| {
+        TERM_ALIASES
+            .iter()
+            .find(|(term, _)| *term == candidate)
+            .is_some_and(|(_, aliases)| aliases.iter().any(|alias| *alias == query))
+    };
+    if aliases_overlap(left, right) || aliases_overlap(right, left) {
         return true;
     }
 
@@ -365,4 +430,58 @@ fn hybrid_terms_overlap(left: &str, right: &str) -> bool {
 
     normalize_plural(left).as_deref() == Some(right)
         || normalize_plural(right).as_deref() == Some(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        hybrid_path_overlap_count, hybrid_query_mentions_cli_command,
+        hybrid_specific_witness_query_terms,
+    };
+
+    #[test]
+    fn hybrid_path_overlap_counts_cmd_as_command_abbreviation() {
+        assert_eq!(
+            hybrid_path_overlap_count(
+                "cmd/frpc/main.go",
+                "entry point bootstrap server api main cli command",
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn hybrid_path_overlap_counts_pkg_as_package_abbreviation() {
+        assert_eq!(
+            hybrid_path_overlap_count(
+                "pkg/config/source/aggregator.go",
+                "tests packages internal library integration",
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn hybrid_query_mentions_cli_command_uses_token_matches_not_substrings() {
+        assert!(hybrid_query_mentions_cli_command(
+            "ruff analyze cli entrypoint"
+        ));
+        assert!(hybrid_query_mentions_cli_command(
+            "entry point bootstrap cli command"
+        ));
+        assert!(hybrid_query_mentions_cli_command(
+            "entry point bootstrap commands runner"
+        ));
+        assert!(!hybrid_query_mentions_cli_command(
+            "entry point bootstrap client runtime"
+        ));
+    }
+
+    #[test]
+    fn hybrid_specific_witness_terms_treat_cli_context_as_generic() {
+        assert_eq!(
+            hybrid_specific_witness_query_terms("ruff analyze cli command entrypoint"),
+            vec!["ruff".to_owned(), "analyze".to_owned()]
+        );
+    }
 }

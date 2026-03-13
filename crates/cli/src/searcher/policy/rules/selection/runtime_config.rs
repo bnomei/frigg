@@ -1,6 +1,7 @@
-use super::super::super::dsl::{ScoreRule, apply_score_rules};
+use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;
+use super::super::super::predicates::selection as pred;
 use super::super::super::trace::{PolicyEffect, PolicyStage};
 use crate::searcher::surfaces::HybridSourceClass;
 
@@ -52,13 +53,6 @@ fn repo_root_runtime_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_runtime_config_artifacts
-        || !ctx.is_entrypoint_runtime
-        || !ctx.has_path_witness_source
-    {
-        return None;
-    }
-
     Some(PolicyEffect::Add(
         if ctx.seen_repo_root_runtime_configs > 0 && ctx.runtime_seen == 0 {
             if ctx.path_stem_is_server_or_cli {
@@ -89,13 +83,6 @@ fn typescript_index_repo_root_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect
 }
 
 fn typescript_index_path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_runtime_config_artifacts
-        || !ctx.is_typescript_runtime_module_index
-        || !ctx.has_path_witness_source
-    {
-        return None;
-    }
-
     Some(PolicyEffect::Add(
         if ctx.seen_repo_root_runtime_configs > 0 && ctx.runtime_seen == 0 {
             1.34
@@ -142,10 +129,6 @@ fn rust_workspace_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_runtime_config_artifacts || !ctx.is_python_runtime_config {
-        return None;
-    }
-
     Some(PolicyEffect::Add(if ctx.wants_python_workspace_config {
         if ctx.seen_count == 0 { 0.24 } else { 0.12 }
     } else if ctx.seen_count == 0 {
@@ -212,102 +195,197 @@ fn tests_specs_penalty_without_runtime(ctx: &SelectionFacts) -> Option<PolicyEff
 }
 
 const RULES: &[ScoreRule<SelectionFacts>] = &[
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.artifact_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_runtime_config_artifact_leaf(),
+        ]),
         artifact_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.server_or_cli_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+            pred::path_stem_is_server_or_cli_leaf(),
+        ]),
         server_or_cli_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.main_penalty",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+            pred::path_stem_is_main_leaf(),
+        ]),
         main_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.main_without_runtime_penalty",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+            pred::path_stem_is_main_leaf(),
+            pred::has_seen_repo_root_runtime_config_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+        ]),
         main_without_runtime_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.repo_root_runtime_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+            pred::has_seen_repo_root_runtime_config_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+        ]),
         repo_root_runtime_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.path_witness_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_entrypoint_runtime_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         path_witness_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.typescript_index_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+        ]),
         typescript_index_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.typescript_index_repo_root_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+            pred::has_seen_repo_root_runtime_config_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+        ]),
         typescript_index_repo_root_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.typescript_index_path_witness_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         typescript_index_path_witness_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.repo_root_artifact_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_repo_root_runtime_config_artifact_leaf(),
+        ]),
         repo_root_artifact_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.repo_root_artifact_path_witness_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_repo_root_runtime_config_artifact_leaf(),
+            pred::has_path_witness_source_leaf(),
+        ]),
         repo_root_artifact_path_witness_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.rust_workspace_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::wants_rust_workspace_config_leaf(),
+            pred::is_rust_workspace_config_leaf(),
+        ]),
         rust_workspace_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.python_adjustment",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_python_runtime_config_leaf(),
+        ]),
         python_adjustment,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.exact_runtime_config_match_bonus",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_runtime_config_artifact_leaf(),
+            pred::has_exact_query_term_match_leaf(),
+        ]),
         exact_runtime_config_match_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.doc_penalty",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::new(
+            &[pred::wants_runtime_config_artifacts_leaf()],
+            &[
+                pred::class_is_documentation_leaf(),
+                pred::class_is_readme_leaf(),
+            ],
+            &[],
+        ),
         doc_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.repo_metadata_penalty",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_repo_metadata_leaf(),
+        ]),
         repo_metadata_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.ci_penalty_without_runtime",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::has_seen_repo_root_runtime_config_leaf(),
+            pred::runtime_seen_is_zero_leaf(),
+            pred::is_ci_workflow_leaf(),
+        ]),
         ci_penalty_without_runtime,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.runtime_config.tests_specs_penalty_without_runtime",
         PolicyStage::SelectionRuntimeConfig,
+        Predicate::new(
+            &[
+                pred::wants_runtime_config_artifacts_leaf(),
+                pred::has_seen_repo_root_runtime_config_leaf(),
+                pred::runtime_seen_is_zero_leaf(),
+            ],
+            &[pred::class_is_tests_leaf(), pred::class_is_specs_leaf()],
+            &[],
+        ),
         tests_specs_penalty_without_runtime,
     ),
 ];
 
-pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
-    if !ctx.wants_runtime_config_artifacts {
-        return;
-    }
+pub(crate) const RULE_SET: ScoreRuleSet<SelectionFacts> = ScoreRuleSet::new(RULES);
 
-    apply_score_rules(program, ctx, RULES);
+pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
+    apply_score_rule_sets(program, ctx, &[RULE_SET]);
 }

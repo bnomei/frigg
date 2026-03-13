@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn apply_laravel_entrypoint_visibility(
     mut matches: Vec<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,
+    meta: PostSelectionRuleMeta,
 ) -> Vec<HybridRankedEvidence> {
     if !ctx.intent.wants_entrypoint_build_flow {
         return matches;
@@ -32,7 +33,7 @@ pub(super) fn apply_laravel_entrypoint_visibility(
             matches,
             candidate,
             ctx,
-            "post_selection.laravel_entrypoint",
+            meta,
             is_laravel_entrypoint_guardrail_replacement,
         );
     }
@@ -61,7 +62,7 @@ pub(super) fn apply_laravel_entrypoint_visibility(
             matches,
             candidate,
             ctx,
-            "post_selection.laravel_entrypoint",
+            meta,
             is_laravel_entrypoint_guardrail_replacement,
         );
     }
@@ -72,6 +73,7 @@ pub(super) fn apply_laravel_entrypoint_visibility(
 pub(super) fn apply_laravel_blade_surface_visibility(
     mut matches: Vec<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,
+    meta: PostSelectionRuleMeta,
 ) -> Vec<HybridRankedEvidence> {
     if !ctx.intent.wants_laravel_ui_witnesses {
         return matches;
@@ -156,7 +158,7 @@ pub(super) fn apply_laravel_blade_surface_visibility(
             matches,
             candidate,
             ctx,
-            "post_selection.laravel_blade_surface",
+            meta,
             is_laravel_ui_guardrail_replacement,
         );
     }
@@ -167,6 +169,7 @@ pub(super) fn apply_laravel_blade_surface_visibility(
 pub(super) fn apply_laravel_ui_test_harness_visibility(
     matches: Vec<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,
+    meta: PostSelectionRuleMeta,
 ) -> Vec<HybridRankedEvidence> {
     if !ctx.intent.wants_laravel_ui_witnesses
         || matches
@@ -214,7 +217,7 @@ pub(super) fn apply_laravel_ui_test_harness_visibility(
         matches,
         candidate,
         ctx,
-        "post_selection.laravel_ui_test_harness",
+        meta,
         is_laravel_ui_test_guardrail_replacement,
     )
 }
@@ -222,6 +225,7 @@ pub(super) fn apply_laravel_ui_test_harness_visibility(
 pub(super) fn apply_laravel_layout_companion_visibility(
     mut matches: Vec<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,
+    meta: PostSelectionRuleMeta,
 ) -> Vec<HybridRankedEvidence> {
     if !ctx.intent.wants_laravel_layout_witnesses {
         return matches;
@@ -306,7 +310,7 @@ pub(super) fn apply_laravel_layout_companion_visibility(
             matches,
             candidate,
             ctx,
-            "post_selection.laravel_layout_companion",
+            meta,
             is_laravel_ui_guardrail_replacement,
         );
     }

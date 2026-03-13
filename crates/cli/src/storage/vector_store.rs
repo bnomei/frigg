@@ -131,7 +131,7 @@ pub(super) fn semantic_chunk_embedding_record_order(
         .then(left.chunk_id.cmp(&right.chunk_id))
 }
 
-pub(super) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
+pub(crate) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(values.len() * std::mem::size_of::<f32>());
     for value in values {
         buffer.extend_from_slice(&value.to_le_bytes());

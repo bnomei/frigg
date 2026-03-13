@@ -17,21 +17,29 @@ use super::super::facts::SelectionFacts;
 use super::super::kernel::PolicyProgram;
 use super::super::trace::PolicyEvaluation;
 
+type SelectionStageApply = fn(&mut PolicyProgram, &SelectionFacts);
+
+const PIPELINE: &[SelectionStageApply] = &[
+    base::apply,
+    contracts::apply,
+    novelty::apply,
+    runtime_witness::apply,
+    runtime_config::apply,
+    companion_tests::apply,
+    laravel_ui::apply,
+    test_witness::apply,
+    navigation::apply,
+    ci_scripts_ops::apply,
+    entrypoint::apply,
+    diversification::apply,
+    tail::apply,
+];
+
 pub(crate) fn evaluate(ctx: &SelectionFacts, trace: bool) -> PolicyEvaluation {
     let mut program = PolicyProgram::with_optional_trace(ctx.base_score, trace);
-    base::apply(&mut program, ctx);
-    contracts::apply(&mut program, ctx);
-    novelty::apply(&mut program, ctx);
-    runtime_witness::apply(&mut program, ctx);
-    runtime_config::apply(&mut program, ctx);
-    companion_tests::apply(&mut program, ctx);
-    laravel_ui::apply(&mut program, ctx);
-    test_witness::apply(&mut program, ctx);
-    navigation::apply(&mut program, ctx);
-    ci_scripts_ops::apply(&mut program, ctx);
-    entrypoint::apply(&mut program, ctx);
-    diversification::apply(&mut program, ctx);
-    tail::apply(&mut program, ctx);
+    for apply in PIPELINE {
+        apply(&mut program, ctx);
+    }
     program.finish()
 }
 
@@ -56,6 +64,20 @@ mod tests {
             .collect()
     }
 
+    fn trace_rule<'a>(
+        evaluation: &'a PolicyEvaluation,
+        rule_id: &'static str,
+    ) -> &'a crate::searcher::policy::trace::PolicyRuleTrace {
+        evaluation
+            .trace
+            .as_ref()
+            .expect("trace")
+            .rules
+            .iter()
+            .find(|rule| rule.rule_id == rule_id)
+            .expect("rule trace should exist")
+    }
+
     #[test]
     fn policy_trace_selection_base_and_contracts_exact_identifier_stack() {
         let ctx = SelectionFacts {
@@ -74,6 +96,14 @@ mod tests {
         assert!(rule_ids.contains(&"selection.contracts.exact_identifier_bonus"));
         assert!(rule_ids.contains(&"selection.contracts.runtime_support_tests_bonus"));
         assert!(!rule_ids.contains(&"selection.contracts.missing_identifier_penalty"));
+        assert_eq!(
+            trace_rule(&evaluation, "selection.contracts.exact_identifier_bonus").predicate_ids,
+            vec![
+                "query.has_exact_terms",
+                "intent.contractish",
+                "candidate.excerpt_exact_identifier_anchor",
+            ],
+        );
     }
 
     #[test]
@@ -100,6 +130,14 @@ mod tests {
         assert!(first_ids.contains(&"selection.novelty.laravel_surface_bonus"));
         assert!(repeat_ids.contains(&"selection.novelty.class_repeat_penalty"));
         assert!(repeat_ids.contains(&"selection.novelty.laravel_surface_repeat_penalty"));
+        assert_eq!(
+            trace_rule(&first_eval, "selection.novelty.laravel_surface_bonus").predicate_ids,
+            vec![
+                "intent.laravel_ui_witnesses",
+                "candidate.laravel_surface.present",
+                "state.laravel_surface_seen_zero",
+            ],
+        );
     }
 
     #[test]
@@ -139,6 +177,19 @@ mod tests {
         assert!(rule_ids.contains(&"selection.runtime_config.ci_penalty_without_runtime"));
         assert!(rule_ids.contains(&"selection.diversification.ci_repeat_penalty"));
         assert!(rule_ids.contains(&"selection.diversification.ci_repo_root_penalty"));
+        assert_eq!(
+            trace_rule(
+                &evaluation,
+                "selection.diversification.ci_repo_root_penalty"
+            )
+            .predicate_ids,
+            vec![
+                "intent.runtime_config_or_entrypoint_build_flow",
+                "candidate.ci_workflow",
+                "state.seen_ci_workflows_positive",
+                "state.has_seen_repo_root_runtime_config",
+            ],
+        );
     }
 
     #[test]
@@ -160,6 +211,14 @@ mod tests {
         assert!(rule_ids.contains(&"selection.tests.support_bonus"));
         assert!(rule_ids.contains(&"selection.tests.cli_support_bonus"));
         assert!(!rule_ids.contains(&"selection.entrypoint.cli_runtime_penalty"));
+        assert_eq!(
+            trace_rule(&evaluation, "selection.tests.cli_support_bonus").predicate_ids,
+            vec![
+                "intent.test_witness_recall",
+                "query.mentions_cli",
+                "candidate.cli_test_support",
+            ],
+        );
     }
 
     #[test]
@@ -180,6 +239,35 @@ mod tests {
         assert!(rule_ids.contains(&"selection.runtime.generic_doc_repeat_penalty"));
         assert!(rule_ids.contains(&"selection.runtime.generic_doc_first_penalty"));
         assert!(rule_ids.contains(&"selection.runtime.doc_path_overlap_penalty"));
+        assert_eq!(
+            trace_rule(&evaluation, "selection.runtime.generic_doc_first_penalty").predicate_ids,
+            vec![
+                "intent.runtime_witnesses",
+                "intent.penalize_generic_runtime_docs",
+                "candidate.generic_runtime_witness_doc",
+                "state.runtime_seen_zero",
+            ],
+        );
+    }
+
+    #[test]
+    fn policy_trace_selection_laravel_surface_general_blade_view_records_predicates() {
+        let ctx = SelectionFacts {
+            wants_laravel_ui_witnesses: true,
+            laravel_surface: Some(LaravelUiSurfaceClass::BladeView),
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true);
+        let rule = trace_rule(&evaluation, "selection.laravel.surface.general_blade_view");
+
+        assert_eq!(
+            rule.predicate_ids,
+            vec![
+                "intent.laravel_ui_witnesses",
+                "candidate.laravel_surface.blade_view",
+            ],
+        );
     }
 
     #[test]
@@ -227,6 +315,18 @@ mod tests {
         let rule_ids = trace_rule_ids(&evaluation);
 
         assert!(rule_ids.contains(&"selection.diversification.mixed_query_first_example_bonus"));
+        assert_eq!(
+            trace_rule(
+                &evaluation,
+                "selection.diversification.mixed_query_first_example_bonus",
+            )
+            .predicate_ids,
+            vec![
+                "intent.mixed_query_example_or_bench",
+                "candidate.example_support",
+                "state.seen_example_support_zero",
+            ],
+        );
     }
 
     #[test]
@@ -252,5 +352,68 @@ mod tests {
         assert!(rule_ids.contains(&"selection.companion.non_prefix_python_bonus"));
         assert!(rule_ids.contains(&"selection.companion.family_affinity_bonus"));
         assert!(rule_ids.contains(&"selection.companion.deeper_path_bonus"));
+        assert_eq!(
+            trace_rule(&evaluation, "selection.companion.deeper_path_bonus").predicate_ids,
+            vec![
+                "intent.runtime_companion_tests",
+                "candidate.test_support",
+                "candidate.path_depth_at_least_four",
+            ],
+        );
+    }
+
+    #[test]
+    fn policy_trace_selection_navigation_scripts_and_tail_rules_record_predicates() {
+        let navigation_ctx = SelectionFacts {
+            wants_navigation_fallbacks: true,
+            wants_mcp_runtime_surface: true,
+            is_navigation_runtime: true,
+            seen_count: 0,
+            ..Default::default()
+        };
+        let navigation_eval = evaluate(&navigation_ctx, true);
+
+        let scripts_ctx = SelectionFacts {
+            wants_scripts_ops_witnesses: true,
+            is_scripts_ops: true,
+            seen_count: 0,
+            ..Default::default()
+        };
+        let scripts_eval = evaluate(&scripts_ctx, true);
+
+        let tail_ctx = SelectionFacts {
+            class: HybridSourceClass::Runtime,
+            query_has_identifier_anchor: true,
+            wants_runtime_witnesses: true,
+            path_overlap: 0,
+            excerpt_overlap: 0,
+            ..Default::default()
+        };
+        let tail_eval = evaluate(&tail_ctx, true);
+
+        assert_eq!(
+            trace_rule(&navigation_eval, "selection.navigation.mcp_runtime_bonus").predicate_ids,
+            vec![
+                "intent.navigation_fallbacks",
+                "intent.mcp_runtime_surface",
+                "candidate.navigation_runtime",
+            ],
+        );
+        assert_eq!(
+            trace_rule(&scripts_eval, "selection.scripts.ops_bonus").predicate_ids,
+            vec!["intent.scripts_ops_witnesses", "candidate.scripts_ops"],
+        );
+        assert_eq!(
+            trace_rule(
+                &tail_eval,
+                "selection.tail.missing_identifier_anchor_penalty"
+            )
+            .predicate_ids,
+            vec![
+                "query.has_identifier_anchor",
+                "intent.runtime_or_entrypoint_build_flow",
+                "candidate.class.runtime",
+            ],
+        );
     }
 }

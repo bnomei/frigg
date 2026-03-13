@@ -69,10 +69,9 @@ pub(super) fn resolve_command_config(
     command: Command,
 ) -> Result<FriggConfig, Box<dyn Error>> {
     match command {
-        Command::Init
-        | Command::Verify
-        | Command::RepairStorage
-        | Command::PruneStorage { .. } => resolve_base_config(cli, true, None),
+        Command::Init | Command::Verify | Command::RepairStorage | Command::PruneStorage { .. } => {
+            resolve_base_config(cli, true, None)
+        }
         Command::Reindex { .. } => resolve_startup_config(cli, RuntimeTransportKind::Stdio),
         Command::PlaybookHybridRun { .. } => {
             let mut config = resolve_base_config(cli, true, None)?;

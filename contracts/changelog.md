@@ -2,6 +2,14 @@
 
 Deterministic reverse-chronological log for public contract and behavior changes.
 
+## 2026-03-12
+
+- spec: `123-busy-repo-semantic-storage-bounding`
+- change_set: `busy-repo-semantic-storage-bounding.t004`
+- summary: semantic storage now keeps one live corpus per `(repository, provider, model)` keyed by `semantic_head`, and steady-state semantic reads no longer fall back to older snapshot-partitioned corpora when the active model is missing coverage.
+- summary: manifest snapshot retention is now bounded to the latest `8` by default while protecting any active semantic-head-covered snapshot, and provenance retention is bounded to the latest `10_000` events.
+- summary: `embedding_vectors` is now treated as a derived sqlite-vec live projection over the active semantic corpus, and MCP/workspace health plus storage repair now surface and fix `semantic_vector_partition_out_of_sync` by rebuilding sqlite-vec from live semantic rows.
+
 ## 2026-03-11
 
 - spec: `108-search-stage-attribution-and-corroborating-ranker`

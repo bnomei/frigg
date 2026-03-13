@@ -13,103 +13,102 @@ pub(crate) const SHELL_GUIDANCE_RESOURCE_URI: &str = "frigg://guidance/shell-vs-
 pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 
 #[derive(Debug, Clone, Serialize)]
-struct LanguageStage {
-    id: &'static str,
-    description: &'static str,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct LanguageSupportEntry {
     id: &'static str,
     display_name: &'static str,
-    status: &'static str,
     search_outline: &'static str,
     navigation: &'static str,
     semantic_retrieval: &'static str,
-    rollout_stage: &'static str,
-    next_priority: bool,
-}
-
-fn baseline_runtime_support_entry(
-    id: &'static str,
-    display_name: &'static str,
-    next_priority: bool,
-) -> LanguageSupportEntry {
-    LanguageSupportEntry {
-        id,
-        display_name,
-        status: "baseline_runtime_surface",
-        search_outline: "baseline_runtime_surface",
-        navigation: "bounded_heuristic_navigation",
-        semantic_retrieval: "experimental_when_enabled",
-        rollout_stage: "runtime_l1_l2",
-        next_priority,
-    }
+    capability_note: &'static str,
 }
 
 fn support_matrix_json() -> String {
-    let stages = vec![
-        LanguageStage {
-            id: "witness_only",
-            description: "Hybrid/path witness support only. Useful, but not enough for first-class claims.",
-        },
-        LanguageStage {
-            id: "runtime_l1_l2",
-            description: "Runtime symbol + outline + heuristic navigation support with stable public semantics.",
-        },
-        LanguageStage {
-            id: "precise_l3",
-            description: "Precise SCIP-backed navigation is validated and part of the supported public story.",
-        },
-        LanguageStage {
-            id: "semantic_parity",
-            description: "Semantic chunking, indexing, ranking, watch/reindex, and provenance behavior are aligned too.",
-        },
-    ];
     let languages = vec![
         LanguageSupportEntry {
             id: "rust",
             display_name: "Rust",
-            status: "first_class",
-            search_outline: "first_class",
-            navigation: "first_class",
-            semantic_retrieval: "first_class_when_enabled",
-            rollout_stage: "semantic_parity",
-            next_priority: false,
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
         },
         LanguageSupportEntry {
             id: "php",
             display_name: "PHP",
-            status: "first_class",
-            search_outline: "first_class",
-            navigation: "first_class",
-            semantic_retrieval: "first_class_when_enabled",
-            rollout_stage: "semantic_parity",
-            next_priority: false,
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
         },
         LanguageSupportEntry {
             id: "blade",
             display_name: "Blade",
-            status: "first_class_template_surface",
-            search_outline: "first_class_template_surface",
+            search_outline: "supported_template_surface",
             navigation: "bounded_source_template_navigation",
             semantic_retrieval: "bounded_template_retrieval",
-            rollout_stage: "runtime_l1_l2",
-            next_priority: false,
+            capability_note: "template_metadata_livewire_flux",
         },
-        baseline_runtime_support_entry("typescript_tsx", "TypeScript / TSX", true),
-        baseline_runtime_support_entry("python", "Python", false),
-        baseline_runtime_support_entry("go", "Go", false),
-        baseline_runtime_support_entry("kotlin", "Kotlin / KTS", false),
-        baseline_runtime_support_entry("lua", "Lua", false),
-        baseline_runtime_support_entry("roc", "Roc", false),
-        baseline_runtime_support_entry("nim", "Nim", false),
+        LanguageSupportEntry {
+            id: "typescript_tsx",
+            display_name: "TypeScript / TSX",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "python",
+            display_name: "Python",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "go",
+            display_name: "Go",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "kotlin",
+            display_name: "Kotlin / KTS",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "lua",
+            display_name: "Lua",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "roc",
+            display_name: "Roc",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
+        LanguageSupportEntry {
+            id: "nim",
+            display_name: "Nim",
+            search_outline: "supported_source_language",
+            navigation: "read_only_source_graph_or_artifact_assisted",
+            semantic_retrieval: "optional_when_enabled",
+            capability_note: "general_source_support",
+        },
     ];
     serde_json::to_string_pretty(&json!({
-        "schema_id": "frigg.policy.support_matrix.v1",
+        "schema_id": "frigg.policy.support_matrix.v2",
         "product": "frigg",
         "product_boundary": "local-first deterministic code-evidence engine delivered through MCP",
-        "next_language_priority": "typescript_tsx",
         "stable_core": [
             "repository discovery and attach",
             "safe file reads",
@@ -127,7 +126,11 @@ fn support_matrix_json() -> String {
             "deep_search_*",
             "self-improvement loop"
         ],
-        "language_rollout_policy": stages,
+        "language_support_notes": [
+            "Frigg currently supports the listed languages for source-backed search, outline, structural, and hybrid retrieval workflows.",
+            "Navigation stays read-only and may combine source heuristics, graph evidence, and optional external artifacts.",
+            "Semantic retrieval is optional acceleration only and never the grounding layer."
+        ],
         "languages": languages
     }))
     .expect("support matrix JSON should serialize")
@@ -183,9 +186,7 @@ If semantic status is disabled, degraded, or unavailable, treat the answer as le
 pub(crate) fn policy_resources() -> Vec<Resource> {
     vec![
         RawResource::new(SUPPORT_MATRIX_RESOURCE_URI, "FRIGG Support Matrix")
-            .with_description(
-                "Machine-readable support policy, rollout stages, and next language priority.",
-            )
+            .with_description("Machine-readable supported languages and capability notes.")
             .with_mime_type("application/json")
             .no_annotation(),
         RawResource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
@@ -264,7 +265,7 @@ pub(crate) fn read_guidance_prompt(
 1. Prefer shell tools for trivial local scans, file reads, or git/filesystem inspection.\n\
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
-4. Keep public language claims conservative: Rust and PHP are first-class, Blade is a first-class template surface, and TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, plus Nim are baseline runtime surfaces rather than precise or semantic-parity languages.\n\
+4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
 5. Use `explore` only after discovery and only when the active profile includes it.\n\n",
     );
     text.push_str(profile_note);
@@ -306,56 +307,43 @@ mod tests {
     }
 
     #[test]
-    fn support_matrix_marks_typescript_as_next_priority() {
+    fn support_matrix_lists_supported_languages_without_rollout_tiers() {
         let json = resource_text(SUPPORT_MATRIX_RESOURCE_URI, ToolSurfaceProfile::Core);
         let parsed =
             serde_json::from_str::<Value>(&json).expect("support matrix JSON should parse");
-        assert_eq!(
-            parsed["next_language_priority"],
-            Value::String("typescript_tsx".to_owned())
-        );
-        assert!(
-            parsed["languages"]
-                .as_array()
-                .expect("languages should be an array")
-                .iter()
-                .any(|entry| {
-                    entry["id"] == json!("typescript_tsx") && entry["next_priority"] == json!(true)
-                })
-        );
-        assert!(
-            parsed["languages"]
-                .as_array()
-                .expect("languages should be an array")
-                .iter()
-                .any(|entry| {
-                    entry["id"] == json!("typescript_tsx")
-                        && entry["rollout_stage"] == json!("runtime_l1_l2")
-                })
-        );
-        assert!(
-            parsed["languages"]
-                .as_array()
-                .expect("languages should be an array")
-                .iter()
-                .any(|entry| {
-                    entry["id"] == json!("python")
-                        && entry["rollout_stage"] == json!("runtime_l1_l2")
-                })
-        );
-        for language_id in ["go", "kotlin", "lua", "roc", "nim"] {
+        assert!(parsed.get("next_language_priority").is_none());
+        assert!(parsed.get("language_rollout_policy").is_none());
+        for language_id in [
+            "rust",
+            "php",
+            "blade",
+            "typescript_tsx",
+            "python",
+            "go",
+            "kotlin",
+            "lua",
+            "roc",
+            "nim",
+        ] {
             assert!(
                 parsed["languages"]
                     .as_array()
                     .expect("languages should be an array")
                     .iter()
-                    .any(|entry| {
-                        entry["id"] == json!(language_id)
-                            && entry["rollout_stage"] == json!("runtime_l1_l2")
-                    }),
-                "expected {language_id} to be marked as runtime_l1_l2"
+                    .any(|entry| entry["id"] == json!(language_id)),
+                "expected {language_id} to be listed as supported"
             );
         }
+        assert!(
+            parsed["languages"]
+                .as_array()
+                .expect("languages should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["id"] == json!("blade")
+                        && entry["capability_note"] == json!("template_metadata_livewire_flux")
+                })
+        );
     }
 
     #[test]

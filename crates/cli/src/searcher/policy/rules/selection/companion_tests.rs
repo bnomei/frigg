@@ -1,60 +1,66 @@
-use super::super::super::dsl::{ScoreRule, apply_score_rules};
+use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;
+use super::super::super::predicates::selection as pred;
 use super::super::super::trace::{PolicyEffect, PolicyStage};
 
 fn runtime_anchor_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_companion_tests && ctx.is_runtime_anchor_test_support).then_some(
-        PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-            if ctx.seen_plain_test_support == 0 {
-                2.10
-            } else {
-                1.22
-            }
-        } else if ctx.seen_plain_test_support == 0 {
-            0.92
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            2.10
         } else {
-            0.48
-        }),
-    )
+            1.22
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        0.92
+    } else {
+        0.48
+    }))
 }
 
 fn runtime_adjacent_python_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_companion_tests && ctx.is_runtime_adjacent_python_test).then_some(
-        PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-            if ctx.seen_plain_test_support == 0 {
-                2.64
-            } else {
-                1.48
-            }
-        } else if ctx.seen_plain_test_support == 0 {
-            1.20
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            2.64
         } else {
-            0.68
-        }),
-    )
+            1.48
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        1.20
+    } else {
+        0.68
+    }))
 }
 
 fn cli_or_harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_companion_tests && (ctx.is_cli_test_support || ctx.is_test_harness))
-        .then_some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-            if ctx.seen_plain_test_support == 0 {
-                0.92
-            } else {
-                0.54
-            }
-        } else if ctx.seen_plain_test_support == 0 {
-            0.44
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            0.92
         } else {
-            0.24
-        }))
+            0.54
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        0.44
+    } else {
+        0.24
+    }))
+}
+
+fn cli_test_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            1.36
+        } else {
+            0.82
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        0.62
+    } else {
+        0.34
+    }))
 }
 
 fn family_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_runtime_companion_tests || !ctx.is_test_support {
-        return None;
-    }
-
     let delta = match ctx.runtime_family_prefix_overlap {
         0 => 0.0,
         1 => 0.08,
@@ -91,22 +97,25 @@ fn family_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
 }
 
+fn package_family_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        0.46
+    } else if ctx.seen_plain_test_support == 0 {
+        1.10
+    } else {
+        0.62
+    }))
+}
+
 fn non_prefix_python_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_companion_tests
-        && ctx.is_runtime_adjacent_python_test
-        && ctx.is_non_prefix_python_test_module)
-        .then_some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-            -0.18
-        } else {
-            0.12
-        }))
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        -0.18
+    } else {
+        0.12
+    }))
 }
 
 fn deeper_path_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_runtime_companion_tests || !ctx.is_test_support || ctx.path_depth < 3 {
-        return None;
-    }
-
     let delta = match ctx.path_depth {
         0..=3 => 0.0,
         4 => 0.08,
@@ -118,85 +127,209 @@ fn deeper_path_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn unanchored_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.prefer_runtime_anchor_tests
-        && ctx.is_test_support
-        && !ctx.is_example_support
-        && !ctx.is_bench_support
-        && !ctx.is_runtime_anchor_test_support
-        && !ctx.is_runtime_adjacent_python_test
-        && !ctx.is_cli_test_support
-        && !ctx.is_test_harness
-        && ctx.runtime_family_prefix_overlap == 0)
-        .then_some(PolicyEffect::Add(if ctx.seen_plain_test_support == 0 {
-            -0.84
-        } else {
-            -0.44
-        }))
+    Some(PolicyEffect::Add(if ctx.seen_plain_test_support == 0 {
+        -0.84
+    } else {
+        -0.44
+    }))
 }
 
 fn cross_family_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_runtime_companion_tests
-        && ctx.is_test_support
-        && !ctx.is_example_support
-        && !ctx.is_bench_support
-        && !ctx.is_cli_test_support
-        && !ctx.is_test_harness
-        && !ctx.is_runtime_adjacent_python_test
-        && ctx.runtime_family_prefix_overlap == 0)
-        .then_some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-            -0.72
-        } else {
-            -1.40
-        }))
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        -0.72
+    } else {
+        -1.40
+    }))
 }
 
+fn shallow_family_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        -0.28
+    } else if ctx.runtime_family_prefix_overlap == 1 {
+        -0.82
+    } else {
+        -0.48
+    }))
+}
+
+fn scripts_ops_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        -0.54
+    } else {
+        -1.36
+    }))
+}
+
+const CLI_OR_HARNESS_ANY: &[super::super::super::dsl::PredicateLeaf<SelectionFacts>] = &[
+    pred::is_cli_test_support_leaf(),
+    pred::is_test_harness_leaf(),
+];
+
 const RULES: &[ScoreRule<SelectionFacts>] = &[
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.runtime_anchor_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_runtime_anchor_test_support_leaf(),
+        ]),
         runtime_anchor_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.runtime_adjacent_python_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_runtime_adjacent_python_test_leaf(),
+        ]),
         runtime_adjacent_python_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.cli_or_harness_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[pred::wants_runtime_companion_tests_leaf()],
+            CLI_OR_HARNESS_ANY,
+            &[],
+        ),
         cli_or_harness_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
+        "selection.companion.cli_test_support_bonus",
+        PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_cli_test_support_leaf(),
+        ]),
+        cli_test_support_bonus,
+    ),
+    ScoreRule::when(
         "selection.companion.family_affinity_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_test_support_leaf(),
+        ]),
         family_affinity_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
+        "selection.companion.package_family_bonus",
+        PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_companion_tests_leaf(),
+                pred::is_test_support_leaf(),
+                pred::runtime_seen_positive_leaf(),
+                pred::runtime_family_prefix_overlap_at_least_four_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+            ],
+        ),
+        package_family_bonus,
+    ),
+    ScoreRule::when(
         "selection.companion.non_prefix_python_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_runtime_adjacent_python_test_leaf(),
+            pred::is_non_prefix_python_test_module_leaf(),
+        ]),
         non_prefix_python_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.deeper_path_bonus",
         PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_test_support_leaf(),
+            pred::path_depth_at_least_four_leaf(),
+        ]),
         deeper_path_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.unanchored_plain_test_penalty",
         PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::prefer_runtime_anchor_tests_leaf(),
+                pred::is_test_support_leaf(),
+                pred::runtime_family_prefix_overlap_is_zero_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+                pred::is_runtime_anchor_test_support_leaf(),
+                pred::is_runtime_adjacent_python_test_leaf(),
+                pred::is_cli_test_support_leaf(),
+                pred::is_test_harness_leaf(),
+            ],
+        ),
         unanchored_plain_test_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.companion.cross_family_plain_test_penalty",
         PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_companion_tests_leaf(),
+                pred::is_test_support_leaf(),
+                pred::runtime_family_prefix_overlap_is_zero_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+                pred::is_cli_test_support_leaf(),
+                pred::is_test_harness_leaf(),
+                pred::is_runtime_adjacent_python_test_leaf(),
+            ],
+        ),
         cross_family_plain_test_penalty,
+    ),
+    ScoreRule::when(
+        "selection.companion.shallow_family_plain_test_penalty",
+        PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_companion_tests_leaf(),
+                pred::is_test_support_leaf(),
+                pred::runtime_seen_positive_leaf(),
+                pred::runtime_family_prefix_overlap_one_or_two_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+                pred::is_cli_test_support_leaf(),
+                pred::is_test_harness_leaf(),
+                pred::is_runtime_adjacent_python_test_leaf(),
+            ],
+        ),
+        shallow_family_plain_test_penalty,
+    ),
+    ScoreRule::when(
+        "selection.companion.scripts_ops_plain_test_penalty",
+        PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_companion_tests_leaf(),
+                pred::is_test_support_leaf(),
+                pred::is_scripts_ops_leaf(),
+            ],
+            &[],
+            &[pred::wants_scripts_ops_witnesses_leaf()],
+        ),
+        scripts_ops_plain_test_penalty,
     ),
 ];
 
-pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
-    if !ctx.wants_runtime_companion_tests {
-        return;
-    }
+pub(crate) const RULE_SET: ScoreRuleSet<SelectionFacts> = ScoreRuleSet::new(RULES);
 
-    apply_score_rules(program, ctx, RULES);
+pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
+    apply_score_rule_sets(program, ctx, &[RULE_SET]);
 }

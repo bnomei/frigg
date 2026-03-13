@@ -124,3 +124,69 @@ fn lua_entrypoint_queries_surface_cli_dispatch_over_test_init_noise() {
 
     cleanup_workspace_root(&workspace_root);
 }
+
+#[test]
+fn lua_entrypoint_queries_keep_repo_root_runtime_config_visible() {
+    let workspace_root = temp_workspace_root("lua-entrypoints-config");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            ("main.lua", "require 'cli'\nrequire 'service'\n"),
+            (
+                "script/cli/init.lua",
+                "if _G['CHECK'] then require 'cli.check' end\nif _G['HELP'] then require 'cli.help' end\n",
+            ),
+            (
+                "script/cli/check.lua",
+                "local M = {}\nfunction M.runCLI() end\nreturn M\n",
+            ),
+            ("script/cli/help.lua", "return function() end\n"),
+            ("script/cli/version.lua", "return function() end\n"),
+            ("script/cli/doc/export.lua", "return function() end\n"),
+            ("script/service/init.lua", "return require 'service'\n"),
+            (
+                "script/core/command/reloadFFIMeta.lua",
+                "return function() end\n",
+            ),
+            (
+                ".luarc.json",
+                "{ \"runtime\": { \"version\": \"LuaJIT\" } }\n",
+            ),
+            (
+                "lua-language-server-scm-1.rockspec",
+                "package = 'lua-language-server'\nversion = 'scm-1'\n",
+            ),
+            (
+                ".github/workflows/build.yml",
+                "name: Build\njobs:\n  build:\n    steps:\n      - run: ninja\n",
+            ),
+            ("test/command/init.lua", "require 'command.auto-require'\n"),
+            ("test/code_action/init.lua", "require 'core.code-action'\n"),
+            ("test/definition/init.lua", "require 'core.definition'\n"),
+            ("test/hover/init.lua", "require 'core.hover'\n"),
+        ],
+    );
+
+    let ranked_paths = top_paths(
+        &searcher_for_workspace_root(&workspace_root),
+        "entry point bootstrap init cli command runtime server",
+        14,
+    );
+
+    assert!(
+        ranked_paths.iter().take(14).any(|path| matches!(
+            path.as_str(),
+            ".luarc.json" | "lua-language-server-scm-1.rockspec"
+        )),
+        "entrypoint queries should keep a Lua repo-root runtime config visible: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths
+            .iter()
+            .take(6)
+            .any(|path| path == "script/cli/init.lua"),
+        "entrypoint queries should still keep Lua CLI dispatch near the top: {ranked_paths:?}"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}

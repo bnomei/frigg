@@ -195,12 +195,7 @@ impl RuntimeTaskRegistry {
         tasks
     }
 
-    pub fn has_active_task(
-        &self,
-        kind: RuntimeTaskKind,
-        repository_id: &str,
-        phase: &str,
-    ) -> bool {
+    pub fn has_active_task(&self, kind: RuntimeTaskKind, repository_id: &str, phase: &str) -> bool {
         self.active.values().any(|task| {
             task.kind == kind && task.repository_id == repository_id && task.phase == phase
         })

@@ -4,7 +4,8 @@ use super::super::super::intent::HybridRankingIntent;
 use super::super::super::surfaces::{
     HybridSourceClass, hybrid_source_class, is_entrypoint_runtime_path,
     is_navigation_reference_doc_path, is_navigation_runtime_path, is_repo_metadata_path,
-    is_runtime_config_artifact_path, is_test_support_path, is_typescript_runtime_module_index_path,
+    is_root_scoped_runtime_config_path, is_runtime_config_artifact_path, is_test_support_path,
+    is_typescript_runtime_module_index_path,
 };
 
 pub(crate) struct PathQualityFacts {
@@ -55,7 +56,165 @@ pub(crate) struct PathQualityFacts {
     pub(crate) is_laravel_view_component_class: bool,
 }
 
+#[allow(dead_code)]
+pub(crate) struct PathQualityIntentView<'a> {
+    facts: &'a PathQualityFacts,
+}
+
+#[allow(dead_code)]
+impl PathQualityIntentView<'_> {
+    pub(crate) fn wants_docs(&self) -> bool {
+        self.facts.wants_docs
+    }
+    pub(crate) fn wants_readme(&self) -> bool {
+        self.facts.wants_readme
+    }
+    pub(crate) fn wants_onboarding(&self) -> bool {
+        self.facts.wants_onboarding
+    }
+    pub(crate) fn wants_contracts(&self) -> bool {
+        self.facts.wants_contracts
+    }
+    pub(crate) fn wants_error_taxonomy(&self) -> bool {
+        self.facts.wants_error_taxonomy
+    }
+    pub(crate) fn wants_tool_contracts(&self) -> bool {
+        self.facts.wants_tool_contracts
+    }
+    pub(crate) fn wants_mcp_runtime_surface(&self) -> bool {
+        self.facts.wants_mcp_runtime_surface
+    }
+    pub(crate) fn wants_examples(&self) -> bool {
+        self.facts.wants_examples
+    }
+    pub(crate) fn wants_benchmarks(&self) -> bool {
+        self.facts.wants_benchmarks
+    }
+    pub(crate) fn wants_tests(&self) -> bool {
+        self.facts.wants_tests
+    }
+    pub(crate) fn wants_fixtures(&self) -> bool {
+        self.facts.wants_fixtures
+    }
+    pub(crate) fn wants_runtime(&self) -> bool {
+        self.facts.wants_runtime
+    }
+    pub(crate) fn wants_runtime_witnesses(&self) -> bool {
+        self.facts.wants_runtime_witnesses
+    }
+    pub(crate) fn wants_runtime_config_artifacts(&self) -> bool {
+        self.facts.wants_runtime_config_artifacts
+    }
+    pub(crate) fn wants_entrypoint_build_flow(&self) -> bool {
+        self.facts.wants_entrypoint_build_flow
+    }
+    pub(crate) fn wants_navigation_fallbacks(&self) -> bool {
+        self.facts.wants_navigation_fallbacks
+    }
+    pub(crate) fn wants_laravel_ui_witnesses(&self) -> bool {
+        self.facts.wants_laravel_ui_witnesses
+    }
+    pub(crate) fn wants_blade_component_witnesses(&self) -> bool {
+        self.facts.wants_blade_component_witnesses
+    }
+    pub(crate) fn wants_laravel_layout_witnesses(&self) -> bool {
+        self.facts.wants_laravel_layout_witnesses
+    }
+    pub(crate) fn wants_test_witness_recall(&self) -> bool {
+        self.facts.wants_test_witness_recall
+    }
+    pub(crate) fn wants_example_or_bench_witnesses(&self) -> bool {
+        self.facts.wants_example_or_bench_witnesses
+    }
+    pub(crate) fn penalize_generic_runtime_docs(&self) -> bool {
+        self.facts.penalize_generic_runtime_docs
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct PathQualityCandidateView<'a> {
+    facts: &'a PathQualityFacts,
+}
+
+#[allow(dead_code)]
+impl PathQualityCandidateView<'_> {
+    pub(crate) fn class(&self) -> HybridSourceClass {
+        self.facts.class
+    }
+    pub(crate) fn is_root_readme(&self) -> bool {
+        self.facts.is_root_readme
+    }
+    pub(crate) fn is_entrypoint_runtime(&self) -> bool {
+        self.facts.is_entrypoint_runtime
+    }
+    pub(crate) fn is_entrypoint_build_workflow(&self) -> bool {
+        self.facts.is_entrypoint_build_workflow
+    }
+    pub(crate) fn is_navigation_runtime(&self) -> bool {
+        self.facts.is_navigation_runtime
+    }
+    pub(crate) fn is_navigation_reference_doc(&self) -> bool {
+        self.facts.is_navigation_reference_doc
+    }
+    pub(crate) fn is_ci_workflow(&self) -> bool {
+        self.facts.is_ci_workflow
+    }
+    pub(crate) fn is_typescript_runtime_module_index(&self) -> bool {
+        self.facts.is_typescript_runtime_module_index
+    }
+    pub(crate) fn is_runtime_config_artifact(&self) -> bool {
+        self.facts.is_runtime_config_artifact
+    }
+    pub(crate) fn is_repo_root_runtime_config_artifact(&self) -> bool {
+        self.facts.is_repo_root_runtime_config_artifact
+    }
+    pub(crate) fn is_example_support(&self) -> bool {
+        self.facts.is_example_support
+    }
+    pub(crate) fn is_bench_support(&self) -> bool {
+        self.facts.is_bench_support
+    }
+    pub(crate) fn is_test_support(&self) -> bool {
+        self.facts.is_test_support
+    }
+    pub(crate) fn is_generic_runtime_witness_doc(&self) -> bool {
+        self.facts.is_generic_runtime_witness_doc
+    }
+    pub(crate) fn is_python_runtime_config(&self) -> bool {
+        self.facts.is_python_runtime_config
+    }
+    pub(crate) fn is_entrypoint_reference_doc(&self) -> bool {
+        self.facts.is_entrypoint_reference_doc
+    }
+    pub(crate) fn is_repo_metadata(&self) -> bool {
+        self.facts.is_repo_metadata
+    }
+    pub(crate) fn is_laravel_non_livewire_blade_view(&self) -> bool {
+        self.facts.is_laravel_non_livewire_blade_view
+    }
+    pub(crate) fn is_laravel_livewire_view(&self) -> bool {
+        self.facts.is_laravel_livewire_view
+    }
+    pub(crate) fn is_laravel_blade_component(&self) -> bool {
+        self.facts.is_laravel_blade_component
+    }
+    pub(crate) fn is_laravel_layout_blade_view(&self) -> bool {
+        self.facts.is_laravel_layout_blade_view
+    }
+    pub(crate) fn is_laravel_view_component_class(&self) -> bool {
+        self.facts.is_laravel_view_component_class
+    }
+}
+
 impl PathQualityFacts {
+    pub(crate) fn intent(&self) -> PathQualityIntentView<'_> {
+        PathQualityIntentView { facts: self }
+    }
+
+    pub(crate) fn candidate(&self) -> PathQualityCandidateView<'_> {
+        PathQualityCandidateView { facts: self }
+    }
+
     pub(crate) fn from_path(path: &str, intent: &HybridRankingIntent) -> Self {
         let normalized_path = path.trim_start_matches("./");
         let class = hybrid_source_class(path);
@@ -121,8 +280,7 @@ impl PathQualityFacts {
             is_ci_workflow: super::super::super::surfaces::is_ci_workflow_path(path),
             is_typescript_runtime_module_index: is_typescript_runtime_module_index_path(path),
             is_runtime_config_artifact,
-            is_repo_root_runtime_config_artifact: is_runtime_config_artifact
-                && !normalized_path.contains('/'),
+            is_repo_root_runtime_config_artifact: is_root_scoped_runtime_config_path(path),
             is_example_support: super::super::super::surfaces::is_example_support_path(path),
             is_bench_support: super::super::super::surfaces::is_bench_support_path(path),
             is_test_support: is_test_support_path(path),
@@ -144,6 +302,21 @@ impl PathQualityFacts {
             is_laravel_view_component_class:
                 super::super::super::is_laravel_view_component_class_path(path),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scoped_runtime_configs_receive_repo_root_quality_flag() {
+        let intent = HybridRankingIntent::from_query("config");
+        let facts =
+            PathQualityFacts::from_path("gradle/wrapper/gradle-wrapper.properties", &intent);
+
+        assert!(facts.is_runtime_config_artifact);
+        assert!(facts.is_repo_root_runtime_config_artifact);
     }
 }
 

@@ -1,4 +1,10 @@
-use super::*;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use tokio::time::Instant;
+
+const MAX_RECENT_PATH_SAMPLES: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WatchRefreshClass {

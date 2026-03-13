@@ -1,63 +1,40 @@
-use super::super::super::dsl::{ScoreRule, apply_score_rules};
+use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;
+use super::super::super::predicates::selection as pred;
 use super::super::super::trace::{PolicyEffect, PolicyStage};
 
-fn first_build_workflow_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.wants_entrypoint_build_flow
-        && ctx.is_entrypoint_build_workflow
-        && ctx.seen_ci_workflows == 0)
-        .then_some(PolicyEffect::Add(4.0))
+fn first_build_workflow_bonus(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(4.0))
 }
 
-fn first_ci_workflow_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.is_ci_workflow
-        && (ctx.wants_runtime_config_artifacts || ctx.wants_entrypoint_build_flow)
-        && ctx.seen_ci_workflows == 0)
-        .then_some(PolicyEffect::Add(0.16))
+fn first_ci_workflow_bonus(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(0.16))
 }
 
 fn ci_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.is_ci_workflow
-        && (ctx.wants_runtime_config_artifacts || ctx.wants_entrypoint_build_flow)
-        && ctx.seen_ci_workflows > 0)
-        .then_some(PolicyEffect::Add(
-            -(if ctx.wants_runtime_config_artifacts {
-                1.28
-            } else {
-                0.84
-            } * ctx.seen_ci_workflows as f32),
-        ))
+    Some(PolicyEffect::Add(
+        -(if ctx.wants_runtime_config_artifacts {
+            1.28
+        } else {
+            0.84
+        } * ctx.seen_ci_workflows as f32),
+    ))
 }
 
-fn ci_repo_root_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.is_ci_workflow
-        && (ctx.wants_runtime_config_artifacts || ctx.wants_entrypoint_build_flow)
-        && ctx.seen_ci_workflows > 0
-        && ctx.seen_repo_root_runtime_configs > 0)
-        .then_some(PolicyEffect::Add(-0.22))
+fn ci_repo_root_penalty(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(-0.22))
 }
 
 fn example_support_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.is_example_support
-        && !ctx.wants_examples
-        && (ctx.wants_runtime_config_artifacts || ctx.wants_entrypoint_build_flow))
-        .then_some(PolicyEffect::Add(if ctx.seen_example_support == 0 {
-            -0.36
-        } else {
-            -(0.86 * ctx.seen_example_support as f32)
-        }))
+    Some(PolicyEffect::Add(if ctx.seen_example_support == 0 {
+        -0.36
+    } else {
+        -(0.86 * ctx.seen_example_support as f32)
+    }))
 }
 
 fn mixed_query_first_example_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_example_support
-        || ctx.seen_example_support > 0
-    {
-        return None;
-    }
-
     let best_overlap = ctx.path_overlap.max(ctx.specific_witness_path_overlap);
     let delta = match best_overlap {
         0 => {
@@ -75,28 +52,10 @@ fn mixed_query_first_example_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect>
 }
 
 fn mixed_query_example_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_example_support
-        || ctx.seen_example_support == 0
-        || ctx.path_overlap > 0
-        || ctx.has_exact_query_term_match
-    {
-        return None;
-    }
-
     Some(PolicyEffect::Add(-(1.00 * ctx.seen_example_support as f32)))
 }
 
 fn mixed_query_first_bench_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_bench_support
-        || ctx.seen_bench_support > 0
-    {
-        return None;
-    }
-
     let delta = match ctx.specific_witness_path_overlap {
         0 => 0.36,
         1 => 0.86,
@@ -107,14 +66,6 @@ fn mixed_query_first_bench_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn mixed_query_bench_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_bench_support
-        || ctx.seen_bench_support == 0
-    {
-        return None;
-    }
-
     let per_seen = if ctx.specific_witness_path_overlap >= 2 {
         0.72
     } else {
@@ -127,119 +78,184 @@ fn mixed_query_bench_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect
 }
 
 fn mixed_query_first_plain_test_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_test_support
-        || ctx.is_example_support
-        || ctx.is_bench_support
-        || ctx.seen_plain_test_support > 0
-        || (!ctx.has_exact_query_term_match && ctx.specific_witness_path_overlap == 0)
-    {
+    if !ctx.has_exact_query_term_match && ctx.specific_witness_path_overlap == 0 {
         return None;
     }
 
-    let delta = if ctx.has_exact_query_term_match {
+    Some(PolicyEffect::Add(if ctx.has_exact_query_term_match {
         1.44
     } else {
         0.84
-    };
-
-    Some(PolicyEffect::Add(delta))
+    }))
 }
 
 fn mixed_query_plain_test_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if !ctx.wants_test_witness_recall
-        || !ctx.wants_example_or_bench_witnesses
-        || !ctx.is_test_support
-        || ctx.is_example_support
-        || ctx.is_bench_support
-        || ctx.seen_plain_test_support == 0
-        || ctx.has_exact_query_term_match
-        || ctx.specific_witness_path_overlap > 0
-    {
-        return None;
-    }
-
     Some(PolicyEffect::Add(
         -(1.10 * ctx.seen_plain_test_support as f32),
     ))
 }
 
 fn typescript_index_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    (ctx.is_typescript_runtime_module_index
-        && (ctx.wants_runtime_config_artifacts || ctx.wants_entrypoint_build_flow))
-        .then_some(PolicyEffect::Add(
-            if ctx.seen_typescript_runtime_module_indexes == 0 {
-                0.96
-            } else {
-                0.36
-            },
-        ))
+    Some(PolicyEffect::Add(
+        if ctx.seen_typescript_runtime_module_indexes == 0 {
+            0.96
+        } else {
+            0.36
+        },
+    ))
 }
 
 const RULES: &[ScoreRule<SelectionFacts>] = &[
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.first_build_workflow_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_entrypoint_build_workflow_leaf(),
+            pred::seen_ci_workflows_is_zero_leaf(),
+        ]),
         first_build_workflow_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.first_ci_workflow_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+            pred::is_ci_workflow_leaf(),
+            pred::seen_ci_workflows_is_zero_leaf(),
+        ]),
         first_ci_workflow_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.ci_repeat_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+            pred::is_ci_workflow_leaf(),
+            pred::seen_ci_workflows_positive_leaf(),
+        ]),
         ci_repeat_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.ci_repo_root_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+            pred::is_ci_workflow_leaf(),
+            pred::seen_ci_workflows_positive_leaf(),
+            pred::has_seen_repo_root_runtime_config_leaf(),
+        ]),
         ci_repo_root_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.example_support_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::new(
+            &[
+                pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+                pred::is_example_support_leaf(),
+            ],
+            &[],
+            &[pred::wants_examples_leaf()],
+        ),
         example_support_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_first_example_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_mixed_query_example_or_bench_leaf(),
+            pred::is_example_support_leaf(),
+            pred::seen_example_support_is_zero_leaf(),
+        ]),
         mixed_query_first_example_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_example_repeat_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::new(
+            &[
+                pred::wants_mixed_query_example_or_bench_leaf(),
+                pred::is_example_support_leaf(),
+                pred::seen_example_support_positive_leaf(),
+            ],
+            &[],
+            &[
+                pred::path_overlap_leaf(),
+                pred::has_exact_query_term_match_leaf(),
+            ],
+        ),
         mixed_query_example_repeat_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_first_bench_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_mixed_query_example_or_bench_leaf(),
+            pred::is_bench_support_leaf(),
+            pred::seen_bench_support_is_zero_leaf(),
+        ]),
         mixed_query_first_bench_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_bench_repeat_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_mixed_query_example_or_bench_leaf(),
+            pred::is_bench_support_leaf(),
+            pred::seen_bench_support_positive_leaf(),
+        ]),
         mixed_query_bench_repeat_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_first_plain_test_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::new(
+            &[
+                pred::wants_mixed_query_example_or_bench_leaf(),
+                pred::is_test_support_leaf(),
+                pred::seen_plain_test_support_is_zero_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+            ],
+        ),
         mixed_query_first_plain_test_bonus,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.mixed_query_plain_test_repeat_penalty",
         PolicyStage::SelectionDiversification,
+        Predicate::new(
+            &[
+                pred::wants_mixed_query_example_or_bench_leaf(),
+                pred::is_test_support_leaf(),
+                pred::seen_plain_test_support_positive_leaf(),
+            ],
+            &[],
+            &[
+                pred::is_example_support_leaf(),
+                pred::is_bench_support_leaf(),
+                pred::has_exact_query_term_match_leaf(),
+                pred::specific_witness_path_overlap_leaf(),
+            ],
+        ),
         mixed_query_plain_test_repeat_penalty,
     ),
-    ScoreRule::new(
+    ScoreRule::when(
         "selection.diversification.typescript_index_bonus",
         PolicyStage::SelectionDiversification,
+        Predicate::all(&[
+            pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+            pred::is_typescript_runtime_module_index_leaf(),
+        ]),
         typescript_index_bonus,
     ),
 ];
 
+pub(crate) const RULE_SET: ScoreRuleSet<SelectionFacts> = ScoreRuleSet::new(RULES);
+
 pub(crate) fn apply(program: &mut PolicyProgram, ctx: &SelectionFacts) {
-    apply_score_rules(program, ctx, RULES);
+    apply_score_rule_sets(program, ctx, &[RULE_SET]);
 }

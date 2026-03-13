@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use super::*;
 use crate::indexer::manifest::normalize_repository_relative_path;
-use crate::storage::DEFAULT_VECTOR_DIMENSIONS;
+use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
+use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkCandidate {
