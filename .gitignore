@@ -27,3 +27,4 @@ specs
 /index.scip
 .env
 .DS_Store
+/var
