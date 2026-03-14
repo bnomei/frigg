@@ -444,7 +444,10 @@ fn hybrid_ranking_semantic_reports_unsupported_language_filter_as_unavailable() 
         &semantic_executor,
     )?;
 
-    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Unavailable);
+    assert_eq!(
+        output.note.semantic_status,
+        HybridSemanticStatus::Unavailable
+    );
     assert!(!output.note.semantic_enabled);
     assert_eq!(output.note.semantic_hit_count, 0);
     assert_eq!(output.note.semantic_match_count, 0);

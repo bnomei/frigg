@@ -385,7 +385,10 @@ async fn playbook_suite_run_step_rejects_unsupported_tool_with_invalid_params() 
         outcome,
         DeepSearchTraceOutcome::Err {
             code: "INVALID_PARAMS".to_owned(),
-            message: "unsupported tool in playbook step 'tool-999': write_file".to_owned(),
+            message: format!(
+                "invalid input: unsupported tool in playbook step 'tool-999': write_file (allowed tools: {})",
+                allowed_step_tools().join(", ")
+            ),
             error_code: Some("invalid_params".to_owned()),
         }
     );

@@ -1144,7 +1144,17 @@ fn hybrid_ranking_python_entrypoint_queries_recover_saved_wave_backend_tests_und
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
-    let witness_paths = output
+    let required_backend_tests = [
+        "autogpt_platform/backend/backend/api/test_helpers.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
+        "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+        "autogpt_platform/backend/backend/blocks/test/test_block.py",
+    ];
+    let _witness_paths = output
         .channel_results
         .iter()
         .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
@@ -1156,17 +1166,6 @@ fn hybrid_ranking_python_entrypoint_queries_recover_saved_wave_backend_tests_und
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    println!("entrypoint witness paths: {witness_paths:?}");
-    let required_backend_tests = [
-        "autogpt_platform/backend/backend/api/test_helpers.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_helpers.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_integration.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_mcp.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_oauth.py",
-        "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
-        "autogpt_platform/backend/backend/blocks/test/test_block.py",
-    ];
 
     assert!(
         ranked_paths
@@ -1323,19 +1322,6 @@ fn hybrid_ranking_python_tests_queries_recover_saved_wave_backend_tests_under_se
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
-    let witness_paths = output
-        .channel_results
-        .iter()
-        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
-        .map(|result| {
-            result
-                .hits
-                .iter()
-                .map(|hit| hit.document.path.as_str())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    println!("tests witness paths: {witness_paths:?}");
     let required_backend_tests = [
         "autogpt_platform/backend/backend/api/test_helpers.py",
         "autogpt_platform/backend/backend/blocks/mcp/test_e2e.py",

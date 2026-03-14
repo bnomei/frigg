@@ -36,10 +36,10 @@ pub(crate) use php::{
     symbol_indices_by_name as php_symbol_indices_by_name,
 };
 pub(crate) use registry::{
-    HeuristicImplementationStrategy, LanguageCapability, LanguageSupportCapability,
-    SymbolLanguage, heuristic_implementation_strategy, parse_supported_language,
-    parser_for_path, semantic_chunk_language_for_path, supported_language_for_path,
-    symbol_from_node, tree_sitter_language_for_path,
+    HeuristicImplementationStrategy, LanguageCapability, LanguageSupportCapability, SymbolLanguage,
+    heuristic_implementation_strategy, parse_supported_language, parser_for_path,
+    semantic_chunk_language_for_path, supported_language_for_path, symbol_from_node,
+    tree_sitter_language_for_path,
 };
 #[allow(unused_imports)]
 pub(crate) use rust::{
@@ -206,8 +206,7 @@ mod tests {
             LanguageCapabilityTier::OptionalAccelerator
         );
         assert_eq!(
-            SymbolLanguage::TypeScript
-                .capability_tier(LanguageSupportCapability::SemanticChunking),
+            SymbolLanguage::TypeScript.capability_tier(LanguageSupportCapability::SemanticChunking),
             LanguageCapabilityTier::Unsupported
         );
     }

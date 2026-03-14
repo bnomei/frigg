@@ -464,12 +464,18 @@ pub(super) fn search_semantic_channel_hits(
         } else {
             HybridSemanticStatus::Ok
         }
-    } else if degraded_reasons.is_empty() && unavailable_reasons.is_empty() {
-        HybridSemanticStatus::Ok
-    } else {
+    } else if !unavailable_reasons.is_empty() {
         HybridSemanticStatus::Degraded
+    } else if !degraded_reasons.is_empty() {
+        HybridSemanticStatus::Degraded
+    } else {
+        HybridSemanticStatus::Ok
     };
-    let mut non_ok_reasons = degraded_reasons;
+    let mut non_ok_reasons = if matches!(status, HybridSemanticStatus::Ok) {
+        Vec::new()
+    } else {
+        degraded_reasons
+    };
     non_ok_reasons.extend(unavailable_reasons);
     let reason = (!non_ok_reasons.is_empty()).then(|| non_ok_reasons.join("; "));
     let health_status = match status {

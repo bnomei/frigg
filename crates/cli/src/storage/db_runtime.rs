@@ -466,3 +466,263 @@ pub(super) fn run_repository_roundtrip_probe(conn: &mut Connection) -> FriggResu
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::FriggError;
+    use rusqlite::Connection;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::env;
+    use std::path::PathBuf;
+
+    fn temp_db_path(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        env::temp_dir().join(format!("frigg-db-runtime-{test_name}-{nonce}.sqlite3"))
+    }
+
+    fn ensure_core_storage_tables(conn: &Connection) -> FriggResult<()> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS snapshot (
+              snapshot_id TEXT PRIMARY KEY,
+              repository_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              revision TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS file_manifest (
+              snapshot_id TEXT NOT NULL,
+              path TEXT NOT NULL,
+              sha256 TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              mtime_ns INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS provenance_event (
+              trace_id TEXT NOT NULL,
+              tool_name TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (trace_id, tool_name, created_at)
+            );
+            "#,
+        )
+        .map_err(|err| FriggError::Internal(format!("failed to create db-runtime test tables: {err}")))
+    }
+
+    #[test]
+    fn count_provenance_events_counts_rows() -> FriggResult<()> {
+        let db_path = temp_db_path("count-events");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!("failed to open db for provenance count test: {err}"))
+        })?;
+        ensure_core_storage_tables(&conn)?;
+
+        assert_eq!(count_provenance_events(&conn)?, 0);
+
+        conn.execute(
+            "INSERT INTO provenance_event (trace_id, tool_name, payload_json, created_at) VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z')",
+            ("trace-1", "read_file", "{}"),
+        )
+        .map_err(|err| FriggError::Internal(format!("failed to seed provenance row: {err}")))?;
+
+        assert_eq!(count_provenance_events(&conn)?, 1);
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn prune_provenance_events_on_connection_keeps_requested_retention() -> FriggResult<()> {
+        let db_path = temp_db_path("prune-events");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!("failed to open db for provenance prune test: {err}"))
+        })?;
+        ensure_core_storage_tables(&conn)?;
+
+        for idx in 1..=3 {
+            conn.execute(
+                "INSERT INTO provenance_event (trace_id, tool_name, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+                (format!("trace-{idx}"), "read_file", "{}", format!("2026-01-0{idx}T00:00:00Z")),
+            )
+            .map_err(|err| FriggError::Internal(format!("failed to seed provenance row {idx}: {err}")))?;
+        }
+
+        prune_provenance_events_on_connection(&conn, 2)?;
+        let before = count_provenance_events(&conn)?;
+        assert_eq!(before, 2);
+
+        prune_provenance_events_on_connection(&conn, 10)?;
+        assert_eq!(count_provenance_events(&conn)?, 2);
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn load_latest_manifest_snapshot_prefers_latest_timestamp_and_handles_empty_rows()
+    -> FriggResult<()> {
+        let db_path = temp_db_path("latest-manifest");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open db for latest manifest helper test: {err}"
+            ))
+        })?;
+        ensure_core_storage_tables(&conn)?;
+
+        conn.execute(
+            "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-old', 'repo-1', 'manifest', NULL, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .map_err(|err| FriggError::Internal(format!("failed to seed old snapshot: {err}")))?;
+        conn.execute(
+            "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-new', 'repo-1', 'manifest', NULL, '2026-01-02T00:00:00Z')",
+            [],
+        )
+        .map_err(|err| FriggError::Internal(format!("failed to seed new snapshot: {err}")))?;
+
+        let no_match = load_latest_manifest_snapshot_for_repository(&conn, "repo-missing");
+        assert!(no_match.is_ok());
+        assert!(no_match?.is_none());
+
+        let loaded = load_latest_manifest_snapshot_for_repository(&conn, "repo-1")?.expect(
+            "latest manifest snapshot should be materialized even when file rows are absent",
+        );
+        assert_eq!(loaded.repository_id, "repo-1");
+        assert_eq!(loaded.snapshot_id, "snapshot-new");
+        assert!(loaded.entries.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn load_latest_manifest_metadata_uses_empty_manifest_rows_as_empty_metadata() -> FriggResult<()> {
+        let db_path = temp_db_path("latest-manifest-metadata");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open db for latest metadata helper test: {err}"
+            ))
+        })?;
+        ensure_core_storage_tables(&conn)?;
+
+        conn.execute(
+            "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-empty', 'repo-1', 'manifest', NULL, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to seed metadata empty snapshot: {err}"))
+        })?;
+        // no manifest rows for snapshot-empty
+
+        let loaded = load_latest_manifest_metadata_snapshot_for_repository(&conn, "repo-1")?
+            .expect("expected metadata snapshot helper to preserve repository snapshot id");
+        assert_eq!(loaded.snapshot_id, "snapshot-empty");
+        assert!(loaded.entries.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn number_conversion_helpers_cover_bounds_and_negatives() {
+        assert_eq!(u64_to_i64(10, "test").expect("u64_to_i64 should support small values"), 10);
+        let overflow = u64_to_i64(u64::MAX, "test-overflow");
+        assert!(
+            overflow.is_err(),
+            "u64_to_i64 should fail when value cannot fit i64"
+        );
+        assert_eq!(
+            usize_to_i64(12, "test").expect("usize_to_i64 should support small values"),
+            12
+        );
+        let opt = option_u64_to_option_i64(Some(99), "test-option");
+        assert_eq!(opt.expect("option conversion should work"), Some(99));
+        assert_eq!(
+            option_u64_to_option_i64(None, "test-option-none").expect("none option conversion"),
+            None
+        );
+
+        let positive = i64_to_u64(17, "size_bytes").expect("positive conversion should work");
+        assert_eq!(positive, 17);
+        assert!(i64_to_u64(-5, "size_bytes").is_err());
+        let optional = option_i64_to_option_u64(Some(33), "size_bytes")
+            .expect("option conversion for some value should work");
+        assert_eq!(optional, Some(33));
+        assert_eq!(
+            option_i64_to_option_u64(None, "size_bytes").expect("option conversion none"),
+            None
+        );
+    }
+
+    #[test]
+    fn read_schema_version_errors_when_table_is_missing() -> FriggResult<()> {
+        let db_path = temp_db_path("schema-version-missing");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open db for schema version missing test: {err}"
+            ))
+        })?;
+
+        let err = read_schema_version(&conn).expect_err("schema version query should fail without table");
+        let message = match err {
+            FriggError::Internal(message) => message,
+            other => {
+                panic!("expected internal error when schema_version table is missing, got: {other}")
+            }
+        };
+        assert!(
+            message.contains("no such table: schema_version"),
+            "unexpected schema version error: {message}"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn read_schema_version_returns_last_version_when_seeded() -> FriggResult<()> {
+        let db_path = temp_db_path("schema-version-seeded");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to open db for schema version seeded test: {err}"
+            ))
+        })?;
+        conn.execute_batch(
+            "CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, updated_at TEXT NOT NULL);",
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to create schema_version table for test: {err}"))
+        })?;
+        conn.execute(
+            "INSERT INTO schema_version (id, version, updated_at) VALUES (1, 3, CURRENT_TIMESTAMP)",
+            [],
+        )
+        .map_err(|err| FriggError::Internal(format!("failed to seed schema version: {err}")))?;
+
+        assert_eq!(read_schema_version(&conn)?, 3);
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn table_exists_reflects_current_schema_tables() -> FriggResult<()> {
+        let db_path = temp_db_path("table-exists");
+        let conn = Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!("failed to open db for table_exists test: {err}"))
+        })?;
+
+        assert!(!table_exists(&conn, "repository").expect("table_exists should return false"));
+        conn.execute("CREATE TABLE repository (repository_id TEXT)", [])
+            .map_err(|err| FriggError::Internal(format!("failed to create test table: {err}")))?;
+        assert!(table_exists(&conn, "repository").expect("table_exists should return true"));
+
+        let _ = std::fs::remove_file(&db_path);
+        Ok(())
+    }
+}

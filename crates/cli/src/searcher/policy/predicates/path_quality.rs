@@ -475,3 +475,142 @@ pub(crate) const fn is_laravel_view_component_class_leaf() -> PredicateLeaf<Path
         is_laravel_view_component_class,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::searcher::HybridRankingIntent;
+
+    #[test]
+    fn path_quality_predicates_reflect_intent_flags() {
+        let mut facts = PathQualityFacts::default();
+        facts.wants_docs = true;
+        facts.wants_readme = true;
+        facts.wants_onboarding = true;
+        facts.wants_contracts = true;
+        facts.wants_error_taxonomy = true;
+        facts.wants_tool_contracts = true;
+        facts.wants_mcp_runtime_surface = true;
+        facts.wants_examples = true;
+        facts.wants_benchmarks = true;
+        facts.wants_tests = true;
+        facts.wants_fixtures = true;
+        facts.wants_runtime = true;
+        facts.wants_runtime_witnesses = true;
+        facts.wants_runtime_config_artifacts = true;
+        facts.wants_entrypoint_build_flow = true;
+        facts.wants_navigation_fallbacks = true;
+        facts.wants_laravel_ui_witnesses = true;
+        facts.wants_blade_component_witnesses = true;
+        facts.wants_laravel_layout_witnesses = true;
+        facts.wants_test_witness_recall = true;
+        facts.wants_example_or_bench_witnesses = true;
+        facts.penalize_generic_runtime_docs = true;
+
+        assert!((wants_docs_leaf().eval)(&facts));
+        assert!((wants_readme_leaf().eval)(&facts));
+        assert!((wants_onboarding_leaf().eval)(&facts));
+        assert!((wants_contracts_leaf().eval)(&facts));
+        assert!((wants_error_taxonomy_leaf().eval)(&facts));
+        assert!((wants_tool_contracts_leaf().eval)(&facts));
+        assert!((wants_mcp_runtime_surface_leaf().eval)(&facts));
+        assert!((wants_examples_leaf().eval)(&facts));
+        assert!((wants_benchmarks_leaf().eval)(&facts));
+        assert!((wants_tests_leaf().eval)(&facts));
+        assert!((wants_fixtures_leaf().eval)(&facts));
+        assert!((wants_runtime_leaf().eval)(&facts));
+        assert!((wants_runtime_witnesses_leaf().eval)(&facts));
+        assert!((wants_runtime_config_artifacts_leaf().eval)(&facts));
+        assert!((wants_entrypoint_build_flow_leaf().eval)(&facts));
+        assert!((wants_navigation_fallbacks_leaf().eval)(&facts));
+        assert!((wants_laravel_ui_witnesses_leaf().eval)(&facts));
+        assert!((wants_blade_component_witnesses_leaf().eval)(&facts));
+        assert!((wants_laravel_layout_witnesses_leaf().eval)(&facts));
+        assert!((wants_test_witness_recall_leaf().eval)(&facts));
+        assert!((wants_example_or_bench_witnesses_leaf().eval)(&facts));
+        assert!((penalize_generic_runtime_docs_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_quality_predicates_reflect_candidate_class_and_path_flags() {
+        let mut facts = PathQualityFacts::default();
+        facts.class = HybridSourceClass::Documentation;
+        facts.is_root_readme = true;
+        facts.is_entrypoint_runtime = true;
+        facts.is_entrypoint_build_workflow = true;
+        facts.is_navigation_runtime = true;
+        facts.is_navigation_reference_doc = true;
+        facts.is_ci_workflow = true;
+        facts.is_typescript_runtime_module_index = true;
+        facts.is_runtime_config_artifact = true;
+        facts.is_repo_root_runtime_config_artifact = true;
+        facts.is_example_support = true;
+        facts.is_bench_support = true;
+        facts.is_test_support = true;
+        facts.is_generic_runtime_witness_doc = true;
+        facts.is_python_runtime_config = true;
+        facts.is_entrypoint_reference_doc = true;
+        facts.is_repo_metadata = true;
+        facts.is_laravel_non_livewire_blade_view = true;
+        facts.is_laravel_livewire_view = true;
+        facts.is_laravel_blade_component = true;
+        facts.is_laravel_layout_blade_view = true;
+        facts.is_laravel_view_component_class = true;
+
+        assert!((class_is_documentation_leaf().eval)(&facts));
+        assert!(!(class_is_readme_leaf().eval)(&facts));
+        assert!((is_root_readme_leaf().eval)(&facts));
+        assert!((is_entrypoint_runtime_leaf().eval)(&facts));
+        assert!((is_entrypoint_build_workflow_leaf().eval)(&facts));
+        assert!((is_navigation_runtime_leaf().eval)(&facts));
+        assert!((is_navigation_reference_doc_leaf().eval)(&facts));
+        assert!((is_ci_workflow_leaf().eval)(&facts));
+        assert!((is_typescript_runtime_module_index_leaf().eval)(&facts));
+        assert!((is_runtime_config_artifact_leaf().eval)(&facts));
+        assert!((is_repo_root_runtime_config_artifact_leaf().eval)(&facts));
+        assert!((is_example_support_leaf().eval)(&facts));
+        assert!((is_bench_support_leaf().eval)(&facts));
+        assert!((is_test_support_leaf().eval)(&facts));
+        assert!((is_generic_runtime_witness_doc_leaf().eval)(&facts));
+        assert!((is_python_runtime_config_leaf().eval)(&facts));
+        assert!((is_entrypoint_reference_doc_leaf().eval)(&facts));
+        assert!((is_repo_metadata_leaf().eval)(&facts));
+        assert!((is_laravel_non_livewire_blade_view_leaf().eval)(&facts));
+        assert!((is_laravel_livewire_view_leaf().eval)(&facts));
+        assert!((is_laravel_blade_component_leaf().eval)(&facts));
+        assert!((is_laravel_layout_blade_view_leaf().eval)(&facts));
+        assert!((is_laravel_view_component_class_leaf().eval)(&facts));
+        assert!((class_is_error_contracts_leaf().eval)(&facts) == false);
+        assert!((class_is_tool_contracts_leaf().eval)(&facts) == false);
+        assert!((class_is_benchmark_docs_leaf().eval)(&facts) == false);
+    }
+
+    #[test]
+    fn path_quality_predicates_capture_defaults_as_false() {
+        let facts = PathQualityFacts::default();
+
+        assert!(!(wants_docs_leaf().eval)(&facts));
+        assert!(!(wants_readme_leaf().eval)(&facts));
+        assert!(!(wants_benchmarks_leaf().eval)(&facts));
+        assert!(!(class_is_readme_leaf().eval)(&facts));
+        assert!(!(class_is_specs_leaf().eval)(&facts));
+        assert!(!(class_is_tests_leaf().eval)(&facts));
+        assert!(!(class_is_fixtures_leaf().eval)(&facts));
+        assert!(!(class_is_runtime_leaf().eval)(&facts));
+        assert!(!(class_is_support_leaf().eval)(&facts));
+        assert!(!(is_ci_workflow_leaf().eval)(&facts));
+        assert!(!(is_repo_metadata_leaf().eval)(&facts));
+        assert!(!(is_laravel_non_livewire_blade_view_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_quality_predicates_derive_from_path_and_intent() {
+        let intent = HybridRankingIntent::from_query("docs runtime-config");
+        let facts = PathQualityFacts::from_path("README.md", &intent);
+
+        assert!((class_is_readme_leaf().eval)(&facts));
+        assert!((wants_docs_leaf().eval)(&facts));
+        assert!(!(wants_runtime_config_artifacts_leaf().eval)(&facts));
+        assert!((is_root_readme_leaf().eval)(&facts));
+    }
+}

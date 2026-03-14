@@ -1154,9 +1154,7 @@ impl TextSearcher {
                 }
                 if overlay_reserve > 0 {
                     for (_, has_overlay, candidate) in &scored {
-                        if !has_overlay
-                            || !selected_paths.insert(candidate.relative_path.clone())
-                        {
+                        if !has_overlay || !selected_paths.insert(candidate.relative_path.clone()) {
                             continue;
                         }
                         candidates.push(SearchCandidateFile {

@@ -1156,7 +1156,11 @@ fn manifest_source_paths_filter_to_symbol_corpus_capability() {
 
     assert_eq!(
         source_paths,
-        vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/server.php")]
+        vec![
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("src/server.php"),
+            PathBuf::from("src/app.ts")
+        ]
     );
 }
 

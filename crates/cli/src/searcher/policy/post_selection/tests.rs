@@ -785,8 +785,56 @@ fn post_selection_policy_entrypoint_queries_prefer_prefix_python_tests_over_loos
 }
 
 #[test]
-fn post_selection_policy_test_focus_queries_recover_runtime_subject_surface_under_test_crowding()
- {
+fn post_selection_policy_runtime_companion_keeps_selected_runtime_adjacent_python_test() {
+    let matches = vec![
+        make_ranked(".github/workflows/classic-autogpt-docker-release.yml", 0.99),
+        make_ranked(
+            "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
+            0.88,
+        ),
+        make_ranked(
+            "autogpt_platform/backend/backend/copilot/executor/__main__.py",
+            0.87,
+        ),
+        make_ranked("autogpt_platform/backend/backend/cli.py", 0.86),
+    ];
+    let candidate_pool = vec![make_ranked(
+        "autogpt_platform/backend/test/agent_generator/test_service.py",
+        0.99,
+    )];
+    let intent = HybridRankingIntent::from_query("entry point bootstrap app startup cli main");
+    assert!(intent.wants_entrypoint_build_flow);
+    assert!(!intent.wants_test_witness_recall);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "entry point bootstrap app startup cli main",
+        4,
+        &candidate_pool,
+        &[],
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"autogpt_platform/backend/backend/blocks/mcp/test_server.py"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&"autogpt_platform/backend/test/agent_generator/test_service.py"),
+        "final paths: {paths:?}"
+    );
+}
+
+#[test]
+fn post_selection_policy_test_focus_queries_recover_runtime_subject_surface_under_test_crowding() {
     let matches = vec![
         make_ranked("tests/unit/auth_controller_test.rs", 0.98),
         make_ranked("tests/unit/auth_controller_variant_00_test.rs", 0.97),
@@ -973,6 +1021,177 @@ fn post_selection_policy_cli_command_queries_keep_specific_cli_test_witness_visi
         paths.contains(&"crates/ruff/tests/cli/main.rs"),
         "final paths: {paths:?}"
     );
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_keeps_selected_cli_test_with_stronger_overlap() {
+    let matches = vec![
+        make_ranked("crates/ruff/tests/cli/main.rs", 0.99),
+        make_ranked("crates/ruff/tests/cli/analyze_graph.rs", 0.98),
+        make_ranked("crates/ruff/tests/cli/format.rs", 0.97),
+        make_ranked(
+            "crates/ruff_linter/resources/test/fixtures/isort/pyproject.toml",
+            0.96,
+        ),
+        make_ranked("crates/ruff_linter/src/lib.rs", 0.95),
+    ];
+    let candidate_pool = vec![make_ranked("crates/ruff/tests/cli/lint.rs", 0.99)];
+    let intent = HybridRankingIntent::from_query("ruff analyze ruff cli entrypoint");
+    assert!(intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "ruff analyze ruff cli entrypoint",
+        5,
+        &candidate_pool,
+        &[],
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"crates/ruff/tests/cli/analyze_graph.rs"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&"crates/ruff/tests/cli/lint.rs"),
+        "final paths: {paths:?}"
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_keeps_existing_cli_test_when_cli_specific_candidate_is_present() {
+    let matches = vec![
+        make_ranked("crates/ruff/tests/cli/main.rs", 0.99),
+        make_ranked("crates/ruff/tests/cli/analyze_graph.rs", 0.98),
+        make_ranked("src/ruff/entrypoint.rs", 0.92),
+    ];
+    let candidate_pool = vec![make_ranked("crates/ruff/tests/cli/new_analyze_graph.rs", 0.97)];
+    let witness_hits = vec![make_witness("crates/ruff/tests/cli/alt_analyze_graph.rs", 0.96)];
+    let intent = HybridRankingIntent::from_query("ruff analyze ruff cli entrypoint");
+    assert!(intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "ruff analyze ruff cli entrypoint",
+        5,
+        &candidate_pool,
+        &witness_hits,
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches.clone(),
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+    let final_paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    let expected_paths: Vec<_> = matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert_eq!(final_paths, expected_paths);
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_preserves_matches_when_only_cli_witness_is_specific_candidate() {
+    let matches = vec![
+        make_ranked("src/main.rs", 0.99),
+        make_ranked("README.md", 0.88),
+    ];
+    let candidate_pool = vec![make_ranked("src/lib.rs", 0.97)];
+    let witness_hits = vec![make_witness("crates/ruff/tests/cli/analyze_graph.rs", 0.95)];
+    let intent = HybridRankingIntent::from_query("ruff analyze ruff cli entrypoint");
+    assert!(intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "ruff analyze ruff cli entrypoint",
+        2,
+        &candidate_pool,
+        &witness_hits,
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches.clone(),
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+
+    assert_eq!(
+        final_matches,
+        matches,
+        "CLI-specific witness candidates should not trigger companion test replacement here"
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_keeps_selected_benchmark_test_over_plain_test_candidate() {
+    let matches = vec![
+        make_ranked("benchmark/render_bench_test.rs", 0.99),
+        make_ranked("README.md", 0.90),
+    ];
+    let witness_hits = vec![make_witness("tests/render_test.rs", 0.98)];
+    let intent = HybridRankingIntent::from_query("benchmark render tests");
+    assert!(intent.wants_benchmarks);
+    assert!(intent.wants_test_witness_recall);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "benchmark render tests",
+        2,
+        &[],
+        &witness_hits,
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches.clone(),
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(paths.contains(&"benchmark/render_bench_test.rs"));
+    assert_eq!(final_matches, matches);
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_recover_non_adjacent_python_witness_with_fallback_when_entrypoint_not_set() {
+    let matches = vec![
+        make_ranked("tests/integration/parser_test.py", 0.96),
+        make_ranked("src/parser.py", 0.95),
+    ];
+    let witness_hits = vec![make_witness("backend/tests/runner/test_harness.py", 0.97)];
+    let intent = HybridRankingIntent::from_query("python test parser coverage");
+    assert!(intent.wants_test_witness_recall);
+    assert!(!intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "python test parser coverage",
+        2,
+        &[],
+        &witness_hits,
+    );
+    let final_matches = apply_runtime_companion_test_visibility(
+        matches.clone(),
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_tests"),
+    );
+    assert_eq!(final_matches.len(), 2);
+    assert!(final_matches.iter().any(|entry| entry.document.path == "tests/integration/parser_test.py"));
+    assert_eq!(final_matches.len(), matches.len());
 }
 
 #[test]

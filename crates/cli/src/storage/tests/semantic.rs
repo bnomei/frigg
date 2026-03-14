@@ -117,7 +117,8 @@ fn semantic_embedding_migrates_shared_chunk_rows_from_v3_schema() -> FriggResult
     let storage = Storage::new(&db_path);
     storage.initialize()?;
 
-    assert_eq!(storage.schema_version()?, 6);
+    let expected_schema_version = super::super::latest_schema_version(super::super::MIGRATIONS);
+    assert_eq!(storage.schema_version()?, expected_schema_version);
 
     let migrated =
         storage.load_semantic_embeddings_for_repository_snapshot("repo-1", "snapshot-001")?;

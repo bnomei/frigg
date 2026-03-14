@@ -1392,7 +1392,9 @@ impl FriggMcpServer {
         semantic_status: Option<&str>,
         semantic_reason: Option<&str>,
     ) -> &'static str {
-        if language.capability_tier(LanguageSupportCapability::SemanticChunking).as_str()
+        if language
+            .capability_tier(LanguageSupportCapability::SemanticChunking)
+            .as_str()
             == "unsupported"
         {
             return "unsupported_language";

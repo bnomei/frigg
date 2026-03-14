@@ -176,14 +176,17 @@ pub(super) fn search_hybrid_with_filters_using_executor(
 
     let semantic_started_at = Instant::now();
     let strict_semantic = searcher.config.semantic_runtime.strict_mode;
-    let unsupported_semantic_language = normalized_filters
-        .language
-        .as_ref()
-        .copied()
-        .filter(|language| {
-            language.capability_tier(LanguageSupportCapability::SemanticChunking).as_str()
-                == "unsupported"
-        });
+    let unsupported_semantic_language =
+        normalized_filters
+            .language
+            .as_ref()
+            .copied()
+            .filter(|language| {
+                language
+                    .capability_tier(LanguageSupportCapability::SemanticChunking)
+                    .as_str()
+                    == "unsupported"
+            });
     let semantic_channel_result = if matches!(query.semantic, Some(false)) {
         empty_channel_result(
             EvidenceChannel::Semantic,

@@ -647,3 +647,163 @@ pub(crate) const fn path_stem_is_server_or_cli_leaf() -> PredicateLeaf<PathWitne
 pub(crate) const fn path_stem_is_main_leaf() -> PredicateLeaf<PathWitnessFacts> {
     PredicateLeaf::new("candidate.path_stem_main", path_stem_is_main)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::facts::PathWitnessFacts;
+    use super::*;
+
+    #[test]
+    fn path_witness_predicates_apply_query_and_candidate_flags() {
+        let mut facts = PathWitnessFacts::default();
+        facts.path_overlap = 3;
+        facts.specific_path_overlap = 2;
+        facts.has_specific_query_terms = true;
+        facts.query_mentions_cli = true;
+        facts.has_exact_query_term_match = true;
+        facts.is_entrypoint = true;
+        facts.is_ci_workflow = true;
+        facts.is_config_artifact = true;
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Runtime;
+        facts.path_stem_is_main = true;
+
+        assert!((path_overlap_leaf().eval)(&facts));
+        assert!((specific_path_overlap_leaf().eval)(&facts));
+        assert!((path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!((specific_path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!((has_specific_query_terms_leaf().eval)(&facts));
+        assert!((query_mentions_cli_leaf().eval)(&facts));
+        assert!((has_exact_query_term_match_leaf().eval)(&facts));
+        assert!((is_entrypoint_leaf().eval)(&facts));
+        assert!((is_ci_workflow_leaf().eval)(&facts));
+        assert!((is_config_artifact_leaf().eval)(&facts));
+        assert!((path_stem_is_main_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_witness_predicates_capture_intent_and_runtime_combinations() {
+        let mut facts = PathWitnessFacts::default();
+        facts.wants_entrypoint_build_flow = true;
+        facts.wants_example_or_bench_witnesses = true;
+        facts.wants_examples = true;
+        facts.wants_benchmarks = true;
+        facts.wants_test_witness_recall = false;
+        facts.wants_python_workspace_config = true;
+        facts.wants_rust_workspace_config = true;
+        facts.wants_python_witnesses = true;
+        facts.is_examples_rs = true;
+
+        assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((mixed_example_or_bench_examples_rs_leaf().eval)(&facts));
+
+        facts.wants_entrypoint_build_flow = false;
+        assert!(!(
+            wants_entrypoint_or_runtime_config_or_test_leaf()
+                .eval)(&facts));
+        facts.wants_test_witness_recall = true;
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_witness_predicates_capture_stateful_class_checks() {
+        let mut facts = PathWitnessFacts::default();
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Tests;
+        facts.is_test_support = true;
+        facts.is_examples_rs = true;
+        facts.is_laravel_non_livewire_blade_view = true;
+        facts.is_frontend_runtime_noise = true;
+        facts.is_laravel_layout_blade_view = true;
+        facts.is_laravel_bootstrap_entrypoint = true;
+        facts.path_stem_is_server_or_cli = true;
+
+        assert!((source_class_is_runtime_support_tests_leaf().eval)(&facts));
+        assert!((is_test_support_leaf().eval)(&facts));
+        assert!((is_examples_rs_leaf().eval)(&facts));
+        assert!((is_laravel_non_livewire_blade_view_leaf().eval)(&facts));
+        assert!((is_frontend_runtime_noise_leaf().eval)(&facts));
+        assert!((is_laravel_layout_blade_view_leaf().eval)(&facts));
+        assert!((is_laravel_bootstrap_entrypoint_leaf().eval)(&facts));
+        assert!((path_stem_is_server_or_cli_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_witness_predicates_cover_overlap_thresholds_and_negatives() {
+        let mut facts = PathWitnessFacts::default();
+
+        assert!(!(path_overlap_leaf().eval)(&facts));
+        assert!(!(path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!(!(specific_path_overlap_leaf().eval)(&facts));
+        assert!(!(specific_path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!(!(has_exact_query_term_match_leaf().eval)(&facts));
+        assert!(!(is_python_config_leaf().eval)(&facts));
+        assert!(!(is_rust_workspace_config_leaf().eval)(&facts));
+        assert!(!(is_runtime_anchor_test_support_leaf().eval)(&facts));
+        assert!(!(is_python_test_leaf().eval)(&facts));
+
+        facts.path_overlap = 1;
+        facts.specific_path_overlap = 1;
+        assert!((path_overlap_leaf().eval)(&facts));
+        assert!(!(path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!((specific_path_overlap_leaf().eval)(&facts));
+        assert!(!(specific_path_overlap_at_least_two_leaf().eval)(&facts));
+
+        facts.path_overlap = 2;
+        facts.specific_path_overlap = 2;
+        assert!((path_overlap_at_least_two_leaf().eval)(&facts));
+        assert!((specific_path_overlap_at_least_two_leaf().eval)(&facts));
+        facts.has_exact_query_term_match = true;
+        facts.query_mentions_cli = true;
+        facts.has_specific_query_terms = true;
+        assert!((has_exact_query_term_match_leaf().eval)(&facts));
+        assert!((query_mentions_cli_leaf().eval)(&facts));
+        assert!((has_specific_query_terms_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_witness_predicates_cover_entrypoint_and_witness_or_logic() {
+        let mut facts = PathWitnessFacts::default();
+        facts.wants_entrypoint_build_flow = true;
+        facts.wants_runtime_config_artifacts = false;
+        facts.wants_test_witness_recall = false;
+        facts.wants_example_or_bench_witnesses = false;
+        facts.is_examples_rs = false;
+
+        assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!(!(mixed_example_or_bench_examples_rs_leaf().eval)(&facts));
+
+        facts.wants_entrypoint_build_flow = false;
+        facts.wants_runtime_config_artifacts = false;
+        facts.wants_test_witness_recall = false;
+        assert!(!(wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
+        assert!(!(wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+
+        facts.wants_runtime_config_artifacts = true;
+        assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+
+        facts.wants_runtime_config_artifacts = false;
+        facts.wants_test_witness_recall = true;
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+    }
+
+    #[test]
+    fn path_witness_predicates_cover_source_class_paths() {
+        let mut facts = PathWitnessFacts::default();
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Other;
+        assert!(!(source_class_is_runtime_support_tests_leaf().eval)(&facts));
+
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Runtime;
+        assert!((source_class_is_runtime_support_tests_leaf().eval)(&facts));
+
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Support;
+        assert!((source_class_is_runtime_support_tests_leaf().eval)(&facts));
+
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Tests;
+        assert!((source_class_is_runtime_support_tests_leaf().eval)(&facts));
+
+        facts.source_class = crate::searcher::surfaces::HybridSourceClass::Fixtures;
+        assert!(!(source_class_is_runtime_support_tests_leaf().eval)(&facts));
+    }
+}

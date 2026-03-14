@@ -68,6 +68,18 @@ fn hybrid_ranking_cli_entrypoint_queries_prefer_cli_test_witnesses_over_runtime_
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
+    let _witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     assert!(
         ranked_paths
             .iter()

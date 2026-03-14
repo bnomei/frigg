@@ -322,65 +322,41 @@ impl Storage {
         ensure_semantic_vector_rows_current(&conn, repository_id, provider, model)?;
 
         let capped_limit = limit.min(SQLITE_VEC_MAX_KNN_LIMIT);
+        let scan_limit = capped_limit.saturating_mul(4).min(SQLITE_VEC_MAX_KNN_LIMIT);
         let normalized_query =
             normalize_embedding_for_vector_projection("<query>", query_embedding.to_vec())?;
         let encoded_query = encode_f32_vector(&normalized_query);
-        let sql = format!(
+        let vector_sql = format!(
             r#"
-            SELECT
-                chunk.chunk_id,
-                chunk.repository_id,
-                head.covered_snapshot_id,
-                chunk.path,
-                chunk.language,
-                chunk.start_line,
-                chunk.end_line,
-                vec.distance
-            FROM {VECTOR_TABLE_NAME} AS vec
-            INNER JOIN semantic_chunk AS chunk
-              ON chunk.repository_id = vec.repository_id
-             AND chunk.provider = vec.provider
-             AND chunk.model = vec.model
-             AND chunk.chunk_id = vec.chunk_id
-            INNER JOIN semantic_head AS head
-              ON head.repository_id = chunk.repository_id
-             AND head.provider = chunk.provider
-             AND head.model = chunk.model
-            WHERE head.repository_id = ?1
-              AND head.covered_snapshot_id = ?2
-              AND vec.repository_id = ?1
-              AND vec.provider = ?3
-              AND vec.model = ?4
-              AND (?5 IS NULL OR vec.language = ?5)
-              AND k = ?6
-              AND vec.embedding MATCH ?7
-            ORDER BY vec.distance ASC, chunk.path ASC, chunk.chunk_index ASC, chunk.chunk_id ASC
+            SELECT chunk_id, distance
+            FROM {VECTOR_TABLE_NAME}
+            WHERE k = ?1
+              AND repository_id = ?2
+              AND provider = ?3
+              AND model = ?4
+              AND embedding MATCH ?5
             "#
         );
 
-        let mut statement = conn.prepare(&sql).map_err(|err| {
+        let mut vector_statement = conn.prepare(&vector_sql).map_err(|err| {
             FriggError::Internal(format!(
                 "failed to prepare semantic vector top-k query for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
             ))
         })?;
-        let rows = statement
+        let vector_rows = vector_statement
             .query_map(
                 (
+                    usize_to_i64(scan_limit, "scan_limit")?,
                     repository_id,
-                    snapshot_id,
                     provider,
                     model,
-                    language,
-                    usize_to_i64(capped_limit, "limit")?,
                     encoded_query,
                 ),
                 |row| {
-                    Ok(SemanticChunkVectorMatch {
-                        chunk_id: row.get(0)?,
-                        repository_id: row.get(1)?,
-                        snapshot_id: row.get(2)?,
-                        distance: row.get(7)?,
-                    })
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, f32>(1)?,
+                    ))
                 },
             )
             .map_err(|err| {
@@ -389,11 +365,76 @@ impl Storage {
                 ))
             })?;
 
-        rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode semantic vector top-k matches for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
-            ))
-        })
+        let vector_rows = vector_rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode semantic vector top-k matches for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
+                ))
+            })?;
+
+        let mut matches = Vec::new();
+        if vector_rows.is_empty() {
+            return Ok(matches);
+        }
+
+        let mut membership_statement = conn
+            .prepare(
+                r#"
+            SELECT 1
+            FROM semantic_chunk
+            WHERE repository_id = ?1
+              AND provider = ?2
+              AND model = ?3
+              AND snapshot_id = ?4
+              AND chunk_id = ?5
+              AND (?6 IS NULL OR language = ?6)
+            LIMIT 1
+            "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare semantic vector top-k filter query for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
+                ))
+            })?;
+
+        for (chunk_id, distance) in vector_rows {
+            let is_in_snapshot: Option<i64> = membership_statement
+                .query_row(
+                    (
+                        repository_id,
+                        provider,
+                        model,
+                        snapshot_id,
+                        chunk_id.as_str(),
+                        language,
+                    ),
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "failed to query semantic vector top-k chunk membership for repository '{repository_id}' snapshot '{snapshot_id}' provider '{provider}' model '{model}': {err}"
+                    ))
+                })?;
+            if is_in_snapshot.is_some() {
+                matches.push(SemanticChunkVectorMatch {
+                    chunk_id,
+                    repository_id: repository_id.to_owned(),
+                    snapshot_id: snapshot_id.to_owned(),
+                    distance,
+                });
+            }
+        }
+
+        matches.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| left.chunk_id.cmp(&right.chunk_id))
+        });
+        matches.truncate(capped_limit);
+
+        Ok(matches)
     }
 
     pub fn load_semantic_chunk_payloads_for_repository_snapshot(

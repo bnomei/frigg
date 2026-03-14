@@ -429,10 +429,14 @@ fn projected_path_witness_candidates_apply_entrypoint_surface_overlay_boosts() -
 }
 
 #[test]
-fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions() -> FriggResult<()> {
+fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions() -> FriggResult<()>
+{
     let root = temp_workspace_root("overlay-seed-reverse-subject-recall");
     let mut files = vec![
-        ("src/auth_controller.rs".to_owned(), "pub fn auth_controller() {}\n".to_owned()),
+        (
+            "src/auth_controller.rs".to_owned(),
+            "pub fn auth_controller() {}\n".to_owned(),
+        ),
         (
             "tests/unit/auth_controller_test.rs".to_owned(),
             "#[test]\nfn auth_controller_test() {}\n".to_owned(),
@@ -454,7 +458,10 @@ fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions(
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect::<Vec<_>>();
-    let borrowed_paths = manifest_paths.iter().map(String::as_str).collect::<Vec<_>>();
+    let borrowed_paths = manifest_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     prepare_workspace(&root, &borrowed_files)?;
     seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &borrowed_paths)?;
 
@@ -479,7 +486,9 @@ fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions(
 
     let baseline_paths = base_path_witness_seed_paths(repository, &intent, &query_context, 8);
     assert!(
-        !baseline_paths.iter().any(|path| path == "src/auth_controller.rs"),
+        !baseline_paths
+            .iter()
+            .any(|path| path == "src/auth_controller.rs"),
         "baseline seed selection should crowd out the related runtime subject: {baseline_paths:?}"
     );
 
@@ -512,7 +521,10 @@ fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions(
 fn hybrid_search_recalls_reverse_subject_runtime_files_for_test_focus_queries() -> FriggResult<()> {
     let root = temp_workspace_root("overlay-hybrid-reverse-subject-recall");
     let mut files = vec![
-        ("src/auth_controller.rs".to_owned(), "pub fn auth_controller() {}\n".to_owned()),
+        (
+            "src/auth_controller.rs".to_owned(),
+            "pub fn auth_controller() {}\n".to_owned(),
+        ),
         (
             "tests/unit/auth_controller_test.rs".to_owned(),
             "#[test]\nfn auth_controller_test() {}\n".to_owned(),
@@ -534,7 +546,10 @@ fn hybrid_search_recalls_reverse_subject_runtime_files_for_test_focus_queries() 
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect::<Vec<_>>();
-    let borrowed_paths = manifest_paths.iter().map(String::as_str).collect::<Vec<_>>();
+    let borrowed_paths = manifest_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     prepare_workspace(&root, &borrowed_files)?;
     seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &borrowed_paths)?;
 
@@ -592,7 +607,10 @@ fn overlay_aware_path_witness_seed_universe_recalls_hidden_ci_workflows() -> Fri
             "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n".to_owned(),
         ),
     ];
-    let mut manifest_paths = vec!["src/main.rs".to_owned(), ".github/workflows/ci.yml".to_owned()];
+    let mut manifest_paths = vec![
+        "src/main.rs".to_owned(),
+        ".github/workflows/ci.yml".to_owned(),
+    ];
     for index in 0..12 {
         let path = format!("docs/build_pipeline_{index:02}.md");
         files.push((
@@ -605,7 +623,10 @@ fn overlay_aware_path_witness_seed_universe_recalls_hidden_ci_workflows() -> Fri
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect::<Vec<_>>();
-    let borrowed_paths = manifest_paths.iter().map(String::as_str).collect::<Vec<_>>();
+    let borrowed_paths = manifest_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     prepare_workspace(&root, &borrowed_files)?;
     seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &borrowed_paths)?;
 
@@ -629,7 +650,9 @@ fn overlay_aware_path_witness_seed_universe_recalls_hidden_ci_workflows() -> Fri
     let query_context = HybridPathWitnessQueryContext::new("build pipeline automation");
     let baseline_paths = base_path_witness_seed_paths(repository, &intent, &query_context, 8);
     assert!(
-        !baseline_paths.iter().any(|path| path == ".github/workflows/ci.yml"),
+        !baseline_paths
+            .iter()
+            .any(|path| path == ".github/workflows/ci.yml"),
         "baseline seed selection should crowd out the CI workflow artifact: {baseline_paths:?}"
     );
 
@@ -668,7 +691,10 @@ fn hybrid_search_recalls_ci_workflows_for_build_pipeline_queries() -> FriggResul
             "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n".to_owned(),
         ),
     ];
-    let mut manifest_paths = vec!["src/main.rs".to_owned(), ".github/workflows/ci.yml".to_owned()];
+    let mut manifest_paths = vec![
+        "src/main.rs".to_owned(),
+        ".github/workflows/ci.yml".to_owned(),
+    ];
     for index in 0..12 {
         let path = format!("docs/build_pipeline_{index:02}.md");
         files.push((
@@ -681,7 +707,10 @@ fn hybrid_search_recalls_ci_workflows_for_build_pipeline_queries() -> FriggResul
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect::<Vec<_>>();
-    let borrowed_paths = manifest_paths.iter().map(String::as_str).collect::<Vec<_>>();
+    let borrowed_paths = manifest_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     prepare_workspace(&root, &borrowed_files)?;
     seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &borrowed_paths)?;
 

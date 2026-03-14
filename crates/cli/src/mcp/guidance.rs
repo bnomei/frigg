@@ -311,9 +311,7 @@ mod tests {
         assert_eq!(parsed["schema_id"], json!("frigg.policy.support_matrix.v4"));
         assert_eq!(
             parsed["capability_tiers"]["core"].as_str(),
-            Some(
-                "capability is part of FRIGG's stable read-only core contract for that language"
-            )
+            Some("capability is part of FRIGG's stable read-only core contract for that language")
         );
         assert_eq!(
             parsed["capability_tiers"]["optional_accelerator"].as_str(),
