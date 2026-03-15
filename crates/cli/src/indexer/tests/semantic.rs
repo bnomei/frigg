@@ -253,6 +253,25 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
     )
     .map_err(FriggError::Io)?;
 
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &[],
+    )?;
+    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(first.snapshot_id.as_str()));
+    assert!(matches!(
+        &plan.snapshot_plan,
+        super::super::ManifestSnapshotPlan::PersistNew {
+            rollback_on_semantic_failure: true,
+            ..
+        }
+    ));
+    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::FullRebuild);
+    assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
+
     let error = reindex_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
@@ -268,6 +287,10 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
             .to_string()
             .contains("semantic embedding batch failed batch_index=0 total_batches=1"),
         "unexpected semantic failure: {error}"
+    );
+    assert!(
+        error.to_string().contains("phase=semantic_refresh"),
+        "semantic execution failures should surface the planned phase: {error}"
     );
 
     let storage = Storage::new(&db_path);
@@ -795,6 +818,210 @@ fn changed_only_reuses_previous_digests_for_unchanged_unreadable_files() -> Frig
     assert_eq!(second.diagnostics.total_count(), 0);
 
     set_file_mode(&unreadable_path, 0o644)?;
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn reindex_plan_full_mode_marks_semantic_full_rebuild_when_enabled() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-plan-semantic-full-db");
+    let workspace_root = temp_workspace_root("reindex-plan-semantic-full-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_full() {}\n")],
+    )?;
+
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime_enabled_openai(),
+        &[],
+    )?;
+
+    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::FullRebuild);
+    assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
+    assert!(plan.semantic_refresh.changed_paths.is_empty());
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-plan-semantic-delta-db");
+    let workspace_root = temp_workspace_root("reindex-plan-semantic-delta-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_delta() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let executor = FixtureSemanticEmbeddingExecutor;
+    let _summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        "pub fn semantic_delta() { println!(\"changed\"); }\n",
+    )
+    .map_err(FriggError::Io)?;
+
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &[],
+    )?;
+
+    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::IncrementalAdvance);
+    assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
+    assert_eq!(plan.semantic_refresh.changed_paths, vec![PathBuf::from("src/main.rs")]);
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_unchanged()
+-> FriggResult<()> {
+    let db_path = temp_db_path("reindex-plan-semantic-reuse-db");
+    let workspace_root = temp_workspace_root("reindex-plan-semantic-reuse-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_reuse() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let executor = FixtureSemanticEmbeddingExecutor;
+    let summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &[],
+    )?;
+
+    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(summary.snapshot_id.as_str()));
+    assert_eq!(plan.files_changed, 0);
+    assert_eq!(plan.files_deleted, 0);
+    assert!(matches!(
+        &plan.snapshot_plan,
+        super::super::ManifestSnapshotPlan::ReuseExisting { snapshot_id }
+            if snapshot_id == &summary.snapshot_id
+    ));
+    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::ReuseExisting);
+    assert!(plan.semantic_refresh.records_manifest.is_empty());
+    assert!(plan.semantic_refresh.changed_paths.is_empty());
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-plan-semantic-stale-db");
+    let workspace_root = temp_workspace_root("reindex-plan-semantic-stale-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_stale_v1() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let executor = FixtureSemanticEmbeddingExecutor;
+    let semantic_summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        "pub fn semantic_stale_v2() {}\n",
+    )
+    .map_err(FriggError::Io)?;
+
+    let manifest_only_summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+        &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
+    )?;
+    assert_ne!(manifest_only_summary.snapshot_id, semantic_summary.snapshot_id);
+
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &[],
+    )?;
+
+    assert_eq!(
+        plan.previous_snapshot_id.as_deref(),
+        Some(manifest_only_summary.snapshot_id.as_str())
+    );
+    assert!(matches!(
+        &plan.snapshot_plan,
+        super::super::ManifestSnapshotPlan::ReuseExisting { snapshot_id }
+            if snapshot_id == &manifest_only_summary.snapshot_id
+    ));
+    assert_eq!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::FullRebuildFromChangedOnly
+    );
+    assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
+    assert!(plan.semantic_refresh.changed_paths.is_empty());
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
     cleanup_workspace(&workspace_root);
     cleanup_db(&db_path);
     Ok(())

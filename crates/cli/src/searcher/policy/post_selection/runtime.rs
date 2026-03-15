@@ -922,19 +922,19 @@ pub(super) fn apply_runtime_companion_test_visibility(
             selection_guardrail_facts(&evidence, &state, ctx).specific_witness_path_overlap > 0
         };
         let has_cli_query = query_mentions_cli_command(ctx.query_text)
-            && !ctx.selection_query_context.specific_witness_terms.is_empty();
+            && !ctx
+                .selection_query_context
+                .specific_witness_terms
+                .is_empty();
 
         has_cli_query
-            && (matches
-                .iter()
-                .any(|entry| {
-                    surfaces::is_cli_test_support_path(&entry.document.path)
-                        && specific_witness_overlap(entry)
-                })
-                || ctx.witness_hits.iter().any(|hit| {
-                    surfaces::is_cli_test_support_path(&hit.document.path)
-                        && specific_witness_hit_overlap(hit)
-                }))
+            && (matches.iter().any(|entry| {
+                surfaces::is_cli_test_support_path(&entry.document.path)
+                    && specific_witness_overlap(entry)
+            }) || ctx.witness_hits.iter().any(|hit| {
+                surfaces::is_cli_test_support_path(&hit.document.path)
+                    && specific_witness_hit_overlap(hit)
+            }))
     };
 
     if has_cli_specific_witness_candidate {
@@ -1054,17 +1054,12 @@ pub(super) fn apply_runtime_companion_test_visibility(
             &state,
             ctx,
         )
-            .then_with(|| {
-                selection_guardrail_score(candidate, &state, ctx).total_cmp(
-                    &selection_guardrail_score_for_path(
-                        selected_path,
-                        &matches,
-                        &state,
-                        ctx,
-                    ),
-                )
-            })
-            .is_gt(),
+        .then_with(|| {
+            selection_guardrail_score(candidate, &state, ctx).total_cmp(
+                &selection_guardrail_score_for_path(selected_path, &matches, &state, ctx),
+            )
+        })
+        .is_gt(),
         (Some(_), None) => true,
         _ => false,
     };

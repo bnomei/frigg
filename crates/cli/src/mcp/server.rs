@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::model::{ReferenceMatch, SymbolMatch};
-use crate::domain::{ChannelResult, EvidenceChannel, FriggError};
+use crate::domain::{ChannelResult, EvidenceChannel, FriggError, WorkloadPrecisionMode};
 use crate::graph::{
     PreciseRelationshipKind, RelationKind, ScipIngestError, ScipResourceBudgets, SymbolGraph,
 };
@@ -29,7 +29,6 @@ use crate::languages::{
 };
 use crate::manifest_validation::{
     RepositoryManifestFreshness, RepositorySemanticFreshness, repository_freshness_status,
-    validate_manifest_digests_for_root,
 };
 use crate::path_class::{repository_path_class, repository_path_class_rank};
 use crate::searcher::{
@@ -113,6 +112,7 @@ use crate::settings::RuntimeProfile;
 
 mod content;
 mod deep_search;
+mod execution;
 mod navigation_cache;
 mod navigation_tools;
 mod precise_graph;
@@ -128,11 +128,28 @@ pub struct FriggMcpServer {
     config: Arc<FriggConfig>,
     tool_router: ToolRouter<Self>,
     tool_surface_profile: ToolSurfaceProfile,
+    runtime_state: FriggMcpRuntimeState,
+    session_state: FriggMcpSessionState,
+    cache_state: FriggMcpCacheState,
+    provenance_state: FriggMcpProvenanceState,
+}
+
+#[derive(Clone)]
+struct FriggMcpRuntimeState {
     runtime_profile: RuntimeProfile,
     runtime_watch_active: bool,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
-    session_default_repository_id: Arc<RwLock<Option<String>>>,
+    runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+}
+
+#[derive(Clone)]
+struct FriggMcpSessionState {
+    session_default_repository_id: Arc<RwLock<Option<String>>>,
+}
+
+#[derive(Clone)]
+struct FriggMcpCacheState {
     symbol_corpus_cache: Arc<RwLock<BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>>>,
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
@@ -151,9 +168,43 @@ pub struct FriggMcpServer {
     heuristic_reference_cache:
         Arc<RwLock<BTreeMap<HeuristicReferenceCacheKey, CachedHeuristicReferences>>>,
     compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
-    runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
-    provenance_best_effort: bool,
-    provenance_enabled: bool,
+}
+
+#[derive(Clone)]
+struct FriggMcpProvenanceState {
+    best_effort: bool,
+    enabled: bool,
+}
+
+#[allow(clippy::enum_variant_names)]
+enum FriggErrorTransportCode {
+    InvalidParams,
+    ResourceNotFound,
+    InvalidRequest,
+    Internal,
+}
+
+struct FriggErrorTranslation {
+    transport_code: FriggErrorTransportCode,
+    message: String,
+    error_code: &'static str,
+    retryable: bool,
+    detail: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReadOnlyToolExecutionContext {
+    pub(super) tool_name: &'static str,
+    pub(super) repository_hint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ScopedReadOnlyToolExecutionContext {
+    #[cfg(test)]
+    pub(super) base: ReadOnlyToolExecutionContext,
+    pub(super) scoped_workspaces: Vec<AttachedWorkspace>,
+    pub(super) scoped_repository_ids: Vec<String>,
+    pub(super) cache_freshness: RepositoryResponseCacheFreshness,
 }
 
 impl FriggMcpServer {
@@ -257,6 +308,80 @@ impl FriggMcpServer {
 
     fn internal(message: impl Into<String>, detail: Option<Value>) -> ErrorData {
         Self::internal_with_code(message, "internal", false, detail)
+    }
+
+    fn build_frigg_error_data(translation: FriggErrorTranslation) -> ErrorData {
+        match translation.transport_code {
+            FriggErrorTransportCode::InvalidParams => {
+                Self::invalid_params(translation.message, translation.detail)
+            }
+            FriggErrorTransportCode::ResourceNotFound => {
+                Self::resource_not_found(translation.message, translation.detail)
+            }
+            FriggErrorTransportCode::InvalidRequest => {
+                Self::access_denied(translation.message, translation.detail)
+            }
+            FriggErrorTransportCode::Internal => Self::internal_with_code(
+                translation.message,
+                translation.error_code,
+                translation.retryable,
+                translation.detail,
+            ),
+        }
+    }
+
+    fn translate_frigg_error(err: FriggError) -> FriggErrorTranslation {
+        match err {
+            FriggError::InvalidInput(message) => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::InvalidParams,
+                message,
+                error_code: "invalid_params",
+                retryable: false,
+                detail: None,
+            },
+            FriggError::NotFound(message) => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::ResourceNotFound,
+                message,
+                error_code: "resource_not_found",
+                retryable: false,
+                detail: None,
+            },
+            FriggError::AccessDenied(message) => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::InvalidRequest,
+                message,
+                error_code: "access_denied",
+                retryable: false,
+                detail: None,
+            },
+            FriggError::Io(err) => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::Internal,
+                message: "IO failure".to_string(),
+                error_code: "internal",
+                retryable: false,
+                detail: Some(json!({
+                    "error_class": "io",
+                    "io_error": Self::bounded_text(&err.to_string()),
+                })),
+            },
+            FriggError::StrictSemanticFailure { reason } => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::Internal,
+                message: format!("semantic channel strict failure: {reason}"),
+                error_code: "unavailable",
+                retryable: true,
+                detail: Some(json!({
+                    "error_class": "semantic",
+                    "semantic_status": "strict_failure",
+                    "semantic_reason": Self::bounded_text(&reason),
+                })),
+            },
+            FriggError::Internal(message) => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::Internal,
+                message,
+                error_code: "internal",
+                retryable: false,
+                detail: None,
+            },
+        }
     }
 
     fn timeout(message: impl Into<String>, detail: Option<Value>) -> ErrorData {
@@ -403,31 +528,64 @@ impl FriggMcpServer {
     }
 
     fn map_frigg_error(err: FriggError) -> ErrorData {
-        match err {
-            FriggError::InvalidInput(message) => Self::invalid_params(message, None),
-            FriggError::NotFound(message) => Self::resource_not_found(message, None),
-            FriggError::AccessDenied(message) => Self::access_denied(message, None),
-            FriggError::Io(err) => Self::internal(err.to_string(), None),
-            FriggError::Internal(message)
-                if message.starts_with("semantic_status=strict_failure:") =>
-            {
-                let reason = message
-                    .split_once(':')
-                    .map(|(_, reason)| reason.trim())
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or("strict semantic channel failure");
-                Self::internal_with_code(
-                    format!("semantic channel strict failure: {reason}"),
-                    "unavailable",
-                    true,
-                    Some(json!({
-                        "semantic_status": "strict_failure",
-                        "semantic_reason": Self::bounded_text(reason),
-                    })),
-                )
-            }
-            FriggError::Internal(message) => Self::internal(message, None),
+        Self::build_frigg_error_data(Self::translate_frigg_error(err))
+    }
+
+    pub(super) fn read_only_tool_execution_context(
+        &self,
+        tool_name: &'static str,
+        repository_hint: Option<String>,
+    ) -> ReadOnlyToolExecutionContext {
+        ReadOnlyToolExecutionContext {
+            tool_name,
+            repository_hint,
         }
+    }
+
+    pub(super) fn scoped_read_only_tool_execution_context(
+        &self,
+        tool_name: &'static str,
+        repository_hint: Option<String>,
+        freshness_mode: RepositoryResponseCacheFreshnessMode,
+    ) -> Result<ScopedReadOnlyToolExecutionContext, ErrorData> {
+        let base = self.read_only_tool_execution_context(tool_name, repository_hint);
+        let scoped_workspaces =
+            self.attached_workspaces_for_repository(base.repository_hint.as_deref())?;
+        let scoped_repository_ids = scoped_workspaces
+            .iter()
+            .map(|workspace| workspace.repository_id.clone())
+            .collect::<Vec<_>>();
+        let cache_freshness =
+            self.repository_response_cache_freshness(&scoped_workspaces, freshness_mode)?;
+
+        Ok(ScopedReadOnlyToolExecutionContext {
+            #[cfg(test)]
+            base,
+            scoped_workspaces,
+            scoped_repository_ids,
+            cache_freshness,
+        })
+    }
+
+    async fn run_read_only_tool_blocking<T, F>(
+        &self,
+        context: &ReadOnlyToolExecutionContext,
+        task_fn: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        Self::run_blocking_task(context.tool_name, task_fn).await
+    }
+
+    fn finalize_read_only_tool<T>(
+        &self,
+        context: &ReadOnlyToolExecutionContext,
+        result: Result<Json<T>, ErrorData>,
+        provenance_result: Result<(), ErrorData>,
+    ) -> Result<Json<T>, ErrorData> {
+        self.finalize_with_provenance(context.tool_name, result, provenance_result)
     }
 
     async fn run_blocking_task<T, F>(operation: &'static str, task_fn: F) -> Result<T, ErrorData>
@@ -1660,7 +1818,8 @@ impl FriggMcpServer {
     }
 
     fn metadata_note_pair(metadata: Value) -> (Option<Value>, Option<String>) {
-        let note = Some(metadata.to_string());
+        let note =
+            Some(serde_json::to_string(&metadata).expect("metadata payload should serialize"));
         (Some(metadata), note)
     }
 
@@ -2047,26 +2206,34 @@ impl FriggMcpServer {
             config: Arc::new(config),
             tool_router: Self::filtered_tool_router(tool_surface_profile),
             tool_surface_profile,
-            runtime_profile,
-            runtime_watch_active,
-            workspace_registry: Arc::new(RwLock::new(workspace_registry)),
-            session_default_repository_id: Arc::new(RwLock::new(None)),
-            validated_manifest_candidate_cache,
-            symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            search_hybrid_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            search_symbol_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            go_to_definition_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            find_declarations_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            runtime_task_registry,
-            provenance_best_effort,
-            provenance_enabled: true,
+            runtime_state: FriggMcpRuntimeState {
+                runtime_profile,
+                runtime_watch_active,
+                workspace_registry: Arc::new(RwLock::new(workspace_registry)),
+                runtime_task_registry,
+                validated_manifest_candidate_cache,
+            },
+            session_state: FriggMcpSessionState {
+                session_default_repository_id: Arc::new(RwLock::new(None)),
+            },
+            cache_state: FriggMcpCacheState {
+                symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                search_hybrid_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                search_symbol_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                go_to_definition_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                find_declarations_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            },
+            provenance_state: FriggMcpProvenanceState {
+                best_effort: provenance_best_effort,
+                enabled: true,
+            },
         }
     }
 
@@ -2116,28 +2283,12 @@ impl FriggMcpServer {
             config: Arc::clone(&self.config),
             tool_router: self.tool_router.clone(),
             tool_surface_profile: self.tool_surface_profile,
-            runtime_profile: self.runtime_profile,
-            runtime_watch_active: self.runtime_watch_active,
-            workspace_registry: Arc::clone(&self.workspace_registry),
-            session_default_repository_id: Arc::new(RwLock::new(None)),
-            validated_manifest_candidate_cache: Arc::clone(
-                &self.validated_manifest_candidate_cache,
-            ),
-            symbol_corpus_cache: Arc::clone(&self.symbol_corpus_cache),
-            precise_graph_cache: Arc::clone(&self.precise_graph_cache),
-            latest_precise_graph_cache: Arc::clone(&self.latest_precise_graph_cache),
-            provenance_storage_cache: Arc::clone(&self.provenance_storage_cache),
-            repository_summary_cache: Arc::clone(&self.repository_summary_cache),
-            search_text_response_cache: Arc::clone(&self.search_text_response_cache),
-            search_hybrid_response_cache: Arc::clone(&self.search_hybrid_response_cache),
-            search_symbol_response_cache: Arc::clone(&self.search_symbol_response_cache),
-            go_to_definition_response_cache: Arc::clone(&self.go_to_definition_response_cache),
-            find_declarations_response_cache: Arc::clone(&self.find_declarations_response_cache),
-            heuristic_reference_cache: Arc::clone(&self.heuristic_reference_cache),
-            compiled_safe_regex_cache: Arc::clone(&self.compiled_safe_regex_cache),
-            runtime_task_registry: Arc::clone(&self.runtime_task_registry),
-            provenance_best_effort: self.provenance_best_effort,
-            provenance_enabled: self.provenance_enabled,
+            runtime_state: self.runtime_state.clone(),
+            session_state: FriggMcpSessionState {
+                session_default_repository_id: Arc::new(RwLock::new(None)),
+            },
+            cache_state: self.cache_state.clone(),
+            provenance_state: self.provenance_state.clone(),
         }
     }
 
@@ -2254,6 +2405,7 @@ impl FriggMcpServer {
     fn runtime_status_summary(&self) -> RuntimeStatusSummary {
         let (active_tasks, recent_tasks) = {
             let registry = self
+                .runtime_state
                 .runtime_task_registry
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2261,9 +2413,12 @@ impl FriggMcpServer {
         };
 
         RuntimeStatusSummary {
-            profile: self.runtime_profile,
-            persistent_state_available: self.runtime_profile.persistent_state_available(),
-            watch_active: self.runtime_watch_active,
+            profile: self.runtime_state.runtime_profile,
+            persistent_state_available: self
+                .runtime_state
+                .runtime_profile
+                .persistent_state_available(),
+            watch_active: self.runtime_state.runtime_watch_active,
             tool_surface_profile: self.tool_surface_profile.as_str().to_owned(),
             status_tool: "workspace_current".to_owned(),
             active_tasks,
@@ -2296,6 +2451,7 @@ impl FriggMcpServer {
 
         let workspace = {
             let mut registry = self
+                .runtime_state
                 .workspace_registry
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2306,7 +2462,8 @@ impl FriggMcpServer {
             self.set_current_repository_id(Some(workspace.repository_id.clone()));
         }
 
-        self.validated_manifest_candidate_cache
+        self.runtime_state
+            .validated_manifest_candidate_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
@@ -2475,34 +2632,47 @@ impl FriggMcpServer {
         params: Parameters<ListRepositoriesParams>,
     ) -> Result<Json<ListRepositoriesResponse>, ErrorData> {
         let _params = params.0;
+        let execution_context = self.read_only_tool_execution_context("list_repositories", None);
+        let execution_context_for_blocking = execution_context.clone();
         let server = self.clone();
-        let (result, provenance_result) = Self::run_blocking_task("list_repositories", move || {
+        let (result, provenance_result) =
+            self.run_read_only_tool_blocking(&execution_context, move || {
             let repositories = server
                 .attached_workspaces()
                 .into_iter()
                 .map(|workspace| server.repository_summary(&workspace))
                 .collect::<Vec<_>>();
+            let repository_ids = repositories
+                .iter()
+                .map(|repo| repo.repository_id.clone())
+                .collect::<Vec<_>>();
 
             let response = ListRepositoriesResponse { repositories };
-            let source_refs = json!({
-                "repository_ids": response
-                    .repositories
-                    .iter()
-                    .map(|repo| repo.repository_id.clone())
-                    .collect::<Vec<_>>(),
-            });
+            let finalization = server.tool_execution_finalization(
+                json!({
+                    "repository_ids": repository_ids,
+                }),
+                Some(execution_context_for_blocking.normalized_workload(
+                    &response
+                        .repositories
+                        .iter()
+                        .map(|repo| repo.repository_id.clone())
+                        .collect::<Vec<_>>(),
+                    WorkloadPrecisionMode::Exact,
+                )),
+            );
             let result = Ok(Json(response));
             let provenance_result = server.record_provenance_with_outcome(
                 "list_repositories",
                 None,
                 json!({}),
-                source_refs,
+                finalization.source_refs,
                 Self::provenance_outcome(&result),
             );
             (result, provenance_result)
         })
         .await?;
-        self.finalize_with_provenance("list_repositories", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
     #[tool(
@@ -2511,7 +2681,7 @@ impl FriggMcpServer {
         annotations(
             read_only_hint = false,
             destructive_hint = false,
-            idempotent_hint = true
+            idempotent_hint = false
         )
     )]
     pub async fn workspace_attach(
@@ -2523,19 +2693,29 @@ impl FriggMcpServer {
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
         let response =
             self.attach_workspace_internal(Path::new(&params.path), set_default, resolve_mode)?;
-        let source_refs = json!({
-            "repository_id": response.repository.repository_id.clone(),
-            "root_path": response.repository.root_path.clone(),
-            "resolved_from": response.resolved_from.clone(),
-            "resolution": response.resolution,
-            "session_default": response.session_default,
-            "storage": {
-                "db_path": response.storage.db_path.clone(),
-                "exists": response.storage.exists,
-                "initialized": response.storage.initialized,
-                "index_state": response.storage.index_state,
-            },
-        });
+        let finalization = self.tool_execution_finalization(
+            json!({
+                "repository_id": response.repository.repository_id.clone(),
+                "root_path": response.repository.root_path.clone(),
+                "resolved_from": response.resolved_from.clone(),
+                "resolution": response.resolution,
+                "session_default": response.session_default,
+                "storage": {
+                    "db_path": response.storage.db_path.clone(),
+                    "exists": response.storage.exists,
+                    "initialized": response.storage.initialized,
+                    "index_state": response.storage.index_state,
+                },
+            }),
+            Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                "workspace_attach",
+                std::slice::from_ref(&response.repository.repository_id),
+                WorkloadPrecisionMode::Exact,
+                None,
+                None,
+                None,
+            )),
+        );
         let result = Ok(Json(response));
         let provenance_result = self
             .record_provenance_blocking(
@@ -2546,7 +2726,7 @@ impl FriggMcpServer {
                     "set_default": params.set_default,
                     "resolve_mode": params.resolve_mode,
                 }),
-                source_refs,
+                finalization.source_refs,
                 &result,
             )
             .await;
@@ -2567,6 +2747,7 @@ impl FriggMcpServer {
         params: Parameters<WorkspaceCurrentParams>,
     ) -> Result<Json<WorkspaceCurrentResponse>, ErrorData> {
         let _params = params.0;
+        let execution_context = self.read_only_tool_execution_context("workspace_current", None);
         let current_workspace = self.current_workspace();
         let repositories = self
             .attached_workspaces()
@@ -2611,11 +2792,22 @@ impl FriggMcpServer {
                 .as_ref()
                 .map(|runtime| runtime.recent_provenance.len()),
         });
+        let normalized_workload =
+            execution_context.normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact);
+        let finalization =
+            self.tool_execution_finalization(source_refs, Some(normalized_workload));
         let result = Ok(Json(response));
         let provenance_result = self
-            .record_provenance_blocking("workspace_current", None, json!({}), source_refs, &result)
+            .record_provenance_blocking_with_metadata(
+                "workspace_current",
+                None,
+                json!({}),
+                finalization.source_refs,
+                finalization.normalized_workload,
+                &result,
+            )
             .await;
-        self.finalize_with_provenance("workspace_current", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
     #[tool(
@@ -2879,7 +3071,7 @@ impl FriggMcpServer {
 impl ServerHandler for FriggMcpServer {
     fn get_info(&self) -> ServerInfo {
         let tool_surface_profile = self.tool_surface_profile.as_str();
-        let runtime_profile = self.runtime_profile.as_str();
+        let runtime_profile = self.runtime_state.runtime_profile.as_str();
         ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_prompts()

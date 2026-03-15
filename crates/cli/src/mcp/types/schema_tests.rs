@@ -92,15 +92,48 @@ fn property_description<T: JsonSchema>(field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn expand_local_refs(root: &Value, schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => {
+            if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                if let Some(pointer) = reference.strip_prefix('#') {
+                    if let Some(target) = root.pointer(pointer) {
+                        let mut resolved = expand_local_refs(root, target);
+                        if let Value::Object(resolved_map) = &mut resolved {
+                            for (key, value) in map {
+                                if key != "$ref" {
+                                    resolved_map.insert(key.clone(), expand_local_refs(root, value));
+                                }
+                            }
+                        }
+                        return resolved;
+                    }
+                }
+            }
+
+            let mut expanded = serde_json::Map::new();
+            for (key, value) in map {
+                expanded.insert(key.clone(), expand_local_refs(root, value));
+            }
+            Value::Object(expanded)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| expand_local_refs(root, item)).collect())
+        }
+        _ => schema.clone(),
+    }
+}
+
 fn property_schema<T: JsonSchema>(field: &str) -> Value {
     let schema_json =
         serde_json::to_value(schema_for!(T)).expect("failed to serialize generated schema");
-    schema_json
+    let property = schema_json
         .get("properties")
         .and_then(Value::as_object)
         .and_then(|props| props.get(field))
         .cloned()
-        .unwrap_or_else(|| panic!("missing schema property `{field}`"))
+        .unwrap_or_else(|| panic!("missing schema property `{field}`"));
+    expand_local_refs(&schema_json, &property)
 }
 
 fn schema_allows_type(schema: &Value, expected: &str) -> bool {
@@ -452,6 +485,13 @@ fn schema_search_hybrid_contract_matches_wrappers() {
 }
 
 #[test]
+fn schema_search_hybrid_examples_parse_against_wrappers() {
+    assert_examples_parse::<SearchHybridParams, SearchHybridResponse>(
+        "search_hybrid.v1.schema.json",
+    );
+}
+
+#[test]
 fn schema_search_hybrid_includes_follow_up_guidance() {
     let query = property_description::<SearchHybridParams>("query")
         .expect("query should expose a schema description");
@@ -477,8 +517,21 @@ fn schema_search_hybrid_includes_follow_up_guidance() {
         "search_hybrid.note description should mention legacy compatibility transport: {note}"
     );
     assert!(
-        note.contains("JSON-encoded"),
-        "search_hybrid.note description should mention JSON-encoded compatibility metadata: {note}"
+        note.contains("human-readable"),
+        "search_hybrid.note description should mention derived human-readable text: {note}"
+    );
+    assert!(
+        note.contains("metadata"),
+        "search_hybrid.note description should redirect machine clients to metadata: {note}"
+    );
+}
+
+#[test]
+fn schema_search_hybrid_metadata_is_typed_object() {
+    let metadata = property_schema::<SearchHybridResponse>("metadata");
+    assert!(
+        schema_allows_type(&metadata, "object"),
+        "search_hybrid.metadata should expose typed object transport: {metadata}"
     );
 }
 
@@ -682,9 +735,9 @@ fn schema_deep_search_compose_citations_contract_notes_and_step_refs_stay_in_syn
 }
 
 #[test]
-fn schema_docs_presence_for_read_only_tools() {
+fn schema_docs_presence_for_public_tools() {
     let base = docs_dir();
-    let expected = PUBLIC_READ_ONLY_TOOL_NAMES
+    let expected = PUBLIC_TOOL_NAMES
         .iter()
         .map(|name| format!("{name}.v1.schema.json"))
         .collect::<BTreeSet<_>>();
@@ -709,7 +762,7 @@ fn schema_docs_presence_for_read_only_tools() {
 }
 
 #[test]
-fn schema_core_read_only_input_fields_exclude_confirm_param() {
+fn schema_core_public_tool_input_fields_exclude_confirm_param() {
     let confirm = WRITE_CONFIRM_PARAM.to_owned();
     let input_field_sets = [
         field_set::<ListRepositoriesParams>(),

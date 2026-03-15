@@ -2,14 +2,16 @@ use super::*;
 
 impl FriggMcpServer {
     pub(super) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
-        self.workspace_registry
+        self.runtime_state
+            .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .attached_workspaces()
     }
 
     pub(super) fn current_repository_id(&self) -> Option<String> {
-        self.session_default_repository_id
+        self.session_state
+            .session_default_repository_id
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -17,6 +19,7 @@ impl FriggMcpServer {
 
     pub(super) fn set_current_repository_id(&self, repository_id: Option<String>) {
         let mut current = self
+            .session_state
             .session_default_repository_id
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -25,7 +28,8 @@ impl FriggMcpServer {
 
     pub(super) fn current_workspace(&self) -> Option<AttachedWorkspace> {
         let repository_id = self.current_repository_id()?;
-        self.workspace_registry
+        self.runtime_state
+            .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .workspace_by_repository_id(&repository_id)
@@ -53,6 +57,7 @@ impl FriggMcpServer {
         repository_id: Option<&str>,
     ) -> Result<Vec<AttachedWorkspace>, ErrorData> {
         let registry = self
+            .runtime_state
             .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());

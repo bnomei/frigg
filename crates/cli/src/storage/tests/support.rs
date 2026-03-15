@@ -2,16 +2,16 @@ pub(super) use std::path::{Path, PathBuf};
 pub(super) use std::{env, fs};
 
 pub(super) use super::super::{
-    DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjectionRecord, MIGRATIONS, ManifestEntry,
-    PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathWitnessProjectionRecord,
-    SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord, Storage,
-    TestSubjectProjectionRecord, VECTOR_TABLE_NAME, encode_f32_vector,
+    DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, MIGRATIONS, ManifestEntry,
+    PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathWitnessProjection,
+    SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord, Storage, TestSubjectProjection,
+    VECTOR_TABLE_NAME, encode_f32_vector,
     ensure_provenance_db_parent_dir, ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
     resolve_provenance_db_path, set_schema_version, table_exists,
     verify_vector_store_on_connection_with_detected_capability,
 };
-pub(super) use crate::domain::{FriggError, FriggResult};
+pub(super) use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 pub(super) use rusqlite::Connection;
 pub(super) use serde_json::json;
 pub(super) use uuid::Uuid;
@@ -272,63 +272,58 @@ pub(super) fn manifest_entry(
 }
 
 pub(super) fn path_witness_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
+    _repository_id: &str,
+    _snapshot_id: &str,
     path: &str,
     path_class: &str,
     source_class: &str,
     path_terms_json: &str,
     flags_json: &str,
-) -> PathWitnessProjectionRecord {
-    PathWitnessProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+) -> PathWitnessProjection {
+    PathWitnessProjection {
         path: path.to_owned(),
-        path_class: path_class.to_owned(),
-        source_class: source_class.to_owned(),
-        path_terms_json: path_terms_json.to_owned(),
+        path_class: PathClass::from_str(path_class).expect("valid path_class"),
+        source_class: SourceClass::from_str(source_class).expect("valid source_class"),
+        path_terms: serde_json::from_str(path_terms_json).expect("valid path terms json"),
         flags_json: flags_json.to_owned(),
     }
 }
 
 pub(super) fn test_subject_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
+    _repository_id: &str,
+    _snapshot_id: &str,
     test_path: &str,
     subject_path: &str,
     shared_terms_json: &str,
     score_hint: usize,
     flags_json: &str,
-) -> TestSubjectProjectionRecord {
-    TestSubjectProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+) -> TestSubjectProjection {
+    TestSubjectProjection {
         test_path: test_path.to_owned(),
         subject_path: subject_path.to_owned(),
-        shared_terms_json: shared_terms_json.to_owned(),
+        shared_terms: serde_json::from_str(shared_terms_json).expect("valid shared terms json"),
         score_hint,
         flags_json: flags_json.to_owned(),
     }
 }
 
 pub(super) fn entrypoint_surface_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
+    _repository_id: &str,
+    _snapshot_id: &str,
     path: &str,
     path_class: &str,
     source_class: &str,
     path_terms_json: &str,
     surface_terms_json: &str,
     flags_json: &str,
-) -> EntrypointSurfaceProjectionRecord {
-    EntrypointSurfaceProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+) -> EntrypointSurfaceProjection {
+    EntrypointSurfaceProjection {
         path: path.to_owned(),
-        path_class: path_class.to_owned(),
-        source_class: source_class.to_owned(),
-        path_terms_json: path_terms_json.to_owned(),
-        surface_terms_json: surface_terms_json.to_owned(),
+        path_class: PathClass::from_str(path_class).expect("valid path_class"),
+        source_class: SourceClass::from_str(source_class).expect("valid source_class"),
+        path_terms: serde_json::from_str(path_terms_json).expect("valid path terms json"),
+        surface_terms: serde_json::from_str(surface_terms_json)
+            .expect("valid surface terms json"),
         flags_json: flags_json.to_owned(),
     }
 }

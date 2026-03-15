@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::domain::ChannelHealthStatus;
 use crate::domain::model::SymbolMatch;
 use crate::graph::SymbolGraph;
 use crate::indexer::SymbolDefinition;
 use crate::languages::{BladeSourceEvidence, PhpSourceEvidence};
 use crate::mcp::types::{
     ExploreLineWindow, ExploreResponse, FindReferencesResponse, ReadFileResponse, RuntimeTaskKind,
-    RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelWeightsParams, SearchHybridResponse,
-    SearchPatternType, SearchSymbolResponse, SearchTextResponse,
+    RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelMetadata,
+    SearchHybridChannelWeightsParams, SearchHybridResponse, SearchPatternType,
+    SearchSymbolResponse, SearchTextResponse,
 };
 use rmcp::ErrorData;
 use rmcp::handler::server::wrapper::Json;
@@ -115,13 +117,13 @@ pub(crate) struct SearchHybridExecution {
     pub read_diagnostics_count: usize,
     pub semantic_requested: Option<bool>,
     pub semantic_enabled: Option<bool>,
-    pub semantic_status: Option<String>,
+    pub semantic_status: Option<ChannelHealthStatus>,
     pub semantic_reason: Option<String>,
     pub semantic_candidate_count: Option<usize>,
     pub semantic_hit_count: Option<usize>,
     pub semantic_match_count: Option<usize>,
     pub warning: Option<String>,
-    pub channel_metadata: Option<Value>,
+    pub channel_metadata: Option<BTreeMap<String, SearchHybridChannelMetadata>>,
     pub match_anchors: Option<Value>,
 }
 
@@ -331,15 +333,7 @@ pub(crate) struct FindReferencesExecution {
 
 pub(crate) struct NavigationToolExecution<T> {
     pub result: Result<Json<T>, ErrorData>,
-    pub scoped_repository_ids: Vec<String>,
-    pub selected_symbol_id: Option<String>,
-    pub selected_precise_symbol: Option<String>,
-    pub resolution_precision: Option<String>,
-    pub resolution_source: Option<String>,
-    pub effective_limit: Option<usize>,
-    pub precise_artifacts_ingested: usize,
-    pub precise_artifacts_failed: usize,
-    pub match_count: usize,
+    pub provenance_result: Result<(), ErrorData>,
 }
 
 #[derive(Debug, Clone)]

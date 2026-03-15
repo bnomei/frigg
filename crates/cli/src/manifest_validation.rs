@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
-use crate::indexer::FileMetadataDigest;
+use crate::indexer::{FileMetadataDigest, ManifestBuilder};
 use crate::languages::semantic_chunk_language_for_path;
 use crate::settings::SemanticRuntimeConfig;
 use crate::storage::{ManifestEntry, ManifestMetadataEntry, RepositoryManifestSnapshot, Storage};
@@ -21,6 +21,16 @@ pub(crate) fn validate_manifest_digests_for_root(
     root: &Path,
     file_digests: &[FileMetadataDigest],
 ) -> Option<Vec<FileMetadataDigest>> {
+    if file_digests.is_empty() {
+        let live_entries = ManifestBuilder::default()
+            .build_metadata_with_diagnostics(root)
+            .ok()?
+            .entries;
+        if !live_entries.is_empty() {
+            return None;
+        }
+    }
+
     let mut validated = Vec::with_capacity(file_digests.len());
     for digest in file_digests {
         let path = if digest.path.is_absolute() {

@@ -4,7 +4,7 @@ use super::super::super::HybridChannelHit;
 use super::super::super::HybridRankedEvidence;
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::query_terms::hybrid_query_exact_terms;
-use super::super::SelectionQueryContext;
+use super::super::PolicyQueryContext;
 use super::super::trace::PolicyStage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub(crate) struct PostSelectionContext<'a> {
     pub(super) intent: &'a HybridRankingIntent,
     pub(super) query_text: &'a str,
     pub(super) exact_terms: Vec<String>,
-    pub(super) selection_query_context: SelectionQueryContext,
+    pub(super) selection_query_context: PolicyQueryContext,
     pub(super) limit: usize,
     pub(super) candidate_pool: &'a [HybridRankedEvidence],
     pub(super) witness_hits: &'a [HybridChannelHit],
@@ -72,7 +72,7 @@ impl<'a> PostSelectionContext<'a> {
             intent,
             query_text,
             exact_terms: hybrid_query_exact_terms(query_text),
-            selection_query_context: SelectionQueryContext::new(intent, query_text),
+            selection_query_context: PolicyQueryContext::new(intent, query_text),
             limit,
             candidate_pool,
             witness_hits,

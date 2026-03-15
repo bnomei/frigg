@@ -2,7 +2,8 @@ use super::*;
 
 impl FriggMcpServer {
     pub(super) fn invalidate_repository_navigation_response_caches(&self, repository_id: &str) {
-        self.go_to_definition_response_cache
+        self.cache_state
+            .go_to_definition_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| {
@@ -12,7 +13,8 @@ impl FriggMcpServer {
                     &key.freshness_scopes,
                 )
             });
-        self.find_declarations_response_cache
+        self.cache_state
+            .find_declarations_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| {
@@ -22,7 +24,8 @@ impl FriggMcpServer {
                     &key.freshness_scopes,
                 )
             });
-        self.heuristic_reference_cache
+        self.cache_state
+            .heuristic_reference_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| key.repository_id != repository_id);
@@ -32,7 +35,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &GoToDefinitionResponseCacheKey,
     ) -> Option<CachedGoToDefinitionResponse> {
-        self.go_to_definition_response_cache
+        self.cache_state
+            .go_to_definition_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -53,7 +57,8 @@ impl FriggMcpServer {
         precise_artifacts_failed: usize,
         match_count: usize,
     ) {
-        self.go_to_definition_response_cache
+        self.cache_state
+            .go_to_definition_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
@@ -77,7 +82,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &FindDeclarationsResponseCacheKey,
     ) -> Option<CachedFindDeclarationsResponse> {
-        self.find_declarations_response_cache
+        self.cache_state
+            .find_declarations_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -98,7 +104,8 @@ impl FriggMcpServer {
         precise_artifacts_failed: usize,
         match_count: usize,
     ) {
-        self.find_declarations_response_cache
+        self.cache_state
+            .find_declarations_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
@@ -122,7 +129,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &HeuristicReferenceCacheKey,
     ) -> Option<CachedHeuristicReferences> {
-        self.heuristic_reference_cache
+        self.cache_state
+            .heuristic_reference_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -137,7 +145,8 @@ impl FriggMcpServer {
         source_files_loaded: usize,
         source_bytes_loaded: u64,
     ) {
-        self.heuristic_reference_cache
+        self.cache_state
+            .heuristic_reference_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(

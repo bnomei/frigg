@@ -531,10 +531,10 @@ pub fn run_hybrid_playbook_regressions(
 #[cfg(test)]
 mod tests {
     use super::{
-        semantic_status_allowed, witness_outcomes, HybridPlaybookProbeOutcome,
-        HybridPlaybookWitnessOutcome, HybridWitnessGroup, HybridWitnessRequirement,
-        PlaybookDocument, load_hybrid_playbook_regressions,
-        parse_playbook_document, scrub_playbook_metadata_header,
+        HybridPlaybookProbeOutcome, HybridPlaybookWitnessOutcome, HybridWitnessGroup,
+        HybridWitnessRequirement, PlaybookDocument, load_hybrid_playbook_regressions,
+        parse_playbook_document, scrub_playbook_metadata_header, semantic_status_allowed,
+        witness_outcomes,
     };
     use crate::domain::FriggResult;
     use std::env;
@@ -542,7 +542,11 @@ mod tests {
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn mk_group(group_id: &str, match_any: Vec<&str>, required_when: HybridWitnessRequirement) -> HybridWitnessGroup {
+    fn mk_group(
+        group_id: &str,
+        match_any: Vec<&str>,
+        required_when: HybridWitnessRequirement,
+    ) -> HybridWitnessGroup {
         HybridWitnessGroup {
             group_id: group_id.to_owned(),
             match_any: match_any.into_iter().map(str::to_owned).collect(),
@@ -704,9 +708,21 @@ Body text.
     #[test]
     fn witness_outcomes_evaluates_required_and_optional_groups() {
         let groups = vec![
-            mk_group("always", vec!["src/lib.rs"], HybridWitnessRequirement::Always),
-            mk_group("ok-only", vec!["docs/ok.md"], HybridWitnessRequirement::SemanticOk),
-            mk_group("empty", vec!["missing"], HybridWitnessRequirement::SemanticOk),
+            mk_group(
+                "always",
+                vec!["src/lib.rs"],
+                HybridWitnessRequirement::Always,
+            ),
+            mk_group(
+                "ok-only",
+                vec!["docs/ok.md"],
+                HybridWitnessRequirement::SemanticOk,
+            ),
+            mk_group(
+                "empty",
+                vec!["missing"],
+                HybridWitnessRequirement::SemanticOk,
+            ),
         ];
 
         let all_required = witness_outcomes(&groups, &["src/lib.rs".to_owned()], true, false);
@@ -776,7 +792,11 @@ Body text.
 
     #[test]
     fn hybrid_probe_outcome_target_only_blocks_disabled_semantic() {
-        let groups = vec![mk_group("docs", vec!["docs/readme.md"], HybridWitnessRequirement::Always)];
+        let groups = vec![mk_group(
+            "docs",
+            vec!["docs/readme.md"],
+            HybridWitnessRequirement::Always,
+        )];
         let targets = witness_outcomes(&groups, &["docs/readme.md".to_owned()], false, true);
         assert_eq!(targets.len(), 1);
         assert!(targets[0].passed);

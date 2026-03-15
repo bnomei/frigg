@@ -14,17 +14,26 @@ use crate::settings::SemanticRuntimeCredentials;
 
 use super::{
     HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankingIntent,
-    SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput,
-    SearchHybridQuery, SearchStageAttribution, SearchStageSample, SearchTextQuery, TextSearcher,
-    build_hybrid_lexical_hits_with_intent, build_hybrid_lexical_recall_regex,
-    build_hybrid_path_witness_hits_with_intent, empty_channel_result,
-    hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
-    hybrid_path_has_exact_stem_match, hybrid_query_exact_terms, match_count_for_hits,
-    merge_hybrid_lexical_search_output, normalize_search_filters,
+    HybridRankedEvidence, SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters,
+    SearchHybridExecutionOutput, SearchHybridQuery, SearchStageAttribution, SearchStageSample,
+    SearchTextQuery, TextSearcher, build_hybrid_lexical_hits_with_intent,
+    build_hybrid_lexical_recall_regex, build_hybrid_path_witness_hits_with_intent,
+    empty_channel_result, hybrid_execution_note_from_channel_results,
+    hybrid_lexical_recall_tokens, hybrid_path_has_exact_stem_match, hybrid_query_exact_terms,
+    match_count_for_hits, merge_hybrid_lexical_search_output, normalize_search_filters,
     rank_hybrid_anchor_evidence_for_query_with_witness, retain_semantic_hits_for_query,
     search_diagnostics_to_channel_diagnostics, search_graph_channel_hits,
     search_semantic_channel_hits, sort_search_diagnostics_deterministically,
 };
+
+struct HybridFusionOutput {
+    ranked_anchors: Vec<HybridRankedEvidence>,
+    grouped_matches: Vec<HybridRankedEvidence>,
+    matches: Vec<HybridRankedEvidence>,
+    anchor_blending_sample: SearchStageSample,
+    document_aggregation_sample: SearchStageSample,
+    final_diversification_sample: SearchStageSample,
+}
 
 pub(super) fn search_hybrid_with_filters_using_executor(
     searcher: &TextSearcher,
@@ -96,7 +105,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         Vec::new()
     };
     let path_witness_query_context =
-        wants_path_witness_recall.then(|| HybridPathWitnessQueryContext::new(&query_text));
+        wants_path_witness_recall.then(|| HybridPathWitnessQueryContext::from_query_text(&query_text));
     let normalized_filters = normalize_search_filters(filters.clone())?;
     let candidate_universe_build = searcher.build_candidate_universe_with_attribution(
         &SearchTextQuery {
@@ -234,9 +243,9 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             }
             Err(err) => {
                 if strict_semantic {
-                    return Err(FriggError::Internal(format!(
-                        "semantic_status=strict_failure: {err}"
-                    )));
+                    return Err(FriggError::StrictSemanticFailure {
+                        reason: err.to_string(),
+                    });
                 }
                 empty_channel_result(
                     EvidenceChannel::Semantic,
@@ -433,125 +442,27 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         .as_micros()
         .try_into()
         .unwrap_or(u64::MAX);
-    let lexical_only_fast_path =
-        witness_hits.is_empty() && graph_hits.is_empty() && semantic_channel_result.hits.is_empty();
     let total_rank_input_count = ranking_lexical_hits.len()
         + witness_hits.len()
         + graph_hits.len()
         + semantic_channel_result.hits.len();
-    let (
+    let HybridFusionOutput {
         ranked_anchors,
         grouped_matches,
         matches,
         anchor_blending_sample,
         document_aggregation_sample,
         final_diversification_sample,
-    ) = if lexical_only_fast_path {
-        let blend_started_at = Instant::now();
-        let ranked_anchors = super::rank_lexical_hybrid_hits(&ranking_lexical_hits, query.weights)?;
-        let anchor_blending_sample = SearchStageSample::new(
-            blend_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            ranking_lexical_hits.len(),
-            ranked_anchors.len(),
-        );
-        let aggregation_started_at = Instant::now();
-        let grouped_matches =
-            super::group_hybrid_ranked_evidence(ranked_anchors.clone(), query.weights, query.limit);
-        let document_aggregation_sample = SearchStageSample::new(
-            aggregation_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            ranked_anchors.len(),
-            grouped_matches.len(),
-        );
-        let diversification_started_at = Instant::now();
-        let matches = super::diversify_hybrid_ranked_evidence(
-            grouped_matches.clone(),
-            query.limit,
-            &query_text,
-        );
-        let final_diversification_sample = SearchStageSample::new(
-            diversification_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            document_aggregation_sample.output_count,
-            matches.len(),
-        );
-        (
-            ranked_anchors,
-            grouped_matches,
-            matches,
-            anchor_blending_sample,
-            document_aggregation_sample,
-            final_diversification_sample,
-        )
-    } else {
-        let blend_started_at = Instant::now();
-        let ranked_anchors = rank_hybrid_anchor_evidence_for_query_with_witness(
-            &ranking_lexical_hits,
-            &witness_hits,
-            &graph_hits,
-            &semantic_channel_result.hits,
-            query.weights,
-            query.limit.saturating_mul(4).max(32),
-            &query_text,
-        )?;
-        let anchor_blending_sample = SearchStageSample::new(
-            blend_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            total_rank_input_count,
-            ranked_anchors.len(),
-        );
-        let aggregation_started_at = Instant::now();
-        let grouped_matches = super::group_hybrid_ranked_evidence(
-            ranked_anchors.clone(),
-            query.weights,
-            query.limit.saturating_mul(4).max(32),
-        );
-        let document_aggregation_sample = SearchStageSample::new(
-            aggregation_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            ranked_anchors.len(),
-            grouped_matches.len(),
-        );
-        let diversification_started_at = Instant::now();
-        let matches = super::diversify_hybrid_ranked_evidence(
-            grouped_matches.clone(),
-            query.limit,
-            &query_text,
-        );
-        let final_diversification_sample = SearchStageSample::new(
-            diversification_started_at
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            document_aggregation_sample.output_count,
-            matches.len(),
-        );
-        (
-            ranked_anchors,
-            grouped_matches,
-            matches,
-            anchor_blending_sample,
-            document_aggregation_sample,
-            final_diversification_sample,
-        )
-    };
+    } = run_hybrid_fusion(
+        &ranking_lexical_hits,
+        &witness_hits,
+        &graph_hits,
+        &semantic_channel_result.hits,
+        query.weights,
+        query.limit,
+        &query_text,
+        total_rank_input_count,
+    )?;
     let matches = super::policy::apply_post_selection_guardrails(
         matches,
         &grouped_matches,
@@ -562,8 +473,195 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     );
     let mut diagnostics = lexical_output.diagnostics.clone();
     merge_execution_diagnostics(&mut diagnostics, witness_output.diagnostics.clone());
+    let lexical_match_count = lexical_output.matches.len();
+    let witness_match_count = witness_output.matches.len();
     let graph_hit_count = graph_hits.len();
     let semantic_hit_count = semantic_channel_result.stats.hit_count;
+    let channel_results = build_hybrid_channel_results(
+        lexical_output,
+        witness_output,
+        lexical_hits,
+        witness_hits,
+        graph_hits,
+        merged_ranking_matches,
+        semantic_channel_result,
+        &matches,
+        wants_path_witness_recall,
+        skip_graph_for_path_witness_intent,
+        skip_graph_for_simple_literal_query,
+        query.limit,
+    );
+    let note = hybrid_execution_note_from_channel_results(
+        query.semantic,
+        searcher.config.semantic_runtime.enabled,
+        &channel_results,
+    );
+
+    Ok(SearchHybridExecutionOutput {
+        matches,
+        ranked_anchors,
+        diagnostics,
+        channel_results,
+        note,
+        stage_attribution: Some(SearchStageAttribution {
+            candidate_intake: SearchStageSample::new(
+                candidate_intake_elapsed_us,
+                candidate_repository_count,
+                candidate_file_count,
+            ),
+            freshness_validation: SearchStageSample::new(
+                freshness_validation_elapsed_us,
+                candidate_repository_count,
+                manifest_backed_repository_count,
+            ),
+            scan: SearchStageSample::new(
+                scan_elapsed_us,
+                candidate_file_count,
+                lexical_match_count,
+            ),
+            witness_scoring: SearchStageSample::new(
+                witness_scoring_elapsed_us,
+                candidate_file_count,
+                witness_match_count,
+            ),
+            graph_expansion: SearchStageSample::new(
+                graph_expansion_elapsed_us,
+                graph_seed_matches.len(),
+                graph_hit_count,
+            ),
+            semantic_retrieval: SearchStageSample::new(
+                semantic_retrieval_elapsed_us,
+                semantic_limit,
+                semantic_hit_count,
+            ),
+            anchor_blending: anchor_blending_sample,
+            document_aggregation: document_aggregation_sample,
+            final_diversification: final_diversification_sample,
+        }),
+    })
+}
+
+fn run_hybrid_fusion(
+    ranking_lexical_hits: &[crate::domain::EvidenceHit],
+    witness_hits: &[crate::domain::EvidenceHit],
+    graph_hits: &[crate::domain::EvidenceHit],
+    semantic_hits: &[crate::domain::EvidenceHit],
+    weights: super::HybridChannelWeights,
+    limit: usize,
+    query_text: &str,
+    total_rank_input_count: usize,
+) -> FriggResult<HybridFusionOutput> {
+    let lexical_only_fast_path = witness_hits.is_empty() && graph_hits.is_empty() && semantic_hits.is_empty();
+    if lexical_only_fast_path {
+        let blend_started_at = Instant::now();
+        let ranked_anchors = super::rank_lexical_hybrid_hits(ranking_lexical_hits, weights)?;
+        let anchor_blending_sample = SearchStageSample::new(
+            blend_started_at
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            ranking_lexical_hits.len(),
+            ranked_anchors.len(),
+        );
+        let aggregation_started_at = Instant::now();
+        let grouped_matches = super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, limit);
+        let document_aggregation_sample = SearchStageSample::new(
+            aggregation_started_at
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            ranked_anchors.len(),
+            grouped_matches.len(),
+        );
+        let diversification_started_at = Instant::now();
+        let matches = super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+        let final_diversification_sample = SearchStageSample::new(
+            diversification_started_at
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            document_aggregation_sample.output_count,
+            matches.len(),
+        );
+        return Ok(HybridFusionOutput {
+            ranked_anchors,
+            grouped_matches,
+            matches,
+            anchor_blending_sample,
+            document_aggregation_sample,
+            final_diversification_sample,
+        });
+    }
+
+    let rank_limit = limit.saturating_mul(4).max(32);
+    let blend_started_at = Instant::now();
+    let ranked_anchors = rank_hybrid_anchor_evidence_for_query_with_witness(
+        ranking_lexical_hits,
+        witness_hits,
+        graph_hits,
+        semantic_hits,
+        weights,
+        rank_limit,
+        query_text,
+    )?;
+    let anchor_blending_sample = SearchStageSample::new(
+        blend_started_at
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX),
+        total_rank_input_count,
+        ranked_anchors.len(),
+    );
+    let aggregation_started_at = Instant::now();
+    let grouped_matches = super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, rank_limit);
+    let document_aggregation_sample = SearchStageSample::new(
+        aggregation_started_at
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX),
+        ranked_anchors.len(),
+        grouped_matches.len(),
+    );
+    let diversification_started_at = Instant::now();
+    let matches = super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+    let final_diversification_sample = SearchStageSample::new(
+        diversification_started_at
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX),
+        document_aggregation_sample.output_count,
+        matches.len(),
+    );
+    Ok(HybridFusionOutput {
+        ranked_anchors,
+        grouped_matches,
+        matches,
+        anchor_blending_sample,
+        document_aggregation_sample,
+        final_diversification_sample,
+    })
+}
+
+fn build_hybrid_channel_results(
+    lexical_output: SearchExecutionOutput,
+    witness_output: SearchExecutionOutput,
+    lexical_hits: Vec<crate::domain::EvidenceHit>,
+    witness_hits: Vec<crate::domain::EvidenceHit>,
+    graph_hits: Vec<crate::domain::EvidenceHit>,
+    merged_ranking_matches: Vec<TextMatch>,
+    semantic_channel_result: ChannelResult,
+    matches: &[HybridRankedEvidence],
+    wants_path_witness_recall: bool,
+    skip_graph_for_path_witness_intent: bool,
+    skip_graph_for_simple_literal_query: bool,
+    query_limit: usize,
+) -> Vec<ChannelResult> {
     let mut channel_results = vec![
         ChannelResult::new(
             EvidenceChannel::LexicalManifest,
@@ -618,7 +716,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
                 Vec::new(),
                 ChannelStats {
                     candidate_count: merged_ranking_matches.len(),
-                    hit_count: merged_ranking_matches.len().min(query.limit),
+                    hit_count: merged_ranking_matches.len().min(query_limit),
                     match_count: 0,
                 },
             )
@@ -626,59 +724,12 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         semantic_channel_result,
     ];
     for result in &mut channel_results {
-        result.stats.match_count = match_count_for_hits(&matches, &result.hits);
+        result.stats.match_count = match_count_for_hits(matches, &result.hits);
         if result.channel == EvidenceChannel::Semantic {
             result.stats.hit_count = result.stats.match_count;
         }
     }
-    let note = hybrid_execution_note_from_channel_results(
-        query.semantic,
-        searcher.config.semantic_runtime.enabled,
-        &channel_results,
-    );
-
-    Ok(SearchHybridExecutionOutput {
-        matches,
-        ranked_anchors,
-        diagnostics,
-        channel_results,
-        note,
-        stage_attribution: Some(SearchStageAttribution {
-            candidate_intake: SearchStageSample::new(
-                candidate_intake_elapsed_us,
-                candidate_repository_count,
-                candidate_file_count,
-            ),
-            freshness_validation: SearchStageSample::new(
-                freshness_validation_elapsed_us,
-                candidate_repository_count,
-                manifest_backed_repository_count,
-            ),
-            scan: SearchStageSample::new(
-                scan_elapsed_us,
-                candidate_file_count,
-                lexical_output.matches.len(),
-            ),
-            witness_scoring: SearchStageSample::new(
-                witness_scoring_elapsed_us,
-                candidate_file_count,
-                witness_output.matches.len(),
-            ),
-            graph_expansion: SearchStageSample::new(
-                graph_expansion_elapsed_us,
-                graph_seed_matches.len(),
-                graph_hit_count,
-            ),
-            semantic_retrieval: SearchStageSample::new(
-                semantic_retrieval_elapsed_us,
-                semantic_limit,
-                semantic_hit_count,
-            ),
-            anchor_blending: anchor_blending_sample,
-            document_aggregation: document_aggregation_sample,
-            final_diversification: final_diversification_sample,
-        }),
-    })
+    channel_results
 }
 
 fn merge_execution_diagnostics(

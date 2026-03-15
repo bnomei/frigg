@@ -146,24 +146,7 @@ pub struct SearchHybridQuery {
     pub semantic: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HybridSemanticStatus {
-    Disabled,
-    Unavailable,
-    Ok,
-    Degraded,
-}
-
-impl HybridSemanticStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Unavailable => "unavailable",
-            Self::Ok => "ok",
-            Self::Degraded => "degraded",
-        }
-    }
-}
+pub type HybridSemanticStatus = ChannelHealthStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HybridExecutionNote {
@@ -283,12 +266,8 @@ fn channel_result_by_channel(
 
 fn hybrid_semantic_status_from_channel_health(status: ChannelHealthStatus) -> HybridSemanticStatus {
     match status {
-        ChannelHealthStatus::Disabled | ChannelHealthStatus::Filtered => {
-            HybridSemanticStatus::Disabled
-        }
-        ChannelHealthStatus::Unavailable => HybridSemanticStatus::Unavailable,
-        ChannelHealthStatus::Ok => HybridSemanticStatus::Ok,
-        ChannelHealthStatus::Degraded => HybridSemanticStatus::Degraded,
+        ChannelHealthStatus::Filtered => ChannelHealthStatus::Disabled,
+        other => other,
     }
 }
 

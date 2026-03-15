@@ -6,14 +6,26 @@ use super::vector_store::{
 };
 use super::{
     DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, SemanticStorageHealth, Storage,
-    VECTOR_TABLE_NAME, load_semantic_head_snapshot_ids_for_repository, open_connection,
+    SNAPSHOT_KIND_MANIFEST, VECTOR_TABLE_NAME, load_semantic_head_snapshot_ids_for_repository,
+    load_snapshot_ids_for_repository_and_kind, open_connection,
 };
 
 #[path = "semantic_store_read.rs"]
 mod semantic_store_read;
 #[path = "semantic_store_support.rs"]
 mod semantic_store_support;
-use semantic_store_support::*;
+use semantic_store_support::{
+    clear_live_semantic_corpus_for_repository_model, count_manifest_snapshots_for_repository,
+    count_semantic_chunk_rows_for_repository_model,
+    count_semantic_embedding_rows_for_repository_model,
+    count_semantic_vector_rows_for_repository_model, delete_live_semantic_rows_for_paths,
+    delete_vector_rows_for_chunk_ids, ensure_semantic_vector_rows_current,
+    insert_semantic_embeddings_for_records, load_live_semantic_chunk_ids_for_paths,
+    load_semantic_head_for_repository_model_on_connection,
+    normalize_embedding_for_vector_projection, rebuild_semantic_vector_rows,
+    sync_vector_partition_replace, sync_vector_rows_insert, upsert_semantic_head,
+    validate_semantic_target,
+};
 
 impl Storage {
     pub fn replace_semantic_embeddings_for_repository(
@@ -316,33 +328,11 @@ impl Storage {
         let conn = open_connection(&self.db_path)?;
         let protected_snapshot_ids =
             load_semantic_head_snapshot_ids_for_repository(&conn, repository_id)?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT snapshot_id
-                FROM snapshot
-                WHERE repository_id = ?1 AND kind = 'manifest'
-                ORDER BY created_at DESC, rowid DESC
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare manifest snapshot prune query for repository '{repository_id}': {err}"
-                ))
-            })?;
-        let snapshot_ids = statement
-            .query_map([repository_id], |row| row.get::<_, String>(0))
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query manifest snapshots for repository '{repository_id}': {err}"
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to decode manifest snapshots for repository '{repository_id}': {err}"
-                ))
-            })?;
+        let snapshot_ids = load_snapshot_ids_for_repository_and_kind(
+            &conn,
+            repository_id,
+            SNAPSHOT_KIND_MANIFEST,
+        )?;
 
         let mut deleted = 0usize;
         for snapshot_id in snapshot_ids.into_iter().skip(keep_latest) {

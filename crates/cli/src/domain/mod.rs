@@ -10,6 +10,11 @@ pub use evidence::{
     EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceDocumentRef, EvidenceHit,
     FriggLayer, ProductRing, SupportLevel,
 };
+pub use provenance::{
+    NormalizedWorkloadMetadata, WorkloadFallbackReason, WorkloadPrecisionMode, WorkloadRepositoryScope,
+    WorkloadRepositoryScopeKind, WorkloadStageAttribution, WorkloadStageSample, WorkloadToolClass,
+    WorkloadToolFamily,
+};
 pub use search::{
     ArtifactBias, FrameworkHint, PathClass, PlannerStrictness, PlaybookReferencePolicy, SearchGoal,
     SearchIntentRuleId, SourceClass,

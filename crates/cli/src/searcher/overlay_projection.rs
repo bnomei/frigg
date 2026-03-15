@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::languages::SymbolLanguage;
 use crate::path_class::classify_repository_path;
-use crate::storage::{EntrypointSurfaceProjectionRecord, TestSubjectProjectionRecord};
+use crate::storage::{EntrypointSurfaceProjection, TestSubjectProjection};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -45,7 +45,7 @@ pub(super) struct TestSubjectProjectionFlags {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct StoredTestSubjectProjection {
+pub(crate) struct StoredTestSubjectProjection {
     pub(super) test_path: String,
     pub(super) subject_path: String,
     pub(super) shared_terms: Vec<String>,
@@ -63,7 +63,7 @@ pub(super) struct EntrypointSurfaceProjectionFlags {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct StoredEntrypointSurfaceProjection {
+pub(crate) struct StoredEntrypointSurfaceProjection {
     pub(super) path: String,
     pub(super) path_class: PathClass,
     pub(super) source_class: SourceClass,
@@ -72,11 +72,9 @@ pub(super) struct StoredEntrypointSurfaceProjection {
     pub(super) flags: EntrypointSurfaceProjectionFlags,
 }
 
-pub(super) fn build_test_subject_projection_records(
-    repository_id: &str,
-    snapshot_id: &str,
+pub(crate) fn build_test_subject_projection_records(
     paths: &[String],
-) -> FriggResult<Vec<TestSubjectProjectionRecord>> {
+) -> FriggResult<Vec<TestSubjectProjection>> {
     let candidates = paths
         .iter()
         .map(|path| TestSubjectCandidate::from_path(path))
@@ -124,22 +122,22 @@ pub(super) fn build_test_subject_projection_records(
 
     retained
         .into_iter()
-        .map(|projection| {
-            encode_test_subject_projection_record(repository_id, snapshot_id, &projection)
-        })
+        .map(|projection| encode_test_subject_projection_record(&projection))
+        .collect()
+}
+
+pub(crate) fn decode_test_subject_projection_records(
+    rows: &[TestSubjectProjection],
+) -> FriggResult<Vec<StoredTestSubjectProjection>> {
+    rows.iter()
+        .map(decode_test_subject_projection_record)
         .collect()
 }
 
 pub(super) fn decode_test_subject_projection_record(
-    record: &TestSubjectProjectionRecord,
+    record: &TestSubjectProjection,
 ) -> FriggResult<StoredTestSubjectProjection> {
-    let _stored_terms: Vec<String> =
-        serde_json::from_str(&record.shared_terms_json).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode stored test subject projection terms for '{} -> {}': {err}",
-                record.test_path, record.subject_path
-            ))
-        })?;
+    let _stored_terms = &record.shared_terms;
     let _stored_flags: TestSubjectProjectionFlags = serde_json::from_str(&record.flags_json)
         .map_err(|err| {
             FriggError::Internal(format!(
@@ -161,70 +159,46 @@ pub(super) fn decode_test_subject_projection_record(
 }
 
 pub(super) fn build_entrypoint_surface_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
     path: &str,
-) -> FriggResult<Option<EntrypointSurfaceProjectionRecord>> {
+) -> FriggResult<Option<EntrypointSurfaceProjection>> {
     let Some(projection) = StoredEntrypointSurfaceProjection::from_path(path) else {
         return Ok(None);
     };
-    let path_terms_json = serde_json::to_string(&projection.path_terms).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to encode entrypoint surface path terms for '{path}': {err}"
-        ))
-    })?;
-    let surface_terms_json = serde_json::to_string(&projection.surface_terms).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to encode entrypoint surface terms for '{path}': {err}"
-        ))
-    })?;
     let flags_json = serde_json::to_string(&projection.flags).map_err(|err| {
         FriggError::Internal(format!(
             "failed to encode entrypoint surface flags for '{path}': {err}"
         ))
     })?;
 
-    Ok(Some(EntrypointSurfaceProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+    Ok(Some(EntrypointSurfaceProjection {
         path: path.to_owned(),
-        path_class: projection.path_class.as_str().to_owned(),
-        source_class: projection.source_class.as_str().to_owned(),
-        path_terms_json,
-        surface_terms_json,
+        path_class: projection.path_class,
+        source_class: projection.source_class,
+        path_terms: projection.path_terms,
+        surface_terms: projection.surface_terms,
         flags_json,
     }))
 }
 
+pub(crate) fn build_entrypoint_surface_projection_records_from_paths(
+    paths: &[String],
+) -> FriggResult<Vec<EntrypointSurfaceProjection>> {
+    let mut rows = paths
+        .iter()
+        .filter_map(|path| build_entrypoint_surface_projection_record(path).transpose())
+        .collect::<FriggResult<Vec<_>>>()?;
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
+    rows.dedup_by(|left, right| left.path == right.path);
+    Ok(rows)
+}
+
 pub(super) fn decode_entrypoint_surface_projection_record(
-    record: &EntrypointSurfaceProjectionRecord,
+    record: &EntrypointSurfaceProjection,
 ) -> FriggResult<StoredEntrypointSurfaceProjection> {
-    let path_class = PathClass::from_str(&record.path_class).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "invalid stored entrypoint surface path_class '{}' for '{}'",
-            record.path_class, record.path
-        ))
-    })?;
-    let source_class = SourceClass::from_str(&record.source_class).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "invalid stored entrypoint surface source_class '{}' for '{}'",
-            record.source_class, record.path
-        ))
-    })?;
-    let _stored_terms: Vec<String> =
-        serde_json::from_str(&record.path_terms_json).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode stored entrypoint surface path terms for '{}': {err}",
-                record.path
-            ))
-        })?;
-    let _stored_surface_terms: Vec<String> = serde_json::from_str(&record.surface_terms_json)
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode stored entrypoint surface terms for '{}': {err}",
-                record.path
-            ))
-        })?;
+    let path_class = record.path_class.clone();
+    let source_class = record.source_class.clone();
+    let _stored_terms = &record.path_terms;
+    let _stored_surface_terms = &record.surface_terms;
     let _stored_flags: EntrypointSurfaceProjectionFlags = serde_json::from_str(&record.flags_json)
         .map_err(|err| {
             FriggError::Internal(format!(
@@ -247,6 +221,14 @@ pub(super) fn decode_entrypoint_surface_projection_record(
     }
 
     Ok(projection)
+}
+
+pub(crate) fn decode_entrypoint_surface_projection_records(
+    rows: &[EntrypointSurfaceProjection],
+) -> FriggResult<Vec<StoredEntrypointSurfaceProjection>> {
+    rows.iter()
+        .map(decode_entrypoint_surface_projection_record)
+        .collect()
 }
 
 pub(super) fn entrypoint_surface_overlay_boost(
@@ -436,16 +418,8 @@ pub(super) fn accumulate_test_subject_overlay_boosts(
 }
 
 fn encode_test_subject_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
     projection: &StoredTestSubjectProjection,
-) -> FriggResult<TestSubjectProjectionRecord> {
-    let shared_terms_json = serde_json::to_string(&projection.shared_terms).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to encode test subject projection terms for '{} -> {}': {err}",
-            projection.test_path, projection.subject_path
-        ))
-    })?;
+) -> FriggResult<TestSubjectProjection> {
     let flags_json = serde_json::to_string(&projection.flags).map_err(|err| {
         FriggError::Internal(format!(
             "failed to encode test subject projection flags for '{} -> {}': {err}",
@@ -453,12 +427,10 @@ fn encode_test_subject_projection_record(
         ))
     })?;
 
-    Ok(TestSubjectProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+    Ok(TestSubjectProjection {
         test_path: projection.test_path.clone(),
         subject_path: projection.subject_path.clone(),
-        shared_terms_json,
+        shared_terms: projection.shared_terms.clone(),
         score_hint: projection.score_hint,
         flags_json,
     })
@@ -767,15 +739,11 @@ mod tests {
 
     #[test]
     fn test_subject_projection_pairs_generic_test_and_runtime_subject_paths() {
-        let rows = build_test_subject_projection_records(
-            "repo-1",
-            "snapshot-001",
-            &[
-                "tests/unit/user_service_test.rs".to_owned(),
-                "src/user_service.rs".to_owned(),
-                "src/other.rs".to_owned(),
-            ],
-        )
+        let rows = build_test_subject_projection_records(&[
+            "tests/unit/user_service_test.rs".to_owned(),
+            "src/user_service.rs".to_owned(),
+            "src/other.rs".to_owned(),
+        ])
         .expect("projection rows should build");
 
         assert_eq!(rows.len(), 1);
@@ -804,12 +772,10 @@ mod tests {
 
     #[test]
     fn decode_test_subject_projection_record_recomputes_live_terms_and_flags() {
-        let record = TestSubjectProjectionRecord {
-            repository_id: "repo-1".to_owned(),
-            snapshot_id: "snapshot-001".to_owned(),
+        let record = TestSubjectProjection {
             test_path: "tests/unit/user_service_test.rs".to_owned(),
             subject_path: "src/user_service.rs".to_owned(),
-            shared_terms_json: r#"["stale"]"#.to_owned(),
+            shared_terms: vec!["stale".to_owned()],
             score_hint: 1,
             flags_json: serde_json::to_string(&TestSubjectProjectionFlags::default())
                 .expect("flags json"),
@@ -828,14 +794,12 @@ mod tests {
 
     #[test]
     fn decode_entrypoint_surface_projection_record_recomputes_live_surface_terms() {
-        let record = EntrypointSurfaceProjectionRecord {
-            repository_id: "repo-1".to_owned(),
-            snapshot_id: "snapshot-001".to_owned(),
+        let record = EntrypointSurfaceProjection {
             path: "Cargo.toml".to_owned(),
-            path_class: PathClass::Project.as_str().to_owned(),
-            source_class: SourceClass::Project.as_str().to_owned(),
-            path_terms_json: "[]".to_owned(),
-            surface_terms_json: "[]".to_owned(),
+            path_class: PathClass::Project,
+            source_class: SourceClass::Project,
+            path_terms: Vec::new(),
+            surface_terms: Vec::new(),
             flags_json: serde_json::to_string(&EntrypointSurfaceProjectionFlags::default())
                 .expect("flags json"),
         };
@@ -855,7 +819,7 @@ mod tests {
         let projection = StoredEntrypointSurfaceProjection::from_path("Cargo.toml")
             .expect("runtime config artifact should project");
         let intent = HybridRankingIntent::from_query("runtime config manifest settings");
-        let query_context = HybridPathWitnessQueryContext::new("runtime config manifest settings");
+        let query_context = HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
 
         let boost = entrypoint_surface_overlay_boost(&projection, &intent, &query_context)
             .expect("matching config query should produce an overlay boost");
@@ -884,7 +848,7 @@ mod tests {
             },
         }];
         let intent = HybridRankingIntent::from_query("user service tests");
-        let query_context = HybridPathWitnessQueryContext::new("user service tests");
+        let query_context = HybridPathWitnessQueryContext::from_query_text("user service tests");
 
         let boosts = accumulate_test_subject_overlay_boosts(&projections, &intent, &query_context);
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::path_class::classify_repository_path;
-use crate::storage::PathWitnessProjectionRecord;
+use crate::storage::PathWitnessProjection;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -53,7 +53,7 @@ pub(super) struct PathWitnessProjectionFlags {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct StoredPathWitnessProjection {
+pub(crate) struct StoredPathWitnessProjection {
     pub(super) path: String,
     pub(super) path_class: PathClass,
     pub(super) source_class: SourceClass,
@@ -75,49 +75,40 @@ impl StoredPathWitnessProjection {
     }
 }
 
-pub(super) fn build_path_witness_projection_record(
-    repository_id: &str,
-    snapshot_id: &str,
-    path: &str,
-) -> FriggResult<PathWitnessProjectionRecord> {
+pub(super) fn build_path_witness_projection(path: &str) -> FriggResult<PathWitnessProjection> {
     let projection = StoredPathWitnessProjection::from_path(path);
-    let path_terms_json = serde_json::to_string(&projection.path_terms).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to encode path witness projection terms for '{path}': {err}"
-        ))
-    })?;
     let flags_json = serde_json::to_string(&projection.flags).map_err(|err| {
         FriggError::Internal(format!(
             "failed to encode path witness projection flags for '{path}': {err}"
         ))
     })?;
 
-    Ok(PathWitnessProjectionRecord {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
+    Ok(PathWitnessProjection {
         path: path.to_owned(),
-        path_class: projection.path_class.as_str().to_owned(),
-        source_class: projection.source_class.as_str().to_owned(),
-        path_terms_json,
+        path_class: projection.path_class,
+        source_class: projection.source_class,
+        path_terms: projection.path_terms,
         flags_json,
     })
 }
 
-pub(super) fn decode_path_witness_projection_record(
-    record: &PathWitnessProjectionRecord,
+pub(crate) fn build_path_witness_projection_records_from_paths(
+    paths: &[String],
+) -> FriggResult<Vec<PathWitnessProjection>> {
+    let mut rows = paths
+        .iter()
+        .map(|path| build_path_witness_projection(path))
+        .collect::<FriggResult<Vec<_>>>()?;
+    rows.sort_by(|left, right| left.path.cmp(&right.path));
+    rows.dedup_by(|left, right| left.path == right.path);
+    Ok(rows)
+}
+
+pub(super) fn decode_path_witness_projection(
+    record: &PathWitnessProjection,
 ) -> FriggResult<StoredPathWitnessProjection> {
-    let path_class = PathClass::from_str(&record.path_class).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "invalid stored path witness path_class '{}' for '{}'",
-            record.path_class, record.path
-        ))
-    })?;
-    let source_class = SourceClass::from_str(&record.source_class).ok_or_else(|| {
-        FriggError::Internal(format!(
-            "invalid stored path witness source_class '{}' for '{}'",
-            record.source_class, record.path
-        ))
-    })?;
+    let path_class = record.path_class.clone();
+    let source_class = record.source_class.clone();
     let source_class = match source_class {
         // Legacy rows may still carry the old FRIGG-specific playbook class. Normalize those
         // projections to the generic path-based class so ranking behavior does not depend on
@@ -125,6 +116,7 @@ pub(super) fn decode_path_witness_projection_record(
         SourceClass::Playbooks => SourceClass::Project,
         other => other,
     };
+    let _stored_terms = &record.path_terms;
     let _stored_flags: PathWitnessProjectionFlags = serde_json::from_str(&record.flags_json)
         .map_err(|err| {
             FriggError::Internal(format!(
@@ -146,6 +138,12 @@ pub(super) fn decode_path_witness_projection_record(
         path_terms,
         flags,
     })
+}
+
+pub(crate) fn decode_path_witness_projection_records(
+    rows: &[PathWitnessProjection],
+) -> FriggResult<Vec<StoredPathWitnessProjection>> {
+    rows.iter().map(decode_path_witness_projection).collect()
 }
 
 fn file_stem_for_path(path: &str) -> String {
@@ -192,7 +190,7 @@ fn build_path_witness_projection_flags(path: &str) -> PathWitnessProjectionFlags
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::PathWitnessProjectionRecord;
+    use crate::storage::PathWitnessProjection;
 
     #[test]
     fn decode_path_witness_projection_record_recomputes_live_terms_for_stale_rows() {
@@ -206,18 +204,15 @@ mod tests {
             "blocks".to_owned(),
             "test_helpers".to_owned(),
         ];
-        let record = PathWitnessProjectionRecord {
-            repository_id: "repo".to_owned(),
-            snapshot_id: "snapshot".to_owned(),
+        let record = PathWitnessProjection {
             path: path.to_owned(),
-            path_class: projection.path_class.as_str().to_owned(),
-            source_class: projection.source_class.as_str().to_owned(),
-            path_terms_json: serde_json::to_string(&stale_terms).expect("stale terms json"),
+            path_class: projection.path_class,
+            source_class: projection.source_class,
+            path_terms: stale_terms.clone(),
             flags_json: serde_json::to_string(&projection.flags).expect("flags json"),
         };
 
-        let decoded =
-            decode_path_witness_projection_record(&record).expect("decode should succeed");
+        let decoded = decode_path_witness_projection(&record).expect("decode should succeed");
 
         assert!(
             decoded.path_terms.iter().any(|term| term == "helpers"),
@@ -233,19 +228,16 @@ mod tests {
     #[test]
     fn decode_path_witness_projection_record_recomputes_live_flags_for_runtime_config_artifacts() {
         let path = "app/src/main/AndroidManifest.xml";
-        let record = PathWitnessProjectionRecord {
-            repository_id: "repo".to_owned(),
-            snapshot_id: "snapshot".to_owned(),
+        let record = PathWitnessProjection {
             path: path.to_owned(),
-            path_class: PathClass::Project.as_str().to_owned(),
-            source_class: SourceClass::Project.as_str().to_owned(),
-            path_terms_json: "[]".to_owned(),
+            path_class: PathClass::Project,
+            source_class: SourceClass::Project,
+            path_terms: Vec::new(),
             flags_json: serde_json::to_string(&PathWitnessProjectionFlags::default())
                 .expect("flags json"),
         };
 
-        let decoded =
-            decode_path_witness_projection_record(&record).expect("decode should succeed");
+        let decoded = decode_path_witness_projection(&record).expect("decode should succeed");
 
         assert!(
             decoded.flags.is_runtime_config_artifact,

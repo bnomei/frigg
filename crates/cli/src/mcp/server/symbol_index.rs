@@ -9,44 +9,19 @@ impl FriggMcpServer {
         let mut diagnostics = RepositoryDiagnosticsSummary::default();
         let mut manifest_output = None;
         let mut source_paths = None;
-        let (file_digests, manifest_token) =
-            match Self::load_latest_manifest_snapshot(&root, &repository_id) {
+        let (file_digests, manifest_token) = match Self::load_latest_validated_manifest_snapshot(
+            &root,
+            &repository_id,
+            Some(&self.runtime_state.validated_manifest_candidate_cache),
+        ) {
                 Some(snapshot) => {
-                    let snapshot_digests = snapshot
-                        .entries
-                        .into_iter()
-                        .map(|entry| FileMetadataDigest {
-                            path: PathBuf::from(entry.path),
-                            size_bytes: entry.size_bytes,
-                            mtime_ns: entry.mtime_ns,
-                        })
-                        .collect::<Vec<_>>();
-                    match validate_manifest_digests_for_root(&root, &snapshot_digests) {
-                        Some(validated_digests) => {
-                            let snapshot_source_paths =
-                                Self::manifest_source_paths_for_digests(&validated_digests);
-                            source_paths = Some(snapshot_source_paths);
-                            (
-                                validated_digests,
-                                format!("snapshot:{}", snapshot.snapshot_id),
-                            )
-                        }
-                        None => {
-                            let live_output = ManifestBuilder::default()
-                                .build_metadata_with_diagnostics(&root)
-                                .map_err(Self::map_frigg_error)?;
-                            let live_signature = Self::root_signature(&live_output.entries);
-                            manifest_output = Some(live_output);
-                            (
-                                manifest_output
-                                    .as_ref()
-                                    .expect("live manifest output just assigned")
-                                    .entries
-                                    .clone(),
-                                format!("live:{live_signature}"),
-                            )
-                        }
-                    }
+                    let snapshot_source_paths =
+                        Self::manifest_source_paths_for_digests(&snapshot.digests);
+                    source_paths = Some(snapshot_source_paths);
+                    (
+                        snapshot.digests,
+                        format!("snapshot:{}", snapshot.snapshot_id),
+                    )
                 }
                 None => {
                     let live_output = ManifestBuilder::default()
@@ -79,6 +54,7 @@ impl FriggMcpServer {
         };
 
         if let Some(cached) = self
+            .cache_state
             .symbol_corpus_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -174,6 +150,7 @@ impl FriggMcpServer {
         });
 
         let mut cache = self
+            .cache_state
             .symbol_corpus_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -199,28 +176,36 @@ impl FriggMcpServer {
             .ok()?
     }
 
+    fn load_latest_validated_manifest_snapshot(
+        root: &Path,
+        repository_id: &str,
+        cache: Option<
+            &std::sync::Arc<
+                std::sync::RwLock<crate::manifest_validation::ValidatedManifestCandidateCache>,
+            >,
+        >,
+    ) -> Option<crate::manifest_validation::ValidatedManifestSnapshot> {
+        let db_path = resolve_provenance_db_path(root).ok()?;
+        if !db_path.exists() {
+            return None;
+        }
+        let storage = Storage::new(db_path);
+        crate::manifest_validation::latest_validated_manifest_snapshot(
+            &storage,
+            repository_id,
+            root,
+            cache,
+        )
+    }
+
     pub(super) fn current_root_signature_for_repository(
         root: &Path,
         repository_id: &str,
     ) -> Option<String> {
-        match Self::load_latest_manifest_snapshot(root, repository_id) {
-            Some(snapshot) => {
-                let snapshot_digests = snapshot
-                    .entries
-                    .into_iter()
-                    .map(|entry| FileMetadataDigest {
-                        path: PathBuf::from(entry.path),
-                        size_bytes: entry.size_bytes,
-                        mtime_ns: entry.mtime_ns,
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(validated_digests) =
-                    validate_manifest_digests_for_root(root, &snapshot_digests)
-                {
-                    return Some(Self::root_signature(&validated_digests));
-                }
-            }
-            None => {}
+        if let Some(snapshot) =
+            Self::load_latest_validated_manifest_snapshot(root, repository_id, None)
+        {
+            return Some(Self::root_signature(&snapshot.digests));
         }
 
         ManifestBuilder::default()

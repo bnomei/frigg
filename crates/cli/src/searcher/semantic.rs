@@ -11,6 +11,7 @@ use crate::embeddings::{
     EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
     OpenAiEmbeddingProvider,
 };
+use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, resolve_provenance_db_path};
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
@@ -22,7 +23,8 @@ use super::{
     HybridRankingIntent, HybridSemanticStatus, SearchFilters, TextSearcher,
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count,
     hybrid_path_quality_multiplier_with_intent, hybrid_query_exact_terms,
-    hybrid_query_overlap_terms, normalize_search_filters, semantic_excerpt,
+    hybrid_query_overlap_terms, normalize_repository_relative_path, normalize_search_filters,
+    semantic_excerpt,
     surfaces::{HybridSourceClass, hybrid_source_class},
 };
 
@@ -248,7 +250,7 @@ pub(super) fn search_semantic_channel_hits(
     let mut roots_by_repository = BTreeMap::new();
     let mut latest_manifest_paths_by_repository = BTreeMap::new();
     let mut latest_snapshot_ids_by_repository = BTreeMap::new();
-    let degraded_reasons = Vec::new();
+    let mut degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
     for repo in repositories {
         if normalized_filters
@@ -276,46 +278,67 @@ pub(super) fn search_semantic_channel_hits(
         roots_by_repository.insert(repository_id.clone(), root.to_path_buf());
 
         let storage = Storage::new(db_path);
-        let latest = storage
-            .load_latest_manifest_for_repository(&repository_id)
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic storage snapshot lookup failed for repository '{repository_id}': {err}"
-                ))
-            })?;
-        let Some(latest_snapshot) = latest else {
+        let Some(validated_snapshot) = latest_validated_manifest_snapshot(
+            &storage,
+            &repository_id,
+            root,
+            Some(&searcher.validated_manifest_candidate_cache),
+        )
+        else {
             unavailable_reasons.push(format!(
-                "repository '{repository_id}' has no manifest snapshot"
+                "repository '{repository_id}' has no valid manifest snapshot"
             ));
             continue;
         };
-        let latest_manifest_paths = latest_snapshot
-            .entries
+        let latest_snapshot_id = validated_snapshot.snapshot_id;
+        let latest_manifest_paths = validated_snapshot
+            .digests
             .iter()
-            .map(|entry| entry.path.clone())
+            .map(|entry| normalize_repository_relative_path(root, &entry.path))
             .collect::<BTreeSet<_>>();
         latest_manifest_paths_by_repository.insert(repository_id.clone(), latest_manifest_paths);
-        latest_snapshot_ids_by_repository
-            .insert(repository_id.clone(), latest_snapshot.snapshot_id.clone());
+        latest_snapshot_ids_by_repository.insert(repository_id.clone(), latest_snapshot_id.clone());
         let latest_snapshot_has_embeddings = storage
             .has_semantic_embeddings_for_repository_snapshot_model(
                 &repository_id,
-                &latest_snapshot.snapshot_id,
+                &latest_snapshot_id,
                 provider.as_str(),
                 model,
             )
             .map_err(|err| {
                 FriggError::Internal(format!(
                     "semantic storage embedding presence lookup failed for repository '{repository_id}' snapshot '{}': {err}",
-                    latest_snapshot.snapshot_id
+                    latest_snapshot_id
                 ))
             })?;
         let selected_snapshot_id = if latest_snapshot_has_embeddings {
-            latest_snapshot.snapshot_id.clone()
+            latest_snapshot_id.clone()
+        } else if let Some(fallback_snapshot_id) = storage
+            .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
+                &repository_id,
+                provider.as_str(),
+                model,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "semantic storage fallback snapshot lookup failed for repository '{repository_id}' provider '{}' model '{}': {err}",
+                    provider.as_str(),
+                    model,
+                ))
+            })?
+        {
+            if fallback_snapshot_id != latest_snapshot_id {
+                degraded_reasons.push(format!(
+                    "repository '{repository_id}' using semantic fallback snapshot '{fallback_snapshot_id}' because latest manifest snapshot '{latest_snapshot_id}' has no live semantic embeddings for provider '{}' model '{}'",
+                    provider.as_str(),
+                    model,
+                ));
+            }
+            fallback_snapshot_id
         } else {
             unavailable_reasons.push(format!(
                 "repository '{repository_id}' latest manifest snapshot '{}' has no live semantic embeddings for provider '{}' model '{}'",
-                latest_snapshot.snapshot_id,
+                latest_snapshot_id,
                 provider.as_str(),
                 model
             ));
@@ -483,6 +506,7 @@ pub(super) fn search_semantic_channel_hits(
         HybridSemanticStatus::Unavailable => ChannelHealthStatus::Unavailable,
         HybridSemanticStatus::Ok => ChannelHealthStatus::Ok,
         HybridSemanticStatus::Degraded => ChannelHealthStatus::Degraded,
+        HybridSemanticStatus::Filtered => ChannelHealthStatus::Filtered,
     };
     let diagnostics = reason
         .as_ref()

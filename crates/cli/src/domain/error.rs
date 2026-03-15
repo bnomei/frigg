@@ -16,6 +16,11 @@ pub enum FriggError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("semantic_status=strict_failure: {reason}")]
+    StrictSemanticFailure {
+        reason: String,
+    },
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -43,6 +48,13 @@ mod tests {
         assert_eq!(
             FriggError::Internal("oops".to_string()).to_string(),
             "internal error: oops"
+        );
+        assert_eq!(
+            FriggError::StrictSemanticFailure {
+                reason: "provider outage".to_owned()
+            }
+            .to_string(),
+            "semantic_status=strict_failure: provider outage"
         );
     }
 

@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
-use crate::mcp::types::PUBLIC_READ_ONLY_TOOL_NAMES;
+use crate::mcp::types::PUBLIC_TOOL_NAMES;
 
 pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolSurfaceProfile {
-    /// Stable default read-only runtime surface.
+    /// Stable default public runtime surface.
     Core,
     /// Advanced-consumer runtime surface that layers deep-search tools on top of the stable profile.
     Extended,
@@ -52,7 +52,7 @@ fn runtime_tool_surface_profile_from_env(raw: Option<String>) -> ToolSurfaceProf
 }
 
 fn profile_tool_names(profile: ToolSurfaceProfile) -> Vec<String> {
-    let mut names = PUBLIC_READ_ONLY_TOOL_NAMES
+    let mut names = PUBLIC_TOOL_NAMES
         .iter()
         .copied()
         .filter(|tool_name| {

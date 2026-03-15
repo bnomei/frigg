@@ -4,71 +4,71 @@ use super::super::dsl::PredicateLeaf;
 use super::super::facts::PathWitnessFacts;
 
 fn wants_entrypoint_build_flow(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_entrypoint_build_flow()
+    ctx.wants_entrypoint_build_flow
 }
 
 fn wants_runtime_config_artifacts(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_runtime_config_artifacts()
+    ctx.wants_runtime_config_artifacts
 }
 
 fn wants_examples(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_examples()
+    ctx.wants_examples
 }
 
 fn wants_benchmarks(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_benchmarks()
+    ctx.wants_benchmarks
 }
 
 fn wants_example_or_bench_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_example_or_bench_witnesses()
+    ctx.wants_example_or_bench_witnesses
 }
 
 fn wants_test_witness_recall(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_test_witness_recall()
+    ctx.wants_test_witness_recall
 }
 
 fn wants_python_workspace_config(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_python_workspace_config()
+    ctx.wants_python_workspace_config
 }
 
 fn wants_rust_workspace_config(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_rust_workspace_config()
+    ctx.wants_rust_workspace_config
 }
 
 fn wants_python_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_python_witnesses()
+    ctx.wants_python_witnesses
 }
 
 fn wants_laravel_ui_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_laravel_ui_witnesses()
+    ctx.wants_laravel_ui_witnesses
 }
 
 fn wants_blade_component_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_blade_component_witnesses()
+    ctx.wants_blade_component_witnesses
 }
 
 fn wants_laravel_form_action_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_laravel_form_action_witnesses()
+    ctx.wants_laravel_form_action_witnesses
 }
 
 fn wants_laravel_layout_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_laravel_layout_witnesses()
+    ctx.wants_laravel_layout_witnesses
 }
 
 fn wants_livewire_view_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_livewire_view_witnesses()
+    ctx.wants_livewire_view_witnesses
 }
 
 fn wants_commands_middleware_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_commands_middleware_witnesses()
+    ctx.wants_commands_middleware_witnesses
 }
 
 fn wants_jobs_listeners_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_jobs_listeners_witnesses()
+    ctx.wants_jobs_listeners_witnesses
 }
 
 fn wants_kotlin_android_ui_witnesses(ctx: &PathWitnessFacts) -> bool {
-    ctx.intent().wants_kotlin_android_ui_witnesses()
+    ctx.wants_kotlin_android_ui_witnesses
 }
 
 fn wants_entrypoint_or_runtime_config(ctx: &PathWitnessFacts) -> bool {
@@ -86,112 +86,112 @@ fn mixed_example_or_bench_examples_rs(ctx: &PathWitnessFacts) -> bool {
 }
 
 fn query_mentions_cli(ctx: &PathWitnessFacts) -> bool {
-    ctx.query().mentions_cli()
+    ctx.query_mentions_cli
 }
 
 fn has_specific_query_terms(ctx: &PathWitnessFacts) -> bool {
-    ctx.query().has_specific_query_terms()
+    ctx.has_specific_query_terms
 }
 
 fn path_overlap(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().path_overlap() > 0
+    ctx.path_overlap > 0
 }
 
 fn specific_path_overlap(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().specific_path_overlap() > 0
+    ctx.specific_path_overlap > 0
 }
 
 fn path_overlap_at_least_two(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().path_overlap() >= 2
+    ctx.path_overlap >= 2
 }
 
 fn specific_path_overlap_at_least_two(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().specific_path_overlap() >= 2
+    ctx.specific_path_overlap >= 2
 }
 
 fn has_exact_query_term_match(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().has_exact_query_term_match()
+    ctx.has_exact_query_term_match
 }
 
 fn is_entrypoint(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_entrypoint()
+    ctx.is_entrypoint
 }
 
 fn is_entrypoint_build_workflow(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_entrypoint_build_workflow()
+    ctx.is_entrypoint_build_workflow
 }
 
 fn is_ci_workflow(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_ci_workflow()
+    ctx.is_ci_workflow
 }
 
 fn is_config_artifact(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_config_artifact()
+    ctx.is_config_artifact
 }
 
 fn is_typescript_runtime_module_index(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_typescript_runtime_module_index()
+    ctx.is_typescript_runtime_module_index
 }
 
 fn is_python_config(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_python_config()
+    ctx.is_python_config
 }
 
 fn is_rust_workspace_config(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_rust_workspace_config()
+    ctx.is_rust_workspace_config
 }
 
 fn is_repo_root_runtime_config_artifact(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_repo_root_runtime_config_artifact()
+    ctx.is_repo_root_runtime_config_artifact
 }
 
 fn is_python_test(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_python_test()
+    ctx.is_python_test
 }
 
 fn is_test_support(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_test_support()
+    ctx.is_test_support
 }
 
 fn is_runtime_anchor_test_support(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_runtime_anchor_test_support()
+    ctx.is_runtime_anchor_test_support
 }
 
 fn is_example_support(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_example_support()
+    ctx.is_example_support
 }
 
 fn is_bench_support(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_bench_support()
+    ctx.is_bench_support
 }
 
 fn is_cli_test(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_cli_test()
+    ctx.is_cli_test
 }
 
 fn is_test_harness(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_test_harness()
+    ctx.is_test_harness
 }
 
 fn is_scripts_ops(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_scripts_ops()
+    ctx.is_scripts_ops
 }
 
 fn is_runtime_adjacent_python_test(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_runtime_adjacent_python_test()
+    ctx.is_runtime_adjacent_python_test
 }
 
 fn is_kotlin_android_ui_runtime_surface(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_kotlin_android_ui_runtime_surface()
+    ctx.is_kotlin_android_ui_runtime_surface
 }
 
 fn is_examples_rs(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_examples_rs()
+    ctx.is_examples_rs
 }
 
 fn source_class_is_runtime_support_tests(ctx: &PathWitnessFacts) -> bool {
     matches!(
-        ctx.candidate().source_class(),
+        ctx.source_class,
         crate::searcher::surfaces::HybridSourceClass::Runtime
             | crate::searcher::surfaces::HybridSourceClass::Support
             | crate::searcher::surfaces::HybridSourceClass::Tests
@@ -199,79 +199,79 @@ fn source_class_is_runtime_support_tests(ctx: &PathWitnessFacts) -> bool {
 }
 
 fn is_laravel_non_livewire_blade_view(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_non_livewire_blade_view()
+    ctx.is_laravel_non_livewire_blade_view
 }
 
 fn is_laravel_livewire_view(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_livewire_view()
+    ctx.is_laravel_livewire_view
 }
 
 fn is_laravel_top_level_blade_view(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_top_level_blade_view()
+    ctx.is_laravel_top_level_blade_view
 }
 
 fn is_laravel_partial_view(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_partial_view()
+    ctx.is_laravel_partial_view
 }
 
 fn is_laravel_blade_component(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_blade_component()
+    ctx.is_laravel_blade_component
 }
 
 fn is_laravel_nested_blade_component(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_nested_blade_component()
+    ctx.is_laravel_nested_blade_component
 }
 
 fn is_laravel_form_action_blade(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_form_action_blade()
+    ctx.is_laravel_form_action_blade
 }
 
 fn is_laravel_livewire_component(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_livewire_component()
+    ctx.is_laravel_livewire_component
 }
 
 fn is_laravel_view_component_class(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_view_component_class()
+    ctx.is_laravel_view_component_class
 }
 
 fn is_laravel_command_or_middleware(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_command_or_middleware()
+    ctx.is_laravel_command_or_middleware
 }
 
 fn is_laravel_job_or_listener(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_job_or_listener()
+    ctx.is_laravel_job_or_listener
 }
 
 fn is_laravel_layout_blade_view(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_layout_blade_view()
+    ctx.is_laravel_layout_blade_view
 }
 
 fn is_laravel_route(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_route()
+    ctx.is_laravel_route
 }
 
 fn is_laravel_bootstrap_entrypoint(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_bootstrap_entrypoint()
+    ctx.is_laravel_bootstrap_entrypoint
 }
 
 fn is_laravel_core_provider(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_core_provider()
+    ctx.is_laravel_core_provider
 }
 
 fn is_laravel_provider(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_laravel_provider()
+    ctx.is_laravel_provider
 }
 
 fn is_frontend_runtime_noise(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().is_frontend_runtime_noise()
+    ctx.is_frontend_runtime_noise
 }
 
 fn path_stem_is_server_or_cli(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().path_stem_is_server_or_cli()
+    ctx.path_stem_is_server_or_cli
 }
 
 fn path_stem_is_main(ctx: &PathWitnessFacts) -> bool {
-    ctx.candidate().path_stem_is_main()
+    ctx.path_stem_is_main
 }
 
 pub(crate) const fn wants_entrypoint_build_flow_leaf() -> PredicateLeaf<PathWitnessFacts> {
@@ -694,15 +694,19 @@ mod tests {
         facts.is_examples_rs = true;
 
         assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
-        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
         assert!((mixed_example_or_bench_examples_rs_leaf().eval)(&facts));
 
         facts.wants_entrypoint_build_flow = false;
-        assert!(!(
-            wants_entrypoint_or_runtime_config_or_test_leaf()
-                .eval)(&facts));
+        assert!(!(wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
         facts.wants_test_witness_recall = true;
-        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
     }
 
     #[test]
@@ -770,22 +774,30 @@ mod tests {
         facts.is_examples_rs = false;
 
         assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
-        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
         assert!(!(mixed_example_or_bench_examples_rs_leaf().eval)(&facts));
 
         facts.wants_entrypoint_build_flow = false;
         facts.wants_runtime_config_artifacts = false;
         facts.wants_test_witness_recall = false;
         assert!(!(wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
-        assert!(!(wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!(!(wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
 
         facts.wants_runtime_config_artifacts = true;
         assert!((wants_entrypoint_or_runtime_config_leaf().eval)(&facts));
-        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
 
         facts.wants_runtime_config_artifacts = false;
         facts.wants_test_witness_recall = true;
-        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(&facts));
+        assert!((wants_entrypoint_or_runtime_config_or_test_leaf().eval)(
+            &facts
+        ));
     }
 
     #[test]

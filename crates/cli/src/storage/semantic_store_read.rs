@@ -4,12 +4,16 @@ use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{OptionalExtension, params_from_iter};
 
-use super::super::vector_store::{decode_f32_vector, encode_f32_vector};
-use super::super::{
-    SQLITE_VEC_MAX_KNN_LIMIT, SemanticChunkEmbeddingProjection, SemanticChunkPayload,
-    SemanticChunkVectorMatch, SemanticHeadRecord, i64_to_u64, usize_to_i64,
+use super::{
+    ensure_semantic_vector_rows_current, load_semantic_head_for_repository_model_on_connection,
+    normalize_embedding_for_vector_projection,
 };
-use super::*;
+use crate::storage::vector_store::{decode_f32_vector, encode_f32_vector};
+use crate::storage::{
+    SQLITE_VEC_MAX_KNN_LIMIT, SemanticChunkEmbeddingProjection, SemanticChunkEmbeddingRecord,
+    SemanticChunkPayload, SemanticChunkVectorMatch, SemanticHeadRecord, Storage, VECTOR_TABLE_NAME,
+    SNAPSHOT_KIND_MANIFEST, i64_to_u64, open_connection, usize_to_i64,
+};
 
 impl Storage {
     pub fn load_semantic_head_for_repository_model(
@@ -684,7 +688,11 @@ impl Storage {
                 r#"
                 SELECT semantic_head.covered_snapshot_id
                 FROM semantic_head
+                INNER JOIN snapshot
+                  ON snapshot.snapshot_id = semantic_head.covered_snapshot_id
                 WHERE semantic_head.repository_id = ?1
+                  AND snapshot.repository_id = ?1
+                  AND snapshot.kind = ?4
                   AND semantic_head.provider = ?2
                   AND semantic_head.model = ?3
                   AND EXISTS(
@@ -693,9 +701,12 @@ impl Storage {
                     WHERE semantic_chunk_embedding.repository_id = semantic_head.repository_id
                       AND semantic_chunk_embedding.provider = semantic_head.provider
                       AND semantic_chunk_embedding.model = semantic_head.model
+                      AND semantic_chunk_embedding.snapshot_id = semantic_head.covered_snapshot_id
                   )
+                ORDER BY snapshot.created_at DESC, snapshot.rowid DESC
+                LIMIT 1
                 "#,
-                (repository_id, provider, model),
+                (repository_id, provider, model, SNAPSHOT_KIND_MANIFEST),
                 |row| row.get(0),
             )
             .optional()

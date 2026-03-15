@@ -124,6 +124,37 @@ fn manifest_load_latest_for_repository_prefers_newer_snapshot() -> FriggResult<(
 }
 
 #[test]
+fn manifest_load_latest_for_repository_ignores_non_manifest_rows() -> FriggResult<()> {
+    let db_path = temp_db_path("manifest-load-latest-ignores-non-manifest");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-manifest-old",
+        &[manifest_entry("src/alpha.rs", "hash-a1", 10, Some(100))],
+    )?;
+    let conn = open_test_connection(&db_path)?;
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-semantic-latest', 'repo-1', 'semantic', NULL, '2099-01-01T00:00:00Z')",
+        [],
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to seed semantic snapshot for mixed-kind lookup test: {err}"
+        ))
+    })?;
+
+    let latest = storage
+        .load_latest_manifest_for_repository("repo-1")?
+        .expect("expected latest manifest snapshot");
+    assert_eq!(latest.snapshot_id, "snapshot-manifest-old");
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn manifest_load_latest_for_repository_breaks_timestamp_ties_by_insertion_order() -> FriggResult<()>
 {
     let db_path = temp_db_path("manifest-load-latest-tie-break");
@@ -132,6 +163,18 @@ fn manifest_load_latest_for_repository_breaks_timestamp_ties_by_insertion_order(
 
     let conn = open_test_connection(&db_path)?;
     let tied_created_at = "2026-03-05T00:00:00.000Z";
+    conn.execute(
+        r#"
+            INSERT INTO repository (repository_id, root_path, display_name, created_at)
+            VALUES ('repo-1', '/repo-1', 'repo-1', ?1)
+            "#,
+        [tied_created_at],
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to seed repository row for tie-break test: {err}"
+        ))
+    })?;
     conn.execute(
         r#"
             INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at)
@@ -195,10 +238,78 @@ fn manifest_load_latest_for_repository_breaks_timestamp_ties_by_insertion_order(
 }
 
 #[test]
+fn manifest_upsert_creates_stub_repository_row_to_match_fk_schema() -> FriggResult<()> {
+    let db_path = temp_db_path("manifest-upsert-seeds-repository");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-orphan",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
+
+    let conn = open_test_connection(&db_path)?;
+    let repository_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM repository WHERE repository_id = 'repo-orphan'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to count repository rows for manifest-upsert seed assertion: {err}"
+            ))
+        })?;
+    assert_eq!(repository_rows, 1);
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn manifest_latest_load_prefers_manifest_kind_when_non_manifest_rows_are_present() -> FriggResult<()> {
+    let db_path = temp_db_path("manifest-latest-manifest-kind-only");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-manifest-old",
+        &[manifest_entry("src/main.rs", "hash-old", 10, Some(100))],
+    )?;
+
+    let conn = open_test_connection(&db_path)?;
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-non-manifest', 'repo-1', 'semantic', NULL, '2026-03-12T00:00:00Z')",
+        [],
+    )
+    .map_err(|err| FriggError::Internal(format!("failed to seed non-manifest snapshot for test: {err}")))?;
+    conn.execute(
+        "INSERT INTO file_manifest (snapshot_id, path, sha256, size_bytes, mtime_ns) VALUES ('snapshot-non-manifest', 'src/other.rs', 'hash-other', 20, 200)",
+        [],
+    )
+    .map_err(|err| FriggError::Internal(format!("failed to seed non-manifest manifest rows for test: {err}")))?;
+
+    let latest = storage
+        .load_latest_manifest_for_repository("repo-1")?
+        .expect("expected manifest latest snapshot");
+    assert_eq!(latest.snapshot_id, "snapshot-manifest-old");
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn path_witness_projection_replace_and_load_roundtrip() -> FriggResult<()> {
     let db_path = temp_db_path("path-witness-projection-roundtrip");
     let storage = Storage::new(&db_path);
     storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
 
     storage.replace_path_witness_projections_for_repository_snapshot(
         "repo-1",
@@ -294,6 +405,16 @@ fn test_subject_projection_replace_and_load_roundtrip() -> FriggResult<()> {
     let db_path = temp_db_path("test-subject-projection-roundtrip");
     let storage = Storage::new(&db_path);
     storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry(
+            "src/user_service.rs",
+            "hash-user-service",
+            10,
+            Some(100),
+        )],
+    )?;
 
     storage.replace_test_subject_projections_for_repository_snapshot(
         "repo-1",
@@ -355,6 +476,11 @@ fn entrypoint_surface_projection_replace_and_load_roundtrip() -> FriggResult<()>
     let db_path = temp_db_path("entrypoint-surface-projection-roundtrip");
     let storage = Storage::new(&db_path);
     storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
 
     storage.replace_entrypoint_surface_projections_for_repository_snapshot(
         "repo-1",

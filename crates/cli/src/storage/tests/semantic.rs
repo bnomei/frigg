@@ -720,6 +720,59 @@ fn semantic_embedding_latest_manifest_snapshot_lookup_prefers_newest_compatible_
 }
 
 #[test]
+fn semantic_latest_manifest_snapshot_lookup_skips_non_manifest_head_snapshot() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-latest-manifest-snapshot-skip-nonmanifest-head");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-manifest",
+        &[manifest_entry("src/a.rs", "hash-a", 10, Some(100))],
+    )?;
+    let conn = open_test_connection(&db_path)?;
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES ('snapshot-non-manifest', 'repo-1', 'semantic', NULL, '2026-03-13T00:00:00Z')",
+        [],
+    )
+    .map_err(|err| FriggError::Internal(format!("failed to seed non-manifest snapshot for semantic head test: {err}")))?;
+
+    replace_semantic_records(
+        &storage,
+        "repo-1",
+        "snapshot-non-manifest",
+        &[semantic_record(
+            "chunk-a",
+            "repo-1",
+            "snapshot-non-manifest",
+            "src/a.rs",
+            "rust",
+            0,
+            1,
+            10,
+            "openai",
+            "text-embedding-3-small",
+            Some("trace-001"),
+            "hash-a",
+            "fn a() {}",
+            &[0.1, 0.2],
+        )],
+    )?;
+
+    assert_eq!(
+        storage.load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
+            "repo-1",
+            "openai",
+            "text-embedding-3-small",
+        )?,
+        None
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_embedding_advance_preserves_unchanged_rows_and_replaces_changed_paths()
 -> FriggResult<()> {
     let db_path = temp_db_path("semantic-embedding-advance");

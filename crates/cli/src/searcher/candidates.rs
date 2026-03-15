@@ -80,6 +80,7 @@ pub(super) fn walk_candidate_files_for_repository(
 }
 
 pub(super) fn hidden_workflow_candidates_for_repository(
+    repository_id: &str,
     root: &Path,
     filters: &NormalizedSearchFilters,
     intent: &HybridRankingIntent,
@@ -101,14 +102,12 @@ pub(super) fn hidden_workflow_candidates_for_repository(
         .require_git(false);
     let walker = builder.build();
     let mut file_candidates = Vec::new();
-    let repository_id = root.to_string_lossy().into_owned();
-
     for dent in walker {
         let dent = match dent {
             Ok(entry) => entry,
             Err(err) => {
                 diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.clone(),
+                    repository_id: repository_id.to_owned(),
                     path: Some(".github/workflows".to_owned()),
                     kind: SearchDiagnosticKind::Walk,
                     message: err.to_string(),
@@ -150,6 +149,7 @@ pub(super) fn hidden_workflow_candidates_for_repository(
 }
 
 pub(super) fn root_scoped_runtime_config_candidates_for_repository(
+    repository_id: &str,
     root: &Path,
     _filters: &NormalizedSearchFilters,
     intent: &HybridRankingIntent,
@@ -169,14 +169,12 @@ pub(super) fn root_scoped_runtime_config_candidates_for_repository(
         .max_depth(Some(3));
     let walker = builder.build();
     let mut file_candidates = Vec::new();
-    let repository_id = root.to_string_lossy().into_owned();
-
     for dent in walker {
         let dent = match dent {
             Ok(entry) => entry,
             Err(err) => {
                 diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.clone(),
+                    repository_id: repository_id.to_owned(),
                     path: None,
                     kind: SearchDiagnosticKind::Walk,
                     message: err.to_string(),

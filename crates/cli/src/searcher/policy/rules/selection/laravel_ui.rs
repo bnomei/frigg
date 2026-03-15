@@ -4,29 +4,29 @@ use super::super::super::kernel::PolicyProgram;
 use super::super::super::predicates::selection as pred;
 use super::super::super::trace::{PolicyEffect, PolicyStage};
 fn specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    if candidate.specific_witness_path_overlap() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    if candidate.specific_witness_path_overlap == 0 {
         return None;
     }
 
-    let delta = match candidate.specific_witness_path_overlap() {
+    let delta = match candidate.specific_witness_path_overlap {
         1 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 0.96
             } else {
                 0.44
             }
         }
         2 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 1.68
             } else {
                 0.82
             }
         }
         _ => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 2.24
             } else {
                 1.08
@@ -38,13 +38,13 @@ fn specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn missing_specific_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let query = ctx.query();
-    let state = ctx.state();
-    (candidate.specific_witness_path_overlap() == 0
-        && query.has_specific_blade_anchors()
-        && (candidate.is_laravel_non_livewire_blade_view() || candidate.is_laravel_livewire_view()))
-    .then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let query = ctx;
+    let state = ctx;
+    (candidate.specific_witness_path_overlap == 0
+        && query.query_has_specific_blade_anchors
+        && (candidate.is_laravel_non_livewire_blade_view || candidate.is_laravel_livewire_view))
+    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.62
     } else {
         -0.32
@@ -52,13 +52,13 @@ fn missing_specific_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect>
 }
 
 fn blade_specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    if candidate.blade_specific_path_overlap() == 0 {
+    let candidate = ctx;
+    if candidate.blade_specific_path_overlap == 0 {
         return None;
     }
 
     Some(PolicyEffect::Add(
-        match candidate.blade_specific_path_overlap() {
+        match candidate.blade_specific_path_overlap {
             1 => 0.74,
             2 => 1.62,
             _ => 2.28,
@@ -67,15 +67,15 @@ fn blade_specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn generic_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let candidate = ctx.candidate();
-    let query = ctx.query();
-    let state = ctx.state();
-    (candidate.blade_specific_path_overlap() == 0
-        && query.has_specific_blade_anchors()
-        && candidate.is_laravel_blade_component()
-        && !intent.wants_laravel_layout_witnesses())
-    .then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let intent = ctx;
+    let candidate = ctx;
+    let query = ctx;
+    let state = ctx;
+    (candidate.blade_specific_path_overlap == 0
+        && query.query_has_specific_blade_anchors
+        && candidate.is_laravel_blade_component
+        && !intent.wants_laravel_layout_witnesses)
+    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.46
     } else {
         -0.22
@@ -83,8 +83,8 @@ fn generic_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect>
 }
 
 fn form_action_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.42
     } else {
         0.54
@@ -92,10 +92,10 @@ fn form_action_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn form_action_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (!candidate.is_laravel_form_action_blade() && candidate.is_laravel_blade_component()).then_some(
-        PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    (!candidate.is_laravel_form_action_blade && candidate.is_laravel_blade_component).then_some(
+        PolicyEffect::Add(if state.seen_count == 0 {
             -0.24
         } else {
             -0.12
@@ -104,8 +104,8 @@ fn form_action_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEff
 }
 
 fn non_livewire_view_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.34
     } else {
         -0.18
@@ -113,8 +113,8 @@ fn non_livewire_view_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn livewire_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.72
     } else {
         0.28
@@ -122,17 +122,17 @@ fn livewire_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn view_component_class_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
     Some(PolicyEffect::Add(
-        if intent.wants_laravel_layout_witnesses() {
-            if state.seen_count() == 0 {
+        if intent.wants_laravel_layout_witnesses {
+            if state.seen_count == 0 {
                 -1.40
             } else {
                 -1.80
             }
-        } else if state.seen_count() == 0 {
+        } else if state.seen_count == 0 {
             -1.00
         } else {
             -1.40
@@ -141,13 +141,13 @@ fn view_component_class_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn livewire_component_blade_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
     Some(PolicyEffect::Add(
-        if intent.wants_livewire_view_witnesses() {
-            if state.seen_count() == 0 { 0.02 } else { -0.18 }
-        } else if state.seen_count() == 0 {
+        if intent.wants_livewire_view_witnesses {
+            if state.seen_count == 0 { 0.02 } else { -0.18 }
+        } else if state.seen_count == 0 {
             -0.54
         } else {
             -0.30
@@ -156,8 +156,8 @@ fn livewire_component_blade_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn non_livewire_blade_view_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.96
     } else {
         0.40
@@ -165,8 +165,8 @@ fn non_livewire_blade_view_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn livewire_view_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.12
     } else {
         0.02
@@ -174,13 +174,13 @@ fn livewire_view_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn blade_component_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
+    let candidate = ctx;
+    let state = ctx;
 
     Some(PolicyEffect::Add(
-        if candidate.is_laravel_nested_blade_component() {
-            if state.seen_count() == 0 { 0.24 } else { -0.04 }
-        } else if state.seen_count() == 0 {
+        if candidate.is_laravel_nested_blade_component {
+            if state.seen_count == 0 { 0.24 } else { -0.04 }
+        } else if state.seen_count == 0 {
             1.48
         } else {
             0.60
@@ -189,9 +189,9 @@ fn blade_component_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn livewire_component_general_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.18
     } else {
         -0.18
@@ -199,8 +199,8 @@ fn livewire_component_general_bias(ctx: &SelectionFacts) -> Option<PolicyEffect>
 }
 
 fn non_livewire_blade_view_general_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.05
     } else {
         0.54
@@ -208,8 +208,8 @@ fn non_livewire_blade_view_general_bonus(ctx: &SelectionFacts) -> Option<PolicyE
 }
 
 fn livewire_view_general_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.92
     } else {
         0.44
@@ -217,12 +217,12 @@ fn livewire_view_general_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn blade_component_general_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
+    let candidate = ctx;
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if candidate.path_overlap() >= 3 {
-        if state.seen_count() == 0 { 0.72 } else { 0.26 }
-    } else if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if candidate.path_overlap >= 3 {
+        if state.seen_count == 0 { 0.72 } else { 0.26 }
+    } else if state.seen_count == 0 {
         0.10
     } else {
         -0.12
@@ -230,8 +230,8 @@ fn blade_component_general_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn test_harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.42
     } else {
         0.18
@@ -239,8 +239,8 @@ fn test_harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn command_middleware_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.18
     } else {
         0.48
@@ -248,8 +248,8 @@ fn command_middleware_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn job_listener_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.96
     } else {
         0.36
@@ -257,8 +257,8 @@ fn job_listener_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn layout_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.80
     } else {
         0.76
@@ -266,8 +266,8 @@ fn layout_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn layout_blade_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.78
     } else {
         0.32
@@ -275,8 +275,8 @@ fn layout_blade_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn blade_page_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.80
     } else {
         0.76
@@ -284,18 +284,18 @@ fn blade_page_view_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn layout_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
+    let candidate = ctx;
+    let state = ctx;
     Some(PolicyEffect::Add(
-        if candidate.blade_specific_path_overlap() == 0
-            && candidate.specific_witness_path_overlap() == 0
+        if candidate.blade_specific_path_overlap == 0
+            && candidate.specific_witness_path_overlap == 0
         {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 -0.92
             } else {
                 -0.44
             }
-        } else if state.seen_count() == 0 {
+        } else if state.seen_count == 0 {
             0.14
         } else {
             0.06
@@ -304,8 +304,8 @@ fn layout_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> 
 }
 
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.34
     } else {
         -0.20
@@ -313,50 +313,50 @@ fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn surface_blade_view(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.44
     } else {
-        -0.18 * state.laravel_surface_seen() as f32
+        -0.18 * state.laravel_surface_seen as f32
     }))
 }
 
 fn surface_livewire_component(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.08
     } else {
-        -0.12 * state.laravel_surface_seen() as f32
+        -0.12 * state.laravel_surface_seen as f32
     }))
 }
 
 fn surface_livewire_view(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.10
     } else {
-        -0.12 * state.laravel_surface_seen() as f32
+        -0.12 * state.laravel_surface_seen as f32
     }))
 }
 
 fn surface_blade_component(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
+    let candidate = ctx;
+    let state = ctx;
 
     Some(PolicyEffect::Add(
-        if candidate.is_laravel_nested_blade_component() {
-            if state.laravel_surface_seen() == 0 {
+        if candidate.is_laravel_nested_blade_component {
+            if state.laravel_surface_seen == 0 {
                 0.10
             } else {
-                -0.12 * state.laravel_surface_seen() as f32
+                -0.12 * state.laravel_surface_seen as f32
             }
-        } else if state.laravel_surface_seen() == 0 {
+        } else if state.laravel_surface_seen == 0 {
             0.96
         } else {
-            0.34 - (0.08 * state.laravel_surface_seen() as f32)
+            0.34 - (0.08 * state.laravel_surface_seen as f32)
         },
     ))
 }
@@ -366,9 +366,9 @@ fn surface_blade_component_first_bonus(_ctx: &SelectionFacts) -> Option<PolicyEf
 }
 
 fn surface_general_blade_view(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.72
     } else {
         0.14
@@ -380,19 +380,19 @@ fn surface_first_blade_view_bonus(_ctx: &SelectionFacts) -> Option<PolicyEffect>
 }
 
 fn surface_general_livewire_component(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.18
     } else {
-        -0.14 * state.laravel_surface_seen() as f32
+        -0.14 * state.laravel_surface_seen as f32
     }))
 }
 
 fn surface_general_livewire_view(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         0.84
     } else {
         0.18
@@ -404,12 +404,12 @@ fn surface_first_livewire_view_bonus(_ctx: &SelectionFacts) -> Option<PolicyEffe
 }
 
 fn surface_general_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if state.laravel_surface_seen() == 0 {
+    Some(PolicyEffect::Add(if state.laravel_surface_seen == 0 {
         -0.04
     } else {
-        -(0.72 * state.laravel_surface_seen() as f32)
+        -(0.72 * state.laravel_surface_seen as f32)
     }))
 }
 

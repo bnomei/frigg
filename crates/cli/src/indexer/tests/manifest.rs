@@ -320,3 +320,38 @@ fn incremental_roundtrip_changed_only_detects_modified_added_and_deleted_files()
     cleanup_db(&db_path);
     Ok(())
 }
+
+#[test]
+fn reindex_plan_changed_only_unchanged_workspace_reuses_existing_snapshot() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-plan-unchanged-db");
+    let workspace_root = temp_workspace_root("reindex-plan-unchanged-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
+    )?;
+
+    let full_summary =
+        reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &SemanticRuntimeConfig::default(),
+        &[],
+    )?;
+
+    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(full_summary.snapshot_id.as_str()));
+    assert_eq!(plan.files_changed, 0);
+    assert_eq!(plan.files_deleted, 0);
+    assert!(matches!(
+        &plan.snapshot_plan,
+        super::super::ManifestSnapshotPlan::ReuseExisting { snapshot_id }
+            if snapshot_id == &full_summary.snapshot_id
+    ));
+    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::Disabled);
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}

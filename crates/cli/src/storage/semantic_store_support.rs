@@ -2,10 +2,10 @@ use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 
-use super::super::vector_store::{decode_f32_vector, encode_f32_vector};
-use super::super::{
+use crate::storage::vector_store::{decode_f32_vector, encode_f32_vector};
+use crate::storage::{
     DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, SemanticHeadRecord, VECTOR_TABLE_NAME,
-    usize_to_i64,
+    SNAPSHOT_KIND_MANIFEST, count_snapshots_for_repository_and_kind, usize_to_i64,
 };
 
 pub(super) fn validate_semantic_target(
@@ -615,22 +615,7 @@ pub(super) fn count_manifest_snapshots_for_repository(
     conn: &Connection,
     repository_id: &str,
 ) -> FriggResult<usize> {
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM snapshot WHERE repository_id = ?1 AND kind = 'manifest'",
-            [repository_id],
-            |row| row.get(0),
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to count manifest snapshots for repository '{repository_id}': {err}"
-            ))
-        })?;
-    usize::try_from(count).map_err(|err| {
-        FriggError::Internal(format!(
-            "manifest snapshot count overflow for repository '{repository_id}': {err}"
-        ))
-    })
+    count_snapshots_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)
 }
 
 pub(super) fn rebuild_semantic_vector_rows(conn: &Connection) -> FriggResult<()> {

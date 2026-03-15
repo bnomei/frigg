@@ -21,7 +21,7 @@ use super::super::laravel::{
 use super::super::query_terms::{hybrid_path_has_exact_stem_match, hybrid_path_overlap_count};
 use super::super::surfaces::{self, HybridSourceClass};
 #[cfg(test)]
-use super::SelectionQueryContext;
+use super::PolicyQueryContext;
 use super::dsl::{Predicate, predicate_matches};
 use super::trace::PolicyStage;
 pub(crate) use context::PostSelectionContext;

@@ -3,26 +3,32 @@ use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::domain::{FriggError, FriggResult};
+use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 #[allow(unused_imports)]
 use sqlite_vec as _;
 
 mod db_runtime;
+mod manifest_store;
 mod provenance_path;
+mod provenance_store;
+mod projection_store;
 mod semantic_store;
 mod vector_store;
 #[cfg(test)]
 use db_runtime::set_schema_version;
 use db_runtime::{
     apply_migration, count_provenance_events, i64_to_u64, latest_schema_version,
+    count_snapshots_for_repository_and_kind, load_snapshot_ids_for_repository_and_kind,
     load_latest_manifest_metadata_snapshot_for_repository,
     load_latest_manifest_snapshot_for_repository, load_manifest_entries_for_snapshot,
     load_semantic_head_snapshot_ids_for_repository, open_connection, option_u64_to_option_i64,
     prune_provenance_events_on_connection, read_schema_version, run_repository_roundtrip_probe,
     table_exists, u64_to_i64, usize_to_i64,
 };
+
+pub(super) const SNAPSHOT_KIND_MANIFEST: &str = "manifest";
 pub use provenance_path::{ensure_provenance_db_parent_dir, resolve_provenance_db_path};
 #[cfg(test)]
 pub(crate) use vector_store::{
@@ -31,6 +37,12 @@ pub(crate) use vector_store::{
     verify_vector_store_on_connection_with_detected_capability,
 };
 use vector_store::{initialize_vector_store_on_connection, verify_vector_store_on_connection};
+
+const INVARIANT_MANIFEST_ROWS_REQUIRE_MANIFEST_SNAPSHOTS: &str =
+    "manifest_rows_require_manifest_snapshots";
+const INVARIANT_SEMANTIC_HEAD_REQUIRES_MANIFEST_SNAPSHOT: &str =
+    "semantic_head_requires_manifest_snapshot";
+const INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC: &str = "semantic_vector_partition_in_sync";
 
 #[derive(Debug, Clone)]
 pub struct Storage {
@@ -339,6 +351,185 @@ const MIGRATIONS: &[Migration] = &[
             ON entrypoint_surface_projection (repository_id, snapshot_id, path);
         "#,
     },
+    Migration {
+        version: 8,
+        sql: r#"
+            ALTER TABLE snapshot RENAME TO snapshot_v8;
+
+            INSERT INTO repository (repository_id, root_path, display_name, created_at)
+            SELECT DISTINCT
+                snapshot_v8.repository_id,
+                '/legacy-import',
+                snapshot_v8.repository_id,
+                CURRENT_TIMESTAMP
+            FROM snapshot_v8
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = snapshot_v8.repository_id
+            );
+
+            CREATE TABLE snapshot (
+              snapshot_id TEXT PRIMARY KEY,
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              kind TEXT NOT NULL,
+              revision TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at)
+            SELECT snapshot_id, repository_id, kind, revision, created_at
+            FROM snapshot_v8;
+
+            DROP TABLE snapshot_v8;
+
+            CREATE INDEX IF NOT EXISTS idx_snapshot_repository_created_snapshot
+            ON snapshot (repository_id, created_at DESC, snapshot_id DESC);
+
+            ALTER TABLE file_manifest RENAME TO file_manifest_v8;
+
+            CREATE TABLE IF NOT EXISTS file_manifest (
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              sha256 TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              mtime_ns INTEGER,
+              PRIMARY KEY (snapshot_id, path)
+            );
+
+            INSERT INTO file_manifest (snapshot_id, path, sha256, size_bytes, mtime_ns)
+            SELECT snapshot_id, path, sha256, size_bytes, mtime_ns
+            FROM file_manifest_v8;
+
+            DROP TABLE file_manifest_v8;
+
+            ALTER TABLE path_witness_projection RENAME TO path_witness_projection_v8;
+
+            CREATE TABLE IF NOT EXISTS path_witness_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              path_class TEXT NOT NULL,
+              source_class TEXT NOT NULL,
+              path_terms_json TEXT NOT NULL,
+              flags_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            INSERT INTO path_witness_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                path_class,
+                source_class,
+                path_terms_json,
+                flags_json,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                path,
+                path_class,
+                source_class,
+                path_terms_json,
+                flags_json,
+                created_at
+            FROM path_witness_projection_v8;
+
+            DROP TABLE path_witness_projection_v8;
+
+            CREATE INDEX IF NOT EXISTS idx_path_witness_projection_repo_snapshot_path
+            ON path_witness_projection (repository_id, snapshot_id, path);
+
+            ALTER TABLE test_subject_projection RENAME TO test_subject_projection_v8;
+
+            CREATE TABLE IF NOT EXISTS test_subject_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              test_path TEXT NOT NULL,
+              subject_path TEXT NOT NULL,
+              shared_terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              flags_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, test_path, subject_path)
+            );
+
+            INSERT INTO test_subject_projection (
+                repository_id,
+                snapshot_id,
+                test_path,
+                subject_path,
+                shared_terms_json,
+                score_hint,
+                flags_json,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                test_path,
+                subject_path,
+                shared_terms_json,
+                score_hint,
+                flags_json,
+                created_at
+            FROM test_subject_projection_v8;
+
+            DROP TABLE test_subject_projection_v8;
+
+            CREATE INDEX IF NOT EXISTS idx_test_subject_projection_repo_snapshot_test
+            ON test_subject_projection (repository_id, snapshot_id, test_path, subject_path);
+
+            CREATE INDEX IF NOT EXISTS idx_test_subject_projection_repo_snapshot_subject
+            ON test_subject_projection (repository_id, snapshot_id, subject_path, test_path);
+
+            ALTER TABLE entrypoint_surface_projection RENAME TO entrypoint_surface_projection_v8;
+
+            CREATE TABLE IF NOT EXISTS entrypoint_surface_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              path_class TEXT NOT NULL,
+              source_class TEXT NOT NULL,
+              path_terms_json TEXT NOT NULL,
+              surface_terms_json TEXT NOT NULL,
+              flags_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            INSERT INTO entrypoint_surface_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                path_class,
+                source_class,
+                path_terms_json,
+                surface_terms_json,
+                flags_json,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                path,
+                path_class,
+                source_class,
+                path_terms_json,
+                surface_terms_json,
+                flags_json,
+                created_at
+            FROM entrypoint_surface_projection_v8;
+
+            DROP TABLE entrypoint_surface_projection_v8;
+
+            CREATE INDEX IF NOT EXISTS idx_entrypoint_surface_projection_repo_snapshot_path
+            ON entrypoint_surface_projection (repository_id, snapshot_id, path);
+        "#,
+    },
 ];
 
 const REQUIRED_TABLES: &[&str] = &[
@@ -489,36 +680,30 @@ pub struct SemanticChunkPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathWitnessProjectionRecord {
-    pub repository_id: String,
-    pub snapshot_id: String,
+pub struct PathWitnessProjection {
     pub path: String,
-    pub path_class: String,
-    pub source_class: String,
-    pub path_terms_json: String,
+    pub path_class: PathClass,
+    pub source_class: SourceClass,
+    pub path_terms: Vec<String>,
     pub flags_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestSubjectProjectionRecord {
-    pub repository_id: String,
-    pub snapshot_id: String,
+pub struct TestSubjectProjection {
     pub test_path: String,
     pub subject_path: String,
-    pub shared_terms_json: String,
+    pub shared_terms: Vec<String>,
     pub score_hint: usize,
     pub flags_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntrypointSurfaceProjectionRecord {
-    pub repository_id: String,
-    pub snapshot_id: String,
+pub struct EntrypointSurfaceProjection {
     pub path: String,
-    pub path_class: String,
-    pub source_class: String,
-    pub path_terms_json: String,
-    pub surface_terms_json: String,
+    pub path_class: PathClass,
+    pub source_class: SourceClass,
+    pub path_terms: Vec<String>,
+    pub surface_terms: Vec<String>,
     pub flags_json: String,
 }
 
@@ -640,8 +825,139 @@ impl Storage {
 
         run_repository_roundtrip_probe(&mut conn)?;
         verify_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
+        self.verify_storage_invariants_with_connection(&conn)?;
 
         Ok(())
+    }
+
+    pub fn repair_storage_invariants(&self) -> FriggResult<StorageInvariantRepairSummary> {
+        let conn = open_connection(&self.db_path)?;
+        let mut repaired_categories = Vec::new();
+
+        let inconsistent_partitions = self.semantic_vector_partition_violations(&conn)?;
+        if !inconsistent_partitions.is_empty() {
+            self.repair_semantic_vector_store()?;
+            repaired_categories.push(INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC.to_string());
+        }
+
+        Ok(StorageInvariantRepairSummary {
+            repaired_categories,
+        })
+    }
+
+    fn verify_storage_invariants_with_connection(&self, conn: &Connection) -> FriggResult<()> {
+        let invalid_manifest_rows: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM file_manifest AS manifest
+                INNER JOIN snapshot ON snapshot.snapshot_id = manifest.snapshot_id
+                WHERE snapshot.kind != ?1
+                "#,
+                [SNAPSHOT_KIND_MANIFEST],
+                |row| row.get(0),
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "storage verification failed: invariant={} error=failed to count invalid manifest rows: {err}",
+                    INVARIANT_MANIFEST_ROWS_REQUIRE_MANIFEST_SNAPSHOTS
+                ))
+            })?;
+        if invalid_manifest_rows > 0 {
+            return Err(FriggError::Internal(format!(
+                "storage verification failed: invariant={} count={invalid_manifest_rows}",
+                INVARIANT_MANIFEST_ROWS_REQUIRE_MANIFEST_SNAPSHOTS
+            )));
+        }
+
+        let invalid_semantic_heads: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM semantic_head
+                LEFT JOIN snapshot
+                  ON snapshot.snapshot_id = semantic_head.covered_snapshot_id
+                 AND snapshot.repository_id = semantic_head.repository_id
+                WHERE snapshot.snapshot_id IS NULL OR snapshot.kind != ?1
+                "#,
+                [SNAPSHOT_KIND_MANIFEST],
+                |row| row.get(0),
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "storage verification failed: invariant={} error=failed to count invalid semantic heads: {err}",
+                    INVARIANT_SEMANTIC_HEAD_REQUIRES_MANIFEST_SNAPSHOT
+                ))
+            })?;
+        if invalid_semantic_heads > 0 {
+            return Err(FriggError::Internal(format!(
+                "storage verification failed: invariant={} count={invalid_semantic_heads}",
+                INVARIANT_SEMANTIC_HEAD_REQUIRES_MANIFEST_SNAPSHOT
+            )));
+        }
+
+        let inconsistent_partitions = self.semantic_vector_partition_violations(conn)?;
+        if !inconsistent_partitions.is_empty() {
+            return Err(FriggError::Internal(format!(
+                "storage verification failed: invariant={} count={} partitions={}",
+                INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC,
+                inconsistent_partitions.len(),
+                inconsistent_partitions.join(",")
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn semantic_vector_partition_violations(&self, conn: &Connection) -> FriggResult<Vec<String>> {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT repository_id, provider, model
+                FROM semantic_head
+                ORDER BY repository_id, provider, model
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "storage verification failed: invariant={} error=failed to prepare semantic partition scan: {err}",
+                    INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC
+                ))
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "storage verification failed: invariant={} error=failed to iterate semantic partitions: {err}",
+                    INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC
+                ))
+            })?;
+
+        let mut partitions = Vec::new();
+        for row in rows {
+            let (repository_id, provider, model) = row.map_err(|err| {
+                FriggError::Internal(format!(
+                    "storage verification failed: invariant={} error=failed to decode semantic partition row: {err}",
+                    INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC
+                ))
+            })?;
+            let health = self.collect_semantic_storage_health_for_repository_model(
+                &repository_id,
+                &provider,
+                &model,
+            )?;
+            if !health.vector_consistent {
+                partitions.push(format!("{repository_id}:{provider}:{model}"));
+            }
+        }
+
+        Ok(partitions)
     }
 
     pub fn initialize_vector_store(
@@ -660,899 +976,11 @@ impl Storage {
         verify_vector_store_on_connection(&conn, expected_dimensions)
     }
 
-    pub fn upsert_manifest(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        entries: &[ManifestEntry],
-    ) -> FriggResult<()> {
-        let mut conn = open_connection(&self.db_path)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start manifest upsert transaction for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            r#"
-            INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at)
-            VALUES (?1, ?2, 'manifest', NULL, STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            ON CONFLICT(snapshot_id) DO UPDATE SET
-                repository_id = excluded.repository_id
-            "#,
-            [snapshot_id, repository_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to upsert snapshot metadata for '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM file_manifest WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to clear existing manifest rows for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        let mut ordered_entries = entries.to_vec();
-        ordered_entries.sort_by(|left, right| left.path.cmp(&right.path));
-
-        let mut insert_stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO file_manifest (snapshot_id, path, sha256, size_bytes, mtime_ns)
-                VALUES (?1, ?2, ?3, ?4, ?5)
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare manifest insert statement for snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        for entry in ordered_entries {
-            insert_stmt
-                .execute((
-                    snapshot_id,
-                    entry.path,
-                    entry.sha256,
-                    u64_to_i64(entry.size_bytes, "size_bytes")?,
-                    option_u64_to_option_i64(entry.mtime_ns, "mtime_ns")?,
-                ))
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "failed to insert manifest row for snapshot '{snapshot_id}': {err}"
-                    ))
-                })?;
-        }
-
-        drop(insert_stmt);
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit manifest upsert for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>> {
-        let conn = open_connection(&self.db_path)?;
-        load_manifest_entries_for_snapshot(&conn, snapshot_id)
-    }
-
-    pub fn load_latest_manifest_for_repository(
-        &self,
-        repository_id: &str,
-    ) -> FriggResult<Option<RepositoryManifestSnapshot>> {
-        let conn = open_connection(&self.db_path)?;
-        load_latest_manifest_snapshot_for_repository(&conn, repository_id)
-    }
-
-    pub fn load_latest_manifest_metadata_for_repository(
-        &self,
-        repository_id: &str,
-    ) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
-        let conn = open_connection(&self.db_path)?;
-        load_latest_manifest_metadata_snapshot_for_repository(&conn, repository_id)
-    }
-
-    pub fn delete_snapshot(&self, snapshot_id: &str) -> FriggResult<()> {
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let mut conn = open_connection(&self.db_path)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start snapshot delete transaction for '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        let active_semantic_heads: i64 = tx
-            .query_row(
-                "SELECT COUNT(*) FROM semantic_head WHERE covered_snapshot_id = ?1",
-                [snapshot_id],
-                |row| row.get(0),
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query semantic head coverage for snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-        if active_semantic_heads > 0 {
-            return Err(FriggError::InvalidInput(format!(
-                "cannot delete snapshot '{snapshot_id}' because it is still covered by the active live semantic corpus; refresh semantics to a newer snapshot or clear the semantic head first"
-            )));
-        }
-
-        tx.execute(
-            "DELETE FROM path_witness_projection WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to delete path witness projection rows for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM test_subject_projection WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to delete test subject projection rows for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM entrypoint_surface_projection WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to delete entrypoint surface projection rows for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM file_manifest WHERE snapshot_id = ?1",
-            [snapshot_id],
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to delete manifest rows for snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute("DELETE FROM snapshot WHERE snapshot_id = ?1", [snapshot_id])
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to delete snapshot metadata for '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit snapshot delete for '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn replace_path_witness_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        records: &[PathWitnessProjectionRecord],
-    ) -> FriggResult<()> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let mut conn = open_connection(&self.db_path)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start path witness projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM path_witness_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
-            (repository_id, snapshot_id),
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to clear path witness projection rows for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        let mut ordered_records = records.to_vec();
-        ordered_records.sort_by(|left, right| left.path.cmp(&right.path));
-        ordered_records.dedup_by(|left, right| left.path == right.path);
-
-        let mut insert_stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO path_witness_projection (
-                  repository_id,
-                  snapshot_id,
-                  path,
-                  path_class,
-                  source_class,
-                  path_terms_json,
-                  flags_json
-                )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare path witness projection insert for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        for record in ordered_records {
-            insert_stmt
-                .execute((
-                    repository_id,
-                    snapshot_id,
-                    record.path,
-                    record.path_class,
-                    record.source_class,
-                    record.path_terms_json,
-                    record.flags_json,
-                ))
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "failed to insert path witness projection row for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                    ))
-                })?;
-        }
-        drop(insert_stmt);
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit path witness projection replace for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn load_path_witness_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-    ) -> FriggResult<Vec<PathWitnessProjectionRecord>> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let conn = open_connection(&self.db_path)?;
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT repository_id, snapshot_id, path, path_class, source_class, path_terms_json, flags_json
-                FROM path_witness_projection
-                WHERE repository_id = ?1 AND snapshot_id = ?2
-                ORDER BY path ASC
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare path witness projection load query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        let rows = stmt
-            .query_map((repository_id, snapshot_id), |row| {
-                Ok(PathWitnessProjectionRecord {
-                    repository_id: row.get(0)?,
-                    snapshot_id: row.get(1)?,
-                    path: row.get(2)?,
-                    path_class: row.get(3)?,
-                    source_class: row.get(4)?,
-                    path_terms_json: row.get(5)?,
-                    flags_json: row.get(6)?,
-                })
-            })
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query path witness projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to decode path witness projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        Ok(rows)
-    }
-
-    pub fn replace_test_subject_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        records: &[TestSubjectProjectionRecord],
-    ) -> FriggResult<()> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let mut conn = open_connection(&self.db_path)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start test subject projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM test_subject_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
-            (repository_id, snapshot_id),
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to clear test subject projection rows for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        let mut ordered_records = records.to_vec();
-        ordered_records.sort_by(|left, right| {
-            left.test_path
-                .cmp(&right.test_path)
-                .then(left.subject_path.cmp(&right.subject_path))
-        });
-        ordered_records.dedup_by(|left, right| {
-            left.test_path == right.test_path && left.subject_path == right.subject_path
-        });
-
-        let mut insert_stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO test_subject_projection (
-                  repository_id,
-                  snapshot_id,
-                  test_path,
-                  subject_path,
-                  shared_terms_json,
-                  score_hint,
-                  flags_json
-                )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare test subject projection insert for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        for record in ordered_records {
-            insert_stmt
-                .execute((
-                    repository_id,
-                    snapshot_id,
-                    record.test_path,
-                    record.subject_path,
-                    record.shared_terms_json,
-                    usize_to_i64(record.score_hint, "score_hint")?,
-                    record.flags_json,
-                ))
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "failed to insert test subject projection row for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                    ))
-                })?;
-        }
-        drop(insert_stmt);
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit test subject projection replace for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn load_test_subject_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-    ) -> FriggResult<Vec<TestSubjectProjectionRecord>> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let conn = open_connection(&self.db_path)?;
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT repository_id, snapshot_id, test_path, subject_path, shared_terms_json, score_hint, flags_json
-                FROM test_subject_projection
-                WHERE repository_id = ?1 AND snapshot_id = ?2
-                ORDER BY test_path ASC, subject_path ASC
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare test subject projection load query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        let raw_rows = stmt
-            .query_map((repository_id, snapshot_id), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
-            })
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query test subject projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to decode test subject projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        let rows = raw_rows
-            .into_iter()
-            .map(
-                |(
-                    repository_id,
-                    snapshot_id,
-                    test_path,
-                    subject_path,
-                    shared_terms_json,
-                    score_hint,
-                    flags_json,
-                )| {
-                    let decoded_score_hint =
-                        i64_to_u64(score_hint, "score_hint").map_err(|err| {
-                            FriggError::Internal(format!(
-                                "failed to decode test subject projection score_hint for repository '{repository_id}' snapshot '{snapshot_id}' path pair '{test_path}' -> '{subject_path}': {err}"
-                            ))
-                        })? as usize;
-                    Ok(TestSubjectProjectionRecord {
-                        repository_id,
-                        snapshot_id,
-                        test_path,
-                        subject_path,
-                        shared_terms_json,
-                        score_hint: decoded_score_hint,
-                        flags_json,
-                    })
-                },
-            )
-            .collect::<FriggResult<Vec<_>>>()?;
-
-        Ok(rows)
-    }
-
-    pub fn replace_entrypoint_surface_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        records: &[EntrypointSurfaceProjectionRecord],
-    ) -> FriggResult<()> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let mut conn = open_connection(&self.db_path)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start entrypoint surface projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        tx.execute(
-            "DELETE FROM entrypoint_surface_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
-            (repository_id, snapshot_id),
-        )
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to clear entrypoint surface projection rows for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        let mut ordered_records = records.to_vec();
-        ordered_records.sort_by(|left, right| left.path.cmp(&right.path));
-        ordered_records.dedup_by(|left, right| left.path == right.path);
-
-        let mut insert_stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO entrypoint_surface_projection (
-                  repository_id,
-                  snapshot_id,
-                  path,
-                  path_class,
-                  source_class,
-                  path_terms_json,
-                  surface_terms_json,
-                  flags_json
-                )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare entrypoint surface projection insert for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        for record in ordered_records {
-            insert_stmt
-                .execute((
-                    repository_id,
-                    snapshot_id,
-                    record.path,
-                    record.path_class,
-                    record.source_class,
-                    record.path_terms_json,
-                    record.surface_terms_json,
-                    record.flags_json,
-                ))
-                .map_err(|err| {
-                    FriggError::Internal(format!(
-                        "failed to insert entrypoint surface projection row for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                    ))
-                })?;
-        }
-        drop(insert_stmt);
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit entrypoint surface projection replace for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-            ))
-        })?;
-
-        Ok(())
-    }
-
-    pub fn load_entrypoint_surface_projections_for_repository_snapshot(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-    ) -> FriggResult<Vec<EntrypointSurfaceProjectionRecord>> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-
-        let conn = open_connection(&self.db_path)?;
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT repository_id, snapshot_id, path, path_class, source_class, path_terms_json, surface_terms_json, flags_json
-                FROM entrypoint_surface_projection
-                WHERE repository_id = ?1 AND snapshot_id = ?2
-                ORDER BY path ASC
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare entrypoint surface projection load query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        let rows = stmt
-            .query_map((repository_id, snapshot_id), |row| {
-                Ok(EntrypointSurfaceProjectionRecord {
-                    repository_id: row.get(0)?,
-                    snapshot_id: row.get(1)?,
-                    path: row.get(2)?,
-                    path_class: row.get(3)?,
-                    source_class: row.get(4)?,
-                    path_terms_json: row.get(5)?,
-                    surface_terms_json: row.get(6)?,
-                    flags_json: row.get(7)?,
-                })
-            })
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query entrypoint surface projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to decode entrypoint surface projections for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
-                ))
-            })?;
-
-        Ok(rows)
-    }
-
-    pub fn append_provenance_event(
-        &self,
-        trace_id: &str,
-        tool_name: &str,
-        payload_json: &Value,
-    ) -> FriggResult<()> {
-        let trace_id = trace_id.trim();
-        if trace_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "trace_id must not be empty".to_owned(),
-            ));
-        }
-
-        let tool_name = tool_name.trim();
-        if tool_name.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "tool_name must not be empty".to_owned(),
-            ));
-        }
-
-        let payload_raw = serde_json::to_string(payload_json).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to serialize provenance payload for tool '{tool_name}': {err}"
-            ))
-        })?;
-
-        let conn = if let Some(conn) = self.provenance_write_connection.get() {
-            conn
-        } else {
-            let connection = Mutex::new(open_connection(&self.db_path)?);
-            let _ = self.provenance_write_connection.set(connection);
-            self.provenance_write_connection
-                .get()
-                .expect("provenance write connection should be initialized")
-        };
-        let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut attempt_ms = 0i64;
-        loop {
-            let insert_result = conn.execute(
-                r#"
-                INSERT INTO provenance_event (trace_id, tool_name, payload_json, created_at)
-                VALUES (
-                    ?1,
-                    ?2,
-                    ?3,
-                    printf(
-                        '%s-%03d',
-                        STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                        ?4
-                    )
-                )
-                "#,
-                (trace_id, tool_name, &payload_raw, attempt_ms),
-            );
-
-            match insert_result {
-                Ok(_) => {
-                    prune_provenance_events_on_connection(
-                        &conn,
-                        DEFAULT_RETAINED_PROVENANCE_EVENTS,
-                    )?;
-                    return Ok(());
-                }
-                Err(rusqlite::Error::SqliteFailure(err, _))
-                    if err.code == ErrorCode::ConstraintViolation
-                        && attempt_ms < PROVENANCE_CREATED_AT_MAX_RETRY_MS =>
-                {
-                    attempt_ms += 1;
-                }
-                Err(err) => {
-                    return Err(FriggError::Internal(format!(
-                        "failed to persist provenance event for tool '{tool_name}': {err}"
-                    )));
-                }
-            }
-        }
-    }
-
-    pub fn load_provenance_events_for_tool(
-        &self,
-        tool_name: &str,
-        limit: usize,
-    ) -> FriggResult<Vec<ProvenanceEventRow>> {
-        let tool_name = tool_name.trim();
-        if tool_name.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "tool_name must not be empty".to_owned(),
-            ));
-        }
-        if limit == 0 {
-            return Err(FriggError::InvalidInput(
-                "limit must be greater than zero".to_owned(),
-            ));
-        }
-
-        let conn = open_connection(&self.db_path)?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT trace_id, tool_name, payload_json, created_at
-                FROM provenance_event
-                WHERE tool_name = ?1
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT ?2
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to prepare provenance query for tool '{tool_name}': {err}"
-                ))
-            })?;
-
-        let rows = statement
-            .query_map((tool_name, usize_to_i64(limit, "limit")?), |row| {
-                Ok(ProvenanceEventRow {
-                    trace_id: row.get(0)?,
-                    tool_name: row.get(1)?,
-                    payload_json: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            })
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to query provenance events for tool '{tool_name}': {err}"
-                ))
-            })?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode provenance events for tool '{tool_name}': {err}"
-            ))
-        })
-    }
-
-    pub fn load_recent_provenance_events(
-        &self,
-        limit: usize,
-    ) -> FriggResult<Vec<ProvenanceEventRow>> {
-        if limit == 0 {
-            return Err(FriggError::InvalidInput(
-                "limit must be greater than zero".to_owned(),
-            ));
-        }
-
-        let conn = open_connection(&self.db_path)?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT trace_id, tool_name, payload_json, created_at
-                FROM provenance_event
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT ?1
-                "#,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!("failed to prepare recent provenance query: {err}"))
-            })?;
-
-        let rows = statement
-            .query_map((usize_to_i64(limit, "limit")?,), |row| {
-                Ok(ProvenanceEventRow {
-                    trace_id: row.get(0)?,
-                    tool_name: row.get(1)?,
-                    payload_json: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            })
-            .map_err(|err| {
-                FriggError::Internal(format!("failed to query recent provenance events: {err}"))
-            })?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
-            FriggError::Internal(format!("failed to decode recent provenance events: {err}"))
-        })
-    }
-
-    pub fn prune_provenance_events(&self, keep_latest: usize) -> FriggResult<usize> {
-        if keep_latest == 0 {
-            return Err(FriggError::InvalidInput(
-                "keep_latest must be greater than zero".to_owned(),
-            ));
-        }
-
-        let mut conn = open_connection(&self.db_path)?;
-        let before = count_provenance_events(&conn)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start provenance prune transaction: {err}"
-            ))
-        })?;
-        tx.execute(
-            r#"
-            DELETE FROM provenance_event
-            WHERE rowid NOT IN (
-              SELECT rowid
-              FROM provenance_event
-              ORDER BY created_at DESC, rowid DESC
-              LIMIT ?1
-            )
-            "#,
-            [usize_to_i64(keep_latest, "keep_latest")?],
-        )
-        .map_err(|err| FriggError::Internal(format!("failed to prune provenance events: {err}")))?;
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit provenance prune transaction: {err}"
-            ))
-        })?;
-        let conn = open_connection(&self.db_path)?;
-        let after = count_provenance_events(&conn)?;
-
-        Ok(before.saturating_sub(after))
-    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct StorageInvariantRepairSummary {
+    pub repaired_categories: Vec<String>,
 }
 
 #[cfg(test)]

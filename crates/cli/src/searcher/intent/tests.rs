@@ -114,7 +114,7 @@ fn playbook_queries_allow_self_reference() {
         intent.playbook_reference_policy(),
         PlaybookReferencePolicy::AllowSelfReference
     );
-    assert!(!intent.penalize_playbook_self_reference);
+    assert!(!intent.penalizes_playbook_self_reference());
     assert!(intent.has_goal(SearchGoal::Fixtures));
 }
 
@@ -188,6 +188,34 @@ fn cli_entrypoint_queries_activate_entrypoint_build_flow_without_build_terms() {
     assert!(intent.has_goal(SearchGoal::EntryPointBuildFlow));
     assert!(!intent.has_goal(SearchGoal::Tests));
     assert!(!intent.has_artifact_bias(ArtifactBias::TestWitness));
+}
+
+#[test]
+fn direct_intent_helpers_reflect_query_witness_and_policy_meaning() {
+    let intent = SearchIntent::from_query(
+        "config examples benches benchmark pyproject requirements tests",
+    );
+
+    assert!(intent.has_goal(SearchGoal::Tests));
+    assert!(intent.has_goal(SearchGoal::Examples));
+    assert!(intent.has_goal(SearchGoal::Benchmarks));
+    assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
+    assert!(intent.has_artifact_bias(ArtifactBias::TestWitness));
+    assert!(intent.wants_example_or_bench_witnesses());
+    assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+    assert!(intent.penalizes_generic_runtime_docs());
+}
+
+#[test]
+fn direct_intent_helpers_track_playbook_self_reference_behavior() {
+    let intent = SearchIntent::from_query("playbook replay citations");
+
+    assert!(intent.has_goal(SearchGoal::Fixtures));
+    assert_eq!(
+        intent.playbook_reference_policy(),
+        PlaybookReferencePolicy::AllowSelfReference
+    );
+    assert!(!intent.penalizes_playbook_self_reference());
 }
 
 #[test]

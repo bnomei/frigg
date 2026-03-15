@@ -5,17 +5,18 @@ impl FriggMcpServer {
         &self,
         params: ReadFileParams,
     ) -> Result<Json<ReadFileResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("read_file", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("read_file", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut resolved_repository_id: Option<String> = None;
             let mut resolved_path: Option<String> = None;
             let mut resolved_absolute_path: Option<String> = None;
             let mut effective_max_bytes: Option<usize> = None;
             let mut effective_line_start: Option<usize> = None;
             let mut effective_line_end: Option<usize> = None;
-            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<ReadFileResponse>, ErrorData> {
                 let requested_max_bytes = params_for_blocking
                     .max_bytes
@@ -158,19 +159,16 @@ impl FriggMcpServer {
                     content: sliced_content,
                 }))
             })();
-            let provenance_result = server.record_provenance_with_outcome(
-                "read_file",
-                repository_hint.as_deref(),
-                json!({
-                    "repository_id": repository_hint,
-                    "path": Self::bounded_text(&params_for_blocking.path),
-                    "max_bytes": params_for_blocking.max_bytes,
-                    "line_start": params_for_blocking.line_start,
-                    "line_end": params_for_blocking.line_end,
-                    "effective_max_bytes": effective_max_bytes,
-                    "effective_line_start": effective_line_start,
-                    "effective_line_end": effective_line_end,
-                }),
+            let repository_ids = resolved_repository_id
+                .clone()
+                .or_else(|| execution_context_for_blocking.repository_hint.clone())
+                .into_iter()
+                .collect::<Vec<_>>();
+            let normalized_workload = (!repository_ids.is_empty()).then(|| {
+                execution_context_for_blocking
+                    .normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact)
+            });
+            let finalization = server.tool_execution_finalization(
                 json!({
                     "resolved_repository_id": resolved_repository_id.clone(),
                     "resolved_path": resolved_path
@@ -180,7 +178,24 @@ impl FriggMcpServer {
                         .clone()
                         .map(|path| Self::bounded_text(&path)),
                 }),
+                normalized_workload,
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                "read_file",
+                execution_context_for_blocking.repository_hint.as_deref(),
+                json!({
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": Self::bounded_text(&params_for_blocking.path),
+                    "max_bytes": params_for_blocking.max_bytes,
+                    "line_start": params_for_blocking.line_start,
+                    "line_end": params_for_blocking.line_end,
+                    "effective_max_bytes": effective_max_bytes,
+                    "effective_line_start": effective_line_start,
+                    "effective_line_end": effective_line_end,
+                }),
+                finalization.source_refs,
                 Self::provenance_outcome(&result),
+                finalization.normalized_workload,
             );
 
             ReadFileExecution {
@@ -191,17 +206,18 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        self.finalize_with_provenance("read_file", result, execution.provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn explore_impl(
         &self,
         params: ExploreParams,
     ) -> Result<Json<ExploreResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("explore", params.repository_id.clone());
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("explore", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut resolved_repository_id: Option<String> = None;
             let mut resolved_path: Option<String> = None;
             let mut resolved_absolute_path: Option<String> = None;
@@ -580,12 +596,20 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
+        let repository_ids = execution
+            .resolved_repository_id
+            .clone()
+            .or_else(|| execution_context.repository_hint.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let metadata =
+            execution_context.normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact);
         let provenance_result = self
-            .record_provenance_blocking(
+            .record_provenance_blocking_with_metadata(
                 "explore",
-                repository_hint.as_deref(),
+                execution_context.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context.repository_hint,
                     "path": Self::bounded_text(&params.path),
                     "operation": params.operation,
                     "query": params.query.as_ref().map(|value| Self::bounded_text(value)),
@@ -608,10 +632,11 @@ impl FriggMcpServer {
                     "total_matches": execution.total_matches,
                     "truncated": execution.truncated,
                 }),
+                Some(metadata),
                 &result,
             )
             .await;
-        self.finalize_with_provenance("explore", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
     fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {

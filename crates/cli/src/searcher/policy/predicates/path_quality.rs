@@ -5,215 +5,215 @@ use super::super::facts::PathQualityFacts;
 use crate::searcher::surfaces::HybridSourceClass;
 
 fn wants_docs(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_docs()
+    ctx.wants_docs
 }
 
 fn wants_readme(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_readme()
+    ctx.wants_readme
 }
 
 fn wants_onboarding(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_onboarding()
+    ctx.wants_onboarding
 }
 
 fn wants_contracts(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_contracts()
+    ctx.wants_contracts
 }
 
 fn wants_error_taxonomy(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_error_taxonomy()
+    ctx.wants_error_taxonomy
 }
 
 fn wants_tool_contracts(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_tool_contracts()
+    ctx.wants_tool_contracts
 }
 
 fn wants_mcp_runtime_surface(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_mcp_runtime_surface()
+    ctx.wants_mcp_runtime_surface
 }
 
 fn wants_examples(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_examples()
+    ctx.wants_examples
 }
 
 fn wants_benchmarks(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_benchmarks()
+    ctx.wants_benchmarks
 }
 
 fn wants_tests(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_tests()
+    ctx.wants_tests
 }
 
 fn wants_fixtures(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_fixtures()
+    ctx.wants_fixtures
 }
 
 fn wants_runtime(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_runtime()
+    ctx.wants_runtime
 }
 
 fn wants_runtime_witnesses(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_runtime_witnesses()
+    ctx.wants_runtime_witnesses
 }
 
 fn wants_runtime_config_artifacts(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_runtime_config_artifacts()
+    ctx.wants_runtime_config_artifacts
 }
 
 fn wants_entrypoint_build_flow(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_entrypoint_build_flow()
+    ctx.wants_entrypoint_build_flow
 }
 
 fn wants_navigation_fallbacks(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_navigation_fallbacks()
+    ctx.wants_navigation_fallbacks
 }
 
 fn wants_laravel_ui_witnesses(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_laravel_ui_witnesses()
+    ctx.wants_laravel_ui_witnesses
 }
 
 fn wants_blade_component_witnesses(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_blade_component_witnesses()
+    ctx.wants_blade_component_witnesses
 }
 
 fn wants_laravel_layout_witnesses(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_laravel_layout_witnesses()
+    ctx.wants_laravel_layout_witnesses
 }
 
 fn wants_test_witness_recall(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_test_witness_recall()
+    ctx.wants_test_witness_recall
 }
 
 fn wants_example_or_bench_witnesses(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().wants_example_or_bench_witnesses()
+    ctx.wants_example_or_bench_witnesses
 }
 
 fn penalize_generic_runtime_docs(ctx: &PathQualityFacts) -> bool {
-    ctx.intent().penalize_generic_runtime_docs()
+    ctx.penalize_generic_runtime_docs
 }
 
 fn class_is_documentation(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Documentation
+    ctx.class == HybridSourceClass::Documentation
 }
 
 fn class_is_error_contracts(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::ErrorContracts
+    ctx.class == HybridSourceClass::ErrorContracts
 }
 
 fn class_is_tool_contracts(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::ToolContracts
+    ctx.class == HybridSourceClass::ToolContracts
 }
 
 fn class_is_benchmark_docs(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::BenchmarkDocs
+    ctx.class == HybridSourceClass::BenchmarkDocs
 }
 
 fn class_is_readme(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Readme
+    ctx.class == HybridSourceClass::Readme
 }
 
 fn class_is_specs(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Specs
+    ctx.class == HybridSourceClass::Specs
 }
 
 fn class_is_tests(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Tests
+    ctx.class == HybridSourceClass::Tests
 }
 
 fn class_is_fixtures(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Fixtures
+    ctx.class == HybridSourceClass::Fixtures
 }
 
 fn class_is_runtime(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Runtime
+    ctx.class == HybridSourceClass::Runtime
 }
 
 fn class_is_support(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().class() == HybridSourceClass::Support
+    ctx.class == HybridSourceClass::Support
 }
 
 fn is_root_readme(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_root_readme()
+    ctx.is_root_readme
 }
 
 fn is_entrypoint_runtime(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_entrypoint_runtime()
+    ctx.is_entrypoint_runtime
 }
 
 fn is_entrypoint_build_workflow(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_entrypoint_build_workflow()
+    ctx.is_entrypoint_build_workflow
 }
 
 fn is_navigation_runtime(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_navigation_runtime()
+    ctx.is_navigation_runtime
 }
 
 fn is_navigation_reference_doc(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_navigation_reference_doc()
+    ctx.is_navigation_reference_doc
 }
 
 fn is_ci_workflow(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_ci_workflow()
+    ctx.is_ci_workflow
 }
 
 fn is_typescript_runtime_module_index(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_typescript_runtime_module_index()
+    ctx.is_typescript_runtime_module_index
 }
 
 fn is_runtime_config_artifact(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_runtime_config_artifact()
+    ctx.is_runtime_config_artifact
 }
 
 fn is_repo_root_runtime_config_artifact(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_repo_root_runtime_config_artifact()
+    ctx.is_repo_root_runtime_config_artifact
 }
 
 fn is_example_support(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_example_support()
+    ctx.is_example_support
 }
 
 fn is_bench_support(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_bench_support()
+    ctx.is_bench_support
 }
 
 fn is_test_support(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_test_support()
+    ctx.is_test_support
 }
 
 fn is_generic_runtime_witness_doc(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_generic_runtime_witness_doc()
+    ctx.is_generic_runtime_witness_doc
 }
 
 fn is_python_runtime_config(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_python_runtime_config()
+    ctx.is_python_runtime_config
 }
 
 fn is_entrypoint_reference_doc(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_entrypoint_reference_doc()
+    ctx.is_entrypoint_reference_doc
 }
 
 fn is_repo_metadata(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_repo_metadata()
+    ctx.is_repo_metadata
 }
 
 fn is_laravel_non_livewire_blade_view(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_laravel_non_livewire_blade_view()
+    ctx.is_laravel_non_livewire_blade_view
 }
 
 fn is_laravel_livewire_view(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_laravel_livewire_view()
+    ctx.is_laravel_livewire_view
 }
 
 fn is_laravel_blade_component(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_laravel_blade_component()
+    ctx.is_laravel_blade_component
 }
 
 fn is_laravel_layout_blade_view(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_laravel_layout_blade_view()
+    ctx.is_laravel_layout_blade_view
 }
 
 fn is_laravel_view_component_class(ctx: &PathQualityFacts) -> bool {
-    ctx.candidate().is_laravel_view_component_class()
+    ctx.is_laravel_view_component_class
 }
 
 pub(crate) const fn wants_docs_leaf() -> PredicateLeaf<PathQualityFacts> {

@@ -9,8 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
-    PUBLIC_READ_ONLY_TOOL_NAMES, ReadFileParams, SearchPatternType, SearchSymbolParams,
-    SearchTextParams, WRITE_CONFIRM_PARAM,
+    PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
+    ReadFileParams, SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -169,14 +169,14 @@ fn parse_tool_annotation_flags() -> Vec<ToolAnnotationFlags> {
 }
 
 #[test]
-fn security_public_tool_surface_remains_read_only_and_explicit() {
+fn security_public_tool_surface_remains_non_destructive_and_explicit() {
     let parsed = parse_tool_annotation_flags();
 
     let actual_names = parsed
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
-    let expected_names = PUBLIC_READ_ONLY_TOOL_NAMES
+    let expected_names = PUBLIC_TOOL_NAMES
         .iter()
         .map(|name| (*name).to_owned())
         .collect::<BTreeSet<_>>();
@@ -186,12 +186,23 @@ fn security_public_tool_surface_remains_read_only_and_explicit() {
     );
 
     for entry in parsed {
-        assert_eq!(
-            entry.read_only_hint,
-            Some(true),
-            "tool `{}` must declare read_only_hint = true",
-            entry.name
-        );
+        if PUBLIC_READ_ONLY_TOOL_NAMES.contains(&entry.name.as_str()) {
+            assert_eq!(
+                entry.read_only_hint,
+                Some(true),
+                "tool `{}` must declare read_only_hint = true",
+                entry.name
+            );
+        } else if PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&entry.name.as_str()) {
+            assert_eq!(
+                entry.read_only_hint,
+                Some(false),
+                "tool `{}` must declare read_only_hint = false because it mutates session state",
+                entry.name
+            );
+        } else {
+            panic!("unexpected public MCP tool `{}`", entry.name);
+        }
         assert_eq!(
             entry.destructive_hint,
             Some(false),
@@ -222,7 +233,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "list_repositories must not require `{}` on read-only tool surface",
+            "list_repositories must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
@@ -241,7 +252,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "read_file must not require `{}` on read-only tool surface",
+            "read_file must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
@@ -260,7 +271,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "search_text must not require `{}` on read-only tool surface",
+            "search_text must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
@@ -279,7 +290,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "search_symbol must not require `{}` on read-only tool surface",
+            "search_symbol must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
@@ -299,7 +310,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "find_references must not require `{}` on read-only tool surface",
+            "find_references must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
@@ -323,7 +334,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "explore must not require `{}` on read-only tool surface",
+            "explore must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }

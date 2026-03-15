@@ -4,351 +4,351 @@ use super::super::dsl::PredicateLeaf;
 use super::super::facts::SelectionFacts;
 
 fn wants_entrypoint_build_flow(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_entrypoint_build_flow()
+    ctx.wants_entrypoint_build_flow
 }
 
 fn wants_runtime_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_runtime_witnesses()
+    ctx.wants_runtime_witnesses
 }
 
 fn wants_class(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_class()
+    ctx.wants_class
 }
 
 fn wants_runtime_config_artifacts(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_runtime_config_artifacts()
+    ctx.wants_runtime_config_artifacts
 }
 
 fn wants_test_witness_recall(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_test_witness_recall()
+    ctx.wants_test_witness_recall
 }
 
 fn wants_examples(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_examples()
+    ctx.wants_examples
 }
 
 fn wants_benchmarks(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_benchmarks()
+    ctx.wants_benchmarks
 }
 
 fn wants_example_or_bench_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_example_or_bench_witnesses()
+    ctx.wants_example_or_bench_witnesses
 }
 
 fn wants_python_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_python_witnesses()
+    ctx.wants_python_witnesses
 }
 
 fn wants_mcp_runtime_surface(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_mcp_runtime_surface()
+    ctx.wants_mcp_runtime_surface
 }
 
 fn wants_runtime_companion_tests(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_runtime_companion_tests()
+    ctx.wants_runtime_companion_tests
 }
 
 fn prefer_runtime_anchor_tests(ctx: &SelectionFacts) -> bool {
-    ctx.intent().prefer_runtime_anchor_tests()
+    ctx.prefer_runtime_anchor_tests
 }
 
 fn wants_rust_workspace_config(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_rust_workspace_config()
+    ctx.wants_rust_workspace_config
 }
 
 fn wants_python_workspace_config(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_python_workspace_config()
+    ctx.wants_python_workspace_config
 }
 
 fn penalize_generic_runtime_docs(ctx: &SelectionFacts) -> bool {
-    ctx.intent().penalize_generic_runtime_docs()
+    ctx.penalize_generic_runtime_docs
 }
 
 fn wants_laravel_ui_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_laravel_ui_witnesses()
+    ctx.wants_laravel_ui_witnesses
 }
 
 fn wants_blade_component_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_blade_component_witnesses()
+    ctx.wants_blade_component_witnesses
 }
 
 fn wants_laravel_form_action_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_laravel_form_action_witnesses()
+    ctx.wants_laravel_form_action_witnesses
 }
 
 fn wants_livewire_view_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_livewire_view_witnesses()
+    ctx.wants_livewire_view_witnesses
 }
 
 fn wants_commands_middleware_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_commands_middleware_witnesses()
+    ctx.wants_commands_middleware_witnesses
 }
 
 fn wants_jobs_listeners_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_jobs_listeners_witnesses()
+    ctx.wants_jobs_listeners_witnesses
 }
 
 fn wants_laravel_layout_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_laravel_layout_witnesses()
+    ctx.wants_laravel_layout_witnesses
 }
 
 fn wants_navigation_fallbacks(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_navigation_fallbacks()
+    ctx.wants_navigation_fallbacks
 }
 
 fn wants_ci_workflow_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_ci_workflow_witnesses()
+    ctx.wants_ci_workflow_witnesses
 }
 
 fn wants_scripts_ops_witnesses(ctx: &SelectionFacts) -> bool {
-    ctx.intent().wants_scripts_ops_witnesses()
+    ctx.wants_scripts_ops_witnesses
 }
 
 fn query_mentions_cli(ctx: &SelectionFacts) -> bool {
-    ctx.query().mentions_cli()
+    ctx.query_mentions_cli
 }
 
 fn query_has_exact_terms(ctx: &SelectionFacts) -> bool {
-    ctx.query().has_exact_terms()
+    ctx.query_has_exact_terms
 }
 
 fn query_has_identifier_anchor(ctx: &SelectionFacts) -> bool {
-    ctx.query().has_identifier_anchor()
+    ctx.query_has_identifier_anchor
 }
 
 fn query_has_specific_blade_anchors(ctx: &SelectionFacts) -> bool {
-    ctx.query().has_specific_blade_anchors()
+    ctx.query_has_specific_blade_anchors
 }
 
 fn class_is_runtime(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Runtime
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Runtime
 }
 
 fn class_is_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Support
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Support
 }
 
 fn class_is_tests(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Tests
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Tests
 }
 
 fn class_is_fixtures(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Fixtures
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Fixtures
 }
 
 fn has_exact_query_term_match(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().has_exact_query_term_match()
+    ctx.has_exact_query_term_match
 }
 
 fn excerpt_has_exact_identifier_anchor(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().excerpt_has_exact_identifier_anchor()
+    ctx.excerpt_has_exact_identifier_anchor
 }
 
 fn has_path_witness_source(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().has_path_witness_source()
+    ctx.has_path_witness_source
 }
 
 fn path_overlap(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().path_overlap() > 0
+    ctx.path_overlap > 0
 }
 
 fn specific_witness_path_overlap(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().specific_witness_path_overlap() > 0
+    ctx.specific_witness_path_overlap > 0
 }
 
 fn blade_specific_path_overlap(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().blade_specific_path_overlap() > 0
+    ctx.blade_specific_path_overlap > 0
 }
 
 fn is_runtime_config_artifact(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_runtime_config_artifact()
+    ctx.is_runtime_config_artifact
 }
 
 fn is_repo_root_runtime_config_artifact(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_repo_root_runtime_config_artifact()
+    ctx.is_repo_root_runtime_config_artifact
 }
 
 fn is_typescript_runtime_module_index(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_typescript_runtime_module_index()
+    ctx.is_typescript_runtime_module_index
 }
 
 fn is_entrypoint_runtime(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_entrypoint_runtime()
+    ctx.is_entrypoint_runtime
 }
 
 fn is_entrypoint_build_workflow(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_entrypoint_build_workflow()
+    ctx.is_entrypoint_build_workflow
 }
 
 fn is_python_runtime_config(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_python_runtime_config()
+    ctx.is_python_runtime_config
 }
 
 fn is_python_entrypoint_runtime(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_python_entrypoint_runtime()
+    ctx.is_python_entrypoint_runtime
 }
 
 fn is_python_test_witness(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_python_test_witness()
+    ctx.is_python_test_witness
 }
 
 fn is_loose_python_test_module(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_loose_python_test_module()
+    ctx.is_loose_python_test_module
 }
 
 fn is_rust_workspace_config(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_rust_workspace_config()
+    ctx.is_rust_workspace_config
 }
 
 fn is_ci_workflow(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_ci_workflow()
+    ctx.is_ci_workflow
 }
 
 fn is_example_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_example_support()
+    ctx.is_example_support
 }
 
 fn is_bench_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_bench_support()
+    ctx.is_bench_support
 }
 
 fn is_test_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_test_support()
+    ctx.is_test_support
 }
 
 fn is_examples_rs(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_examples_rs()
+    ctx.is_examples_rs
 }
 
 fn path_stem_is_server_or_cli(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().path_stem_is_server_or_cli()
+    ctx.path_stem_is_server_or_cli
 }
 
 fn path_stem_is_main(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().path_stem_is_main()
+    ctx.path_stem_is_main
 }
 
 fn is_cli_test_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_cli_test_support()
+    ctx.is_cli_test_support
 }
 
 fn is_runtime_anchor_test_support(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_runtime_anchor_test_support()
+    ctx.is_runtime_anchor_test_support
 }
 
 fn is_test_harness(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_test_harness()
+    ctx.is_test_harness
 }
 
 fn is_non_code_test_doc(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_non_code_test_doc()
+    ctx.is_non_code_test_doc
 }
 
 fn is_generic_runtime_witness_doc(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_generic_runtime_witness_doc()
+    ctx.is_generic_runtime_witness_doc
 }
 
 fn is_laravel_core_provider(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_core_provider()
+    ctx.is_laravel_core_provider
 }
 
 fn is_laravel_provider(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_provider()
+    ctx.is_laravel_provider
 }
 
 fn is_laravel_route(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_route()
+    ctx.is_laravel_route
 }
 
 fn is_laravel_bootstrap_entrypoint(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_bootstrap_entrypoint()
+    ctx.is_laravel_bootstrap_entrypoint
 }
 
 fn is_laravel_non_livewire_blade_view(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_non_livewire_blade_view()
+    ctx.is_laravel_non_livewire_blade_view
 }
 
 fn is_laravel_livewire_view(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_livewire_view()
+    ctx.is_laravel_livewire_view
 }
 
 fn is_laravel_blade_component(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_blade_component()
+    ctx.is_laravel_blade_component
 }
 
 fn is_laravel_nested_blade_component(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_nested_blade_component()
+    ctx.is_laravel_nested_blade_component
 }
 
 fn is_laravel_form_action_blade(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_form_action_blade()
+    ctx.is_laravel_form_action_blade
 }
 
 fn is_laravel_livewire_component(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_livewire_component()
+    ctx.is_laravel_livewire_component
 }
 
 fn is_laravel_view_component_class(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_view_component_class()
+    ctx.is_laravel_view_component_class
 }
 
 fn is_laravel_command_or_middleware(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_command_or_middleware()
+    ctx.is_laravel_command_or_middleware
 }
 
 fn is_laravel_job_or_listener(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_job_or_listener()
+    ctx.is_laravel_job_or_listener
 }
 
 fn is_laravel_layout_blade_view(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_laravel_layout_blade_view()
+    ctx.is_laravel_layout_blade_view
 }
 
 fn laravel_surface_is_blade_view(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().laravel_surface()
+    ctx.laravel_surface
         == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeView)
 }
 
 fn laravel_surface_is_livewire_component(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().laravel_surface()
+    ctx.laravel_surface
         == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireComponent)
 }
 
 fn laravel_surface_is_livewire_view(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().laravel_surface()
+    ctx.laravel_surface
         == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireView)
 }
 
 fn laravel_surface_is_blade_component(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().laravel_surface()
+    ctx.laravel_surface
         == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeComponent)
 }
 
 fn is_repo_metadata(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_repo_metadata()
+    ctx.is_repo_metadata
 }
 
 fn has_generic_runtime_anchor_stem(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().has_generic_runtime_anchor_stem()
+    ctx.has_generic_runtime_anchor_stem
 }
 
 fn is_frontend_runtime_noise(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_frontend_runtime_noise()
+    ctx.is_frontend_runtime_noise
 }
 
 fn seen_count_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_count() == 0
+    ctx.seen_count == 0
 }
 
 fn runtime_seen_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().runtime_seen() == 0
+    ctx.runtime_seen == 0
 }
 
 fn has_seen_repo_root_runtime_config(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_repo_root_runtime_configs() > 0
+    ctx.seen_repo_root_runtime_configs > 0
 }
 
 fn laravel_surface_seen_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().laravel_surface_seen() == 0
+    ctx.laravel_surface_seen == 0
 }
 
 fn wants_contractish(ctx: &SelectionFacts) -> bool {
@@ -368,27 +368,27 @@ fn wants_mixed_query_example_or_bench(ctx: &SelectionFacts) -> bool {
 }
 
 fn class_is_documentation(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Documentation
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Documentation
 }
 
 fn class_is_readme(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Readme
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Readme
 }
 
 fn class_is_specs(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().class() == crate::searcher::surfaces::HybridSourceClass::Specs
+    ctx.class == crate::searcher::surfaces::HybridSourceClass::Specs
 }
 
 fn has_laravel_surface(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().laravel_surface().is_some()
+    ctx.laravel_surface.is_some()
 }
 
 fn excerpt_has_build_flow_anchor(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().excerpt_has_build_flow_anchor()
+    ctx.excerpt_has_build_flow_anchor
 }
 
 fn excerpt_has_test_double_anchor(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().excerpt_has_test_double_anchor()
+    ctx.excerpt_has_test_double_anchor
 }
 
 fn is_entrypoint_reference_doc(ctx: &SelectionFacts) -> bool {
@@ -396,87 +396,87 @@ fn is_entrypoint_reference_doc(ctx: &SelectionFacts) -> bool {
 }
 
 fn is_navigation_runtime(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_navigation_runtime()
+    ctx.is_navigation_runtime
 }
 
 fn is_navigation_reference_doc(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_navigation_reference_doc()
+    ctx.is_navigation_reference_doc
 }
 
 fn is_scripts_ops(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_scripts_ops()
+    ctx.is_scripts_ops
 }
 
 fn is_runtime_adjacent_python_test(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_runtime_adjacent_python_test()
+    ctx.is_runtime_adjacent_python_test
 }
 
 fn is_non_prefix_python_test_module(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().is_non_prefix_python_test_module()
+    ctx.is_non_prefix_python_test_module
 }
 
 fn runtime_family_prefix_overlap_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().runtime_family_prefix_overlap() == 0
+    ctx.runtime_family_prefix_overlap == 0
 }
 
 fn runtime_family_prefix_overlap_at_least_four(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().runtime_family_prefix_overlap() >= 4
+    ctx.runtime_family_prefix_overlap >= 4
 }
 
 fn runtime_family_prefix_overlap_one_or_two(ctx: &SelectionFacts) -> bool {
-    (1..=2).contains(&ctx.candidate().runtime_family_prefix_overlap())
+    (1..=2).contains(&ctx.runtime_family_prefix_overlap)
 }
 
 fn path_depth_at_least_four(ctx: &SelectionFacts) -> bool {
-    ctx.candidate().path_depth() >= 4
+    ctx.path_depth >= 4
 }
 
 fn seen_count_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_count() > 0
+    ctx.seen_count > 0
 }
 
 fn runtime_seen_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().runtime_seen() > 0
+    ctx.runtime_seen > 0
 }
 
 fn seen_ci_workflows_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_ci_workflows() == 0
+    ctx.seen_ci_workflows == 0
 }
 
 fn seen_ci_workflows_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_ci_workflows() > 0
+    ctx.seen_ci_workflows > 0
 }
 
 fn seen_example_support_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_example_support() == 0
+    ctx.seen_example_support == 0
 }
 
 fn seen_example_support_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_example_support() > 0
+    ctx.seen_example_support > 0
 }
 
 fn seen_bench_support_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_bench_support() == 0
+    ctx.seen_bench_support == 0
 }
 
 fn seen_bench_support_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_bench_support() > 0
+    ctx.seen_bench_support > 0
 }
 
 fn seen_plain_test_support_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_plain_test_support() == 0
+    ctx.seen_plain_test_support == 0
 }
 
 fn seen_plain_test_support_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_plain_test_support() > 0
+    ctx.seen_plain_test_support > 0
 }
 
 fn laravel_surface_seen_positive(ctx: &SelectionFacts) -> bool {
-    ctx.state().laravel_surface_seen() > 0
+    ctx.laravel_surface_seen > 0
 }
 
 fn seen_typescript_runtime_module_indexes_is_zero(ctx: &SelectionFacts) -> bool {
-    ctx.state().seen_typescript_runtime_module_indexes() == 0
+    ctx.seen_typescript_runtime_module_indexes == 0
 }
 
 pub(crate) const fn wants_entrypoint_build_flow_leaf() -> PredicateLeaf<SelectionFacts> {
@@ -1209,15 +1209,23 @@ mod tests {
 
         assert!((wants_example_or_bench_witnesses_leaf().eval)(&facts));
         assert!((wants_runtime_or_entrypoint_build_flow_leaf().eval)(&facts));
-        assert!((wants_runtime_config_or_entrypoint_build_flow_leaf().eval)(&facts));
+        assert!((wants_runtime_config_or_entrypoint_build_flow_leaf().eval)(
+            &facts
+        ));
         assert!((wants_contractish_leaf().eval)(&facts));
-        assert!((runtime_family_prefix_overlap_one_or_two_leaf().eval)(&facts));
-        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(&facts));
+        assert!((runtime_family_prefix_overlap_one_or_two_leaf().eval)(
+            &facts
+        ));
+        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(
+            &facts
+        ));
 
         facts.wants_entrypoint_build_flow = false;
         assert!(!(wants_runtime_config_or_entrypoint_build_flow_leaf().eval)(&facts));
         facts.wants_runtime_config_artifacts = true;
-        assert!((wants_runtime_config_or_entrypoint_build_flow_leaf().eval)(&facts));
+        assert!((wants_runtime_config_or_entrypoint_build_flow_leaf().eval)(
+            &facts
+        ));
     }
 
     #[test]
@@ -1245,8 +1253,12 @@ mod tests {
         assert!(!(blade_specific_path_overlap_leaf().eval)(&facts));
         assert!(!(path_depth_at_least_four_leaf().eval)(&facts));
         assert!((runtime_family_prefix_overlap_is_zero_leaf().eval)(&facts));
-        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(&facts));
-        assert!(!(runtime_family_prefix_overlap_one_or_two_leaf().eval)(&facts));
+        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(
+            &facts
+        ));
+        assert!(!(runtime_family_prefix_overlap_one_or_two_leaf().eval)(
+            &facts
+        ));
         assert!(!(seen_ci_workflows_positive_leaf().eval)(&facts));
         assert!(!(seen_example_support_positive_leaf().eval)(&facts));
         assert!(!(seen_bench_support_positive_leaf().eval)(&facts));
@@ -1271,8 +1283,12 @@ mod tests {
         assert!((blade_specific_path_overlap_leaf().eval)(&facts));
         assert!((path_depth_at_least_four_leaf().eval)(&facts));
         assert!(!(runtime_family_prefix_overlap_is_zero_leaf().eval)(&facts));
-        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(&facts));
-        assert!((runtime_family_prefix_overlap_one_or_two_leaf().eval)(&facts));
+        assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(
+            &facts
+        ));
+        assert!((runtime_family_prefix_overlap_one_or_two_leaf().eval)(
+            &facts
+        ));
         assert!((seen_ci_workflows_positive_leaf().eval)(&facts));
         assert!((seen_example_support_positive_leaf().eval)(&facts));
         assert!((seen_bench_support_positive_leaf().eval)(&facts));
@@ -1280,8 +1296,12 @@ mod tests {
         assert!((laravel_surface_seen_positive_leaf().eval)(&facts));
 
         facts.runtime_family_prefix_overlap = 4;
-        assert!((runtime_family_prefix_overlap_at_least_four_leaf().eval)(&facts));
-        assert!(!(runtime_family_prefix_overlap_one_or_two_leaf().eval)(&facts));
+        assert!((runtime_family_prefix_overlap_at_least_four_leaf().eval)(
+            &facts
+        ));
+        assert!(!(runtime_family_prefix_overlap_one_or_two_leaf().eval)(
+            &facts
+        ));
         facts.runtime_family_prefix_overlap = 0;
         assert!((runtime_family_prefix_overlap_is_zero_leaf().eval)(&facts));
     }

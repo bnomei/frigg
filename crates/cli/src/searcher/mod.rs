@@ -17,6 +17,7 @@ mod ordering;
 mod overlay_projection;
 mod path_witness_projection;
 mod policy;
+mod projection_service;
 mod query_terms;
 mod ranker;
 mod regex_support;
@@ -31,10 +32,7 @@ use crate::languages::{LanguageCapability, SymbolLanguage, parse_supported_langu
 pub use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
-use crate::storage::{
-    EntrypointSurfaceProjectionRecord, ManifestEntry, PathWitnessProjectionRecord, Storage,
-    TestSubjectProjectionRecord, resolve_provenance_db_path,
-};
+use crate::storage::{Storage, resolve_provenance_db_path};
 use crate::text_sanitization::scrub_leading_html_comment;
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 use aho_corasick::AhoCorasick;
@@ -60,8 +58,7 @@ use lexical_channel::{
     HybridPathWitnessQueryContext, best_path_witness_anchor_in_file,
     build_hybrid_lexical_hits_with_intent, build_hybrid_path_witness_hits_with_intent,
     hybrid_path_has_exact_stem_match, hybrid_path_quality_multiplier_with_intent,
-    hybrid_path_witness_recall_score, hybrid_path_witness_recall_score_for_projection,
-    merge_hybrid_lexical_search_output, semantic_excerpt,
+    hybrid_path_witness_recall_score, merge_hybrid_lexical_search_output, semantic_excerpt,
 };
 #[cfg(test)]
 use lexical_channel::{build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query};
@@ -70,17 +67,7 @@ use ordering::{
     retain_bounded_match, sort_matches_deterministically,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
-use overlay_projection::{
-    PathOverlayBoost, StoredEntrypointSurfaceProjection, StoredTestSubjectProjection,
-    accumulate_test_subject_overlay_boosts, build_entrypoint_surface_projection_record,
-    build_test_subject_projection_records as build_test_subject_projection_records_from_paths,
-    decode_entrypoint_surface_projection_record, decode_test_subject_projection_record,
-    entrypoint_surface_overlay_boost,
-};
-use path_witness_projection::{
-    StoredPathWitnessProjection, build_path_witness_projection_record,
-    decode_path_witness_projection_record,
-};
+use projection_service::ProjectionStoreService;
 use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
     hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
@@ -89,6 +76,17 @@ use query_terms::{
 };
 pub use ranker::rank_hybrid_evidence;
 use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
+pub(crate) use overlay_projection::{
+    StoredTestSubjectProjection, build_entrypoint_surface_projection_records_from_paths,
+    build_test_subject_projection_records as build_test_subject_projection_records_from_paths,
+    decode_entrypoint_surface_projection_records, decode_test_subject_projection_records,
+};
+#[cfg(test)]
+use overlay_projection::StoredEntrypointSurfaceProjection;
+pub(crate) use path_witness_projection::{
+    StoredPathWitnessProjection, build_path_witness_projection_records_from_paths,
+    decode_path_witness_projection_records,
+};
 use regex::Regex;
 pub use regex_support::{RegexSearchError, compile_safe_regex};
 use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
@@ -191,24 +189,7 @@ fn rank_hybrid_evidence_for_query_with_witness(
 pub struct TextSearcher {
     config: FriggConfig,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
-    hybrid_path_witness_projection_cache: Arc<
-        RwLock<
-            BTreeMap<HybridPathWitnessProjectionCacheKey, Arc<Vec<StoredPathWitnessProjection>>>,
-        >,
-    >,
-    hybrid_test_subject_projection_cache: Arc<
-        RwLock<
-            BTreeMap<HybridPathWitnessProjectionCacheKey, Arc<Vec<StoredTestSubjectProjection>>>,
-        >,
-    >,
-    hybrid_entrypoint_surface_projection_cache: Arc<
-        RwLock<
-            BTreeMap<
-                HybridPathWitnessProjectionCacheKey,
-                Arc<Vec<StoredEntrypointSurfaceProjection>>,
-            >,
-        >,
-    >,
+    projection_store_service: ProjectionStoreService,
     hybrid_graph_file_analysis_cache:
         Arc<RwLock<BTreeMap<HybridGraphFileAnalysisCacheKey, Arc<HybridGraphFileAnalysis>>>>,
     hybrid_graph_artifact_cache:
@@ -252,12 +233,40 @@ impl TextSearcher {
         Self {
             config,
             validated_manifest_candidate_cache,
-            hybrid_path_witness_projection_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            hybrid_test_subject_projection_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            hybrid_entrypoint_surface_projection_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            projection_store_service: ProjectionStoreService::new(),
             hybrid_graph_file_analysis_cache: Arc::new(RwLock::new(BTreeMap::new())),
             hybrid_graph_artifact_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_or_build_entrypoint_surface_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredEntrypointSurfaceProjection>>> {
+        self.projection_store_service
+            .load_or_build_entrypoint_surface_projections_for_repository(repository, snapshot_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn entrypoint_surface_projection_cache_len(&self) -> usize {
+        self.projection_store_service.entrypoint_surface_cache_len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_or_build_test_subject_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredTestSubjectProjection>>> {
+        self.projection_store_service
+            .load_or_build_test_subject_projections_for_repository(repository, snapshot_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_witness_projection_cache_len(&self) -> usize {
+        self.projection_store_service.path_witness_cache_len()
     }
 
     pub fn search(&self, query: SearchTextQuery) -> FriggResult<Vec<TextMatch>> {
@@ -698,6 +707,7 @@ impl TextSearcher {
             merge_candidate_files(
                 &mut candidates,
                 hidden_workflow_candidates_for_repository(
+                    &repository.repository_id,
                     &repository.root,
                     filters,
                     intent,
@@ -707,6 +717,7 @@ impl TextSearcher {
             merge_candidate_files(
                 &mut candidates,
                 root_scoped_runtime_config_candidates_for_repository(
+                    &repository.repository_id,
                     &repository.root,
                     filters,
                     intent,
@@ -819,7 +830,7 @@ impl TextSearcher {
         let frontier = policy::plan_path_witness_frontier(intent, limit);
         let top_k = frontier.top_k;
         let materialized_limit = frontier.materialized_limit;
-        let query_context = HybridPathWitnessQueryContext::new(query_text);
+        let query_context = HybridPathWitnessQueryContext::from_query_text(query_text);
         let mut scored = Vec::<PathWitnessCandidate>::with_capacity(top_k);
         let base_repositories = candidate_universe
             .repositories
@@ -909,177 +920,13 @@ impl TextSearcher {
         intent: &HybridRankingIntent,
         query_context: &HybridPathWitnessQueryContext,
     ) -> Option<Vec<PathWitnessCandidate>> {
-        let base_repository = base_repository?;
-        let snapshot_id = base_repository.snapshot_id.as_deref()?;
-        let projections = self
-            .load_or_build_path_witness_projections_for_repository(base_repository, snapshot_id)?;
-        let base_candidates_by_path = base_repository
-            .candidates
-            .iter()
-            .map(|candidate| {
-                (
-                    candidate.relative_path.clone(),
-                    candidate.absolute_path.clone(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let projections_by_path = projections
-            .iter()
-            .map(|projection| (projection.path.clone(), projection))
-            .collect::<BTreeMap<_, _>>();
-        if base_candidates_by_path
-            .keys()
-            .any(|path| !projections_by_path.contains_key(path))
-        {
-            return None;
-        }
-        let overlay_boosts_by_path = self.overlay_boosts_for_repository(
-            repository,
-            Some(base_repository),
-            intent,
-            query_context,
-        );
-
-        let mut scored = Vec::new();
-        for (rel_path, path) in &base_candidates_by_path {
-            let projection = projections_by_path.get(rel_path)?;
-            let base_score = hybrid_path_witness_recall_score_for_projection(
-                rel_path,
-                projection,
+        self.projection_store_service
+            .projected_path_witness_candidates_for_repository(
+                repository,
+                base_repository,
                 intent,
                 query_context,
-            );
-            let overlay_boost = overlay_boosts_by_path
-                .get(rel_path)
-                .cloned()
-                .unwrap_or_default();
-            let Some(score) = base_score
-                .map(|score| score + overlay_boost.bonus_score())
-                .or_else(|| {
-                    (overlay_boost.bonus_millis > 0).then_some(overlay_boost.bonus_score())
-                })
-            else {
-                continue;
-            };
-            scored.push(PathWitnessCandidate {
-                score,
-                repository_id: repository.repository_id.clone(),
-                rel_path: rel_path.clone(),
-                path: path.clone(),
-                witness_provenance_ids: overlay_boost.provenance_ids,
-            });
-        }
-
-        for candidate in &repository.candidates {
-            if base_candidates_by_path.contains_key(&candidate.relative_path) {
-                continue;
-            }
-            let base_score =
-                hybrid_path_witness_recall_score(&candidate.relative_path, intent, query_context);
-            let overlay_boost = overlay_boosts_by_path
-                .get(&candidate.relative_path)
-                .cloned()
-                .unwrap_or_default();
-            let Some(score) = base_score
-                .map(|score| score + overlay_boost.bonus_score())
-                .or_else(|| {
-                    (overlay_boost.bonus_millis > 0).then_some(overlay_boost.bonus_score())
-                })
-            else {
-                continue;
-            };
-            scored.push(PathWitnessCandidate {
-                score,
-                repository_id: repository.repository_id.clone(),
-                rel_path: candidate.relative_path.clone(),
-                path: candidate.absolute_path.clone(),
-                witness_provenance_ids: overlay_boost.provenance_ids,
-            });
-        }
-
-        Some(scored)
-    }
-
-    fn overlay_boosts_for_repository(
-        &self,
-        repository: &RepositoryCandidateUniverse,
-        base_repository: Option<&RepositoryCandidateUniverse>,
-        intent: &HybridRankingIntent,
-        query_context: &HybridPathWitnessQueryContext,
-    ) -> BTreeMap<String, PathOverlayBoost> {
-        let mut overlay_boosts_by_path = BTreeMap::<String, PathOverlayBoost>::new();
-        let base_repository = base_repository.unwrap_or(repository);
-
-        if intent.wants_tests || intent.wants_test_witness_recall {
-            if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-                if let Some(test_subject_projections) = self
-                    .load_or_build_test_subject_projections_for_repository(
-                        base_repository,
-                        snapshot_id,
-                    )
-                {
-                    for (path, boost) in accumulate_test_subject_overlay_boosts(
-                        test_subject_projections.as_ref(),
-                        intent,
-                        query_context,
-                    ) {
-                        merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
-                    }
-                }
-            }
-        }
-
-        let wants_entrypoint_overlay = intent.wants_entrypoint_build_flow
-            || intent.wants_runtime_config_artifacts
-            || intent.wants_ci_workflow_witnesses
-            || intent.wants_scripts_ops_witnesses;
-        if !wants_entrypoint_overlay {
-            return overlay_boosts_by_path;
-        }
-
-        let mut stored_projection_paths = std::collections::BTreeSet::<String>::new();
-        if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-            if let Some(entrypoint_surface_projections) = self
-                .load_or_build_entrypoint_surface_projections_for_repository(
-                    base_repository,
-                    snapshot_id,
-                )
-            {
-                for projection in entrypoint_surface_projections.iter() {
-                    stored_projection_paths.insert(projection.path.clone());
-                    if let Some(boost) =
-                        entrypoint_surface_overlay_boost(projection, intent, query_context)
-                    {
-                        merge_path_overlay_boost(
-                            &mut overlay_boosts_by_path,
-                            projection.path.clone(),
-                            boost,
-                        );
-                    }
-                }
-            }
-        }
-
-        for candidate in &repository.candidates {
-            if stored_projection_paths.contains(&candidate.relative_path) {
-                continue;
-            }
-            if let Some(projection) =
-                StoredEntrypointSurfaceProjection::from_path(&candidate.relative_path)
-            {
-                if let Some(boost) =
-                    entrypoint_surface_overlay_boost(&projection, intent, query_context)
-                {
-                    merge_path_overlay_boost(
-                        &mut overlay_boosts_by_path,
-                        candidate.relative_path.clone(),
-                        boost,
-                    );
-                }
-            }
-        }
-
-        overlay_boosts_by_path
+            )
     }
 
     fn build_overlay_aware_path_witness_seed_universe(
@@ -1102,12 +949,14 @@ impl TextSearcher {
                     .repositories
                     .iter()
                     .find(|candidate| candidate.repository_id == repository.repository_id);
-                let overlay_boosts_by_path = self.overlay_boosts_for_repository(
-                    repository,
-                    base_repository,
-                    intent,
-                    query_context,
-                );
+                let overlay_boosts_by_path = self
+                    .projection_store_service
+                    .overlay_boosts_for_repository(
+                        repository,
+                        base_repository,
+                        intent,
+                        query_context,
+                    );
                 let mut scored = repository
                     .candidates
                     .iter()
@@ -1198,308 +1047,15 @@ impl TextSearcher {
         })
     }
 
-    fn load_or_build_path_witness_projections_for_repository(
-        &self,
-        repository: &RepositoryCandidateUniverse,
-        snapshot_id: &str,
-    ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
-        let cache_key = HybridPathWitnessProjectionCacheKey {
-            repository_id: repository.repository_id.clone(),
-            root: repository.root.clone(),
-            snapshot_id: snapshot_id.to_owned(),
-        };
-        if let Some(cached) = self
-            .hybrid_path_witness_projection_cache
-            .read()
-            .ok()?
-            .get(&cache_key)
-            .cloned()
-        {
-            return Some(cached);
-        }
-
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        let manifest_entries = storage.load_manifest_for_snapshot(snapshot_id).ok()?;
-        if manifest_entries.is_empty() {
-            return None;
-        }
-        let expected_paths = manifest_entries
-            .iter()
-            .map(|entry| {
-                normalize_repository_relative_path(&repository.root, Path::new(&entry.path))
-            })
-            .collect::<Vec<_>>();
-
-        let mut rows = storage
-            .load_path_witness_projections_for_repository_snapshot(
-                &repository.repository_id,
-                snapshot_id,
-            )
-            .ok()?;
-        let has_expected_rows = rows.len() == expected_paths.len()
-            && rows
-                .iter()
-                .map(|row| row.path.as_str())
-                .eq(expected_paths.iter().map(String::as_str));
-        if !has_expected_rows {
-            rows = self.build_path_witness_projection_records(
-                &repository.repository_id,
-                snapshot_id,
-                &repository.root,
-                &manifest_entries,
-            )?;
-            storage
-                .replace_path_witness_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                    &rows,
-                )
-                .ok()?;
-        }
-
-        let projections = Arc::new(self.decode_path_witness_projection_records(&rows)?);
-        self.hybrid_path_witness_projection_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
-        Some(projections)
-    }
-
-    fn build_path_witness_projection_records(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        root: &Path,
-        manifest_entries: &[ManifestEntry],
-    ) -> Option<Vec<PathWitnessProjectionRecord>> {
-        let mut rows = manifest_entries
-            .iter()
-            .map(|entry| {
-                let relative_path =
-                    normalize_repository_relative_path(root, Path::new(&entry.path));
-                build_path_witness_projection_record(repository_id, snapshot_id, &relative_path)
-                    .ok()
-            })
-            .collect::<Option<Vec<_>>>()?;
-        rows.sort_by(|left, right| left.path.cmp(&right.path));
-        rows.dedup_by(|left, right| left.path == right.path);
-        Some(rows)
-    }
-
-    fn decode_path_witness_projection_records(
-        &self,
-        rows: &[PathWitnessProjectionRecord],
-    ) -> Option<Vec<StoredPathWitnessProjection>> {
-        rows.iter()
-            .map(|row| decode_path_witness_projection_record(row).ok())
-            .collect()
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn load_or_build_test_subject_projections_for_repository(
-        &self,
-        repository: &RepositoryCandidateUniverse,
-        snapshot_id: &str,
-    ) -> Option<Arc<Vec<StoredTestSubjectProjection>>> {
-        let cache_key = HybridPathWitnessProjectionCacheKey {
-            repository_id: repository.repository_id.clone(),
-            root: repository.root.clone(),
-            snapshot_id: snapshot_id.to_owned(),
-        };
-        if let Some(cached) = self
-            .hybrid_test_subject_projection_cache
-            .read()
-            .ok()?
-            .get(&cache_key)
-            .cloned()
-        {
-            return Some(cached);
-        }
-
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        let manifest_entries = storage.load_manifest_for_snapshot(snapshot_id).ok()?;
-        if manifest_entries.is_empty() {
-            return None;
-        }
-        let expected_rows = self.build_test_subject_projection_records(
-            &repository.repository_id,
-            snapshot_id,
-            &repository.root,
-            &manifest_entries,
-        )?;
-        let mut rows = storage
-            .load_test_subject_projections_for_repository_snapshot(
-                &repository.repository_id,
-                snapshot_id,
-            )
-            .ok()?;
-        if rows != expected_rows {
-            storage
-                .replace_test_subject_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                    &expected_rows,
-                )
-                .ok()?;
-            rows = expected_rows;
-        }
-
-        let projections = Arc::new(self.decode_test_subject_projection_records(&rows)?);
-        self.hybrid_test_subject_projection_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
-        Some(projections)
-    }
-
-    fn build_test_subject_projection_records(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        root: &Path,
-        manifest_entries: &[ManifestEntry],
-    ) -> Option<Vec<TestSubjectProjectionRecord>> {
-        let mut paths = manifest_entries
-            .iter()
-            .map(|entry| normalize_repository_relative_path(root, Path::new(&entry.path)))
-            .collect::<Vec<_>>();
-        paths.sort();
-        paths.dedup();
-        build_test_subject_projection_records_from_paths(repository_id, snapshot_id, &paths).ok()
-    }
-
-    fn decode_test_subject_projection_records(
-        &self,
-        rows: &[TestSubjectProjectionRecord],
-    ) -> Option<Vec<StoredTestSubjectProjection>> {
-        rows.iter()
-            .map(|row| decode_test_subject_projection_record(row).ok())
-            .collect()
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn load_or_build_entrypoint_surface_projections_for_repository(
-        &self,
-        repository: &RepositoryCandidateUniverse,
-        snapshot_id: &str,
-    ) -> Option<Arc<Vec<StoredEntrypointSurfaceProjection>>> {
-        let cache_key = HybridPathWitnessProjectionCacheKey {
-            repository_id: repository.repository_id.clone(),
-            root: repository.root.clone(),
-            snapshot_id: snapshot_id.to_owned(),
-        };
-        if let Some(cached) = self
-            .hybrid_entrypoint_surface_projection_cache
-            .read()
-            .ok()?
-            .get(&cache_key)
-            .cloned()
-        {
-            return Some(cached);
-        }
-
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        let manifest_entries = storage.load_manifest_for_snapshot(snapshot_id).ok()?;
-        if manifest_entries.is_empty() {
-            return None;
-        }
-        let expected_rows = self.build_entrypoint_surface_projection_records(
-            &repository.repository_id,
-            snapshot_id,
-            &repository.root,
-            &manifest_entries,
-        )?;
-        let mut rows = storage
-            .load_entrypoint_surface_projections_for_repository_snapshot(
-                &repository.repository_id,
-                snapshot_id,
-            )
-            .ok()?;
-        if rows != expected_rows {
-            storage
-                .replace_entrypoint_surface_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                    &expected_rows,
-                )
-                .ok()?;
-            rows = expected_rows;
-        }
-
-        let projections = Arc::new(self.decode_entrypoint_surface_projection_records(&rows)?);
-        self.hybrid_entrypoint_surface_projection_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
-        Some(projections)
-    }
-
-    fn build_entrypoint_surface_projection_records(
-        &self,
-        repository_id: &str,
-        snapshot_id: &str,
-        root: &Path,
-        manifest_entries: &[ManifestEntry],
-    ) -> Option<Vec<EntrypointSurfaceProjectionRecord>> {
-        let mut rows = manifest_entries
-            .iter()
-            .filter_map(|entry| {
-                let relative_path =
-                    normalize_repository_relative_path(root, Path::new(&entry.path));
-                build_entrypoint_surface_projection_record(
-                    repository_id,
-                    snapshot_id,
-                    &relative_path,
-                )
-                .ok()
-                .flatten()
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.path.cmp(&right.path));
-        rows.dedup_by(|left, right| left.path == right.path);
-        Some(rows)
-    }
-
-    fn decode_entrypoint_surface_projection_records(
-        &self,
-        rows: &[EntrypointSurfaceProjectionRecord],
-    ) -> Option<Vec<StoredEntrypointSurfaceProjection>> {
-        rows.iter()
-            .map(|row| decode_entrypoint_surface_projection_record(row).ok())
-            .collect()
-    }
 }
 
 #[derive(Debug)]
-struct PathWitnessCandidate {
+pub(super) struct PathWitnessCandidate {
     score: f32,
     repository_id: String,
     rel_path: String,
     path: PathBuf,
     witness_provenance_ids: Vec<String>,
-}
-
-fn merge_path_overlay_boost(
-    boosts_by_path: &mut BTreeMap<String, PathOverlayBoost>,
-    path: String,
-    boost: PathOverlayBoost,
-) {
-    boosts_by_path.entry(path).or_default().merge(boost);
 }
 
 fn overlay_seed_reserve_slots(intent: &HybridRankingIntent, per_repository_limit: usize) -> usize {

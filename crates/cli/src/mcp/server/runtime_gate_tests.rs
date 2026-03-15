@@ -36,7 +36,9 @@ use scip::types::{
 };
 use serde_json::Value;
 
-use super::{FriggMcpServer, RepositoryResponseCacheFreshnessMode};
+use super::{
+    FriggMcpServer, ReadOnlyToolExecutionContext, RepositoryResponseCacheFreshnessMode,
+};
 
 fn fixture_config() -> FriggConfig {
     let workspace_root = std::env::current_dir()
@@ -101,6 +103,120 @@ fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
     }
 }
 
+#[test]
+fn read_only_tool_execution_context_scopes_session_repository_with_manifest_freshness() {
+    let workspace_root = temp_workspace_root("read-only-tool-context-manifest-freshness");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let repository_id = workspace.repository_id.clone();
+    server.set_current_repository_id(Some(repository_id.clone()));
+
+    let context = server
+        .scoped_read_only_tool_execution_context(
+            "search_text",
+            None,
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("tool execution context should resolve current repository");
+
+    assert_eq!(
+        context.base,
+        ReadOnlyToolExecutionContext {
+            tool_name: "search_text",
+            repository_hint: None,
+        }
+    );
+    assert_eq!(context.scoped_repository_ids, vec![repository_id]);
+    assert_eq!(context.scoped_workspaces.len(), 1);
+    assert!(
+        context.cache_freshness.scopes.is_some(),
+        "scoped execution context should capture cache freshness inputs"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn read_only_tool_execution_context_rejects_unknown_repository_hint() {
+    let server = FriggMcpServer::new(fixture_config());
+    let error = server
+        .scoped_read_only_tool_execution_context(
+            "search_text",
+            Some("missing-repository".to_owned()),
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect_err("unknown repository hints should fail during execution scoping");
+
+    assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    let detail = error
+        .data
+        .as_ref()
+        .expect("missing repository errors should include metadata");
+    assert_eq!(detail.get("error_code"), Some(&Value::String("resource_not_found".to_owned())));
+}
+
+#[test]
+fn read_only_navigation_tool_execution_context_scopes_explicit_repository() {
+    let workspace_root = temp_workspace_root("read-only-navigation-tool-context-freshness");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .attached_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let repository_id = workspace.repository_id.clone();
+
+    let context = server
+        .scoped_read_only_tool_execution_context(
+            "go_to_definition",
+            Some(repository_id.clone()),
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )
+        .expect("navigation execution context should resolve explicit repository");
+
+    assert_eq!(context.base.tool_name, "go_to_definition");
+    assert_eq!(context.base.repository_hint.as_deref(), Some(repository_id.as_str()));
+    assert_eq!(context.scoped_repository_ids, vec![repository_id]);
+    assert!(
+        context.cache_freshness.scopes.is_some(),
+        "navigation execution context should capture cache freshness inputs"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 async fn wait_for_repository_answer_cache_eviction(
     server: &FriggMcpServer,
     repository_id: &str,
@@ -110,31 +226,37 @@ async fn wait_for_repository_answer_cache_eviction(
     loop {
         let summary_evicted = server.cached_repository_summary(repository_id).is_none();
         let text_evicted = server
+            .cache_state
             .search_text_response_cache
             .read()
             .expect("search text response cache should not be poisoned")
             .is_empty();
         let hybrid_evicted = server
+            .cache_state
             .search_hybrid_response_cache
             .read()
             .expect("search hybrid response cache should not be poisoned")
             .is_empty();
         let symbol_evicted = server
+            .cache_state
             .search_symbol_response_cache
             .read()
             .expect("search symbol response cache should not be poisoned")
             .is_empty();
         let definition_evicted = server
+            .cache_state
             .go_to_definition_response_cache
             .read()
             .expect("go-to-definition response cache should not be poisoned")
             .is_empty();
         let declarations_evicted = server
+            .cache_state
             .find_declarations_response_cache
             .read()
             .expect("find declarations response cache should not be poisoned")
             .is_empty();
         let heuristic_evicted = server
+            .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
@@ -645,6 +767,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
 
     assert_eq!(
         server
+            .cache_state
             .search_text_response_cache
             .read()
             .expect("search text cache should not be poisoned")
@@ -653,6 +776,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .search_hybrid_response_cache
             .read()
             .expect("search hybrid cache should not be poisoned")
@@ -661,6 +785,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .search_symbol_response_cache
             .read()
             .expect("search symbol cache should not be poisoned")
@@ -669,6 +794,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .go_to_definition_response_cache
             .read()
             .expect("go_to_definition cache should not be poisoned")
@@ -677,6 +803,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .find_declarations_response_cache
             .read()
             .expect("find_declarations cache should not be poisoned")
@@ -685,6 +812,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
@@ -693,6 +821,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .search_text_response_cache
             .read()
             .expect("search text cache should not be poisoned")
@@ -702,6 +831,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .search_hybrid_response_cache
             .read()
             .expect("search hybrid cache should not be poisoned")
@@ -711,6 +841,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .search_symbol_response_cache
             .read()
             .expect("search symbol cache should not be poisoned")
@@ -720,6 +851,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .go_to_definition_response_cache
             .read()
             .expect("go_to_definition cache should not be poisoned")
@@ -729,6 +861,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .find_declarations_response_cache
             .read()
             .expect("find_declarations cache should not be poisoned")
@@ -738,6 +871,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert!(
         server
+            .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
@@ -967,6 +1101,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .search_text_response_cache
             .read()
             .expect("search text response cache should not be poisoned")
@@ -975,6 +1110,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .search_hybrid_response_cache
             .read()
             .expect("search hybrid response cache should not be poisoned")
@@ -983,6 +1119,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .search_symbol_response_cache
             .read()
             .expect("search symbol response cache should not be poisoned")
@@ -991,6 +1128,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .go_to_definition_response_cache
             .read()
             .expect("go-to-definition response cache should not be poisoned")
@@ -999,6 +1137,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .find_declarations_response_cache
             .read()
             .expect("find declarations response cache should not be poisoned")
@@ -1007,6 +1146,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     );
     assert_eq!(
         server
+            .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
@@ -1037,9 +1177,9 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
 
 #[test]
 fn strict_semantic_failure_maps_to_unavailable_error_code() {
-    let error = FriggMcpServer::map_frigg_error(FriggError::Internal(
-        "semantic_status=strict_failure: provider outage".to_owned(),
-    ));
+    let error = FriggMcpServer::map_frigg_error(FriggError::StrictSemanticFailure {
+        reason: "provider outage".to_owned(),
+    });
 
     assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
     assert_eq!(
@@ -1057,15 +1197,140 @@ fn strict_semantic_failure_maps_to_unavailable_error_code() {
         error
             .data
             .as_ref()
+            .and_then(|value| value.get("error_class"))
+            .and_then(|value| value.as_str()),
+        Some("semantic")
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
             .and_then(|value| value.get("semantic_status"))
             .and_then(|value| value.as_str()),
         Some("strict_failure")
     );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("semantic_reason"))
+            .and_then(|value| value.as_str()),
+        Some("provider outage")
+    );
+}
+
+#[test]
+fn invalid_input_maps_to_invalid_params_class() {
+    let error = FriggMcpServer::map_frigg_error(FriggError::InvalidInput("bad input".to_owned()));
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String("invalid_params".to_owned()))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+}
+
+#[test]
+fn not_found_maps_to_resource_not_found_class() {
+    let error = FriggMcpServer::map_frigg_error(FriggError::NotFound("missing".to_owned()));
+
+    assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String("resource_not_found".to_owned()))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+}
+
+#[test]
+fn access_denied_maps_to_access_denied_class() {
+    let error = FriggMcpServer::map_frigg_error(FriggError::AccessDenied("blocked".to_owned()));
+
+    assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String("access_denied".to_owned()))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+    assert_eq!(error.message, "blocked");
+}
+
+#[test]
+fn io_error_maps_to_internal_error_class() {
+    use std::io::Error as IoError;
+
+    let error = FriggMcpServer::map_frigg_error(FriggError::Io(
+        IoError::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    ));
+
+    assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String("internal".to_owned()))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_class"))
+            .and_then(|value| value.as_str()),
+        Some("io")
+    );
+}
+
+#[test]
+fn internal_error_maps_to_internal_error_class() {
+    let error = FriggMcpServer::map_frigg_error(FriggError::Internal("boom".to_owned()));
+
+    assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String("internal".to_owned()))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+    assert_eq!(error.message, "boom");
 }
 
 #[test]
 fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
-    let warning = FriggMcpServer::search_hybrid_warning(Some("ok"), None, Some(0), Some(0));
+    let warning = FriggMcpServer::search_hybrid_warning(
+        Some(crate::domain::ChannelHealthStatus::Ok),
+        None,
+        Some(0),
+        Some(0),
+    );
 
     assert_eq!(
         warning.as_deref(),
@@ -1077,7 +1342,12 @@ fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
 
 #[test]
 fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
-    let warning = FriggMcpServer::search_hybrid_warning(Some("ok"), None, Some(3), Some(0));
+    let warning = FriggMcpServer::search_hybrid_warning(
+        Some(crate::domain::ChannelHealthStatus::Ok),
+        None,
+        Some(3),
+        Some(0),
+    );
 
     assert_eq!(
         warning.as_deref(),
@@ -1177,6 +1447,7 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
     config.semantic_runtime = semantic_runtime_enabled_openai();
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     let workspace = server
+        .runtime_state
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1310,6 +1581,7 @@ fn repository_response_cache_freshness_marks_dirty_root_uncacheable() {
         &["src/lib.rs"],
     );
     server
+        .runtime_state
         .validated_manifest_candidate_cache
         .write()
         .expect("validated manifest candidate cache should not be poisoned")
@@ -1547,6 +1819,7 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
     config.semantic_runtime.enabled = true;
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     let workspace = server
+        .runtime_state
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1598,6 +1871,7 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
         false,
     );
     let workspace = server
+        .runtime_state
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1624,6 +1898,7 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
     assert_eq!(initial_lexical.snapshot_id.as_deref(), Some("snapshot-001"));
 
     server
+        .runtime_state
         .validated_manifest_candidate_cache
         .write()
         .expect("validated manifest candidate cache should not be poisoned")
@@ -1652,6 +1927,7 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
     let server = FriggMcpServer::new_with_runtime_options(fixture_config(), true, false);
 
     let manifest_task_id = server
+        .runtime_state
         .runtime_task_registry
         .write()
         .expect("runtime task registry should not be poisoned")
@@ -1662,6 +1938,7 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
             Some("watch root /tmp/repo-001 class manifest_fast".to_owned()),
         );
     server
+        .runtime_state
         .runtime_task_registry
         .write()
         .expect("runtime task registry should not be poisoned")
@@ -1671,6 +1948,7 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
             Some("watch root /tmp/repo-001 class manifest_fast".to_owned()),
         );
     server
+        .runtime_state
         .runtime_task_registry
         .write()
         .expect("runtime task registry should not be poisoned")
@@ -1718,6 +1996,7 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
         .expect("workspace root must produce valid config");
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     let workspace = server
+        .runtime_state
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1729,6 +2008,7 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
     let _ = server.prewarm_precise_graph_for_workspace(&workspace);
 
     let cached = server
+        .cache_state
         .latest_precise_graph_cache
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1761,6 +2041,7 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
         .expect("workspace root must produce valid config");
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     let workspace = server
+        .runtime_state
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

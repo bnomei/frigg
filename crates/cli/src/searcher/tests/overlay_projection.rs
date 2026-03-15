@@ -138,12 +138,10 @@ fn hybrid_test_subject_projection_rebuilds_partial_snapshot_rows() -> FriggResul
     storage.replace_test_subject_projections_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &[crate::storage::TestSubjectProjectionRecord {
-            repository_id: "repo-001".to_owned(),
-            snapshot_id: "snapshot-001".to_owned(),
+        &[crate::storage::TestSubjectProjection {
             test_path: "tests/unit/user_service_test.rs".to_owned(),
             subject_path: "src/user_service.rs".to_owned(),
-            shared_terms_json: r#"["user","service"]"#.to_owned(),
+            shared_terms: vec!["user".to_owned(), "service".to_owned()],
             score_hint: 19,
             flags_json: r#"{"exact_stem_match":true}"#.to_owned(),
         }],
@@ -201,14 +199,7 @@ fn hybrid_entrypoint_surface_projection_materializes_and_reuses_snapshot_cache()
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
-    assert_eq!(
-        searcher
-            .hybrid_entrypoint_surface_projection_cache
-            .read()
-            .expect("entrypoint surface projection cache should not be poisoned")
-            .len(),
-        0
-    );
+    assert_eq!(searcher.entrypoint_surface_projection_cache_len(), 0);
 
     let universe = searcher
         .build_candidate_universe_with_attribution(
@@ -246,14 +237,7 @@ fn hybrid_entrypoint_surface_projection_materializes_and_reuses_snapshot_cache()
             .any(|projection| projection.path == ".github/workflows/ci.yml"),
         "entrypoint surface projection should retain workflow surfaces"
     );
-    assert_eq!(
-        searcher
-            .hybrid_entrypoint_surface_projection_cache
-            .read()
-            .expect("entrypoint surface projection cache should not be poisoned")
-            .len(),
-        1
-    );
+    assert_eq!(searcher.entrypoint_surface_projection_cache_len(), 1);
 
     let second = searcher
         .load_or_build_entrypoint_surface_projections_for_repository(repository, "snapshot-001")
@@ -305,7 +289,7 @@ fn projected_path_witness_candidates_apply_test_subject_overlay_boosts() -> Frig
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("user service tests");
-    let query_context = HybridPathWitnessQueryContext::new("user service tests");
+    let query_context = HybridPathWitnessQueryContext::from_query_text("user service tests");
     let candidates = searcher
         .projected_path_witness_candidates_for_repository(
             repository,
@@ -391,7 +375,7 @@ fn projected_path_witness_candidates_apply_entrypoint_surface_overlay_boosts() -
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("runtime config manifest settings");
-    let query_context = HybridPathWitnessQueryContext::new("runtime config manifest settings");
+    let query_context = HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
     let candidates = searcher
         .projected_path_witness_candidates_for_repository(
             repository,
@@ -482,7 +466,7 @@ fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions(
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("auth controller test coverage");
-    let query_context = HybridPathWitnessQueryContext::new("auth controller test coverage");
+    let query_context = HybridPathWitnessQueryContext::from_query_text("auth controller test coverage");
 
     let baseline_paths = base_path_witness_seed_paths(repository, &intent, &query_context, 8);
     assert!(
@@ -647,7 +631,7 @@ fn overlay_aware_path_witness_seed_universe_recalls_hidden_ci_workflows() -> Fri
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("build pipeline automation");
-    let query_context = HybridPathWitnessQueryContext::new("build pipeline automation");
+    let query_context = HybridPathWitnessQueryContext::from_query_text("build pipeline automation");
     let baseline_paths = base_path_witness_seed_paths(repository, &intent, &query_context, 8);
     assert!(
         !baseline_paths

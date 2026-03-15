@@ -156,24 +156,18 @@ impl FriggMcpServer {
             let Ok(response) = serde_json::from_str::<Value>(response_json) else {
                 continue;
             };
-            let Some(note_raw) = response.get("note").and_then(Value::as_str) else {
-                continue;
-            };
-            let Ok(note) = serde_json::from_str::<Value>(note_raw) else {
-                continue;
-            };
-            let Some(note) = note.as_object() else {
+            let Some(metadata) = response.get("metadata").and_then(Value::as_object) else {
                 continue;
             };
 
-            if let Some(step_budgets) = note.get("resource_budgets").cloned() {
+            if let Some(step_budgets) = metadata.get("resource_budgets").cloned() {
                 resource_budgets.push(json!({
                     "step_id": step.step_id,
                     "tool_name": step.tool_name,
                     "resource_budgets": step_budgets,
                 }));
             }
-            if let Some(step_usage) = note.get("resource_usage").cloned() {
+            if let Some(step_usage) = metadata.get("resource_usage").cloned() {
                 resource_usage.push(json!({
                     "step_id": step.step_id,
                     "tool_name": step.tool_name,

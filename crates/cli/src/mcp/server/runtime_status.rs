@@ -2,7 +2,8 @@ use super::*;
 
 impl FriggMcpServer {
     fn workspace_has_dirty_root(&self, workspace: &AttachedWorkspace) -> bool {
-        self.validated_manifest_candidate_cache
+        self.runtime_state
+            .validated_manifest_candidate_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_dirty_root(&workspace.root)
@@ -79,6 +80,7 @@ impl FriggMcpServer {
         repository_id: &str,
     ) -> Option<RepositorySummary> {
         let cache = self
+            .cache_state
             .repository_summary_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -93,6 +95,7 @@ impl FriggMcpServer {
         summary: &RepositorySummary,
     ) {
         let mut cache = self
+            .cache_state
             .repository_summary_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -106,7 +109,8 @@ impl FriggMcpServer {
     }
 
     pub(super) fn invalidate_repository_summary_cache(&self, repository_id: &str) {
-        self.repository_summary_cache
+        self.cache_state
+            .repository_summary_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(repository_id);
@@ -219,6 +223,7 @@ impl FriggMcpServer {
                     )
                 })?;
             let dirty_root = self
+                .runtime_state
                 .validated_manifest_candidate_cache
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -316,6 +321,19 @@ impl FriggMcpServer {
     }
 
     pub(super) fn workspace_manifest_entry_count(workspace: &AttachedWorkspace) -> Option<usize> {
+        let db_path = resolve_provenance_db_path(&workspace.root).ok()?;
+        if db_path.exists() {
+            let storage = Storage::new(db_path.clone());
+            if let Some(snapshot) = crate::manifest_validation::latest_validated_manifest_snapshot(
+                &storage,
+                &workspace.repository_id,
+                &workspace.root,
+                None,
+            ) {
+                return Some(snapshot.digests.len());
+            }
+        }
+
         Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
             .map(|snapshot| snapshot.entries.len())
     }
@@ -647,6 +665,7 @@ impl FriggMcpServer {
             return;
         }
         if self
+            .runtime_state
             .runtime_task_registry
             .read()
             .expect("runtime task registry poisoned")
@@ -682,6 +701,7 @@ impl FriggMcpServer {
 
         let semantic_refresh_already_running = should_refresh_semantic
             && self
+                .runtime_state
                 .runtime_task_registry
                 .read()
                 .expect("runtime task registry poisoned")
@@ -695,6 +715,7 @@ impl FriggMcpServer {
             let workspace = workspace.clone();
             let semantic_plan = semantic_plan.clone();
             let task_id = self
+                .runtime_state
                 .runtime_task_registry
                 .write()
                 .expect("runtime task registry poisoned")
@@ -711,7 +732,7 @@ impl FriggMcpServer {
                         )
                     }),
                 );
-            let task_registry = Arc::clone(&self.runtime_task_registry);
+            let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
             let task_id_for_thread = task_id.clone();
             let spawn_result = std::thread::Builder::new()
                 .name(format!(
@@ -742,7 +763,8 @@ impl FriggMcpServer {
                         .finish_task(&task_id_for_thread, status, detail);
                 });
             if let Err(err) = spawn_result {
-                self.runtime_task_registry
+                self.runtime_state
+                    .runtime_task_registry
                     .write()
                     .expect("runtime task registry poisoned")
                     .finish_task(
@@ -757,6 +779,7 @@ impl FriggMcpServer {
             let server = self.clone();
             let workspace = workspace.clone();
             let task_id = self
+                .runtime_state
                 .runtime_task_registry
                 .write()
                 .expect("runtime task registry poisoned")
@@ -766,7 +789,7 @@ impl FriggMcpServer {
                     "precise_attach_prewarm",
                     Some(format!("attach root {}", workspace.root.display())),
                 );
-            let task_registry = Arc::clone(&self.runtime_task_registry);
+            let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
             let task_id_for_thread = task_id.clone();
             let spawn_result = std::thread::Builder::new()
                 .name(format!("frigg-precise-prewarm-{}", workspace.repository_id))
@@ -789,7 +812,8 @@ impl FriggMcpServer {
                         .finish_task(&task_id_for_thread, status, detail);
                 });
             if let Err(err) = spawn_result {
-                self.runtime_task_registry
+                self.runtime_state
+                    .runtime_task_registry
                     .write()
                     .expect("runtime task registry poisoned")
                     .finish_task(

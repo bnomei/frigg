@@ -9,7 +9,7 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
 use frigg::mcp::{FriggMcpServer, RuntimeTaskRegistry};
 use frigg::playbooks::run_hybrid_playbook_regressions;
@@ -37,6 +37,7 @@ use cli_runtime::{
     resolve_startup_config, resolve_watch_runtime_config, run_hybrid_playbook_command,
     run_reindex_command, run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
     run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
+    run_workload_corpus_export_command,
 };
 #[cfg(test)]
 use cli_runtime::{
@@ -184,6 +185,37 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
+    /// Export a deterministic sanitized workload corpus from stored provenance rows.
+    ExportWorkloadCorpus {
+        /// Output file path for JSON or JSONL export.
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
+        /// Export encoding.
+        #[arg(long, value_enum, default_value_t = WorkloadCorpusExportFormat::Jsonl)]
+        format: WorkloadCorpusExportFormat,
+        /// Number of recent provenance rows to export per repository.
+        #[arg(
+            long,
+            value_name = "COUNT",
+            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
+        )]
+        limit: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum WorkloadCorpusExportFormat {
+    Json,
+    Jsonl,
+}
+
+impl WorkloadCorpusExportFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Jsonl => "jsonl",
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -244,6 +276,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     enforce_targets,
                     output.as_deref(),
                 )?
+            }
+            Command::ExportWorkloadCorpus {
+                output,
+                format,
+                limit,
+            } => {
+                let config = resolve_command_config(&cli, command)?;
+                run_workload_corpus_export_command(&config, &output, format, limit)?
             }
         }
         return Ok(());
@@ -819,6 +859,25 @@ mod tests {
     }
 
     #[test]
+    fn export_workload_corpus_command_resolution_keeps_semantic_runtime_unset() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
+
+        let config = resolve_command_config(
+            &cli,
+            Command::ExportWorkloadCorpus {
+                output: PathBuf::from("var/workload-corpus.jsonl"),
+                format: WorkloadCorpusExportFormat::Jsonl,
+                limit: DEFAULT_RETAINED_PROVENANCE_EVENTS,
+            },
+        )
+        .expect("export-workload-corpus command should resolve base config");
+        assert!(!config.semantic_runtime.enabled);
+        assert!(config.semantic_runtime.provider.is_none());
+    }
+
+    #[test]
     fn startup_config_applies_max_file_bytes_override() {
         let mut cli = base_cli();
         cli.max_file_bytes = Some(2 * 1024 * 1024);
@@ -1322,6 +1381,112 @@ mod tests {
             )
             .expect("repaired semantic health should be readable");
         assert!(repaired.vector_consistent);
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn export_workload_corpus_command_writes_deterministic_bounded_jsonl() {
+        let workspace_root = temp_workspace_root("export-workload-corpus-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+            .expect("init bootstrap should succeed before workload corpus export");
+        let db_path = resolve_storage_db_path(&workspace_root, "export-workload-corpus")
+            .expect("storage db path should resolve after init");
+        let storage = Storage::new(&db_path);
+        let long_text = "x".repeat(400);
+        let large_values: Vec<_> = (0..12).collect();
+        storage
+            .append_provenance_event(
+                "trace-001",
+                "read_file",
+                &json!({
+                    "tool_name": "read_file",
+                    "params": {
+                        "path": "src/main.rs",
+                        "query": long_text,
+                        "values": large_values,
+                    },
+                    "source_refs": [
+                        {"path": "src/main.rs", "line": 1},
+                        {"path": "README.md", "line": 1},
+                    ],
+                    "outcome": {"status": "ok"},
+                    "target_repository_id": "repo-001",
+                    "normalized_workload": {
+                        "tool_class": "literal_lookup",
+                        "precision_mode": "exact",
+                        "repository_scope": {
+                            "scope": "single",
+                            "repository_count": 1
+                        }
+                    }
+                }),
+            )
+            .expect("first provenance event should seed before export");
+        storage
+            .append_provenance_event(
+                "trace-002",
+                "search_hybrid",
+                &json!({
+                    "tool_name": "search_hybrid",
+                    "params": {"query": "main function"},
+                    "source_refs": [],
+                    "outcome": {
+                        "status": "error",
+                        "error_code": "unavailable"
+                    },
+                    "target_repository_id": "repo-001",
+                    "normalized_workload": {
+                        "tool_class": "hybrid_discovery",
+                        "precision_mode": "heuristic"
+                    }
+                }),
+            )
+            .expect("second provenance event should seed before export");
+
+        let output_path = workspace_root.join("artifacts").join("workload-corpus.jsonl");
+        run_workload_corpus_export_command(
+            &config,
+            &output_path,
+            WorkloadCorpusExportFormat::Jsonl,
+            10,
+        )
+        .expect("workload corpus export should succeed");
+
+        let exported = fs::read_to_string(&output_path)
+            .expect("workload corpus output should be readable after export");
+        let rows = exported
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("each row should be valid json"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["trace_id"], "trace-001");
+        assert_eq!(rows[1]["trace_id"], "trace-002");
+        assert_eq!(rows[0]["repository_id"], "repo-001");
+        assert_eq!(rows[0]["tool_name"], "read_file");
+        assert_eq!(rows[0]["source_ref_count"], 2);
+        assert_eq!(
+            rows[0]["normalized_workload"]["tool_class"],
+            "literal_lookup"
+        );
+
+        let bounded_query = rows[0]["parameter_summary"]["query"]
+            .as_str()
+            .expect("bounded query should remain a string");
+        assert!(bounded_query.len() < 400);
+        assert!(bounded_query.ends_with("..."));
+        assert_eq!(
+            rows[0]["parameter_summary"]["values"]
+                .as_array()
+                .expect("bounded values should remain an array")
+                .len(),
+            8
+        );
 
         cleanup_workspace(&workspace_root);
     }

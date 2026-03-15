@@ -55,6 +55,97 @@ pub(super) struct SearchIntent {
     applied_rule_ids: Vec<SearchIntentRuleId>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SearchIntentQuerySignals<'a> {
+    intent: &'a SearchIntent,
+}
+
+impl SearchIntentQuerySignals<'_> {
+    pub(super) fn wants_docs(self) -> bool {
+        self.intent.wants_docs
+    }
+
+    pub(super) fn wants_runtime(self) -> bool {
+        self.intent.wants_runtime
+    }
+
+    pub(super) fn wants_examples(self) -> bool {
+        self.intent.wants_examples
+    }
+
+    pub(super) fn wants_entrypoint_build_flow(self) -> bool {
+        self.intent.wants_entrypoint_build_flow
+    }
+
+    pub(super) fn wants_tests(self) -> bool {
+        self.intent.wants_tests
+    }
+
+    pub(super) fn wants_fixtures(self) -> bool {
+        self.intent.wants_fixtures
+    }
+
+    pub(super) fn wants_benchmarks(self) -> bool {
+        self.intent.wants_benchmarks
+    }
+
+    pub(super) fn wants_readme(self) -> bool {
+        self.intent.wants_readme
+    }
+
+    pub(super) fn wants_contracts(self) -> bool {
+        self.intent.wants_contracts
+    }
+
+    pub(super) fn wants_error_taxonomy(self) -> bool {
+        self.intent.wants_error_taxonomy
+    }
+
+    pub(super) fn wants_tool_contracts(self) -> bool {
+        self.intent.wants_tool_contracts
+    }
+
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SearchIntentWitnessSignals<'a> {
+    intent: &'a SearchIntent,
+}
+
+impl SearchIntentWitnessSignals<'_> {
+    pub(super) fn wants_runtime_witnesses(self) -> bool {
+        self.intent.wants_runtime_witnesses
+    }
+
+    pub(super) fn wants_runtime_config_artifacts(self) -> bool {
+        self.intent.wants_runtime_config_artifacts
+    }
+
+    pub(super) fn wants_laravel_ui_witnesses(self) -> bool {
+        self.intent.wants_laravel_ui_witnesses
+    }
+
+    pub(super) fn wants_commands_middleware_witnesses(self) -> bool {
+        self.intent.wants_commands_middleware_witnesses
+    }
+
+    pub(super) fn wants_jobs_listeners_witnesses(self) -> bool {
+        self.intent.wants_jobs_listeners_witnesses
+    }
+
+    pub(super) fn wants_ci_workflow_witnesses(self) -> bool {
+        self.intent.wants_ci_workflow_witnesses
+    }
+
+    pub(super) fn wants_scripts_ops_witnesses(self) -> bool {
+        self.intent.wants_scripts_ops_witnesses
+    }
+
+    pub(super) fn wants_test_witness_recall(self) -> bool {
+        self.intent.wants_test_witness_recall
+    }
+}
+
 impl Default for SearchIntent {
     fn default() -> Self {
         Self {
@@ -121,6 +212,14 @@ impl SearchIntent {
         &self.goals
     }
 
+    pub(super) fn query_signals(&self) -> SearchIntentQuerySignals<'_> {
+        SearchIntentQuerySignals { intent: self }
+    }
+
+    pub(super) fn witness_signals(&self) -> SearchIntentWitnessSignals<'_> {
+        SearchIntentWitnessSignals { intent: self }
+    }
+
     pub(super) fn framework_hints(&self) -> &BTreeSet<FrameworkHint> {
         &self.framework_hints
     }
@@ -135,6 +234,14 @@ impl SearchIntent {
 
     pub(super) fn playbook_reference_policy(&self) -> PlaybookReferencePolicy {
         self.playbook_reference_policy
+    }
+
+    pub(super) fn penalizes_playbook_self_reference(&self) -> bool {
+        self.penalize_playbook_self_reference
+    }
+
+    pub(super) fn penalizes_generic_runtime_docs(&self) -> bool {
+        !self.wants_docs && !self.wants_onboarding && !self.wants_readme
     }
 
     pub(super) fn applied_rule_ids(&self) -> &[SearchIntentRuleId] {
@@ -154,45 +261,54 @@ impl SearchIntent {
     }
 
     pub(super) fn wants_path_witness_recall(&self) -> bool {
-        self.has_goal(SearchGoal::RuntimeWitnesses)
-            || self.has_artifact_bias(ArtifactBias::LaravelUi)
-            || self.has_artifact_bias(ArtifactBias::CommandsMiddleware)
-            || self.has_artifact_bias(ArtifactBias::JobsListeners)
-            || self.has_goal(SearchGoal::EntryPointBuildFlow)
-            || self.has_artifact_bias(ArtifactBias::CiWorkflow)
-            || self.has_artifact_bias(ArtifactBias::ScriptsOps)
-            || self.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact)
-            || self.has_artifact_bias(ArtifactBias::TestWitness)
-            || self.has_goal(SearchGoal::Examples)
-            || self.has_goal(SearchGoal::Benchmarks)
+        let query = self.query_signals();
+        let witness = self.witness_signals();
+
+        witness.wants_runtime_witnesses()
+            || witness.wants_laravel_ui_witnesses()
+            || witness.wants_commands_middleware_witnesses()
+            || witness.wants_jobs_listeners_witnesses()
+            || query.wants_entrypoint_build_flow()
+            || witness.wants_ci_workflow_witnesses()
+            || witness.wants_scripts_ops_witnesses()
+            || witness.wants_runtime_config_artifacts()
+            || witness.wants_test_witness_recall()
+            || self.wants_example_or_bench_witnesses()
+    }
+
+    pub(super) fn wants_example_or_bench_witnesses(&self) -> bool {
+        self.wants_examples || self.wants_benchmarks
     }
 
     pub(super) fn wants_class(&self, class: SourceClass) -> bool {
+        let query = self.query_signals();
+        let witness = self.witness_signals();
+
         match class {
             SourceClass::ErrorContracts => {
-                self.has_goal(SearchGoal::ErrorTaxonomy) || self.has_goal(SearchGoal::Contracts)
+                query.wants_error_taxonomy() || query.wants_contracts()
             }
             SourceClass::ToolContracts => {
-                self.has_goal(SearchGoal::ToolContracts) || self.has_goal(SearchGoal::Contracts)
+                query.wants_tool_contracts() || query.wants_contracts()
             }
-            SourceClass::BenchmarkDocs => self.has_goal(SearchGoal::Benchmarks),
-            SourceClass::Documentation => self.has_goal(SearchGoal::Documentation),
-            SourceClass::Readme => self.has_goal(SearchGoal::Readme),
-            SourceClass::Runtime => self.has_goal(SearchGoal::Runtime),
+            SourceClass::BenchmarkDocs => query.wants_benchmarks(),
+            SourceClass::Documentation => query.wants_docs(),
+            SourceClass::Readme => query.wants_readme(),
+            SourceClass::Runtime => query.wants_runtime(),
             SourceClass::Project => false,
             SourceClass::Support => {
-                self.has_goal(SearchGoal::RuntimeWitnesses)
-                    || self.has_goal(SearchGoal::Examples)
-                    || self.has_goal(SearchGoal::Benchmarks)
-                    || self.has_artifact_bias(ArtifactBias::CiWorkflow)
-                    || self.has_artifact_bias(ArtifactBias::ScriptsOps)
+                witness.wants_runtime_witnesses()
+                    || query.wants_examples()
+                    || query.wants_benchmarks()
+                    || witness.wants_ci_workflow_witnesses()
+                    || witness.wants_scripts_ops_witnesses()
             }
             SourceClass::Tests => {
-                self.has_goal(SearchGoal::Tests)
-                    || self.has_goal(SearchGoal::RuntimeWitnesses)
-                    || self.has_goal(SearchGoal::Examples)
+                query.wants_tests()
+                    || witness.wants_runtime_witnesses()
+                    || query.wants_examples()
             }
-            SourceClass::Fixtures => self.has_goal(SearchGoal::Fixtures),
+            SourceClass::Fixtures => query.wants_fixtures(),
             _ => false,
         }
     }

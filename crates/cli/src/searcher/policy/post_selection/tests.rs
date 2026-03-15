@@ -993,7 +993,7 @@ fn post_selection_policy_cli_command_queries_keep_specific_cli_test_witness_visi
     let witness_hits = vec![make_witness("crates/ruff/tests/cli/analyze_graph.rs", 0.94)];
     let intent = HybridRankingIntent::from_query("ruff analyze ruff cli entrypoint");
     assert!(intent.wants_entrypoint_build_flow);
-    let query_context = SelectionQueryContext::new(&intent, "ruff analyze ruff cli entrypoint");
+    let query_context = PolicyQueryContext::new(&intent, "ruff analyze ruff cli entrypoint");
     assert!(query_context.query_mentions_cli);
     assert_eq!(
         query_context.specific_witness_terms,
@@ -1067,14 +1067,21 @@ fn post_selection_policy_runtime_companion_keeps_selected_cli_test_with_stronger
 }
 
 #[test]
-fn post_selection_policy_runtime_companion_keeps_existing_cli_test_when_cli_specific_candidate_is_present() {
+fn post_selection_policy_runtime_companion_keeps_existing_cli_test_when_cli_specific_candidate_is_present()
+ {
     let matches = vec![
         make_ranked("crates/ruff/tests/cli/main.rs", 0.99),
         make_ranked("crates/ruff/tests/cli/analyze_graph.rs", 0.98),
         make_ranked("src/ruff/entrypoint.rs", 0.92),
     ];
-    let candidate_pool = vec![make_ranked("crates/ruff/tests/cli/new_analyze_graph.rs", 0.97)];
-    let witness_hits = vec![make_witness("crates/ruff/tests/cli/alt_analyze_graph.rs", 0.96)];
+    let candidate_pool = vec![make_ranked(
+        "crates/ruff/tests/cli/new_analyze_graph.rs",
+        0.97,
+    )];
+    let witness_hits = vec![make_witness(
+        "crates/ruff/tests/cli/alt_analyze_graph.rs",
+        0.96,
+    )];
     let intent = HybridRankingIntent::from_query("ruff analyze ruff cli entrypoint");
     assert!(intent.wants_entrypoint_build_flow);
 
@@ -1104,7 +1111,8 @@ fn post_selection_policy_runtime_companion_keeps_existing_cli_test_when_cli_spec
 }
 
 #[test]
-fn post_selection_policy_runtime_companion_preserves_matches_when_only_cli_witness_is_specific_candidate() {
+fn post_selection_policy_runtime_companion_preserves_matches_when_only_cli_witness_is_specific_candidate()
+ {
     let matches = vec![
         make_ranked("src/main.rs", 0.99),
         make_ranked("README.md", 0.88),
@@ -1128,14 +1136,14 @@ fn post_selection_policy_runtime_companion_preserves_matches_when_only_cli_witne
     );
 
     assert_eq!(
-        final_matches,
-        matches,
+        final_matches, matches,
         "CLI-specific witness candidates should not trigger companion test replacement here"
     );
 }
 
 #[test]
-fn post_selection_policy_runtime_companion_keeps_selected_benchmark_test_over_plain_test_candidate() {
+fn post_selection_policy_runtime_companion_keeps_selected_benchmark_test_over_plain_test_candidate()
+{
     let matches = vec![
         make_ranked("benchmark/render_bench_test.rs", 0.99),
         make_ranked("README.md", 0.90),
@@ -1145,13 +1153,7 @@ fn post_selection_policy_runtime_companion_keeps_selected_benchmark_test_over_pl
     assert!(intent.wants_benchmarks);
     assert!(intent.wants_test_witness_recall);
 
-    let ctx = PostSelectionContext::new(
-        &intent,
-        "benchmark render tests",
-        2,
-        &[],
-        &witness_hits,
-    );
+    let ctx = PostSelectionContext::new(&intent, "benchmark render tests", 2, &[], &witness_hits);
     let final_matches = apply_runtime_companion_test_visibility(
         matches.clone(),
         &ctx,
@@ -1167,7 +1169,8 @@ fn post_selection_policy_runtime_companion_keeps_selected_benchmark_test_over_pl
 }
 
 #[test]
-fn post_selection_policy_runtime_companion_recover_non_adjacent_python_witness_with_fallback_when_entrypoint_not_set() {
+fn post_selection_policy_runtime_companion_recover_non_adjacent_python_witness_with_fallback_when_entrypoint_not_set()
+ {
     let matches = vec![
         make_ranked("tests/integration/parser_test.py", 0.96),
         make_ranked("src/parser.py", 0.95),
@@ -1190,7 +1193,11 @@ fn post_selection_policy_runtime_companion_recover_non_adjacent_python_witness_w
         test_rule_meta("post_selection.runtime_companion_tests"),
     );
     assert_eq!(final_matches.len(), 2);
-    assert!(final_matches.iter().any(|entry| entry.document.path == "tests/integration/parser_test.py"));
+    assert!(
+        final_matches
+            .iter()
+            .any(|entry| entry.document.path == "tests/integration/parser_test.py")
+    );
     assert_eq!(final_matches.len(), matches.len());
 }
 

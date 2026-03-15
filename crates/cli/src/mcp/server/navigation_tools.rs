@@ -1,17 +1,20 @@
 use super::*;
+use crate::domain::WorkloadFallbackReason;
 
 impl FriggMcpServer {
     pub(super) async fn find_references_impl(
         &self,
         params: FindReferencesParams,
     ) -> Result<Json<FindReferencesResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("find_references", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let resource_budget_metadata = Self::find_references_budget_metadata(resource_budgets);
         let params_for_blocking = params.clone();
         let server = self.clone();
         let resource_budget_metadata_for_blocking = resource_budget_metadata.clone();
-        let execution = Self::run_blocking_task("find_references", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut total_matches = 0usize;
             let mut selected_symbol_id: Option<String> = None;
@@ -36,8 +39,6 @@ impl FriggMcpServer {
             let mut effective_limit: Option<usize> = None;
             let mut target_selection_candidate_count = 0usize;
             let mut target_selection_same_rank_count = 0usize;
-            let repository_hint = repository_hint.clone();
-
             let result = (|| -> Result<Json<FindReferencesResponse>, ErrorData> {
                 let limit = params_for_blocking
                     .limit
@@ -497,11 +498,26 @@ impl FriggMcpServer {
                     note,
                 }))
             })();
-            let provenance_result = server.record_provenance_with_outcome(
-                "find_references",
-                repository_hint.as_deref(),
+            let precision_mode =
+                FriggMcpServer::provenance_precision_mode_from_label(resolution_precision.as_deref());
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let metadata = FriggMcpServer::provenance_normalized_workload_metadata(
+                execution_context_for_blocking.tool_name,
+                &scoped_repository_ids,
+                precision_mode,
+                fallback_reason,
+                None,
+                None,
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context_for_blocking.repository_hint,
                     "symbol": params_for_blocking
                         .symbol
                         .as_ref()
@@ -543,6 +559,7 @@ impl FriggMcpServer {
                     "source_bytes_loaded": source_bytes_loaded,
                 }),
                 Self::provenance_outcome(&result),
+                Some(metadata),
             );
 
             FindReferencesExecution {
@@ -575,7 +592,7 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        self.finalize_with_provenance("find_references", result, execution.provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn go_to_definition_impl(
@@ -587,11 +604,13 @@ impl FriggMcpServer {
             provenance_result: Result<(), ErrorData>,
         }
 
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("go_to_definition", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("go_to_definition", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
@@ -603,25 +622,20 @@ impl FriggMcpServer {
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
             let mut match_count = 0usize;
-            let repository_hint = repository_hint.clone();
-
             let result = (|| -> Result<Json<GoToDefinitionResponse>, ErrorData> {
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
-                let scoped_workspaces = server.attached_workspaces_for_repository(
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                let scoped_repository_ids_for_cache = scoped_workspaces
-                    .iter()
-                    .map(|workspace| workspace.repository_id.clone())
-                    .collect::<Vec<_>>();
-                let cache_freshness = server.repository_response_cache_freshness(
-                    &scoped_workspaces,
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
                     RepositoryResponseCacheFreshnessMode::ManifestOnly,
                 )?;
+                let scoped_repository_ids_for_cache =
+                    scoped_execution_context.scoped_repository_ids.clone();
+                let cache_freshness = scoped_execution_context.cache_freshness.clone();
                 let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
                     GoToDefinitionResponseCacheKey {
                         scoped_repository_ids: scoped_repository_ids_for_cache.clone(),
@@ -1194,15 +1208,30 @@ impl FriggMcpServer {
                 }
                 Ok(response)
             })();
-            let provenance_result = server.record_provenance_with_outcome(
+            let precision_mode =
+                FriggMcpServer::provenance_precision_mode_from_label(resolution_precision.as_deref());
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let metadata = FriggMcpServer::provenance_normalized_workload_metadata(
                 "go_to_definition",
-                repository_hint.as_deref(),
+                &scoped_repository_ids,
+                precision_mode,
+                fallback_reason,
+                None,
+                None,
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
                 json!({
                     "symbol": params_for_blocking
                         .symbol
                         .as_ref()
                         .map(|symbol| Self::bounded_text(symbol)),
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context_for_blocking.repository_hint,
                     "path": params_for_blocking
                         .path
                         .as_ref()
@@ -1224,6 +1253,7 @@ impl FriggMcpServer {
                     "match_count": match_count,
                 }),
                 Self::provenance_outcome(&result),
+                Some(metadata),
             );
 
             GoToDefinitionExecution {
@@ -1234,18 +1264,20 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        self.finalize_with_provenance("go_to_definition", result, execution.provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn find_declarations_impl(
         &self,
         params: FindDeclarationsParams,
     ) -> Result<Json<FindDeclarationsResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context = self
+            .read_only_tool_execution_context("find_declarations", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("find_declarations", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
@@ -1264,17 +1296,14 @@ impl FriggMcpServer {
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
-                let scoped_workspaces = server.attached_workspaces_for_repository(
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                let scoped_repository_ids_for_cache = scoped_workspaces
-                    .iter()
-                    .map(|workspace| workspace.repository_id.clone())
-                    .collect::<Vec<_>>();
-                let cache_freshness = server.repository_response_cache_freshness(
-                    &scoped_workspaces,
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
                     RepositoryResponseCacheFreshnessMode::ManifestOnly,
                 )?;
+                let scoped_repository_ids_for_cache =
+                    scoped_execution_context.scoped_repository_ids.clone();
+                let cache_freshness = scoped_execution_context.cache_freshness.clone();
                 let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
                     FindDeclarationsResponseCacheKey {
                         scoped_repository_ids: scoped_repository_ids_for_cache.clone(),
@@ -1497,60 +1526,81 @@ impl FriggMcpServer {
                 Ok(Json(response))
             })();
 
+            let precision_mode = FriggMcpServer::provenance_precision_mode_from_label(
+                resolution_precision.as_deref(),
+            );
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let finalization = server.tool_execution_finalization(
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids,
+                    "selected_symbol_id": selected_symbol_id,
+                    "selected_precise_symbol": selected_precise_symbol,
+                    "resolution_precision": resolution_precision,
+                    "resolution_source": resolution_source,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "match_count": match_count,
+                }),
+                Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                    execution_context_for_blocking.tool_name,
+                    &scoped_repository_ids,
+                    precision_mode,
+                    fallback_reason,
+                    None,
+                    None,
+                )),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
+                json!({
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                finalization.source_refs,
+                Self::provenance_outcome(&result),
+                finalization.normalized_workload,
+            );
+
             NavigationToolExecution {
                 result,
-                scoped_repository_ids,
-                selected_symbol_id,
-                selected_precise_symbol,
-                resolution_precision,
-                resolution_source,
-                effective_limit,
-                precise_artifacts_ingested,
-                precise_artifacts_failed,
-                match_count,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "find_declarations",
-                repository_hint.as_deref(),
-                json!({
-                    "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                    "repository_id": repository_hint,
-                    "path": params.path.map(|path| Self::bounded_text(&path)),
-                    "line": params.line,
-                    "column": params.column,
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "selected_symbol_id": execution.selected_symbol_id,
-                    "selected_precise_symbol": execution.selected_precise_symbol,
-                    "resolution_precision": execution.resolution_precision,
-                    "resolution_source": execution.resolution_source,
-                    "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                    "precise_artifacts_failed": execution.precise_artifacts_failed,
-                    "match_count": execution.match_count,
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("find_declarations", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn find_implementations_impl(
         &self,
         params: FindImplementationsParams,
     ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context = self.read_only_tool_execution_context(
+            "find_implementations",
+            params.repository_id.clone(),
+        );
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("find_implementations", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
@@ -1754,60 +1804,79 @@ impl FriggMcpServer {
                 }))
             })();
 
+            let precision_mode = FriggMcpServer::provenance_precision_mode_from_label(
+                resolution_precision.as_deref(),
+            );
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let finalization = server.tool_execution_finalization(
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids,
+                    "selected_symbol_id": selected_symbol_id,
+                    "selected_precise_symbol": selected_precise_symbol,
+                    "resolution_precision": resolution_precision,
+                    "resolution_source": resolution_source,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "match_count": match_count,
+                }),
+                Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                    execution_context_for_blocking.tool_name,
+                    &scoped_repository_ids,
+                    precision_mode,
+                    fallback_reason,
+                    None,
+                    None,
+                )),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
+                json!({
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                finalization.source_refs,
+                Self::provenance_outcome(&result),
+                finalization.normalized_workload,
+            );
+
             NavigationToolExecution {
                 result,
-                scoped_repository_ids,
-                selected_symbol_id,
-                selected_precise_symbol,
-                resolution_precision,
-                resolution_source,
-                effective_limit,
-                precise_artifacts_ingested,
-                precise_artifacts_failed,
-                match_count,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "find_implementations",
-                repository_hint.as_deref(),
-                json!({
-                    "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                    "repository_id": repository_hint,
-                    "path": params.path.map(|path| Self::bounded_text(&path)),
-                    "line": params.line,
-                    "column": params.column,
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "selected_symbol_id": execution.selected_symbol_id,
-                    "selected_precise_symbol": execution.selected_precise_symbol,
-                    "resolution_precision": execution.resolution_precision,
-                    "resolution_source": execution.resolution_source,
-                    "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                    "precise_artifacts_failed": execution.precise_artifacts_failed,
-                    "match_count": execution.match_count,
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("find_implementations", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn incoming_calls_impl(
         &self,
         params: IncomingCallsParams,
     ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("incoming_calls", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("incoming_calls", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
@@ -1996,60 +2065,79 @@ impl FriggMcpServer {
                 }))
             })();
 
+            let precision_mode = FriggMcpServer::provenance_precision_mode_from_label(
+                resolution_precision.as_deref(),
+            );
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let finalization = server.tool_execution_finalization(
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids,
+                    "selected_symbol_id": selected_symbol_id,
+                    "selected_precise_symbol": selected_precise_symbol,
+                    "resolution_precision": resolution_precision,
+                    "resolution_source": resolution_source,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "match_count": match_count,
+                }),
+                Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                    execution_context_for_blocking.tool_name,
+                    &scoped_repository_ids,
+                    precision_mode,
+                    fallback_reason,
+                    None,
+                    None,
+                )),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
+                json!({
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                finalization.source_refs,
+                Self::provenance_outcome(&result),
+                finalization.normalized_workload,
+            );
+
             NavigationToolExecution {
                 result,
-                scoped_repository_ids,
-                selected_symbol_id,
-                selected_precise_symbol,
-                resolution_precision,
-                resolution_source,
-                effective_limit,
-                precise_artifacts_ingested,
-                precise_artifacts_failed,
-                match_count,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "incoming_calls",
-                repository_hint.as_deref(),
-                json!({
-                    "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                    "repository_id": repository_hint,
-                    "path": params.path.map(|path| Self::bounded_text(&path)),
-                    "line": params.line,
-                    "column": params.column,
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "selected_symbol_id": execution.selected_symbol_id,
-                    "selected_precise_symbol": execution.selected_precise_symbol,
-                    "resolution_precision": execution.resolution_precision,
-                    "resolution_source": execution.resolution_source,
-                    "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                    "precise_artifacts_failed": execution.precise_artifacts_failed,
-                    "match_count": execution.match_count,
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("incoming_calls", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn outgoing_calls_impl(
         &self,
         params: OutgoingCallsParams,
     ) -> Result<Json<OutgoingCallsResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("outgoing_calls", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("outgoing_calls", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut selected_symbol_id: Option<String> = None;
             let mut selected_precise_symbol: Option<String> = None;
@@ -2288,48 +2376,65 @@ impl FriggMcpServer {
                 }))
             })();
 
+            let precision_mode = FriggMcpServer::provenance_precision_mode_from_label(
+                resolution_precision.as_deref(),
+            );
+            let fallback_reason = if precision_mode == WorkloadPrecisionMode::Heuristic {
+                Some(WorkloadFallbackReason::PreciseAbsent)
+            } else {
+                None
+            };
+            let finalization = server.tool_execution_finalization(
+                json!({
+                    "scoped_repository_ids": scoped_repository_ids,
+                    "selected_symbol_id": selected_symbol_id,
+                    "selected_precise_symbol": selected_precise_symbol,
+                    "resolution_precision": resolution_precision,
+                    "resolution_source": resolution_source,
+                    "precise_artifacts_ingested": precise_artifacts_ingested,
+                    "precise_artifacts_failed": precise_artifacts_failed,
+                    "match_count": match_count,
+                }),
+                Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                    execution_context_for_blocking.tool_name,
+                    &scoped_repository_ids,
+                    precision_mode,
+                    fallback_reason,
+                    None,
+                    None,
+                )),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                execution_context_for_blocking.tool_name,
+                execution_context_for_blocking.repository_hint.as_deref(),
+                json!({
+                    "symbol": params_for_blocking
+                        .symbol
+                        .as_ref()
+                        .map(|symbol| Self::bounded_text(symbol)),
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": params_for_blocking
+                        .path
+                        .as_ref()
+                        .map(|path| Self::bounded_text(path)),
+                    "line": params_for_blocking.line,
+                    "column": params_for_blocking.column,
+                    "limit": params_for_blocking.limit,
+                    "effective_limit": effective_limit,
+                }),
+                finalization.source_refs,
+                Self::provenance_outcome(&result),
+                finalization.normalized_workload,
+            );
+
             NavigationToolExecution {
                 result,
-                scoped_repository_ids,
-                selected_symbol_id,
-                selected_precise_symbol,
-                resolution_precision,
-                resolution_source,
-                effective_limit,
-                precise_artifacts_ingested,
-                precise_artifacts_failed,
-                match_count,
+                provenance_result,
             }
         })
         .await?;
 
         let result = execution.result;
-        let provenance_result = self
-            .record_provenance_blocking(
-                "outgoing_calls",
-                repository_hint.as_deref(),
-                json!({
-                    "symbol": params.symbol.map(|symbol| Self::bounded_text(&symbol)),
-                    "repository_id": repository_hint,
-                    "path": params.path.map(|path| Self::bounded_text(&path)),
-                    "line": params.line,
-                    "column": params.column,
-                    "limit": params.limit,
-                    "effective_limit": execution.effective_limit,
-                }),
-                json!({
-                    "scoped_repository_ids": execution.scoped_repository_ids,
-                    "selected_symbol_id": execution.selected_symbol_id,
-                    "selected_precise_symbol": execution.selected_precise_symbol,
-                    "resolution_precision": execution.resolution_precision,
-                    "resolution_source": execution.resolution_source,
-                    "precise_artifacts_ingested": execution.precise_artifacts_ingested,
-                    "precise_artifacts_failed": execution.precise_artifacts_failed,
-                    "match_count": execution.match_count,
-                }),
-                &result,
-            )
-            .await;
-        self.finalize_with_provenance("outgoing_calls", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 }

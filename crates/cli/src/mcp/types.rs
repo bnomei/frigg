@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
+
 use crate::domain::{
+    ChannelHealthStatus,
     EvidenceAnchor,
     model::{ReferenceMatch, SymbolMatch, TextMatch},
 };
@@ -7,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 19] = [
+pub const PUBLIC_TOOL_NAMES: [&str; 19] = [
     "list_repositories",
     "workspace_attach",
     "workspace_current",
@@ -28,6 +31,27 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 19] = [
     "deep_search_replay",
     "deep_search_compose_citations",
 ];
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
+    "list_repositories",
+    "workspace_current",
+    "read_file",
+    "explore",
+    "search_text",
+    "search_hybrid",
+    "search_symbol",
+    "find_references",
+    "go_to_definition",
+    "find_declarations",
+    "find_implementations",
+    "incoming_calls",
+    "outgoing_calls",
+    "document_symbols",
+    "search_structural",
+    "deep_search_run",
+    "deep_search_replay",
+    "deep_search_compose_citations",
+];
+pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 1] = ["workspace_attach"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
 
@@ -381,6 +405,149 @@ pub struct SearchHybridMatch {
     pub semantic_sources: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridChannelDiagnostic {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridChannelMetadata {
+    pub status: ChannelHealthStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub candidate_count: usize,
+    pub hit_count: usize,
+    pub match_count: usize,
+    pub diagnostic_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<SearchHybridChannelDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridDiagnosticsSummary {
+    pub walk: usize,
+    pub read: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridStageSample {
+    pub elapsed_us: u64,
+    pub input_count: usize,
+    pub output_count: usize,
+}
+
+impl From<&crate::searcher::SearchStageSample> for SearchHybridStageSample {
+    fn from(value: &crate::searcher::SearchStageSample) -> Self {
+        Self {
+            elapsed_us: value.elapsed_us,
+            input_count: value.input_count,
+            output_count: value.output_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridStageAttribution {
+    pub candidate_intake: SearchHybridStageSample,
+    pub freshness_validation: SearchHybridStageSample,
+    pub scan: SearchHybridStageSample,
+    pub witness_scoring: SearchHybridStageSample,
+    pub graph_expansion: SearchHybridStageSample,
+    pub semantic_retrieval: SearchHybridStageSample,
+    pub anchor_blending: SearchHybridStageSample,
+    pub document_aggregation: SearchHybridStageSample,
+    pub final_diversification: SearchHybridStageSample,
+}
+
+impl From<&crate::searcher::SearchStageAttribution> for SearchHybridStageAttribution {
+    fn from(value: &crate::searcher::SearchStageAttribution) -> Self {
+        Self {
+            candidate_intake: SearchHybridStageSample::from(&value.candidate_intake),
+            freshness_validation: SearchHybridStageSample::from(&value.freshness_validation),
+            scan: SearchHybridStageSample::from(&value.scan),
+            witness_scoring: SearchHybridStageSample::from(&value.witness_scoring),
+            graph_expansion: SearchHybridStageSample::from(&value.graph_expansion),
+            semantic_retrieval: SearchHybridStageSample::from(&value.semantic_retrieval),
+            anchor_blending: SearchHybridStageSample::from(&value.anchor_blending),
+            document_aggregation: SearchHybridStageSample::from(&value.document_aggregation),
+            final_diversification: SearchHybridStageSample::from(&value.final_diversification),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ResponseFreshnessRepositoryMetadata {
+    pub repository_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub manifest: String,
+    pub semantic: String,
+    pub dirty_root: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ResponseFreshnessBasisMetadata {
+    pub mode: String,
+    pub cacheable: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<ResponseFreshnessRepositoryMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridSemanticAcceleratorMetadata {
+    pub tier: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ChannelHealthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridLanguageCapabilityMetadata {
+    pub requested_language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub semantic_chunking: String,
+    pub semantic_accelerator: SearchHybridSemanticAcceleratorMetadata,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capabilities: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridMetadata {
+    pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_requested: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_status: Option<ChannelHealthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_candidate_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_hit_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_match_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    pub diagnostics_count: usize,
+    pub diagnostics: SearchHybridDiagnosticsSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_attribution: Option<SearchHybridStageAttribution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_capability: Option<SearchHybridLanguageCapabilityMetadata>,
+    pub freshness_basis: ResponseFreshnessBasisMetadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
@@ -392,7 +559,7 @@ pub struct SearchHybridResponse {
     pub semantic_enabled: Option<bool>,
     /// Legacy top-level compatibility mirror of `metadata.semantic_status`; live responses may omit this when structured metadata is present.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_status: Option<String>,
+    pub semantic_status: Option<ChannelHealthStatus>,
     /// Legacy top-level compatibility mirror of `metadata.semantic_reason`; live responses may omit this when structured metadata is present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_reason: Option<String>,
@@ -407,8 +574,8 @@ pub struct SearchHybridResponse {
     pub warning: Option<String>,
     /// Canonical structured multi-channel diagnostics payload for live responses; includes `channels` plus flat semantic compatibility mirrors.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
-    /// Legacy JSON-encoded compatibility metadata; live responses may omit this when structured metadata is present.
+    pub metadata: Option<SearchHybridMetadata>,
+    /// Legacy derived human-readable note; machine clients should read `metadata` for structured meaning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

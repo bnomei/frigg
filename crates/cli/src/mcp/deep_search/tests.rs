@@ -321,7 +321,7 @@ fn playbook_suite_compose_citation_payload_requires_numeric_fields() {
                 "repository_id": "repo-001",
                 "symbol": "greeting"
             }],
-            "note": "{\"precision\":\"heuristic\"}"
+            "note": "Structured details are available under metadata."
         }),
     );
 

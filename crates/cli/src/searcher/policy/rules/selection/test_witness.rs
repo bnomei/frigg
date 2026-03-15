@@ -6,8 +6,8 @@ use super::super::super::trace::{PolicyEffect, PolicyStage};
 use crate::searcher::surfaces::HybridSourceClass;
 
 fn class_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.42
     } else {
         0.72
@@ -15,29 +15,29 @@ fn class_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    if candidate.specific_witness_path_overlap() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    if candidate.specific_witness_path_overlap == 0 {
         return None;
     }
 
-    let delta = match candidate.specific_witness_path_overlap() {
+    let delta = match candidate.specific_witness_path_overlap {
         1 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 2.10
             } else {
                 1.02
             }
         }
         2 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 3.68
             } else {
                 1.82
             }
         }
         _ => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 4.72
             } else {
                 2.34
@@ -49,12 +49,12 @@ fn specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn exact_query_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (candidate.has_exact_query_term_match()
-        && !(intent.wants_example_or_bench_witnesses() && candidate.is_examples_rs()))
-    .then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let intent = ctx;
+    let candidate = ctx;
+    let state = ctx;
+    (candidate.has_exact_query_term_match
+        && !(intent.wants_example_or_bench_witnesses && candidate.is_examples_rs))
+    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
         3.2
     } else {
         1.8
@@ -62,23 +62,23 @@ fn exact_query_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn support_path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    if candidate.is_example_support() || candidate.is_bench_support() {
+    let candidate = ctx;
+    let state = ctx;
+    if candidate.is_example_support || candidate.is_bench_support {
         return None;
     }
 
-    let delta = match candidate.path_overlap() {
+    let delta = match candidate.path_overlap {
         0 | 1 => 0.0,
         2 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 0.34
             } else {
                 0.18
             }
         }
         _ => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 1.80
             } else {
                 0.92
@@ -90,16 +90,16 @@ fn support_path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn example_or_bench_context_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (!candidate.is_example_support() && !candidate.is_bench_support()).then_some(PolicyEffect::Add(
-        if state.seen_count() == 0 { 0.42 } else { 0.24 },
+    let candidate = ctx;
+    let state = ctx;
+    (!candidate.is_example_support && !candidate.is_bench_support).then_some(PolicyEffect::Add(
+        if state.seen_count == 0 { 0.42 } else { 0.24 },
     ))
 }
 
 fn example_support_priority_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.10
     } else {
         0.58
@@ -107,8 +107,8 @@ fn example_support_priority_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> 
 }
 
 fn bench_support_priority_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.28
     } else {
         0.66
@@ -116,8 +116,8 @@ fn bench_support_priority_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.18
     } else {
         0.10
@@ -125,8 +125,8 @@ fn support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn generic_examples_rs_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -3.00
     } else {
         -1.50
@@ -134,8 +134,8 @@ fn generic_examples_rs_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn cli_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.84
     } else {
         0.46
@@ -143,17 +143,17 @@ fn cli_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn generic_test_penalty_under_examples_benches(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    let query = ctx.query();
-    (candidate.class() == HybridSourceClass::Tests
-        && !candidate.is_example_support()
-        && !candidate.is_bench_support()
-        && candidate.specific_witness_path_overlap() == 0
-        && !candidate.has_exact_query_term_match()
-        && (!candidate.is_cli_test_support() || !query.mentions_cli())
-        && !candidate.is_test_harness())
-    .then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    let query = ctx;
+    (candidate.class == HybridSourceClass::Tests
+        && !candidate.is_example_support
+        && !candidate.is_bench_support
+        && candidate.specific_witness_path_overlap == 0
+        && !candidate.has_exact_query_term_match
+        && (!candidate.is_cli_test_support || !query.query_mentions_cli)
+        && !candidate.is_test_harness)
+    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -1.20
     } else {
         -0.60
@@ -161,8 +161,8 @@ fn generic_test_penalty_under_examples_benches(ctx: &SelectionFacts) -> Option<P
 }
 
 fn harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         1.10
     } else {
         0.60
@@ -170,12 +170,12 @@ fn harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_test_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if intent.wants_python_witnesses() {
-        if state.seen_count() == 0 { 0.34 } else { 0.18 }
-    } else if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if intent.wants_python_witnesses {
+        if state.seen_count == 0 { 0.34 } else { 0.18 }
+    } else if state.seen_count == 0 {
         -0.28
     } else {
         -0.14
@@ -183,8 +183,8 @@ fn python_test_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn loose_python_test_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.12
     } else {
         0.06
@@ -192,8 +192,8 @@ fn loose_python_test_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn non_code_doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.44
     } else {
         -0.26
@@ -201,8 +201,8 @@ fn non_code_doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.28
     } else {
         -0.16
@@ -210,9 +210,9 @@ fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn cli_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (!candidate.is_cli_test_support()).then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    (!candidate.is_cli_test_support).then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.34
     } else {
         -0.20
@@ -220,9 +220,9 @@ fn cli_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn cli_non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (!candidate.is_cli_test_support()).then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    (!candidate.is_cli_test_support).then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.24
     } else {
         -0.12

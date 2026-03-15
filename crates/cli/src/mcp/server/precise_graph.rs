@@ -356,6 +356,7 @@ impl FriggMcpServer {
         corpus: &RepositorySymbolCorpus,
     ) -> Option<CachedPreciseGraph> {
         let cached = self
+            .cache_state
             .latest_precise_graph_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -378,6 +379,7 @@ impl FriggMcpServer {
         let current_root_signature =
             Self::current_root_signature_for_repository(root, repository_id)?;
         let cached = self
+            .cache_state
             .latest_precise_graph_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -449,13 +451,15 @@ impl FriggMcpServer {
         };
 
         if let Some(cached) = self
+            .cache_state
             .precise_graph_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&cache_key)
             .cloned()
         {
-            self.latest_precise_graph_cache
+            self.cache_state
+                .latest_precise_graph_cache
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(corpus.repository_id.clone(), cached.clone());
@@ -499,6 +503,7 @@ impl FriggMcpServer {
         };
 
         let mut cache = self
+            .cache_state
             .precise_graph_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -509,7 +514,8 @@ impl FriggMcpServer {
         });
         let cached_graph = Arc::new(cached_graph);
         cache.insert(cache_key, cached_graph.clone());
-        self.latest_precise_graph_cache
+        self.cache_state
+            .latest_precise_graph_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(corpus.repository_id.clone(), cached_graph.clone());
@@ -548,13 +554,15 @@ impl FriggMcpServer {
         };
 
         if let Some(cached) = self
+            .cache_state
             .precise_graph_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&cache_key)
             .cloned()
         {
-            self.latest_precise_graph_cache
+            self.cache_state
+                .latest_precise_graph_cache
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(repository_id.to_owned(), cached.clone());
@@ -578,6 +586,7 @@ impl FriggMcpServer {
         };
 
         let mut cache = self
+            .cache_state
             .precise_graph_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -588,7 +597,8 @@ impl FriggMcpServer {
         });
         let cached_graph = Arc::new(cached_graph);
         cache.insert(cache_key, cached_graph.clone());
-        self.latest_precise_graph_cache
+        self.cache_state
+            .latest_precise_graph_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(repository_id.to_owned(), cached_graph.clone());

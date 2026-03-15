@@ -217,6 +217,14 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-vector-repair");
     let storage = Storage::new(&db_path);
     storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[
+            manifest_entry("src/a.rs", "hash-a", 10, Some(100)),
+            manifest_entry("src/b.rs", "hash-b", 10, Some(100)),
+        ],
+    )?;
 
     replace_semantic_records(
         &storage,
@@ -281,7 +289,28 @@ fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     assert_eq!(broken.live_embedding_rows, 2);
     assert_eq!(broken.live_vector_rows, 1);
 
-    storage.repair_semantic_vector_store()?;
+    let err = storage
+        .verify()
+        .expect_err("verify should fail when semantic vector partitions drift out of sync");
+    let err_message = err.to_string();
+    assert!(
+        err_message.contains("invariant=semantic_vector_partition_in_sync"),
+        "unexpected semantic partition invariant error: {err_message}"
+    );
+    assert!(
+        err_message.contains("count=1"),
+        "unexpected semantic partition invariant count: {err_message}"
+    );
+    assert!(
+        err_message.contains("repo-1:openai:text-embedding-3-small"),
+        "unexpected semantic partition details: {err_message}"
+    );
+
+    let repair_summary = storage.repair_storage_invariants()?;
+    assert_eq!(
+        repair_summary.repaired_categories,
+        vec!["semantic_vector_partition_in_sync".to_string()]
+    );
 
     let repaired = storage.collect_semantic_storage_health_for_repository_model(
         "repo-1",

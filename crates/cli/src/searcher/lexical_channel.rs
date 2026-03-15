@@ -178,7 +178,7 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     policy_path_quality_multiplier_with_intent(path, intent)
 }
 
-pub(super) use super::policy::PathWitnessQueryContext as HybridPathWitnessQueryContext;
+pub(super) use super::policy::PolicyQueryContext as HybridPathWitnessQueryContext;
 
 fn score_path_witness_anchor_line(
     line: &str,
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn witness_anchor_reader_keeps_best_matching_line() {
-        let query_context = HybridPathWitnessQueryContext::new("build flow entrypoint");
+        let query_context = HybridPathWitnessQueryContext::from_query_text("build flow entrypoint");
         let source = Cursor::new(
             "\nplain header\nsetup unrelated values\nbuild entrypoint wires workflow\n",
         );
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn witness_anchor_reader_falls_back_to_first_non_empty_line() {
-        let query_context = HybridPathWitnessQueryContext::new("jobs listeners queue");
+        let query_context = HybridPathWitnessQueryContext::from_query_text("jobs listeners queue");
         let source = Cursor::new("\nheader line\nanother unrelated value\n");
 
         let anchor = best_path_witness_anchor_in_reader("docs/overview.md", source, &query_context);

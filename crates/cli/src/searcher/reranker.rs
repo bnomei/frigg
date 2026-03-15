@@ -1,7 +1,7 @@
 use super::HybridRankedEvidence;
 use super::intent::HybridRankingIntent;
 use super::policy::{
-    SelectionCandidate, SelectionFacts, SelectionQueryContext, SelectionState,
+    SelectionCandidate, SelectionFacts, PolicyQueryContext, SelectionState,
     hybrid_selection_score_from_context,
 };
 
@@ -11,7 +11,7 @@ pub(super) fn diversify_hybrid_ranked_evidence(
     query_text: &str,
 ) -> Vec<HybridRankedEvidence> {
     let intent = HybridRankingIntent::from_query(query_text);
-    let query_context = SelectionQueryContext::new(&intent, query_text);
+    let query_context = PolicyQueryContext::new(&intent, query_text);
     let mut state = SelectionState::default();
     let mut remaining = ranked
         .into_iter()
@@ -49,7 +49,7 @@ pub(super) fn diversify_hybrid_ranked_evidence(
 fn hybrid_selection_score(
     candidate: &SelectionCandidate,
     intent: &HybridRankingIntent,
-    query_context: &SelectionQueryContext,
+    query_context: &PolicyQueryContext,
     state: &SelectionState,
 ) -> f32 {
     let ctx = SelectionFacts::from_candidate(candidate, intent, query_context, state);

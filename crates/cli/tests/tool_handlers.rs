@@ -1149,13 +1149,16 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             .is_some(),
         "search_hybrid metadata should expose additive stage attribution"
     );
+    let second_metadata = second
+        .metadata
+        .as_ref()
+        .map(|metadata| serde_json::to_value(metadata).expect("metadata should serialize"));
     assert_eq!(
         structured
             .get("metadata")
             .and_then(|value| value.get("semantic_status"))
             .and_then(|value| value.as_str()),
-        second
-            .metadata
+        second_metadata
             .as_ref()
             .and_then(|value| value.get("semantic_status"))
             .and_then(|value| value.as_str()),
@@ -1171,16 +1174,14 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             structured
                 .get("metadata")
                 .and_then(|value| value.get("stage_attribution")),
-            second
-                .metadata
+            second_metadata
                 .as_ref()
                 .and_then(|value| value.get("stage_attribution")),
             "cacheable search_hybrid responses should keep stage attribution stable within the session"
         );
     } else {
         assert!(
-            second
-                .metadata
+            second_metadata
                 .as_ref()
                 .and_then(|value| value.get("stage_attribution"))
                 .and_then(|value| value.get("scan"))
@@ -1250,10 +1251,13 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
     assert_eq!(response.semantic_hit_count, None);
     assert_eq!(response.semantic_match_count, None);
     assert_eq!(response.note, None);
-    let metadata = response
-        .metadata
-        .as_ref()
-        .expect("search_hybrid should emit structured metadata");
+    let metadata = serde_json::to_value(
+        response
+            .metadata
+            .as_ref()
+            .expect("search_hybrid should emit structured metadata"),
+    )
+    .expect("metadata should serialize");
     assert_eq!(
         metadata
             .get("channels")
@@ -1364,10 +1368,13 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
         .expect("unsupported semantic language filters should degrade to metadata, not fail")
         .0;
 
-    let metadata = response
-        .metadata
-        .as_ref()
-        .expect("search_hybrid should emit structured metadata");
+    let metadata = serde_json::to_value(
+        response
+            .metadata
+            .as_ref()
+            .expect("search_hybrid should emit structured metadata"),
+    )
+    .expect("metadata should serialize");
     assert_eq!(
         metadata
             .get("semantic_capability")
@@ -2420,6 +2427,8 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     assert_eq!(
         second
             .metadata
+            .as_ref()
+            .map(|metadata| serde_json::to_value(metadata).expect("metadata should serialize"))
             .as_ref()
             .and_then(|metadata| metadata.get("freshness_basis"))
             .and_then(|value| value.get("cacheable"))

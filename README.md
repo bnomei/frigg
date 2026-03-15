@@ -5,7 +5,7 @@ It helps agents and developer tools answer code questions with reproducible, sou
 
 Frigg is:
 - engine-first: deterministic local evidence from manifests, search, graph overlays, and optional semantics.
-- MCP-delivered: a small, explicit read-only tool surface with versioned JSON schemas.
+- MCP-delivered: a small, explicit public tool surface with versioned JSON schemas, including session-scoped `workspace_attach` plus read-only evidence tools.
 - CLI-operated: one deployable binary (`frigg`) built and shipped as one Rust package.
 
 ## Product Rings
@@ -330,7 +330,7 @@ Important:
 - after the first semantic population, `reindex --changed` continues to advance the same live corpus incrementally.
 - if you enabled semantics in Codex config, run the full `reindex` before expecting `search_hybrid` to contribute semantic scores in MCP sessions.
 - semantic storage is one live corpus per `(repository, provider, model)` keyed by `semantic_head`; changed-only refreshes advance that corpus in place instead of keeping steady-state semantic snapshot partitions.
-- Frigg no longer falls back to older semantic snapshots. If the active manifest snapshot is not covered for the active provider/model, runtime health and search surface that missing live corpus directly.
+- Frigg keeps steady-state semantic storage live-corpus-first, but runtime can still fall back to the latest older semantic-populated manifest snapshot in degraded mode when the active manifest snapshot is not yet covered for the active provider/model.
 - Manifest snapshot retention is bounded to the latest `8` per repository by default while protecting any active `semantic_head` snapshot, and provenance retention is bounded to the latest `10_000` events.
 - `embedding_vectors` is a derived sqlite-vec live projection, not a snapshot-partitioned source of truth. If `workspace_current` or repository health reports `semantic_vector_partition_out_of_sync`, use the storage repair surface to rebuild sqlite-vec from the live semantic corpus.
 
@@ -464,7 +464,7 @@ Schema files:
 
 Contract notes:
 - these are the canonical `v1` public tools,
-- `core` is the stable default read-only profile; `extended` is an advanced-consumer profile that layers `explore` plus deep-search runtime tools on top of it,
+- `core` is the stable default public profile; `workspace_attach` is its session-scoped stateful entry point, and the remaining public tools are read-only/idempotent. `extended` layers `explore` plus deep-search runtime tools on top of that base,
 - paths in responses are canonical repository-relative paths,
 - breaking schema changes require a new major version directory.
 

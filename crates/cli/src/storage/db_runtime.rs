@@ -8,8 +8,66 @@ use super::vector_store::{
 };
 use super::{
     ManifestEntry, ManifestMetadataEntry, Migration, RepositoryManifestMetadataSnapshot,
-    RepositoryManifestSnapshot,
+    RepositoryManifestSnapshot, SNAPSHOT_KIND_MANIFEST,
 };
+
+pub(super) fn load_snapshot_ids_for_repository_and_kind(
+    conn: &Connection,
+    repository_id: &str,
+    kind: &str,
+) -> FriggResult<Vec<String>> {
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT snapshot_id
+            FROM snapshot
+            WHERE repository_id = ?1 AND kind = ?2
+            ORDER BY created_at DESC, rowid DESC
+            "#,
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to prepare snapshot id lookup for repository '{repository_id}' and kind '{kind}': {err}"
+            ))
+        })?;
+
+    statement
+        .query_map((repository_id, kind), |row| row.get::<_, String>(0))
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to query snapshot ids for repository '{repository_id}' and kind '{kind}': {err}"
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to decode snapshot ids for repository '{repository_id}' and kind '{kind}': {err}"
+            ))
+        })
+}
+
+pub(super) fn count_snapshots_for_repository_and_kind(
+    conn: &Connection,
+    repository_id: &str,
+    kind: &str,
+) -> FriggResult<usize> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM snapshot WHERE repository_id = ?1 AND kind = ?2",
+            (repository_id, kind),
+            |row| row.get(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to count snapshots for repository '{repository_id}' and kind '{kind}': {err}"
+            ))
+        })?;
+    usize::try_from(count).map_err(|err| {
+        FriggError::Internal(format!(
+            "snapshot count overflow for repository '{repository_id}' and kind '{kind}': {err}"
+        ))
+    })
+}
 
 pub(super) fn count_provenance_events(conn: &Connection) -> FriggResult<usize> {
     let count: i64 = conn
@@ -90,6 +148,8 @@ pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
     ensure_sqlite_vec_auto_extension_registered()?;
     let conn = Connection::open(path)
         .map_err(|err| FriggError::Internal(format!("failed to open sqlite db: {err}")))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}")))?;
     ensure_sqlite_vec_registration_readiness(&conn)?;
     Ok(conn)
 }
@@ -141,14 +201,22 @@ pub(super) fn load_latest_manifest_snapshot_for_repository(
     conn: &Connection,
     repository_id: &str,
 ) -> FriggResult<Option<RepositoryManifestSnapshot>> {
+    load_latest_snapshot_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)
+}
+
+pub(super) fn load_latest_snapshot_for_repository_and_kind(
+    conn: &Connection,
+    repository_id: &str,
+    kind: &str,
+) -> FriggResult<Option<RepositoryManifestSnapshot>> {
     let mut statement = conn
         .prepare(
             r#"
             WITH latest AS (
                 SELECT snapshot_id
                 FROM snapshot
-                WHERE repository_id = ?1
-                ORDER BY created_at DESC, snapshot_id DESC
+                WHERE repository_id = ?1 AND kind = ?2
+                ORDER BY created_at DESC, rowid DESC
                 LIMIT 1
             )
             SELECT latest.snapshot_id, file_manifest.path, file_manifest.sha256, file_manifest.size_bytes, file_manifest.mtime_ns
@@ -164,7 +232,7 @@ pub(super) fn load_latest_manifest_snapshot_for_repository(
         })?;
 
     let rows = statement
-        .query_map([repository_id], |row| {
+        .query_map((repository_id, kind), |row| {
             let snapshot_id: String = row.get(0)?;
             let path: Option<String> = row.get(1)?;
             let sha256: Option<String> = row.get(2)?;
@@ -183,7 +251,7 @@ pub(super) fn load_latest_manifest_snapshot_for_repository(
     for row in rows {
         let (row_snapshot_id, path, sha256, size_bytes_raw, mtime_ns_raw) = row.map_err(|err| {
             FriggError::Internal(format!(
-                "failed to decode latest manifest rows for repository '{repository_id}': {err}"
+                "failed to decode latest manifest rows for repository '{repository_id}' and kind '{kind}': {err}"
             ))
         })?;
         snapshot_id.get_or_insert(row_snapshot_id);
@@ -211,16 +279,24 @@ pub(super) fn load_latest_manifest_snapshot_for_repository(
         });
     }
 
-    Ok(snapshot_id.map(|snapshot_id| RepositoryManifestSnapshot {
-        repository_id: repository_id.to_owned(),
-        snapshot_id,
-        entries,
-    }))
+        Ok(snapshot_id.map(|snapshot_id| RepositoryManifestSnapshot {
+            repository_id: repository_id.to_owned(),
+            snapshot_id,
+            entries,
+        }))
 }
 
 pub(super) fn load_latest_manifest_metadata_snapshot_for_repository(
     conn: &Connection,
     repository_id: &str,
+) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
+    load_latest_snapshot_metadata_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)
+}
+
+pub(super) fn load_latest_snapshot_metadata_for_repository_and_kind(
+    conn: &Connection,
+    repository_id: &str,
+    kind: &str,
 ) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
     let mut statement = conn
         .prepare(
@@ -228,8 +304,8 @@ pub(super) fn load_latest_manifest_metadata_snapshot_for_repository(
             WITH latest AS (
                 SELECT snapshot_id
                 FROM snapshot
-                WHERE repository_id = ?1
-                ORDER BY created_at DESC, snapshot_id DESC
+                WHERE repository_id = ?1 AND kind = ?2
+                ORDER BY created_at DESC, rowid DESC
                 LIMIT 1
             )
             SELECT latest.snapshot_id, file_manifest.path, file_manifest.size_bytes, file_manifest.mtime_ns
@@ -245,7 +321,7 @@ pub(super) fn load_latest_manifest_metadata_snapshot_for_repository(
         })?;
 
     let rows = statement
-        .query_map([repository_id], |row| {
+        .query_map((repository_id, kind), |row| {
             let snapshot_id: String = row.get(0)?;
             let path: Option<String> = row.get(1)?;
             let size_bytes_raw: Option<i64> = row.get(2)?;
@@ -261,11 +337,12 @@ pub(super) fn load_latest_manifest_metadata_snapshot_for_repository(
     let mut snapshot_id = None;
     let mut entries = Vec::new();
     for row in rows {
-        let (row_snapshot_id, path, size_bytes_raw, mtime_ns_raw) = row.map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to decode latest manifest metadata rows for repository '{repository_id}': {err}"
-            ))
-        })?;
+        let (row_snapshot_id, path, size_bytes_raw, mtime_ns_raw) = row
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode latest manifest metadata rows for repository '{repository_id}' and kind '{kind}': {err}"
+                ))
+            })?;
         snapshot_id.get_or_insert(row_snapshot_id);
         let Some(path) = path else {
             continue;
@@ -472,9 +549,9 @@ mod tests {
     use super::*;
     use crate::domain::FriggError;
     use rusqlite::Connection;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use std::env;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_db_path(test_name: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -512,14 +589,18 @@ mod tests {
             );
             "#,
         )
-        .map_err(|err| FriggError::Internal(format!("failed to create db-runtime test tables: {err}")))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to create db-runtime test tables: {err}"))
+        })
     }
 
     #[test]
     fn count_provenance_events_counts_rows() -> FriggResult<()> {
         let db_path = temp_db_path("count-events");
         let conn = Connection::open(&db_path).map_err(|err| {
-            FriggError::Internal(format!("failed to open db for provenance count test: {err}"))
+            FriggError::Internal(format!(
+                "failed to open db for provenance count test: {err}"
+            ))
         })?;
         ensure_core_storage_tables(&conn)?;
 
@@ -540,7 +621,9 @@ mod tests {
     fn prune_provenance_events_on_connection_keeps_requested_retention() -> FriggResult<()> {
         let db_path = temp_db_path("prune-events");
         let conn = Connection::open(&db_path).map_err(|err| {
-            FriggError::Internal(format!("failed to open db for provenance prune test: {err}"))
+            FriggError::Internal(format!(
+                "failed to open db for provenance prune test: {err}"
+            ))
         })?;
         ensure_core_storage_tables(&conn)?;
 
@@ -601,7 +684,8 @@ mod tests {
     }
 
     #[test]
-    fn load_latest_manifest_metadata_uses_empty_manifest_rows_as_empty_metadata() -> FriggResult<()> {
+    fn load_latest_manifest_metadata_uses_empty_manifest_rows_as_empty_metadata() -> FriggResult<()>
+    {
         let db_path = temp_db_path("latest-manifest-metadata");
         let conn = Connection::open(&db_path).map_err(|err| {
             FriggError::Internal(format!(
@@ -630,7 +714,10 @@ mod tests {
 
     #[test]
     fn number_conversion_helpers_cover_bounds_and_negatives() {
-        assert_eq!(u64_to_i64(10, "test").expect("u64_to_i64 should support small values"), 10);
+        assert_eq!(
+            u64_to_i64(10, "test").expect("u64_to_i64 should support small values"),
+            10
+        );
         let overflow = u64_to_i64(u64::MAX, "test-overflow");
         assert!(
             overflow.is_err(),
@@ -668,7 +755,8 @@ mod tests {
             ))
         })?;
 
-        let err = read_schema_version(&conn).expect_err("schema version query should fail without table");
+        let err =
+            read_schema_version(&conn).expect_err("schema version query should fail without table");
         let message = match err {
             FriggError::Internal(message) => message,
             other => {

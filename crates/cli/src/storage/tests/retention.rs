@@ -77,3 +77,98 @@ fn snapshot_and_provenance_pruning_keep_storage_bounded() -> FriggResult<()> {
     cleanup_db(&db_path);
     Ok(())
 }
+
+#[test]
+fn snapshot_prune_keeps_non_manifest_rows_out_of_manifest_retention() -> FriggResult<()> {
+    let db_path = temp_db_path("storage-prune-manifest-vs-non-manifest");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-manifest-old",
+        &[manifest_entry(
+            "src/lib.rs",
+            "hash-manifest-old",
+            101,
+            Some(1001),
+        )],
+    )?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-manifest-new",
+        &[manifest_entry(
+            "src/lib.rs",
+            "hash-manifest-new",
+            102,
+            Some(1002),
+        )],
+    )?;
+
+    let conn = open_test_connection(&db_path)?;
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at) VALUES (?1, ?2, 'semantic', NULL, ?3)",
+        ("snapshot-semantic-only", "repo-1", "2026-01-03T00:00:00Z"),
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to seed non-manifest snapshot for retention test: {err}"
+        ))
+    })?;
+
+    let deleted = storage.prune_repository_snapshots("repo-1", 1)?;
+    assert_eq!(deleted, 1);
+
+    let manifest_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM snapshot WHERE repository_id = ?1 AND kind = 'manifest'",
+            ["repo-1"],
+            |row| row.get(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to count manifest snapshots after prune in test: {err}"
+            ))
+        })?;
+    let non_manifest_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM snapshot WHERE repository_id = ?1 AND kind = 'semantic'",
+            ["repo-1"],
+            |row| row.get(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to count non-manifest snapshots after prune in test: {err}"
+            ))
+        })?;
+
+    assert_eq!(manifest_count, 1);
+    assert_eq!(non_manifest_count, 1);
+    assert!(
+        storage.load_manifest_for_snapshot("snapshot-manifest-old")?.is_empty(),
+        "oldest manifest snapshot should be pruned by manifest retention"
+    );
+    assert!(
+        storage
+            .load_manifest_for_snapshot("snapshot-manifest-new")?
+            .len()
+            == 1,
+        "latest manifest snapshot should remain after manifest retention"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM snapshot WHERE snapshot_id = ?1",
+            ["snapshot-semantic-only"],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to assert non-manifest snapshot retained during manifest prune: {err}"
+            ))
+        })?,
+        1
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}

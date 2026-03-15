@@ -772,14 +772,7 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
-    assert_eq!(
-        searcher
-            .hybrid_path_witness_projection_cache
-            .read()
-            .expect("path witness projection cache should not be poisoned")
-            .len(),
-        0
-    );
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
 
     let query = "tests fixtures integration tests createsapplication dusktestcase";
     let intent = HybridRankingIntent::from_query(query);
@@ -789,14 +782,7 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
         8,
         &intent,
     )?;
-    assert_eq!(
-        searcher
-            .hybrid_path_witness_projection_cache
-            .read()
-            .expect("path witness projection cache should not be poisoned")
-            .len(),
-        1
-    );
+    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
 
     let second = searcher.search_path_witness_recall_with_filters(
         query,
@@ -805,14 +791,7 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
         &intent,
     )?;
     assert_eq!(first.matches, second.matches);
-    assert_eq!(
-        searcher
-            .hybrid_path_witness_projection_cache
-            .read()
-            .expect("path witness projection cache should not be poisoned")
-            .len(),
-        1
-    );
+    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
 
     cleanup_workspace(&root);
     Ok(())
@@ -876,7 +855,7 @@ fn hybrid_path_witness_recall_uses_live_entrypoint_detection_for_stale_typescrip
 -> FriggResult<()> {
     let query = "entry point bootstrap server app cli router main";
     let intent = HybridRankingIntent::from_query(query);
-    let query_context = HybridPathWitnessQueryContext::new(query);
+    let query_context = HybridPathWitnessQueryContext::from_query_text(query);
     let mut stale_entrypoint = StoredPathWitnessProjection::from_path("packages/cli/src/server.ts");
     stale_entrypoint.flags.is_entrypoint_runtime = false;
     let competing_router = StoredPathWitnessProjection::from_path(
@@ -910,7 +889,7 @@ fn hybrid_path_witness_recall_uses_live_roc_entrypoint_detection_for_stale_proje
 -> FriggResult<()> {
     let query = "entry point main app package platform runtime";
     let intent = HybridRankingIntent::from_query(query);
-    let query_context = HybridPathWitnessQueryContext::new(query);
+    let query_context = HybridPathWitnessQueryContext::from_query_text(query);
     let mut stale_entrypoint = StoredPathWitnessProjection::from_path("platform/main.roc");
     stale_entrypoint.flags.is_entrypoint_runtime = false;
     let competing_host_lib = StoredPathWitnessProjection::from_path("crates/roc_host/src/lib.rs");
@@ -942,7 +921,7 @@ fn hybrid_path_witness_recall_uses_live_kotlin_entrypoint_detection_for_stale_pr
 -> FriggResult<()> {
     let query = "entry point bootstrap app activity navigation main cli";
     let intent = HybridRankingIntent::from_query(query);
-    let query_context = HybridPathWitnessQueryContext::new(query);
+    let query_context = HybridPathWitnessQueryContext::from_query_text(query);
     let mut stale_entrypoint = StoredPathWitnessProjection::from_path(
         "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoActivity.kt",
     );
@@ -978,7 +957,7 @@ fn hybrid_path_witness_recall_uses_live_pytest_detection_for_stale_python_test_p
 -> FriggResult<()> {
     let query = "tests fixtures integration helpers e2e config setup pyproject";
     let intent = HybridRankingIntent::from_query(query);
-    let query_context = HybridPathWitnessQueryContext::new(query);
+    let query_context = HybridPathWitnessQueryContext::from_query_text(query);
     let mut stale_test = StoredPathWitnessProjection::from_path(
         "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
     );

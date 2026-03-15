@@ -98,51 +98,13 @@ fn storage_hot_path_benchmarks() {
         state.cleanup();
     });
 
-    run_workload(
+    run_workload_with_sample_setup(
         WORKLOAD_SEMANTIC_EMBEDDING_ADVANCE,
         BENCH_SAMPLE_COUNT,
         1,
+        || reset_semantic_base_state(hot_state),
         || {
-            hot_state
-                .storage
-                .advance_semantic_embeddings_for_repository(
-                    BENCH_REPOSITORY_ID,
-                    Some(BENCH_SEMANTIC_PREVIOUS_SNAPSHOT_ID),
-                    BENCH_SEMANTIC_CURRENT_SNAPSHOT_ID,
-                    BENCH_SEMANTIC_PROVIDER,
-                    BENCH_SEMANTIC_MODEL,
-                    &hot_state.semantic_delta.changed_paths,
-                    &hot_state.semantic_delta.deleted_paths,
-                    &hot_state.semantic_delta.delta_records,
-                )
-                .expect("semantic embedding delta benchmark advance should succeed");
-            let count = hot_state
-                .storage
-                .count_semantic_embeddings_for_repository_snapshot_model(
-                    BENCH_REPOSITORY_ID,
-                    BENCH_SEMANTIC_CURRENT_SNAPSHOT_ID,
-                    BENCH_SEMANTIC_PROVIDER,
-                    BENCH_SEMANTIC_MODEL,
-                )
-                .expect("semantic embedding delta benchmark count should succeed");
-            assert_eq!(
-                count, hot_state.semantic_delta.expected_record_count,
-                "semantic embedding delta benchmark should preserve deterministic record count"
-            );
-            let texts = hot_state
-                .storage
-                .load_semantic_chunk_texts_for_repository_snapshot(
-                    BENCH_REPOSITORY_ID,
-                    BENCH_SEMANTIC_CURRENT_SNAPSHOT_ID,
-                    &hot_state.semantic_delta.lookup_chunk_ids,
-                )
-                .expect("semantic embedding delta benchmark lookup should succeed");
-            assert_eq!(
-                texts.len(),
-                hot_state.semantic_delta.lookup_chunk_ids.len(),
-                "semantic embedding delta benchmark should roundtrip every lookup chunk"
-            );
-            std::hint::black_box((count, texts));
+            apply_semantic_delta_and_assert(hot_state);
         },
     );
 
@@ -190,8 +152,21 @@ fn storage_hot_path_benchmarks() {
     });
 }
 
-fn run_workload<F>(workload_id: &str, sample_count: usize, iters_per_sample: u64, mut workload: F)
+fn run_workload<F>(workload_id: &str, sample_count: usize, iters_per_sample: u64, workload: F)
 where
+    F: FnMut(),
+{
+    run_workload_with_sample_setup(workload_id, sample_count, iters_per_sample, || {}, workload);
+}
+
+fn run_workload_with_sample_setup<S, F>(
+    workload_id: &str,
+    sample_count: usize,
+    iters_per_sample: u64,
+    mut sample_setup: S,
+    mut workload: F,
+) where
+    S: FnMut(),
     F: FnMut(),
 {
     assert!(sample_count > 0, "sample_count must be greater than zero");
@@ -202,6 +177,7 @@ where
 
     for _ in 0..BENCH_WARMUP_SAMPLES {
         for _ in 0..iters_per_sample {
+            sample_setup();
             workload();
         }
     }
@@ -209,6 +185,7 @@ where
     let mut iters = Vec::with_capacity(sample_count);
     let mut times = Vec::with_capacity(sample_count);
     for _ in 0..sample_count {
+        sample_setup();
         let start = Instant::now();
         for _ in 0..iters_per_sample {
             workload();
@@ -246,6 +223,7 @@ struct HotStorageState {
 }
 
 struct SemanticDeltaState {
+    base_records: Vec<SemanticChunkEmbeddingRecord>,
     changed_paths: Vec<String>,
     deleted_paths: Vec<String>,
     delta_records: Vec<SemanticChunkEmbeddingRecord>,
@@ -281,6 +259,7 @@ fn prepare_hot_state() -> HotStorageState {
         manifest_entries,
         semantic_delta,
     };
+    reset_semantic_base_state(&state);
     apply_semantic_delta_and_assert(&state);
     state
 }
@@ -398,6 +377,7 @@ fn seed_semantic_delta_state(storage: &Storage) -> SemanticDeltaState {
     let expected_topk_first_chunk_id = "chunk-000-00".to_owned();
 
     SemanticDeltaState {
+        base_records,
         changed_paths,
         deleted_paths,
         delta_records,
@@ -406,6 +386,19 @@ fn seed_semantic_delta_state(storage: &Storage) -> SemanticDeltaState {
         query_embedding,
         expected_topk_first_chunk_id,
     }
+}
+
+fn reset_semantic_base_state(state: &HotStorageState) {
+    state
+        .storage
+        .replace_semantic_embeddings_for_repository(
+            BENCH_REPOSITORY_ID,
+            BENCH_SEMANTIC_PREVIOUS_SNAPSHOT_ID,
+            BENCH_SEMANTIC_PROVIDER,
+            BENCH_SEMANTIC_MODEL,
+            &state.semantic_delta.base_records,
+        )
+        .expect("semantic delta base-state reset should succeed");
 }
 
 fn assert_deterministic_hotspot_query(state: &HotStorageState) {
@@ -435,6 +428,7 @@ fn assert_deterministic_hotspot_query(state: &HotStorageState) {
 }
 
 fn assert_semantic_delta_is_deterministic(state: &HotStorageState) {
+    reset_semantic_base_state(state);
     apply_semantic_delta_and_assert(state);
     let first_count = state
         .storage
@@ -454,6 +448,7 @@ fn assert_semantic_delta_is_deterministic(state: &HotStorageState) {
         )
         .expect("semantic delta deterministic lookup should succeed");
 
+    reset_semantic_base_state(state);
     apply_semantic_delta_and_assert(state);
     let second_count = state
         .storage

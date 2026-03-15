@@ -1,8 +1,18 @@
+use std::collections::BTreeMap;
+
 use super::*;
+use crate::domain::ChannelHealthStatus;
+use crate::mcp::types::{
+    SearchHybridChannelDiagnostic, SearchHybridChannelMetadata,
+    SearchHybridDiagnosticsSummary, SearchHybridLanguageCapabilityMetadata,
+    SearchHybridMetadata, SearchHybridSemanticAcceleratorMetadata,
+    SearchHybridStageAttribution,
+};
 
 impl FriggMcpServer {
     pub(super) fn invalidate_repository_search_response_caches(&self, repository_id: &str) {
-        self.search_text_response_cache
+        self.cache_state
+            .search_text_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| {
@@ -12,7 +22,8 @@ impl FriggMcpServer {
                     &key.freshness_scopes,
                 )
             });
-        self.search_hybrid_response_cache
+        self.cache_state
+            .search_hybrid_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| {
@@ -22,7 +33,8 @@ impl FriggMcpServer {
                     &key.freshness_scopes,
                 )
             });
-        self.search_symbol_response_cache
+        self.cache_state
+            .search_symbol_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|key, _| {
@@ -38,10 +50,12 @@ impl FriggMcpServer {
         &self,
         params: SearchTextParams,
     ) -> Result<Json<SearchTextResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("search_text", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("search_text", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut effective_limit: Option<usize> = None;
             let mut effective_pattern_type: Option<SearchPatternType> = None;
@@ -49,7 +63,6 @@ impl FriggMcpServer {
             let mut walk_diagnostics_count = 0usize;
             let mut read_diagnostics_count = 0usize;
             let mut response_source_refs = json!({});
-            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
                 if query.is_empty() {
@@ -81,17 +94,14 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_workspaces = server.attached_workspaces_for_repository(
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                scoped_repository_ids = scoped_workspaces
-                    .iter()
-                    .map(|workspace| workspace.repository_id.clone())
-                    .collect::<Vec<_>>();
-                let cache_freshness = server.repository_response_cache_freshness(
-                    &scoped_workspaces,
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
                     RepositoryResponseCacheFreshnessMode::ManifestOnly,
                 )?;
+                let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
+                scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
+                let cache_freshness = scoped_execution_context.cache_freshness.clone();
                 let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
                     SearchTextResponseCacheKey {
                         scoped_repository_ids: scoped_repository_ids.clone(),
@@ -130,7 +140,7 @@ impl FriggMcpServer {
 
                 let searcher = TextSearcher::with_validated_manifest_candidate_cache(
                     scoped_config,
-                    Arc::clone(&server.validated_manifest_candidate_cache),
+                    Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
                 );
                 let search_output = match pattern_type {
                     SearchPatternType::Literal => searcher.search_literal_with_filters_diagnostics(
@@ -192,11 +202,17 @@ impl FriggMcpServer {
                 .as_ref()
                 .map(|response| response.0.total_matches)
                 .unwrap_or(0);
-            let provenance_result = server.record_provenance_with_outcome(
+            let normalized_workload = execution_context_for_blocking
+                .normalized_workload(&scoped_repository_ids, WorkloadPrecisionMode::Exact);
+            let finalization = server.tool_execution_finalization(
+                response_source_refs.clone(),
+                Some(normalized_workload),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
                 "search_text",
-                repository_hint.as_deref(),
+                execution_context_for_blocking.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context_for_blocking.repository_hint,
                     "query": Self::bounded_text(&params_for_blocking.query),
                     "pattern_type": effective_pattern_type.clone(),
                     "path_regex": params_for_blocking
@@ -206,8 +222,9 @@ impl FriggMcpServer {
                     "limit": params_for_blocking.limit,
                     "effective_limit": effective_limit,
                 }),
-                response_source_refs.clone(),
+                finalization.source_refs,
                 Self::provenance_outcome(&result),
+                finalization.normalized_workload,
             );
 
             SearchTextExecution {
@@ -225,17 +242,19 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        self.finalize_with_provenance("search_text", result, execution.provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn search_hybrid_impl(
         &self,
         params: SearchHybridParams,
     ) -> Result<Json<SearchHybridResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("search_hybrid", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("search_hybrid", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut effective_limit: Option<usize> = None;
             let mut effective_weights: Option<SearchHybridChannelWeightsParams> = None;
@@ -244,17 +263,16 @@ impl FriggMcpServer {
             let mut read_diagnostics_count = 0usize;
             let mut semantic_requested: Option<bool> = None;
             let mut semantic_enabled: Option<bool> = None;
-            let mut semantic_status: Option<String> = None;
+            let mut semantic_status: Option<ChannelHealthStatus> = None;
             let mut semantic_reason: Option<String> = None;
             let mut semantic_candidate_count: Option<usize> = None;
             let mut semantic_hit_count: Option<usize> = None;
             let mut semantic_match_count: Option<usize> = None;
             let mut warning: Option<String> = None;
-            let mut channel_metadata: Option<Value> = None;
-            let mut stage_attribution: Option<Value> = None;
+            let mut channel_metadata: Option<BTreeMap<String, SearchHybridChannelMetadata>> = None;
+            let mut stage_attribution: Option<crate::searcher::SearchStageAttribution> = None;
             let mut match_anchors: Option<Value> = None;
             let mut response_source_refs = json!({});
-            let repository_hint = repository_hint.clone();
             let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
                 let query = params_for_blocking.query.trim().to_owned();
                 if query.is_empty() {
@@ -266,13 +284,13 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
 
-                let scoped_workspaces = server.attached_workspaces_for_repository(
-                    params_for_blocking.repository_id.as_deref(),
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
+                    RepositoryResponseCacheFreshnessMode::SemanticAware,
                 )?;
-                scoped_repository_ids = scoped_workspaces
-                    .iter()
-                    .map(|workspace| workspace.repository_id.clone())
-                    .collect::<Vec<_>>();
+                let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
+                scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
                 let (scoped_config, repository_id_map) =
                     server.scoped_search_config(&scoped_workspaces);
 
@@ -296,10 +314,7 @@ impl FriggMcpServer {
                     });
                     weights
                 };
-                let cache_freshness = server.repository_response_cache_freshness(
-                    &scoped_workspaces,
-                    RepositoryResponseCacheFreshnessMode::SemanticAware,
-                )?;
+                let cache_freshness = scoped_execution_context.cache_freshness.clone();
                 let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
                     SearchHybridResponseCacheKey {
                         scoped_repository_ids: scoped_repository_ids.clone(),
@@ -322,7 +337,7 @@ impl FriggMcpServer {
 
                 let searcher = TextSearcher::with_validated_manifest_candidate_cache(
                     scoped_config,
-                    Arc::clone(&server.validated_manifest_candidate_cache),
+                    Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
                 );
                 let search_output = searcher
                     .search_hybrid_with_filters(
@@ -357,35 +372,31 @@ impl FriggMcpServer {
                 );
                 semantic_enabled =
                     Some(semantic_channel.is_some_and(|result| result.stats.match_count > 0));
-                semantic_status =
-                    semantic_channel.map(|result| result.health.status.as_str().to_owned());
+                semantic_status = semantic_channel
+                    .map(|result| Self::search_hybrid_semantic_status(result.health.status));
                 semantic_reason = semantic_channel.and_then(|result| result.health.reason.clone());
                 semantic_candidate_count =
                     semantic_channel.map(|result| result.stats.candidate_count);
                 semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
                 semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
                 warning = Self::search_hybrid_warning(
-                    semantic_status.as_deref(),
+                    semantic_status,
                     semantic_reason.as_deref(),
                     semantic_hit_count,
                     semantic_match_count,
                 );
-                let semantic_language_capability = params_for_blocking.language.as_deref().map(
-                    |raw_language| {
+                let semantic_language_capability =
+                    params_for_blocking.language.as_deref().map(|raw_language| {
                         Self::search_hybrid_language_capability_metadata(
                             raw_language,
-                            semantic_status.as_deref(),
+                            semantic_status,
                             semantic_reason.as_deref(),
                         )
-                    },
-                );
+                    });
                 channel_metadata = Some(Self::search_hybrid_channels_metadata(
                     &search_output.channel_results,
                 ));
-                stage_attribution = search_output
-                    .stage_attribution
-                    .as_ref()
-                    .and_then(|attribution| serde_json::to_value(attribution).ok());
+                stage_attribution = search_output.stage_attribution.clone();
 
                 let mut matches = search_output
                     .matches
@@ -414,43 +425,29 @@ impl FriggMcpServer {
                 }
                 match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
 
-                let mut metadata_payload = json!({
-                    "channels": channel_metadata.clone(),
-                    "semantic_requested": semantic_requested,
-                    "semantic_enabled": semantic_enabled,
-                    "semantic_status": semantic_status.clone(),
-                    "semantic_reason": semantic_reason.clone(),
-                    "semantic_candidate_count": semantic_candidate_count,
-                    "semantic_hit_count": semantic_hit_count,
-                    "semantic_match_count": semantic_match_count,
-                    "warning": warning.clone(),
-                    "diagnostics_count": diagnostics_count,
-                    "diagnostics": {
-                        "walk": walk_diagnostics_count,
-                        "read": read_diagnostics_count,
-                        "total": diagnostics_count,
+                let metadata = Some(SearchHybridMetadata {
+                    channels: channel_metadata.clone().unwrap_or_default(),
+                    semantic_requested,
+                    semantic_enabled,
+                    semantic_status: semantic_status.clone(),
+                    semantic_reason: semantic_reason.clone(),
+                    semantic_candidate_count,
+                    semantic_hit_count,
+                    semantic_match_count,
+                    warning: warning.clone(),
+                    diagnostics_count,
+                    diagnostics: SearchHybridDiagnosticsSummary {
+                        walk: walk_diagnostics_count,
+                        read: read_diagnostics_count,
+                        total: diagnostics_count,
                     },
+                    stage_attribution: stage_attribution
+                        .as_ref()
+                        .map(SearchHybridStageAttribution::from),
+                    semantic_capability: semantic_language_capability.clone(),
+                    freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
+                        .expect("search_hybrid freshness basis should deserialize"),
                 });
-                if let Some(stage_attribution) = stage_attribution.clone() {
-                    metadata_payload
-                        .as_object_mut()
-                        .expect("search_hybrid metadata payload should be an object")
-                        .insert("stage_attribution".to_owned(), stage_attribution);
-                }
-                if let Some(language_capability) = semantic_language_capability.clone() {
-                    metadata_payload
-                        .as_object_mut()
-                        .expect("search_hybrid metadata payload should be an object")
-                        .insert("semantic_capability".to_owned(), language_capability);
-                }
-                metadata_payload
-                    .as_object_mut()
-                    .expect("search_hybrid metadata payload should be an object")
-                    .insert(
-                        "freshness_basis".to_owned(),
-                        cache_freshness.basis.clone(),
-                    );
-                let metadata = Some(metadata_payload);
 
                 let response = SearchHybridResponse {
                     matches,
@@ -464,38 +461,27 @@ impl FriggMcpServer {
                     metadata,
                     note: None,
                 };
-                let mut response_source_refs_value = json!({
-                    "scoped_repository_ids": scoped_repository_ids.clone(),
-                    "freshness_basis": cache_freshness.basis.clone(),
-                    "diagnostics_count": diagnostics_count,
-                    "diagnostics": {
-                        "walk": walk_diagnostics_count,
-                        "read": read_diagnostics_count,
-                        "total": diagnostics_count,
-                    },
-                    "semantic_requested": semantic_requested,
-                    "semantic_enabled": semantic_enabled,
-                    "semantic_status": semantic_status.clone(),
-                    "semantic_reason": semantic_reason.as_ref().map(|reason| Self::bounded_text(reason)),
-                    "semantic_candidate_count": semantic_candidate_count,
-                    "semantic_hit_count": semantic_hit_count,
-                    "semantic_match_count": semantic_match_count,
-                    "warning": warning.as_ref().map(|warning| Self::bounded_text(warning)),
-                    "channels": channel_metadata.clone(),
-                    "matches": match_anchors.clone(),
-                });
-                if let Some(stage_attribution) = stage_attribution.clone() {
-                    response_source_refs_value
-                        .as_object_mut()
-                        .expect("search_hybrid source refs should be an object")
-                        .insert("stage_attribution".to_owned(), stage_attribution);
-                }
-                if let Some(language_capability) = semantic_language_capability {
-                    response_source_refs_value
-                        .as_object_mut()
-                        .expect("search_hybrid source refs should be an object")
-                        .insert("semantic_capability".to_owned(), language_capability);
-                }
+                let mut response_source_refs_value = serde_json::to_value(
+                    response
+                        .metadata
+                        .as_ref()
+                        .expect("search_hybrid metadata should exist"),
+                )
+                .expect("search_hybrid metadata should serialize");
+                response_source_refs_value
+                    .as_object_mut()
+                    .expect("search_hybrid source refs should be an object")
+                    .insert(
+                        "scoped_repository_ids".to_owned(),
+                        json!(scoped_repository_ids.clone()),
+                    );
+                response_source_refs_value
+                    .as_object_mut()
+                    .expect("search_hybrid source refs should be an object")
+                    .insert(
+                        "matches".to_owned(),
+                        match_anchors.clone().unwrap_or_else(|| json!([])),
+                    );
                 response_source_refs = response_source_refs_value;
                 if let Some(cache_key) = cache_key {
                     server.cache_search_hybrid_response(cache_key, &response, &response_source_refs);
@@ -503,11 +489,39 @@ impl FriggMcpServer {
 
                 Ok(Json(response))
             })();
-            let provenance_result = server.record_provenance_with_outcome(
+            let fallback_reason = if matches!(semantic_status, Some(ChannelHealthStatus::Unavailable))
+            {
+                Self::provenance_fallback_reason_from_label(Some("semantic_unavailable"))
+            } else if matches!(semantic_status, Some(ChannelHealthStatus::Disabled)) {
+                Self::provenance_fallback_reason_from_label(Some("unsupported_feature"))
+            } else if matches!(semantic_status, Some(ChannelHealthStatus::Degraded)) {
+                Self::provenance_fallback_reason_from_label(Some("stage_filtered"))
+            } else {
+                Self::provenance_fallback_reason_from_label(None)
+            };
+            let fallback_reason_detail = semantic_reason.clone();
+            let precision_mode = if fallback_reason.is_some() {
+                WorkloadPrecisionMode::Fallback
+            } else {
+                WorkloadPrecisionMode::Precise
+            };
+            let normalized_workload = FriggMcpServer::provenance_normalized_workload_metadata(
                 "search_hybrid",
-                repository_hint.as_deref(),
+                &scoped_repository_ids,
+                precision_mode,
+                fallback_reason,
+                fallback_reason_detail,
+                stage_attribution.as_ref(),
+            );
+            let finalization = server.tool_execution_finalization(
+                response_source_refs.clone(),
+                Some(normalized_workload),
+            );
+            let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                "search_hybrid",
+                execution_context_for_blocking.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint.clone(),
+                    "repository_id": execution_context_for_blocking.repository_hint.clone(),
                     "query": Self::bounded_text(&params_for_blocking.query),
                     "language": params_for_blocking
                         .language
@@ -518,8 +532,9 @@ impl FriggMcpServer {
                     "semantic": params_for_blocking.semantic,
                     "weights": effective_weights.clone(),
                 }),
-                response_source_refs.clone(),
+                finalization.source_refs,
                 Self::provenance_outcome(&result),
+                finalization.normalized_workload,
             );
 
             SearchHybridExecution {
@@ -546,17 +561,19 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
-        self.finalize_with_provenance("search_hybrid", result, execution.provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
     pub(super) async fn search_symbol_impl(
         &self,
         params: SearchSymbolParams,
     ) -> Result<Json<SearchSymbolResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context =
+            self.read_only_tool_execution_context("search_symbol", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("search_symbol", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut diagnostics_count = 0usize;
             let mut manifest_walk_diagnostics_count = 0usize;
@@ -590,17 +607,17 @@ impl FriggMcpServer {
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
-                let scoped_workspaces = server.attached_workspaces_for_repository(
-                    params_for_blocking.repository_id.as_deref(),
+                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                    execution_context_for_blocking.tool_name,
+                    execution_context_for_blocking.repository_hint.clone(),
+                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
                 )?;
+                let scoped_workspaces = scoped_execution_context.scoped_workspaces;
                 let scoped_repository_ids_for_cache = scoped_workspaces
                     .iter()
                     .map(|workspace| workspace.repository_id.clone())
                     .collect::<Vec<_>>();
-                let cache_freshness = server.repository_response_cache_freshness(
-                    &scoped_workspaces,
-                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
-                )?;
+                let cache_freshness = scoped_execution_context.cache_freshness;
                 let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
                     SearchSymbolResponseCacheKey {
                         scoped_repository_ids: scoped_repository_ids_for_cache,
@@ -858,12 +875,14 @@ impl FriggMcpServer {
         .await?;
 
         let result = execution.result;
+        let metadata = execution_context
+            .normalized_workload(&execution.scoped_repository_ids, WorkloadPrecisionMode::Precise);
         let provenance_result = self
-            .record_provenance_blocking(
+            .record_provenance_blocking_with_metadata(
                 "search_symbol",
-                repository_hint.as_deref(),
+                execution_context.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context.repository_hint,
                     "query": Self::bounded_text(&params.query),
                     "path_class": params.path_class.map(|value| value.as_str().to_owned()),
                     "path_regex": params.path_regex.map(|value| Self::bounded_text(&value)),
@@ -880,20 +899,22 @@ impl FriggMcpServer {
                         "total": execution.diagnostics_count,
                     },
                 }),
+                Some(metadata),
                 &result,
             )
             .await;
-        self.finalize_with_provenance("search_symbol", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
     pub(super) async fn document_symbols_impl(
         &self,
         params: DocumentSymbolsParams,
     ) -> Result<Json<DocumentSymbolsResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context = self
+            .read_only_tool_execution_context("document_symbols", params.repository_id.clone());
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("document_symbols", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut resolved_repository_id: Option<String> = None;
             let mut resolved_path: Option<String> = None;
             let mut symbol_count = 0usize;
@@ -1023,9 +1044,9 @@ impl FriggMcpServer {
         let provenance_result = self
             .record_provenance_blocking(
                 "document_symbols",
-                repository_hint.as_deref(),
+                execution_context.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context.repository_hint,
                     "path": Self::bounded_text(&params.path),
                 }),
                 json!({
@@ -1036,17 +1057,18 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("document_symbols", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
     pub(super) async fn search_structural_impl(
         &self,
         params: SearchStructuralParams,
     ) -> Result<Json<SearchStructuralResponse>, ErrorData> {
-        let repository_hint = params.repository_id.clone();
+        let execution_context = self
+            .read_only_tool_execution_context("search_structural", params.repository_id.clone());
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = Self::run_blocking_task("search_structural", move || {
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
             let mut scoped_repository_ids: Vec<String> = Vec::new();
             let mut effective_limit: Option<usize> = None;
             let mut language_filter: Option<String> = None;
@@ -1243,9 +1265,9 @@ impl FriggMcpServer {
         let provenance_result = self
             .record_provenance_blocking(
                 "search_structural",
-                repository_hint.as_deref(),
+                execution_context.repository_hint.as_deref(),
                 json!({
-                    "repository_id": repository_hint,
+                    "repository_id": execution_context.repository_hint,
                     "query": Self::bounded_text(&params.query),
                     "language": params.language,
                     "path_regex": params.path_regex.map(|raw| Self::bounded_text(&raw)),
@@ -1262,7 +1284,7 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("search_structural", result, provenance_result)
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 }
 
@@ -1345,36 +1367,45 @@ impl FriggMcpServer {
             .collect()
     }
 
+    pub(super) fn search_hybrid_semantic_status(
+        status: ChannelHealthStatus,
+    ) -> ChannelHealthStatus {
+        match status {
+            ChannelHealthStatus::Filtered => ChannelHealthStatus::Disabled,
+            other => other,
+        }
+    }
+
     pub(super) fn search_hybrid_warning(
-        semantic_status: Option<&str>,
+        semantic_status: Option<ChannelHealthStatus>,
         semantic_reason: Option<&str>,
         semantic_hit_count: Option<usize>,
         semantic_match_count: Option<usize>,
     ) -> Option<String> {
         match semantic_status {
-            Some("disabled") => Some(match semantic_reason {
+            Some(ChannelHealthStatus::Disabled) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "semantic retrieval is disabled; results are ranked from lexical and graph signals only ({reason})"
                 ),
                 _ => "semantic retrieval is disabled; results are ranked from lexical and graph signals only".to_owned(),
             }),
-            Some("unavailable") => Some(match semantic_reason {
+            Some(ChannelHealthStatus::Unavailable) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "semantic retrieval is unavailable; results are ranked from lexical and graph signals only ({reason})"
                 ),
                 _ => "semantic retrieval is unavailable; results are ranked from lexical and graph signals only".to_owned(),
             }),
-            Some("degraded") => Some(match semantic_reason {
+            Some(ChannelHealthStatus::Degraded) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "semantic retrieval is degraded; semantic contribution may be partial ({reason})"
                 ),
                 _ => "semantic retrieval is degraded; semantic contribution may be partial".to_owned(),
             }),
-            Some("ok") if semantic_hit_count == Some(0) => Some(
+            Some(ChannelHealthStatus::Ok) if semantic_hit_count == Some(0) => Some(
                 "semantic retrieval completed successfully but retained no query-relevant semantic hits; results are ranked from lexical and graph signals only"
                     .to_owned(),
             ),
-            Some("ok")
+            Some(ChannelHealthStatus::Ok)
                 if semantic_hit_count.unwrap_or(0) > 0
                     && semantic_match_count == Some(0) =>
             {
@@ -1389,7 +1420,7 @@ impl FriggMcpServer {
 
     fn search_hybrid_semantic_accelerator_state(
         language: SymbolLanguage,
-        semantic_status: Option<&str>,
+        semantic_status: Option<ChannelHealthStatus>,
         semantic_reason: Option<&str>,
     ) -> &'static str {
         if language
@@ -1401,77 +1432,69 @@ impl FriggMcpServer {
         }
 
         match semantic_status {
-            Some("disabled") => match semantic_reason {
+            Some(ChannelHealthStatus::Disabled) => match semantic_reason {
                 Some("semantic channel disabled by request toggle") => "disabled_by_request",
                 _ => "disabled_in_config",
             },
-            Some("unavailable") => "repository_unavailable",
-            Some("degraded") => "degraded_runtime",
-            Some("ok") => "active",
+            Some(ChannelHealthStatus::Unavailable) => "repository_unavailable",
+            Some(ChannelHealthStatus::Degraded) => "degraded_runtime",
+            Some(ChannelHealthStatus::Ok) => "active",
             _ => "eligible",
         }
     }
 
     fn search_hybrid_language_capability_metadata(
         raw_language: &str,
-        semantic_status: Option<&str>,
+        semantic_status: Option<ChannelHealthStatus>,
         semantic_reason: Option<&str>,
-    ) -> Value {
+    ) -> SearchHybridLanguageCapabilityMetadata {
         let requested_language = raw_language.trim().to_ascii_lowercase();
         let Some(language) = SymbolLanguage::parse_alias(&requested_language) else {
-            return json!({
-                "requested_language": requested_language,
-                "semantic_chunking": "unknown_filter_value",
-                "semantic_accelerator": {
-                    "tier": "unknown_filter_value",
-                    "state": "unknown_filter_value",
+            return SearchHybridLanguageCapabilityMetadata {
+                requested_language,
+                display_name: None,
+                semantic_chunking: "unknown_filter_value".to_owned(),
+                semantic_accelerator: SearchHybridSemanticAcceleratorMetadata {
+                    tier: "unknown_filter_value".to_owned(),
+                    state: "unknown_filter_value".to_owned(),
+                    status: None,
+                    reason: None,
                 },
-            });
+                capabilities: BTreeMap::new(),
+            };
         };
 
-        let mut capabilities = serde_json::Map::new();
+        let mut capabilities = BTreeMap::new();
         for capability in LanguageSupportCapability::ALL {
             capabilities.insert(
                 capability.as_str().to_owned(),
-                Value::String(language.capability_tier(capability).as_str().to_owned()),
+                language.capability_tier(capability).as_str().to_owned(),
             );
         }
 
-        Value::Object(serde_json::Map::from_iter([
-            (
-                "requested_language".to_owned(),
-                Value::String(language.as_str().to_owned()),
-            ),
-            (
-                "display_name".to_owned(),
-                Value::String(language.display_name().to_owned()),
-            ),
-            (
-                "semantic_chunking".to_owned(),
-                Value::String(
-                    language
-                        .capability_tier(LanguageSupportCapability::SemanticChunking)
-                        .as_str()
-                        .to_owned(),
-                ),
-            ),
-            (
-                "semantic_accelerator".to_owned(),
-                json!({
-                    "tier": language
-                        .capability_tier(LanguageSupportCapability::SemanticChunking)
-                        .as_str(),
-                    "state": Self::search_hybrid_semantic_accelerator_state(
-                        language,
-                        semantic_status,
-                        semantic_reason,
-                    ),
-                    "status": semantic_status,
-                    "reason": semantic_reason,
-                }),
-            ),
-            ("capabilities".to_owned(), Value::Object(capabilities)),
-        ]))
+        SearchHybridLanguageCapabilityMetadata {
+            requested_language: language.as_str().to_owned(),
+            display_name: Some(language.display_name().to_owned()),
+            semantic_chunking: language
+                .capability_tier(LanguageSupportCapability::SemanticChunking)
+                .as_str()
+                .to_owned(),
+            semantic_accelerator: SearchHybridSemanticAcceleratorMetadata {
+                tier: language
+                    .capability_tier(LanguageSupportCapability::SemanticChunking)
+                    .as_str()
+                    .to_owned(),
+                state: Self::search_hybrid_semantic_accelerator_state(
+                    language,
+                    semantic_status,
+                    semantic_reason,
+                )
+                .to_owned(),
+                status: semantic_status,
+                reason: semantic_reason.map(ToOwned::to_owned),
+            },
+            capabilities,
+        }
     }
 
     fn search_hybrid_channel_result(
@@ -1483,33 +1506,37 @@ impl FriggMcpServer {
             .find(|result| result.channel == channel)
     }
 
-    fn search_hybrid_channels_metadata(channel_results: &[ChannelResult]) -> Value {
-        let mut channels = serde_json::Map::new();
+    fn search_hybrid_channels_metadata(
+        channel_results: &[ChannelResult],
+    ) -> BTreeMap<String, SearchHybridChannelMetadata> {
+        let mut channels = BTreeMap::new();
         for result in channel_results {
             let diagnostics = result
                 .diagnostics
                 .iter()
-                .map(|diagnostic| {
-                    json!({
-                        "code": diagnostic.code,
-                        "message": Self::bounded_text(&diagnostic.message),
-                    })
+                .map(|diagnostic| SearchHybridChannelDiagnostic {
+                    code: diagnostic.code.clone(),
+                    message: Self::bounded_text(&diagnostic.message),
                 })
                 .collect::<Vec<_>>();
             channels.insert(
                 result.channel.as_str().to_owned(),
-                json!({
-                    "status": result.health.status.as_str(),
-                    "reason": result.health.reason.as_ref().map(|reason| Self::bounded_text(reason)),
-                    "candidate_count": result.stats.candidate_count,
-                    "hit_count": result.stats.hit_count,
-                    "match_count": result.stats.match_count,
-                    "diagnostic_count": result.diagnostics.len(),
-                    "diagnostics": diagnostics,
-                }),
+                SearchHybridChannelMetadata {
+                    status: result.health.status,
+                    reason: result
+                        .health
+                        .reason
+                        .as_ref()
+                        .map(|reason| Self::bounded_text(reason)),
+                    candidate_count: result.stats.candidate_count,
+                    hit_count: result.stats.hit_count,
+                    match_count: result.stats.match_count,
+                    diagnostic_count: result.diagnostics.len(),
+                    diagnostics,
+                },
             );
         }
-        Value::Object(channels)
+        channels
     }
 
     fn parse_symbol_language(value: Option<&str>) -> Result<Option<SymbolLanguage>, ErrorData> {
@@ -1539,6 +1566,7 @@ impl FriggMcpServer {
         raw: &str,
     ) -> Result<regex::Regex, crate::searcher::RegexSearchError> {
         if let Some(cached) = self
+            .cache_state
             .compiled_safe_regex_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1550,6 +1578,7 @@ impl FriggMcpServer {
 
         let compiled = compile_safe_regex(raw)?;
         let mut cache = self
+            .cache_state
             .compiled_safe_regex_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1593,7 +1622,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &SearchTextResponseCacheKey,
     ) -> Option<CachedSearchTextResponse> {
-        self.search_text_response_cache
+        self.cache_state
+            .search_text_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -1606,7 +1636,8 @@ impl FriggMcpServer {
         response: &SearchTextResponse,
         source_refs: &Value,
     ) {
-        self.search_text_response_cache
+        self.cache_state
+            .search_text_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
@@ -1622,7 +1653,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &SearchHybridResponseCacheKey,
     ) -> Option<CachedSearchHybridResponse> {
-        self.search_hybrid_response_cache
+        self.cache_state
+            .search_hybrid_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -1635,7 +1667,8 @@ impl FriggMcpServer {
         response: &SearchHybridResponse,
         source_refs: &Value,
     ) {
-        self.search_hybrid_response_cache
+        self.cache_state
+            .search_hybrid_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
@@ -1651,7 +1684,8 @@ impl FriggMcpServer {
         &self,
         cache_key: &SearchSymbolResponseCacheKey,
     ) -> Option<CachedSearchSymbolResponse> {
-        self.search_symbol_response_cache
+        self.cache_state
+            .search_symbol_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
@@ -1669,7 +1703,8 @@ impl FriggMcpServer {
         symbol_extraction_diagnostics_count: usize,
         effective_limit: usize,
     ) {
-        self.search_symbol_response_cache
+        self.cache_state
+            .search_symbol_response_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(

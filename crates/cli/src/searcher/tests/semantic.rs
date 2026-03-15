@@ -532,33 +532,36 @@ fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_mani
 
     assert_eq!(
         output.note.semantic_status,
-        HybridSemanticStatus::Unavailable
+        HybridSemanticStatus::Degraded
     );
-    assert!(!output.note.semantic_enabled);
+    assert!(output.note.semantic_enabled);
+    assert!(output.note.semantic_hit_count >= 1);
+    assert!(output.note.semantic_match_count >= 1);
     assert!(
         output
             .note
             .semantic_reason
             .as_deref()
             .is_some_and(|reason| {
-                reason.contains("snapshot-002") && reason.contains("no live semantic embeddings")
+                reason.contains("snapshot-002")
+                    && reason.contains("snapshot-001")
+                    && reason.contains("using semantic fallback snapshot")
             }),
-        "missing live semantic corpus should name the latest manifest snapshot"
+        "degraded semantic fallback should name both the latest manifest snapshot and the fallback semantic snapshot"
     );
     assert!(
         paths.contains(&"src/current.rs"),
-        "current manifest path should remain visible through lexical recovery when semantic is unavailable: {paths:?}"
+        "current manifest path should remain visible when semantic fallback is active: {paths:?}"
     );
     assert!(
         !paths.contains(&"src/deleted.rs"),
         "paths removed from the latest manifest must not resurface when semantic storage is unavailable: {paths:?}"
     );
     assert!(
-        output
-            .matches
-            .iter()
-            .all(|entry| entry.semantic_score == 0.0),
-        "semantic-unavailable recovery should not report retained semantic scores"
+        output.matches.iter().any(|entry| {
+            entry.document.path == "src/current.rs" && entry.semantic_score > 0.0
+        }),
+        "semantic fallback should retain a positive semantic score for surviving latest-manifest paths"
     );
 
     cleanup_workspace(&root);

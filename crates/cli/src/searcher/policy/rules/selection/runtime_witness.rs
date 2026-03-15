@@ -6,18 +6,18 @@ use super::super::super::trace::{PolicyEffect, PolicyStage};
 use crate::searcher::surfaces::HybridSourceClass;
 
 fn first_runtime_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    (state.seen_count() == 0).then_some(PolicyEffect::Add(0.24))
+    let state = ctx;
+    (state.seen_count == 0).then_some(PolicyEffect::Add(0.24))
 }
 
 fn first_support_or_test_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    (state.seen_count() == 0).then_some(PolicyEffect::Add(0.10))
+    let state = ctx;
+    (state.seen_count == 0).then_some(PolicyEffect::Add(0.10))
 }
 
 fn identifier_anchor_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         0.30
     } else {
         0.16
@@ -25,8 +25,8 @@ fn identifier_anchor_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn fixtures_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.42
     } else {
         -0.24
@@ -34,12 +34,12 @@ fn fixtures_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_entrypoint_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if intent.wants_python_witnesses() {
-        if state.seen_count() == 0 { 0.26 } else { 0.14 }
-    } else if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if intent.wants_python_witnesses {
+        if state.seen_count == 0 { 0.26 } else { 0.14 }
+    } else if state.seen_count == 0 {
         -0.16
     } else {
         -0.08
@@ -47,13 +47,13 @@ fn python_entrypoint_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_config_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
     Some(PolicyEffect::Add(
-        if intent.wants_python_workspace_config() {
-            if state.seen_count() == 0 { 0.18 } else { 0.10 }
-        } else if state.seen_count() == 0 {
+        if intent.wants_python_workspace_config {
+            if state.seen_count == 0 { 0.18 } else { 0.10 }
+        } else if state.seen_count == 0 {
             -0.18
         } else {
             -0.10
@@ -62,12 +62,12 @@ fn python_config_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_test_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let state = ctx.state();
+    let intent = ctx;
+    let state = ctx;
 
-    Some(PolicyEffect::Add(if intent.wants_python_witnesses() {
-        if state.seen_count() == 0 { 0.28 } else { 0.12 }
-    } else if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if intent.wants_python_witnesses {
+        if state.seen_count == 0 { 0.28 } else { 0.12 }
+    } else if state.seen_count == 0 {
         -0.22
     } else {
         -0.12
@@ -75,8 +75,8 @@ fn python_test_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn loose_python_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.18
     } else {
         -0.10
@@ -84,28 +84,28 @@ fn loose_python_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    if candidate.path_overlap() == 0 {
+    let candidate = ctx;
+    if candidate.path_overlap == 0 {
         return None;
     }
 
-    let delta = match candidate.class() {
+    let delta = match candidate.class {
         HybridSourceClass::Runtime => {
-            if candidate.path_overlap() == 1 {
+            if candidate.path_overlap == 1 {
                 0.10
             } else {
                 0.18
             }
         }
         HybridSourceClass::Support | HybridSourceClass::Tests => {
-            if candidate.path_overlap() == 1 {
+            if candidate.path_overlap == 1 {
                 0.08
             } else {
                 0.14
             }
         }
         HybridSourceClass::Documentation | HybridSourceClass::Readme => {
-            if candidate.path_overlap() == 1 {
+            if candidate.path_overlap == 1 {
                 0.02
             } else {
                 0.06
@@ -118,8 +118,8 @@ fn path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn generic_doc_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    (state.seen_count() > 0).then_some(PolicyEffect::Add(-0.16 * state.seen_count() as f32))
+    let state = ctx;
+    (state.seen_count > 0).then_some(PolicyEffect::Add(-0.16 * state.seen_count as f32))
 }
 
 fn generic_doc_first_penalty(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -127,15 +127,15 @@ fn generic_doc_first_penalty(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn doc_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
+    let candidate = ctx;
     if !matches!(
-        candidate.class(),
+        candidate.class,
         HybridSourceClass::Documentation | HybridSourceClass::Readme
     ) {
         return None;
     }
 
-    let delta = match candidate.path_overlap() {
+    let delta = match candidate.path_overlap {
         0 => -0.18,
         1 => -0.06,
         _ => 0.0,
@@ -145,8 +145,8 @@ fn doc_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.runtime_seen() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.runtime_seen == 0 {
         -0.26
     } else {
         -0.18
@@ -154,8 +154,8 @@ fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_config_runtime_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.runtime_seen() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.runtime_seen == 0 {
         0.16
     } else {
         0.08
@@ -163,9 +163,9 @@ fn python_config_runtime_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn generic_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (candidate.path_overlap() == 0).then_some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    (candidate.path_overlap == 0).then_some(PolicyEffect::Add(if state.seen_count == 0 {
         -0.12
     } else {
         -0.18
@@ -173,28 +173,28 @@ fn generic_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn missing_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    if candidate.excerpt_has_exact_identifier_anchor()
-        || candidate.has_exact_query_term_match()
+    let candidate = ctx;
+    let state = ctx;
+    if candidate.excerpt_has_exact_identifier_anchor
+        || candidate.has_exact_query_term_match
         || !matches!(
-            candidate.class(),
+            candidate.class,
             HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
         )
     {
         return None;
     }
 
-    let delta = match candidate.path_overlap() {
+    let delta = match candidate.path_overlap {
         0 => {
-            if state.seen_count() == 0 {
+            if state.seen_count == 0 {
                 -0.24
             } else {
                 -0.14
             }
         }
         1 => {
-            if candidate.class() == HybridSourceClass::Runtime {
+            if candidate.class == HybridSourceClass::Runtime {
                 -0.18
             } else {
                 -0.10
@@ -207,8 +207,8 @@ fn missing_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.runtime_seen() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.runtime_seen == 0 {
         -0.28
     } else {
         -0.18
@@ -216,30 +216,30 @@ fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn example_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    let corroborated_example_signal = intent.wants_examples()
-        || candidate.path_overlap() > 0
-        || candidate.excerpt_overlap() > 0
-        || candidate.has_path_witness_source();
+    let intent = ctx;
+    let candidate = ctx;
+    let state = ctx;
+    let corroborated_example_signal = intent.wants_examples
+        || candidate.path_overlap > 0
+        || candidate.excerpt_overlap > 0
+        || candidate.has_path_witness_source;
     if !corroborated_example_signal {
         return None;
     }
 
     let overlap = candidate
-        .specific_witness_path_overlap()
-        .max(candidate.path_overlap())
-        .max(candidate.excerpt_overlap());
+        .specific_witness_path_overlap
+        .max(candidate.path_overlap)
+        .max(candidate.excerpt_overlap);
     let delta = if overlap >= 2 {
-        if state.seen_count() == 0 { 0.84 } else { 0.46 }
+        if state.seen_count == 0 { 0.84 } else { 0.46 }
     } else if overlap == 1 {
-        if state.seen_count() == 0 { 0.66 } else { 0.36 }
-    } else if candidate.has_exact_query_term_match() {
-        if state.seen_count() == 0 { 0.58 } else { 0.32 }
-    } else if intent.wants_examples() {
-        if state.seen_count() == 0 { 0.24 } else { 0.12 }
-    } else if state.seen_count() == 0 {
+        if state.seen_count == 0 { 0.66 } else { 0.36 }
+    } else if candidate.has_exact_query_term_match {
+        if state.seen_count == 0 { 0.58 } else { 0.32 }
+    } else if intent.wants_examples {
+        if state.seen_count == 0 { 0.24 } else { 0.12 }
+    } else if state.seen_count == 0 {
         0.18
     } else {
         0.10
@@ -249,16 +249,16 @@ fn example_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn bench_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
+    let candidate = ctx;
+    let state = ctx;
 
-    let delta = if candidate.specific_witness_path_overlap() >= 2 {
-        if state.seen_count() == 0 { 0.96 } else { 0.52 }
-    } else if candidate.specific_witness_path_overlap() == 1 {
-        if state.seen_count() == 0 { 0.76 } else { 0.42 }
-    } else if candidate.has_exact_query_term_match() {
-        if state.seen_count() == 0 { 0.64 } else { 0.36 }
-    } else if state.seen_count() == 0 {
+    let delta = if candidate.specific_witness_path_overlap >= 2 {
+        if state.seen_count == 0 { 0.96 } else { 0.52 }
+    } else if candidate.specific_witness_path_overlap == 1 {
+        if state.seen_count == 0 { 0.76 } else { 0.42 }
+    } else if candidate.has_exact_query_term_match {
+        if state.seen_count == 0 { 0.64 } else { 0.36 }
+    } else if state.seen_count == 0 {
         0.26
     } else {
         0.14
@@ -268,23 +268,23 @@ fn bench_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let intent = ctx.intent();
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    if candidate.is_example_support()
-        || candidate.is_bench_support()
-        || candidate.specific_witness_path_overlap() > 0
+    let intent = ctx;
+    let candidate = ctx;
+    let state = ctx;
+    if candidate.is_example_support
+        || candidate.is_bench_support
+        || candidate.specific_witness_path_overlap > 0
     {
         return None;
     }
 
-    Some(PolicyEffect::Add(if intent.wants_test_witness_recall() {
-        if state.seen_count() == 0 {
+    Some(PolicyEffect::Add(if intent.wants_test_witness_recall {
+        if state.seen_count == 0 {
             -0.18
         } else {
             -0.10
         }
-    } else if state.seen_count() == 0 {
+    } else if state.seen_count == 0 {
         -0.34
     } else {
         -0.18
@@ -292,10 +292,10 @@ fn non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn non_support_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let candidate = ctx.candidate();
-    let state = ctx.state();
-    (!candidate.is_example_support() && !candidate.is_bench_support()).then_some(PolicyEffect::Add(
-        if state.seen_count() == 0 {
+    let candidate = ctx;
+    let state = ctx;
+    (!candidate.is_example_support && !candidate.is_bench_support).then_some(PolicyEffect::Add(
+        if state.seen_count == 0 {
             -0.36
         } else {
             -0.22
@@ -304,8 +304,8 @@ fn non_support_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn examples_rs_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    Some(PolicyEffect::Add(if state.seen_count() == 0 {
+    let state = ctx;
+    Some(PolicyEffect::Add(if state.seen_count == 0 {
         -1.10
     } else {
         -0.58
@@ -313,8 +313,8 @@ fn examples_rs_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn python_test_bridge_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    let state = ctx.state();
-    (state.runtime_seen() > 0 && state.seen_count() == 0).then_some(PolicyEffect::Add(0.18))
+    let state = ctx;
+    (state.runtime_seen > 0 && state.seen_count == 0).then_some(PolicyEffect::Add(0.18))
 }
 
 const RULES: &[ScoreRule<SelectionFacts>] = &[

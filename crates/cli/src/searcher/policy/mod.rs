@@ -10,8 +10,7 @@ mod trace;
 use super::intent::HybridRankingIntent;
 use facts::PathQualityFacts;
 pub(super) use facts::{
-    PathWitnessFacts, PathWitnessQueryContext, SelectionCandidate, SelectionFacts,
-    SelectionQueryContext, SelectionState,
+    PathWitnessFacts, PolicyQueryContext, SelectionCandidate, SelectionFacts, SelectionState,
 };
 pub(super) use frontier::plan_path_witness_frontier;
 
