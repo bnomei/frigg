@@ -4,8 +4,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 
 use crate::storage::vector_store::{decode_f32_vector, encode_f32_vector};
 use crate::storage::{
-    DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, SemanticHeadRecord, VECTOR_TABLE_NAME,
-    SNAPSHOT_KIND_MANIFEST, count_snapshots_for_repository_and_kind, usize_to_i64,
+    DEFAULT_VECTOR_DIMENSIONS, SNAPSHOT_KIND_MANIFEST, SemanticChunkEmbeddingRecord,
+    SemanticHeadRecord, VECTOR_TABLE_NAME, count_snapshots_for_repository_and_kind, usize_to_i64,
 };
 
 pub(super) fn validate_semantic_target(

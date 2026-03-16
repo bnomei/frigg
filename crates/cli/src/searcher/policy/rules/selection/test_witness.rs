@@ -54,11 +54,11 @@ fn exact_query_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let state = ctx;
     (candidate.has_exact_query_term_match
         && !(intent.wants_example_or_bench_witnesses && candidate.is_examples_rs))
-    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
-        3.2
-    } else {
-        1.8
-    }))
+        .then_some(PolicyEffect::Add(if state.seen_count == 0 {
+            3.2
+        } else {
+            1.8
+        }))
 }
 
 fn support_path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -153,11 +153,11 @@ fn generic_test_penalty_under_examples_benches(ctx: &SelectionFacts) -> Option<P
         && !candidate.has_exact_query_term_match
         && (!candidate.is_cli_test_support || !query.query_mentions_cli)
         && !candidate.is_test_harness)
-    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
-        -1.20
-    } else {
-        -0.60
-    }))
+        .then_some(PolicyEffect::Add(if state.seen_count == 0 {
+            -1.20
+        } else {
+            -0.60
+        }))
 }
 
 fn harness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {

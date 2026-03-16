@@ -819,7 +819,8 @@ mod tests {
         let projection = StoredEntrypointSurfaceProjection::from_path("Cargo.toml")
             .expect("runtime config artifact should project");
         let intent = HybridRankingIntent::from_query("runtime config manifest settings");
-        let query_context = HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
+        let query_context =
+            HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
 
         let boost = entrypoint_surface_overlay_boost(&projection, &intent, &query_context)
             .expect("matching config query should produce an overlay boost");

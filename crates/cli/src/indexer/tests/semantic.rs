@@ -261,7 +261,10 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
         &semantic_runtime,
         &[],
     )?;
-    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(first.snapshot_id.as_str()));
+    assert_eq!(
+        plan.previous_snapshot_id.as_deref(),
+        Some(first.snapshot_id.as_str())
+    );
     assert!(matches!(
         &plan.snapshot_plan,
         super::super::ManifestSnapshotPlan::PersistNew {
@@ -891,9 +894,15 @@ fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> 
         &[],
     )?;
 
-    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::IncrementalAdvance);
+    assert_eq!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::IncrementalAdvance
+    );
     assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
-    assert_eq!(plan.semantic_refresh.changed_paths, vec![PathBuf::from("src/main.rs")]);
+    assert_eq!(
+        plan.semantic_refresh.changed_paths,
+        vec![PathBuf::from("src/main.rs")]
+    );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
 
     cleanup_workspace(&workspace_root);
@@ -936,7 +945,10 @@ fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_un
         &[],
     )?;
 
-    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(summary.snapshot_id.as_str()));
+    assert_eq!(
+        plan.previous_snapshot_id.as_deref(),
+        Some(summary.snapshot_id.as_str())
+    );
     assert_eq!(plan.files_changed, 0);
     assert_eq!(plan.files_deleted, 0);
     assert!(matches!(
@@ -944,7 +956,10 @@ fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_un
         super::super::ManifestSnapshotPlan::ReuseExisting { snapshot_id }
             if snapshot_id == &summary.snapshot_id
     ));
-    assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::ReuseExisting);
+    assert_eq!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::ReuseExisting
+    );
     assert!(plan.semantic_refresh.records_manifest.is_empty());
     assert!(plan.semantic_refresh.changed_paths.is_empty());
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
@@ -994,7 +1009,10 @@ fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() ->
         &SemanticRuntimeCredentials::default(),
         &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
     )?;
-    assert_ne!(manifest_only_summary.snapshot_id, semantic_summary.snapshot_id);
+    assert_ne!(
+        manifest_only_summary.snapshot_id,
+        semantic_summary.snapshot_id
+    );
 
     let plan = build_reindex_plan_for_tests(
         "repo-001",

@@ -145,7 +145,9 @@ fn snapshot_prune_keeps_non_manifest_rows_out_of_manifest_retention() -> FriggRe
     assert_eq!(manifest_count, 1);
     assert_eq!(non_manifest_count, 1);
     assert!(
-        storage.load_manifest_for_snapshot("snapshot-manifest-old")?.is_empty(),
+        storage
+            .load_manifest_for_snapshot("snapshot-manifest-old")?
+            .is_empty(),
         "oldest manifest snapshot should be pruned by manifest retention"
     );
     assert!(

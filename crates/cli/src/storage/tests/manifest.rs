@@ -268,7 +268,8 @@ fn manifest_upsert_creates_stub_repository_row_to_match_fk_schema() -> FriggResu
 }
 
 #[test]
-fn manifest_latest_load_prefers_manifest_kind_when_non_manifest_rows_are_present() -> FriggResult<()> {
+fn manifest_latest_load_prefers_manifest_kind_when_non_manifest_rows_are_present() -> FriggResult<()>
+{
     let db_path = temp_db_path("manifest-latest-manifest-kind-only");
     let storage = Storage::new(&db_path);
     storage.initialize()?;

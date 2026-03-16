@@ -17,9 +17,7 @@ pub enum FriggError {
     Io(#[from] std::io::Error),
 
     #[error("semantic_status=strict_failure: {reason}")]
-    StrictSemanticFailure {
-        reason: String,
-    },
+    StrictSemanticFailure { reason: String },
 
     #[error("internal error: {0}")]
     Internal(String),

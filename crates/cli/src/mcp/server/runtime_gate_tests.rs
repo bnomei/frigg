@@ -16,8 +16,8 @@ use crate::mcp::server_cache::{
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
     FindDeclarationsResponse, GoToDefinitionResponse, RuntimeTaskKind, RuntimeTaskStatus,
-    SearchHybridResponse, SearchSymbolResponse, SearchTextResponse, WorkspaceIndexComponentState,
-    WorkspaceResolveMode,
+    SearchHybridResponse, SearchSymbolResponse, SearchTextResponse, WorkspaceAttachParams,
+    WorkspaceDetachParams, WorkspaceIndexComponentState, WorkspaceResolveMode,
 };
 use crate::searcher::ValidatedManifestCandidateCache;
 use crate::settings::{
@@ -29,6 +29,7 @@ use crate::storage::{
 };
 use crate::watch::maybe_start_watch_runtime;
 use protobuf::{EnumOrUnknown, Message};
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorCode;
 use scip::types::{
     Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
@@ -36,9 +37,7 @@ use scip::types::{
 };
 use serde_json::Value;
 
-use super::{
-    FriggMcpServer, ReadOnlyToolExecutionContext, RepositoryResponseCacheFreshnessMode,
-};
+use super::{FriggMcpServer, ReadOnlyToolExecutionContext, RepositoryResponseCacheFreshnessMode};
 
 fn fixture_config() -> FriggConfig {
     let workspace_root = std::env::current_dir()
@@ -116,7 +115,7 @@ fn read_only_tool_execution_context_scopes_session_repository_with_manifest_fres
             .expect("workspace root must produce valid config"),
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -126,8 +125,10 @@ fn read_only_tool_execution_context_scopes_session_repository_with_manifest_fres
         "snapshot-001",
         &["src/lib.rs"],
     );
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
     let repository_id = workspace.repository_id.clone();
-    server.set_current_repository_id(Some(repository_id.clone()));
 
     let context = server
         .scoped_read_only_tool_execution_context(
@@ -170,7 +171,10 @@ fn read_only_tool_execution_context_rejects_unknown_repository_hint() {
         .data
         .as_ref()
         .expect("missing repository errors should include metadata");
-    assert_eq!(detail.get("error_code"), Some(&Value::String("resource_not_found".to_owned())));
+    assert_eq!(
+        detail.get("error_code"),
+        Some(&Value::String("resource_not_found".to_owned()))
+    );
 }
 
 #[test]
@@ -186,7 +190,7 @@ fn read_only_navigation_tool_execution_context_scopes_explicit_repository() {
             .expect("workspace root must produce valid config"),
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -207,7 +211,10 @@ fn read_only_navigation_tool_execution_context_scopes_explicit_repository() {
         .expect("navigation execution context should resolve explicit repository");
 
     assert_eq!(context.base.tool_name, "go_to_definition");
-    assert_eq!(context.base.repository_hint.as_deref(), Some(repository_id.as_str()));
+    assert_eq!(
+        context.base.repository_hint.as_deref(),
+        Some(repository_id.as_str())
+    );
     assert_eq!(context.scoped_repository_ids, vec![repository_id]);
     assert!(
         context.cache_freshness.scopes.is_some(),
@@ -438,6 +445,183 @@ fn server_starts_detached_when_started_without_startup_roots() {
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     assert!(server.attached_workspaces().is_empty());
     assert!(server.current_repository_id().is_none());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn workspace_attach_can_adopt_known_repository_id_for_new_session() {
+    let workspace_root = temp_workspace_root("attach-known-repository-id");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Adopted;\n")
+        .expect("failed to write workspace root fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    let session = server.clone_for_new_session();
+
+    assert!(server.attached_workspaces().is_empty());
+    assert!(session.attached_workspaces().is_empty());
+
+    let response = session
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: None,
+            repository_id: Some(workspace.repository_id.clone()),
+            set_default: Some(true),
+            resolve_mode: None,
+        }))
+        .await
+        .expect("workspace_attach should adopt a known repository id")
+        .0;
+
+    assert_eq!(response.repository.repository_id, workspace.repository_id);
+    assert!(response.session_default);
+    assert_eq!(session.attached_workspaces().len(), 1);
+    assert_eq!(
+        session.current_repository_id().as_deref(),
+        Some(workspace.repository_id.as_str())
+    );
+    assert_eq!(session.known_workspaces().len(), 1);
+    assert!(server.attached_workspaces().is_empty());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn workspace_detach_clears_session_default_and_preserves_known_workspace() {
+    let workspace_root = temp_workspace_root("detach-preserves-known-workspace");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Detached;\n")
+        .expect("failed to write workspace root fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    let session = server.clone_for_new_session();
+    session
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: None,
+            repository_id: Some(workspace.repository_id.clone()),
+            set_default: Some(true),
+            resolve_mode: None,
+        }))
+        .await
+        .expect("workspace_attach should adopt a known repository id");
+
+    let response = session
+        .workspace_detach(Parameters(WorkspaceDetachParams {
+            repository_id: None,
+        }))
+        .await
+        .expect("workspace_detach should detach the session default repository")
+        .0;
+
+    assert_eq!(response.repository_id, workspace.repository_id);
+    assert!(response.detached);
+    assert!(!response.session_default);
+    assert!(session.current_repository_id().is_none());
+    assert!(session.attached_workspaces().is_empty());
+    assert_eq!(session.known_workspaces().len(), 1);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn watch_leases_follow_session_adoption_counts() {
+    let workspace_root = temp_workspace_root("watch-lease-counts");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct LeaseCount;\n",
+    )
+    .expect("failed to write workspace root fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+    };
+    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+    let validated_manifest_candidate_cache =
+        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+    let server = FriggMcpServer::new_with_runtime(
+        config.clone(),
+        RuntimeProfile::StdioAttached,
+        true,
+        Arc::clone(&runtime_task_registry),
+        Arc::clone(&validated_manifest_candidate_cache),
+    );
+    let runtime = Arc::new(
+        maybe_start_watch_runtime(
+            &config,
+            RuntimeTransportKind::Stdio,
+            runtime_task_registry,
+            validated_manifest_candidate_cache,
+            None,
+        )
+        .expect("watch runtime should start")
+        .expect("watch runtime should be enabled"),
+    );
+    server.set_watch_runtime(Some(Arc::clone(&runtime)));
+    let second_session = server.clone_for_new_session();
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+
+    assert!(!runtime.lease_status(&workspace.repository_id).active);
+
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("first session should adopt workspace");
+    assert_eq!(
+        runtime.lease_status(&workspace.repository_id).lease_count,
+        1
+    );
+
+    second_session
+        .adopt_workspace(&workspace, true)
+        .expect("second session should share the same watch lease");
+    assert_eq!(
+        runtime.lease_status(&workspace.repository_id).lease_count,
+        2
+    );
+
+    server
+        .detach_workspace(&workspace.repository_id)
+        .expect("first session should detach workspace");
+    assert_eq!(
+        runtime.lease_status(&workspace.repository_id).lease_count,
+        1
+    );
+
+    second_session
+        .detach_workspace(&workspace.repository_id)
+        .expect("second session should detach workspace");
+    assert_eq!(
+        runtime.lease_status(&workspace.repository_id).lease_count,
+        0
+    );
+    assert!(!runtime.lease_status(&workspace.repository_id).active);
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -943,10 +1127,13 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("runtime server should expose the startup workspace");
+    runtime
+        .acquire_lease(&workspace)
+        .expect("runtime should start watching an adopted workspace");
     let summary = server.repository_summary(&workspace);
     let lexical_snapshot_id = summary
         .health
@@ -1278,9 +1465,10 @@ fn access_denied_maps_to_access_denied_class() {
 fn io_error_maps_to_internal_error_class() {
     use std::io::Error as IoError;
 
-    let error = FriggMcpServer::map_frigg_error(FriggError::Io(
-        IoError::new(std::io::ErrorKind::PermissionDenied, "denied"),
-    ));
+    let error = FriggMcpServer::map_frigg_error(FriggError::Io(IoError::new(
+        std::io::ErrorKind::PermissionDenied,
+        "denied",
+    )));
 
     assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
     assert_eq!(
@@ -1451,7 +1639,7 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1507,7 +1695,7 @@ fn repository_response_cache_freshness_returns_ready_manifest_scope() {
         false,
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1570,7 +1758,7 @@ fn repository_response_cache_freshness_marks_dirty_root_uncacheable() {
         false,
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1635,7 +1823,7 @@ fn repository_response_cache_freshness_marks_missing_snapshot_uncacheable() {
         false,
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1693,7 +1881,7 @@ fn repository_response_cache_freshness_marks_stale_snapshot_uncacheable() {
         false,
     );
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1751,7 +1939,7 @@ fn repository_response_cache_freshness_includes_semantic_scope_metadata() {
     config.semantic_runtime = semantic_runtime_enabled_openai();
     let server = FriggMcpServer::new_with_runtime_options(config, false, false);
     let workspace = server
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1823,7 +2011,7 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -1875,7 +2063,7 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -2000,7 +2188,7 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");
@@ -2045,7 +2233,7 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
         .workspace_registry
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .attached_workspaces()
+        .known_workspaces()
         .into_iter()
         .next()
         .expect("server should register workspace");

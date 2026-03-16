@@ -326,7 +326,8 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
 
     let first = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: nested_path.display().to_string(),
+            path: Some(nested_path.display().to_string()),
+            repository_id: None,
             set_default: None,
             resolve_mode: None,
         }))
@@ -352,7 +353,8 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
 
     let second = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: fixture_root().display().to_string(),
+            path: Some(fixture_root().display().to_string()),
+            repository_id: None,
             set_default: Some(false),
             resolve_mode: None,
         }))
@@ -424,7 +426,8 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
 
     let response = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: workspace_root.display().to_string(),
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
         }))
@@ -534,7 +537,8 @@ async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
 
     let response = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: workspace_root.display().to_string(),
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
         }))
@@ -590,7 +594,8 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
 
     let attached_a = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: root_a.display().to_string(),
+            path: Some(root_a.display().to_string()),
+            repository_id: None,
             set_default: Some(false),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
         }))
@@ -599,7 +604,8 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
         .0;
     let attached_b = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: root_b.display().to_string(),
+            path: Some(root_b.display().to_string()),
+            repository_id: None,
             set_default: Some(true),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
         }))

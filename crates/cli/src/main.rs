@@ -146,6 +146,8 @@ struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
+    /// Serve Frigg over loopback HTTP for shared local MCP sessions.
+    Serve,
     /// Initialize storage schema for each workspace root.
     Init,
     /// Verify storage schema and read/write sanity for each workspace root.
@@ -221,7 +223,8 @@ impl WorkloadCorpusExportFormat {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    let http_runtime = resolve_http_runtime_config(&cli)?;
+    let serve_requested = matches!(cli.command, Some(Command::Serve));
+    let http_runtime = resolve_http_runtime_config(&cli, serve_requested)?;
     let transport_kind = http_runtime
         .as_ref()
         .map(HttpRuntimeConfig::transport_kind)
@@ -230,21 +233,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Some(command) = cli.command.clone() {
         match command.clone() {
+            Command::Serve => {}
             Command::Init => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?
             }
             Command::Verify => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)?
             }
             Command::Reindex { changed } => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_semantic_runtime_startup_gate(&config)?;
                 run_reindex_command(&config, changed)?
             }
             Command::RepairStorage => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_maintenance_command(
                     &config,
                     StorageMaintenanceCommand::RepairSemanticVectorStore,
@@ -254,7 +258,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 keep_manifest_snapshots,
                 keep_provenance_events,
             } => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_maintenance_command(
                     &config,
                     StorageMaintenanceCommand::Prune {
@@ -268,7 +272,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 enforce_targets,
                 output,
             } => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_semantic_runtime_startup_gate(&config)?;
                 run_hybrid_playbook_command(
                     &config,
@@ -282,11 +286,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 format,
                 limit,
             } => {
-                let config = resolve_command_config(&cli, command)?;
+                let config = resolve_command_config(&cli, command.clone())?;
                 run_workload_corpus_export_command(&config, &output, format, limit)?
             }
         }
-        return Ok(());
+        if !matches!(command, Command::Serve) {
+            return Ok(());
+        }
     }
 
     let config = resolve_startup_config(&cli, transport_kind)?;
@@ -307,13 +313,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::clone(&runtime_task_registry),
         Arc::clone(&validated_manifest_candidate_cache),
     );
-    let _watch_runtime = maybe_start_watch_runtime(
+    let watch_runtime = maybe_start_watch_runtime(
         &watch_runtime_config,
         transport_kind,
         runtime_task_registry,
         validated_manifest_candidate_cache,
         Some(server.repository_cache_invalidation_callback()),
     )?;
+    let _watch_runtime = watch_runtime.map(Arc::new);
+    server.set_watch_runtime(_watch_runtime.clone());
     if let Some(runtime) = http_runtime {
         serve_http(runtime, server).await?;
     } else {
@@ -375,7 +383,7 @@ mod tests {
     #[test]
     fn transport_defaults_to_stdio_when_http_port_absent() {
         let cli = base_cli();
-        let runtime = resolve_http_runtime_config(&cli).expect("stdio mode should resolve");
+        let runtime = resolve_http_runtime_config(&cli, false).expect("stdio mode should resolve");
         assert!(runtime.is_none());
     }
 
@@ -385,7 +393,7 @@ mod tests {
         cli.mcp_http_port = Some(4000);
         cli.mcp_http_auth_token = Some("test-token".to_owned());
 
-        let runtime = resolve_http_runtime_config(&cli)
+        let runtime = resolve_http_runtime_config(&cli, false)
             .expect("http runtime should resolve")
             .expect("http runtime should be enabled");
         assert_eq!(
@@ -405,12 +413,27 @@ mod tests {
     }
 
     #[test]
+    fn serve_command_defaults_to_loopback_bind_and_port() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Serve);
+
+        let runtime = resolve_http_runtime_config(&cli, true)
+            .expect("serve runtime should resolve")
+            .expect("serve runtime should be enabled");
+        assert_eq!(
+            runtime.bind_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 37_444)
+        );
+        assert_eq!(runtime.auth_token, None);
+    }
+
+    #[test]
     fn transport_rejects_http_flags_without_port() {
         let mut cli = base_cli();
         cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         let error =
-            resolve_http_runtime_config(&cli).expect_err("host flag without port must fail");
+            resolve_http_runtime_config(&cli, false).expect_err("host flag without port must fail");
         assert!(
             error.to_string().contains("require --mcp-http-port"),
             "unexpected error: {error}"
@@ -424,7 +447,7 @@ mod tests {
         cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         cli.mcp_http_auth_token = Some("test-token".to_owned());
 
-        let error = resolve_http_runtime_config(&cli)
+        let error = resolve_http_runtime_config(&cli, false)
             .expect_err("non-loopback bind should fail without override");
         assert!(
             error
@@ -441,7 +464,7 @@ mod tests {
         cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         cli.allow_remote_http = true;
 
-        let error = resolve_http_runtime_config(&cli)
+        let error = resolve_http_runtime_config(&cli, false)
             .expect_err("remote bind without auth token should fail");
         assert!(
             error
@@ -459,7 +482,7 @@ mod tests {
         cli.allow_remote_http = true;
         cli.mcp_http_auth_token = Some("test-token".to_owned());
 
-        let runtime = resolve_http_runtime_config(&cli)
+        let runtime = resolve_http_runtime_config(&cli, false)
             .expect("remote bind with auth should be allowed")
             .expect("http runtime should be enabled");
         assert_eq!(
@@ -475,7 +498,7 @@ mod tests {
         let mut cli = base_cli();
         cli.mcp_http_port = Some(4010);
 
-        let runtime = resolve_http_runtime_config(&cli)
+        let runtime = resolve_http_runtime_config(&cli, false)
             .expect("loopback bind without auth token should resolve")
             .expect("http runtime should be enabled");
         assert_eq!(
@@ -500,7 +523,8 @@ mod tests {
         cli.mcp_http_port = Some(4014);
         cli.mcp_http_auth_token = Some("   ".to_owned());
 
-        let error = resolve_http_runtime_config(&cli).expect_err("blank auth token should fail");
+        let error =
+            resolve_http_runtime_config(&cli, false).expect_err("blank auth token should fail");
         assert!(
             error
                 .to_string()
@@ -669,7 +693,7 @@ mod tests {
     fn watch_runtime_transport_kind_matches_http_runtime() {
         let cli = base_cli();
         assert_eq!(
-            resolve_http_runtime_config(&cli)
+            resolve_http_runtime_config(&cli, false)
                 .expect("stdio should resolve")
                 .as_ref()
                 .map(HttpRuntimeConfig::transport_kind)
@@ -679,7 +703,7 @@ mod tests {
 
         let mut loopback_cli = base_cli();
         loopback_cli.mcp_http_port = Some(4011);
-        let loopback_runtime = resolve_http_runtime_config(&loopback_cli)
+        let loopback_runtime = resolve_http_runtime_config(&loopback_cli, false)
             .expect("loopback http should resolve")
             .expect("loopback runtime should be enabled");
         assert_eq!(
@@ -692,7 +716,7 @@ mod tests {
         remote_cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         remote_cli.allow_remote_http = true;
         remote_cli.mcp_http_auth_token = Some("test-token".to_owned());
-        let remote_runtime = resolve_http_runtime_config(&remote_cli)
+        let remote_runtime = resolve_http_runtime_config(&remote_cli, false)
             .expect("remote http should resolve with override")
             .expect("remote runtime should be enabled");
         assert_eq!(
@@ -914,18 +938,23 @@ mod tests {
     }
 
     #[test]
-    fn command_config_rejects_empty_workspace_roots() {
+    fn command_config_defaults_empty_workspace_roots_to_current_directory() {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
 
-        let error = resolve_command_config(&cli, Command::Init)
-            .expect_err("utility commands should still require at least one workspace root");
-        assert!(
-            error
-                .to_string()
-                .contains("at least one workspace root is required"),
-            "unexpected command config error: {error}"
-        );
+        let config = resolve_command_config(&cli, Command::Init)
+            .expect("utility commands should default to the current directory");
+        assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
+    }
+
+    #[test]
+    fn reindex_command_defaults_empty_workspace_roots_to_current_directory() {
+        let mut cli = base_cli();
+        cli.workspace_roots.clear();
+
+        let config = resolve_command_config(&cli, Command::Reindex { changed: true })
+            .expect("reindex command should default to the current directory");
+        assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
     }
 
     #[test]
@@ -1448,7 +1477,9 @@ mod tests {
             )
             .expect("second provenance event should seed before export");
 
-        let output_path = workspace_root.join("artifacts").join("workload-corpus.jsonl");
+        let output_path = workspace_root
+            .join("artifacts")
+            .join("workload-corpus.jsonl");
         run_workload_corpus_export_command(
             &config,
             &output_path,
@@ -1461,7 +1492,10 @@ mod tests {
             .expect("workload corpus output should be readable after export");
         let rows = exported
             .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("each row should be valid json"))
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .expect("each row should be valid json")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(rows.len(), 2);

@@ -14,31 +14,31 @@ impl FriggMcpServer {
             &repository_id,
             Some(&self.runtime_state.validated_manifest_candidate_cache),
         ) {
-                Some(snapshot) => {
-                    let snapshot_source_paths =
-                        Self::manifest_source_paths_for_digests(&snapshot.digests);
-                    source_paths = Some(snapshot_source_paths);
-                    (
-                        snapshot.digests,
-                        format!("snapshot:{}", snapshot.snapshot_id),
-                    )
-                }
-                None => {
-                    let live_output = ManifestBuilder::default()
-                        .build_metadata_with_diagnostics(&root)
-                        .map_err(Self::map_frigg_error)?;
-                    let live_signature = Self::root_signature(&live_output.entries);
-                    manifest_output = Some(live_output);
-                    (
-                        manifest_output
-                            .as_ref()
-                            .expect("live manifest output just assigned")
-                            .entries
-                            .clone(),
-                        format!("live:{live_signature}"),
-                    )
-                }
-            };
+            Some(snapshot) => {
+                let snapshot_source_paths =
+                    Self::manifest_source_paths_for_digests(&snapshot.digests);
+                source_paths = Some(snapshot_source_paths);
+                (
+                    snapshot.digests,
+                    format!("snapshot:{}", snapshot.snapshot_id),
+                )
+            }
+            None => {
+                let live_output = ManifestBuilder::default()
+                    .build_metadata_with_diagnostics(&root)
+                    .map_err(Self::map_frigg_error)?;
+                let live_signature = Self::root_signature(&live_output.entries);
+                manifest_output = Some(live_output);
+                (
+                    manifest_output
+                        .as_ref()
+                        .expect("live manifest output just assigned")
+                        .entries
+                        .clone(),
+                    format!("live:{live_signature}"),
+                )
+            }
+        };
         if let Some(manifest_output) = &manifest_output {
             for manifest_diagnostic in &manifest_output.diagnostics {
                 match manifest_diagnostic.kind {

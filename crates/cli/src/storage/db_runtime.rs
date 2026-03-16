@@ -149,7 +149,9 @@ pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
     let conn = Connection::open(path)
         .map_err(|err| FriggError::Internal(format!("failed to open sqlite db: {err}")))?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|err| FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}")))?;
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}"))
+        })?;
     ensure_sqlite_vec_registration_readiness(&conn)?;
     Ok(conn)
 }
@@ -279,18 +281,22 @@ pub(super) fn load_latest_snapshot_for_repository_and_kind(
         });
     }
 
-        Ok(snapshot_id.map(|snapshot_id| RepositoryManifestSnapshot {
-            repository_id: repository_id.to_owned(),
-            snapshot_id,
-            entries,
-        }))
+    Ok(snapshot_id.map(|snapshot_id| RepositoryManifestSnapshot {
+        repository_id: repository_id.to_owned(),
+        snapshot_id,
+        entries,
+    }))
 }
 
 pub(super) fn load_latest_manifest_metadata_snapshot_for_repository(
     conn: &Connection,
     repository_id: &str,
 ) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
-    load_latest_snapshot_metadata_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)
+    load_latest_snapshot_metadata_for_repository_and_kind(
+        conn,
+        repository_id,
+        SNAPSHOT_KIND_MANIFEST,
+    )
 }
 
 pub(super) fn load_latest_snapshot_metadata_for_repository_and_kind(

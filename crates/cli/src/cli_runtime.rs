@@ -48,12 +48,6 @@ pub(super) fn resolve_base_config(
     workspace_roots_required: bool,
     watch_default_transport: Option<RuntimeTransportKind>,
 ) -> Result<FriggConfig, Box<dyn Error>> {
-    if workspace_roots_required && cli.workspace_roots.is_empty() {
-        return Err(Box::new(io::Error::other(
-            "at least one workspace root is required",
-        )));
-    }
-
     let mut config = if workspace_roots_required {
         FriggConfig::from_workspace_roots(cli.workspace_roots.clone())?
     } else {
@@ -76,14 +70,20 @@ pub(super) fn resolve_command_config(
     command: Command,
 ) -> Result<FriggConfig, Box<dyn Error>> {
     match command {
+        Command::Serve => Err(Box::new(io::Error::other(
+            "`frigg serve` uses startup serving config, not command config resolution",
+        ))),
         Command::Init
         | Command::Verify
         | Command::RepairStorage
         | Command::PruneStorage { .. }
-        | Command::ExportWorkloadCorpus { .. } => {
-            resolve_base_config(cli, true, None)
+        | Command::ExportWorkloadCorpus { .. } => resolve_base_config(cli, true, None),
+        Command::Reindex { .. } => {
+            let mut config = resolve_base_config(cli, true, Some(RuntimeTransportKind::Stdio))?;
+            config.semantic_runtime = resolve_semantic_runtime_config(cli);
+            config.validate()?;
+            Ok(config)
         }
-        Command::Reindex { .. } => resolve_startup_config(cli, RuntimeTransportKind::Stdio),
         Command::PlaybookHybridRun { .. } => {
             let mut config = resolve_base_config(cli, true, None)?;
             config.semantic_runtime = resolve_semantic_runtime_config(cli);
@@ -342,9 +342,9 @@ pub(super) fn run_workload_corpus_export_command(
                 outcome_summary: workload_corpus_summary_field(&payload, "outcome"),
                 source_refs_summary,
                 source_ref_count,
-                normalized_workload: payload.get("normalized_workload").map(|value| {
-                    sanitize_workload_corpus_value(value, WORKLOAD_CORPUS_MAX_DEPTH)
-                }),
+                normalized_workload: payload
+                    .get("normalized_workload")
+                    .map(|value| sanitize_workload_corpus_value(value, WORKLOAD_CORPUS_MAX_DEPTH)),
             });
         }
 
@@ -470,8 +470,7 @@ pub(super) fn run_storage_maintenance_command(
                     "{command_name} ok repository_id={} root={} db={} repaired={}",
                     repo.repository_id.0,
                     root.display(),
-                    db_path.display()
-                    ,
+                    db_path.display(),
                     repaired_categories
                 );
             }
@@ -717,10 +716,11 @@ pub(super) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
         let db_path = resolve_storage_db_path(root, "startup")?;
         if !db_path.is_file() {
             let err_message = format!(
-                "startup strict vector readiness failed repository_id={} root={} db={}: storage db file is missing; run `frigg init --workspace-root {}` first",
+                "startup strict vector readiness failed repository_id={} root={} db={}: storage db file is missing; run `frigg init` from {} or `frigg init --workspace-root {}` first",
                 repo.repository_id.0,
                 root.display(),
                 db_path.display(),
+                root.display(),
                 root.display()
             );
             println!(

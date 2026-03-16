@@ -283,8 +283,7 @@ pub(super) fn search_semantic_channel_hits(
             &repository_id,
             root,
             Some(&searcher.validated_manifest_candidate_cache),
-        )
-        else {
+        ) else {
             unavailable_reasons.push(format!(
                 "repository '{repository_id}' has no valid manifest snapshot"
             ));

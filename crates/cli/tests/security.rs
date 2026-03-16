@@ -10,7 +10,8 @@ use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
     PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
-    ReadFileParams, SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
+    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, SearchPatternType, SearchSymbolParams,
+    SearchTextParams, WRITE_CONFIRM_PARAM,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -200,6 +201,13 @@ fn security_public_tool_surface_remains_non_destructive_and_explicit() {
                 "tool `{}` must declare read_only_hint = false because it mutates session state",
                 entry.name
             );
+        } else if PUBLIC_WRITE_TOOL_NAMES.contains(&entry.name.as_str()) {
+            assert_eq!(
+                entry.read_only_hint,
+                Some(false),
+                "tool `{}` must declare read_only_hint = false because it mutates workspace state",
+                entry.name
+            );
         } else {
             panic!("unexpected public MCP tool `{}`", entry.name);
         }
@@ -341,6 +349,28 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     explore_result.expect("explore should succeed");
 
     cleanup_workspace(&workspace);
+}
+
+#[test]
+fn security_confirmed_write_tools_are_public_and_not_misclassified() {
+    for tool_name in ["workspace_prepare", "workspace_reindex"] {
+        assert!(
+            PUBLIC_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be part of the public tool surface"
+        );
+        assert!(
+            PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be classified as a confirmed write tool"
+        );
+        assert!(
+            !PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must not appear on the read-only public tool surface"
+        );
+        assert!(
+            !PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must not be misclassified as session-state-only"
+        );
+    }
 }
 
 #[tokio::test]

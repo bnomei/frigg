@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -21,10 +21,40 @@ impl WatchRefreshClass {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ScheduledRefresh {
     pub root_idx: usize,
+    pub repository_id: String,
     pub class: WatchRefreshClass,
+}
+
+pub(super) enum RepositorySelector {
+    Index(usize),
+    Id(String),
+}
+
+impl From<usize> for RepositorySelector {
+    fn from(value: usize) -> Self {
+        Self::Index(value)
+    }
+}
+
+impl From<&str> for RepositorySelector {
+    fn from(value: &str) -> Self {
+        Self::Id(value.to_owned())
+    }
+}
+
+impl From<&String> for RepositorySelector {
+    fn from(value: &String) -> Self {
+        Self::Id(value.clone())
+    }
+}
+
+impl From<String> for RepositorySelector {
+    fn from(value: String) -> Self {
+        Self::Id(value)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -84,15 +114,14 @@ impl RefreshQueueState {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct RootWatchState {
-    last_event_at: Option<Instant>,
+pub(super) struct RepositoryWatchState {
     active_class: Option<WatchRefreshClass>,
     manifest_fast: RefreshQueueState,
     semantic_followup: RefreshQueueState,
     recent_paths: VecDeque<PathBuf>,
 }
 
-impl RootWatchState {
+impl RepositoryWatchState {
     fn push_sample(&mut self, path: PathBuf) {
         if self.recent_paths.len() == MAX_RECENT_PATH_SAMPLES {
             self.recent_paths.pop_front();
@@ -101,7 +130,6 @@ impl RootWatchState {
     }
 
     fn record_event(&mut self, path: PathBuf, now: Instant, debounce: Duration) {
-        self.last_event_at = Some(now);
         self.push_sample(path);
         self.manifest_fast.pending = true;
         if self.manifest_fast.retry_deadline.is_some()
@@ -120,13 +148,8 @@ impl RootWatchState {
 
     fn enqueue_initial_sync(&mut self, class: WatchRefreshClass, now: Instant) {
         match class {
-            WatchRefreshClass::ManifestFast => {
-                self.last_event_at = Some(now);
-                self.manifest_fast.enqueue(now);
-            }
-            WatchRefreshClass::SemanticFollowup => {
-                self.semantic_followup.enqueue(now);
-            }
+            WatchRefreshClass::ManifestFast => self.manifest_fast.enqueue(now),
+            WatchRefreshClass::SemanticFollowup => self.semantic_followup.enqueue(now),
         }
     }
 
@@ -181,155 +204,253 @@ impl RootWatchState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct WatchSchedulerState {
-    roots: Vec<RootWatchState>,
-    in_flight_manifest_fast: usize,
-    in_flight_semantic_followup: usize,
+    repositories: BTreeMap<String, RepositoryWatchState>,
+    repository_ids_by_index: Vec<String>,
+    in_flight_manifest_fast: BTreeSet<String>,
+    in_flight_semantic_followup: BTreeSet<String>,
 }
 
 impl WatchSchedulerState {
     pub(super) fn new(root_count: usize) -> Self {
-        Self {
-            roots: vec![
-                RootWatchState {
-                    last_event_at: None,
-                    active_class: None,
-                    manifest_fast: RefreshQueueState::default(),
-                    semantic_followup: RefreshQueueState::default(),
-                    recent_paths: VecDeque::new(),
-                };
-                root_count
-            ],
-            in_flight_manifest_fast: 0,
-            in_flight_semantic_followup: 0,
+        let mut scheduler = Self::default();
+        for index in 0..root_count {
+            let repository_id = format!("repo-{index:03}");
+            scheduler.add_repository(&repository_id);
         }
+        scheduler
+    }
+
+    pub(super) fn add_repository(&mut self, repository_id: &str) {
+        if !self
+            .repository_ids_by_index
+            .iter()
+            .any(|id| id == repository_id)
+        {
+            self.repository_ids_by_index.push(repository_id.to_owned());
+        }
+        self.repositories
+            .entry(repository_id.to_owned())
+            .or_insert_with(|| RepositoryWatchState {
+                active_class: None,
+                manifest_fast: RefreshQueueState::default(),
+                semantic_followup: RefreshQueueState::default(),
+                recent_paths: VecDeque::new(),
+            });
+    }
+
+    pub(super) fn remove_repository(&mut self, repository_id: &str) {
+        self.repositories.remove(repository_id);
+        self.in_flight_manifest_fast.remove(repository_id);
+        self.in_flight_semantic_followup.remove(repository_id);
     }
 
     pub(super) fn enqueue_initial_sync(
         &mut self,
-        root_idx: usize,
+        repository_id: impl Into<RepositorySelector>,
         class: WatchRefreshClass,
         now: Instant,
     ) {
-        if let Some(state) = self.roots.get_mut(root_idx) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.enqueue_initial_sync(class, now);
         }
     }
 
-    pub(super) fn enqueue_semantic_followup(&mut self, root_idx: usize, now: Instant) {
-        if let Some(state) = self.roots.get_mut(root_idx) {
+    pub(super) fn enqueue_semantic_followup(
+        &mut self,
+        repository_id: impl Into<RepositorySelector>,
+        now: Instant,
+    ) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.enqueue_semantic_followup(now);
         }
     }
 
     pub(super) fn record_path_change(
         &mut self,
-        root_idx: usize,
+        repository_id: impl Into<RepositorySelector>,
         path: PathBuf,
         now: Instant,
         debounce: Duration,
     ) {
-        if let Some(state) = self.roots.get_mut(root_idx) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.record_event(path, now, debounce);
         }
     }
 
     pub(super) fn next_ready_refresh(&self, now: Instant) -> Option<ScheduledRefresh> {
-        if self.in_flight_manifest_fast == 0 {
-            if let Some(root_idx) =
-                self.next_ready_root_for_class(now, WatchRefreshClass::ManifestFast)
-            {
-                return Some(ScheduledRefresh {
-                    root_idx,
-                    class: WatchRefreshClass::ManifestFast,
-                });
-            }
+        if self.in_flight_manifest_fast.is_empty()
+            && let Some(repository_id) =
+                self.next_ready_repository_for_class(now, WatchRefreshClass::ManifestFast)
+        {
+            return Some(ScheduledRefresh {
+                root_idx: self.repository_index(&repository_id).unwrap_or(usize::MAX),
+                repository_id,
+                class: WatchRefreshClass::ManifestFast,
+            });
         }
 
-        if self.in_flight_semantic_followup == 0 {
-            if let Some(root_idx) =
-                self.next_ready_root_for_class(now, WatchRefreshClass::SemanticFollowup)
-            {
-                return Some(ScheduledRefresh {
-                    root_idx,
-                    class: WatchRefreshClass::SemanticFollowup,
-                });
-            }
+        if self.in_flight_semantic_followup.is_empty()
+            && let Some(repository_id) =
+                self.next_ready_repository_for_class(now, WatchRefreshClass::SemanticFollowup)
+        {
+            return Some(ScheduledRefresh {
+                root_idx: self.repository_index(&repository_id).unwrap_or(usize::MAX),
+                repository_id,
+                class: WatchRefreshClass::SemanticFollowup,
+            });
         }
 
         None
     }
 
-    fn next_ready_root_for_class(&self, now: Instant, class: WatchRefreshClass) -> Option<usize> {
-        self.roots
+    fn next_ready_repository_for_class(
+        &self,
+        now: Instant,
+        class: WatchRefreshClass,
+    ) -> Option<String> {
+        self.repositories
             .iter()
-            .enumerate()
-            .filter_map(|(idx, state)| state.ready_at(class).map(|ready_at| (idx, ready_at)))
+            .filter_map(|(repository_id, state)| {
+                state
+                    .ready_at(class)
+                    .map(|ready_at| (repository_id.clone(), ready_at))
+            })
             .filter(|(_, ready_at)| *ready_at <= now)
-            .min_by_key(|(_, ready_at)| *ready_at)
-            .map(|(idx, _)| idx)
+            .min_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)))
+            .map(|(repository_id, _)| repository_id)
     }
 
     pub(super) fn mark_started(
         &mut self,
-        root_idx: usize,
+        repository_id: impl Into<RepositorySelector>,
         class: WatchRefreshClass,
     ) -> Vec<PathBuf> {
-        *self.in_flight_count_mut(class) += 1;
-        self.roots
-            .get_mut(root_idx)
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return Vec::new();
+        };
+        self.in_flight_set_mut(class).insert(repository_id.clone());
+        self.repositories
+            .get_mut(&repository_id)
             .map(|state| state.mark_started(class))
             .unwrap_or_default()
     }
 
     pub(super) fn mark_succeeded(
         &mut self,
-        root_idx: usize,
+        repository_id: impl Into<RepositorySelector>,
         class: WatchRefreshClass,
         now: Instant,
     ) {
-        let in_flight = self.in_flight_count_mut(class);
-        *in_flight = in_flight.saturating_sub(1);
-        if let Some(state) = self.roots.get_mut(root_idx) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        self.in_flight_set_mut(class).remove(&repository_id);
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.mark_succeeded(class, now);
         }
     }
 
     pub(super) fn mark_failed(
         &mut self,
-        root_idx: usize,
+        repository_id: impl Into<RepositorySelector>,
         class: WatchRefreshClass,
         now: Instant,
         retry: Duration,
     ) {
-        let in_flight = self.in_flight_count_mut(class);
-        *in_flight = in_flight.saturating_sub(1);
-        if let Some(state) = self.roots.get_mut(root_idx) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        self.in_flight_set_mut(class).remove(&repository_id);
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.mark_failed(class, now, retry);
         }
     }
 
-    fn in_flight_count_mut(&mut self, class: WatchRefreshClass) -> &mut usize {
+    #[cfg(test)]
+    pub(super) fn repository_pending(
+        &self,
+        repository_id: impl Into<RepositorySelector>,
+        class: WatchRefreshClass,
+    ) -> bool {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return false;
+        };
+        self.repositories
+            .get(&repository_id)
+            .map(|state| match class {
+                WatchRefreshClass::ManifestFast => state.manifest_fast.pending,
+                WatchRefreshClass::SemanticFollowup => state.semantic_followup.pending,
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub(super) fn repository_rerun_requested(
+        &self,
+        repository_id: impl Into<RepositorySelector>,
+        class: WatchRefreshClass,
+    ) -> bool {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return false;
+        };
+        self.repositories
+            .get(&repository_id)
+            .map(|state| match class {
+                WatchRefreshClass::ManifestFast => state.manifest_fast.rerun_requested,
+                WatchRefreshClass::SemanticFollowup => state.semantic_followup.rerun_requested,
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub(super) fn root_pending(
+        &self,
+        repository_id: impl Into<RepositorySelector>,
+        class: WatchRefreshClass,
+    ) -> bool {
+        self.repository_pending(repository_id, class)
+    }
+
+    #[cfg(test)]
+    pub(super) fn root_rerun_requested(
+        &self,
+        repository_id: impl Into<RepositorySelector>,
+        class: WatchRefreshClass,
+    ) -> bool {
+        self.repository_rerun_requested(repository_id, class)
+    }
+
+    fn repository_index(&self, repository_id: &str) -> Option<usize> {
+        self.repository_ids_by_index
+            .iter()
+            .position(|candidate| candidate == repository_id)
+    }
+
+    fn resolve_repository_id(&self, selector: RepositorySelector) -> Option<String> {
+        match selector {
+            RepositorySelector::Index(index) => self.repository_ids_by_index.get(index).cloned(),
+            RepositorySelector::Id(repository_id) => self
+                .repositories
+                .contains_key(&repository_id)
+                .then_some(repository_id),
+        }
+    }
+
+    fn in_flight_set_mut(&mut self, class: WatchRefreshClass) -> &mut BTreeSet<String> {
         match class {
             WatchRefreshClass::ManifestFast => &mut self.in_flight_manifest_fast,
             WatchRefreshClass::SemanticFollowup => &mut self.in_flight_semantic_followup,
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn root_pending(&self, root_idx: usize, class: WatchRefreshClass) -> bool {
-        self.roots.get(root_idx).is_some_and(|state| match class {
-            WatchRefreshClass::ManifestFast => state.manifest_fast.pending,
-            WatchRefreshClass::SemanticFollowup => state.semantic_followup.pending,
-        })
-    }
-
-    #[cfg(test)]
-    pub(super) fn root_rerun_requested(&self, root_idx: usize, class: WatchRefreshClass) -> bool {
-        self.roots.get(root_idx).is_some_and(|state| match class {
-            WatchRefreshClass::ManifestFast => state.manifest_fast.rerun_requested,
-            WatchRefreshClass::SemanticFollowup => state.semantic_followup.rerun_requested,
-        })
     }
 }

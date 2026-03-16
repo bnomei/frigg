@@ -44,11 +44,11 @@ fn missing_specific_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect>
     (candidate.specific_witness_path_overlap == 0
         && query.query_has_specific_blade_anchors
         && (candidate.is_laravel_non_livewire_blade_view || candidate.is_laravel_livewire_view))
-    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
-        -0.62
-    } else {
-        -0.32
-    }))
+        .then_some(PolicyEffect::Add(if state.seen_count == 0 {
+            -0.62
+        } else {
+            -0.32
+        }))
 }
 
 fn blade_specific_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -75,11 +75,11 @@ fn generic_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect>
         && query.query_has_specific_blade_anchors
         && candidate.is_laravel_blade_component
         && !intent.wants_laravel_layout_witnesses)
-    .then_some(PolicyEffect::Add(if state.seen_count == 0 {
-        -0.46
-    } else {
-        -0.22
-    }))
+        .then_some(PolicyEffect::Add(if state.seen_count == 0 {
+            -0.46
+        } else {
+            -0.22
+        }))
 }
 
 fn form_action_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -95,11 +95,7 @@ fn form_action_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEff
     let candidate = ctx;
     let state = ctx;
     (!candidate.is_laravel_form_action_blade && candidate.is_laravel_blade_component).then_some(
-        PolicyEffect::Add(if state.seen_count == 0 {
-            -0.24
-        } else {
-            -0.12
-        }),
+        PolicyEffect::Add(if state.seen_count == 0 { -0.24 } else { -0.12 }),
     )
 }
 
@@ -127,11 +123,7 @@ fn view_component_class_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 
     Some(PolicyEffect::Add(
         if intent.wants_laravel_layout_witnesses {
-            if state.seen_count == 0 {
-                -1.40
-            } else {
-                -1.80
-            }
+            if state.seen_count == 0 { -1.40 } else { -1.80 }
         } else if state.seen_count == 0 {
             -1.00
         } else {
@@ -144,15 +136,13 @@ fn livewire_component_blade_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let intent = ctx;
     let state = ctx;
 
-    Some(PolicyEffect::Add(
-        if intent.wants_livewire_view_witnesses {
-            if state.seen_count == 0 { 0.02 } else { -0.18 }
-        } else if state.seen_count == 0 {
-            -0.54
-        } else {
-            -0.30
-        },
-    ))
+    Some(PolicyEffect::Add(if intent.wants_livewire_view_witnesses {
+        if state.seen_count == 0 { 0.02 } else { -0.18 }
+    } else if state.seen_count == 0 {
+        -0.54
+    } else {
+        -0.30
+    }))
 }
 
 fn non_livewire_blade_view_bias(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -290,11 +280,7 @@ fn layout_blade_component_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> 
         if candidate.blade_specific_path_overlap == 0
             && candidate.specific_witness_path_overlap == 0
         {
-            if state.seen_count == 0 {
-                -0.92
-            } else {
-                -0.44
-            }
+            if state.seen_count == 0 { -0.92 } else { -0.44 }
         } else if state.seen_count == 0 {
             0.14
         } else {

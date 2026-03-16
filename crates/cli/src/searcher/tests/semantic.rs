@@ -530,10 +530,7 @@ fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_mani
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        output.note.semantic_status,
-        HybridSemanticStatus::Degraded
-    );
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Degraded);
     assert!(output.note.semantic_enabled);
     assert!(output.note.semantic_hit_count >= 1);
     assert!(output.note.semantic_match_count >= 1);
@@ -558,9 +555,10 @@ fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_mani
         "paths removed from the latest manifest must not resurface when semantic storage is unavailable: {paths:?}"
     );
     assert!(
-        output.matches.iter().any(|entry| {
-            entry.document.path == "src/current.rs" && entry.semantic_score > 0.0
-        }),
+        output
+            .matches
+            .iter()
+            .any(|entry| { entry.document.path == "src/current.rs" && entry.semantic_score > 0.0 }),
         "semantic fallback should retain a positive semantic score for surviving latest-manifest paths"
     );
 

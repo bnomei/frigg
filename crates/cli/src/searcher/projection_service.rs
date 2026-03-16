@@ -76,7 +76,13 @@ impl ProjectionStoreService {
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
         };
-        if let Some(cached) = self.path_witness_cache.read().ok()?.get(&cache_key).cloned() {
+        if let Some(cached) = self
+            .path_witness_cache
+            .read()
+            .ok()?
+            .get(&cache_key)
+            .cloned()
+        {
             return Some(cached);
         }
 
@@ -132,7 +138,13 @@ impl ProjectionStoreService {
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
         };
-        if let Some(cached) = self.test_subject_cache.read().ok()?.get(&cache_key).cloned() {
+        if let Some(cached) = self
+            .test_subject_cache
+            .read()
+            .ok()?
+            .get(&cache_key)
+            .cloned()
+        {
             return Some(cached);
         }
 
@@ -147,9 +159,8 @@ impl ProjectionStoreService {
         if expected_paths.is_empty() {
             return None;
         }
-        let expected_rows = {
-            build_test_subject_projection_records_from_paths(&expected_paths).ok()?
-        };
+        let expected_rows =
+            { build_test_subject_projection_records_from_paths(&expected_paths).ok()? };
         let mut rows = storage
             .load_test_subject_projections_for_repository_snapshot(
                 &repository.repository_id,
@@ -206,9 +217,8 @@ impl ProjectionStoreService {
         if expected_paths.is_empty() {
             return None;
         }
-        let expected_rows = {
-            build_entrypoint_surface_projection_records_from_paths(&expected_paths).ok()?
-        };
+        let expected_rows =
+            { build_entrypoint_surface_projection_records_from_paths(&expected_paths).ok()? };
         let mut rows = storage
             .load_entrypoint_surface_projections_for_repository_snapshot(
                 &repository.repository_id,
@@ -243,8 +253,8 @@ impl ProjectionStoreService {
     ) -> Option<Vec<PathWitnessCandidate>> {
         let base_repository = base_repository?;
         let snapshot_id = base_repository.snapshot_id.as_deref()?;
-        let projections =
-            self.load_or_build_path_witness_projections_for_repository(base_repository, snapshot_id)?;
+        let projections = self
+            .load_or_build_path_witness_projections_for_repository(base_repository, snapshot_id)?;
         let base_candidates_by_path = base_repository
             .candidates
             .iter()
@@ -266,8 +276,12 @@ impl ProjectionStoreService {
             return None;
         }
 
-        let overlay_boosts_by_path =
-            self.overlay_boosts_for_repository(repository, Some(base_repository), intent, query_context);
+        let overlay_boosts_by_path = self.overlay_boosts_for_repository(
+            repository,
+            Some(base_repository),
+            intent,
+            query_context,
+        );
         let mut scored = Vec::new();
         for (rel_path, path) in &base_candidates_by_path {
             let projection = projections_by_path.get(rel_path)?;
@@ -340,8 +354,8 @@ impl ProjectionStoreService {
 
         if intent.wants_tests || intent.wants_test_witness_recall {
             if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-                if let Some(test_subject_projections) =
-                    self.load_or_build_test_subject_projections_for_repository(
+                if let Some(test_subject_projections) = self
+                    .load_or_build_test_subject_projections_for_repository(
                         base_repository,
                         snapshot_id,
                     )
@@ -367,8 +381,8 @@ impl ProjectionStoreService {
 
         let mut stored_projection_paths = BTreeSet::<String>::new();
         if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-            if let Some(entrypoint_surface_projections) =
-                self.load_or_build_entrypoint_surface_projections_for_repository(
+            if let Some(entrypoint_surface_projections) = self
+                .load_or_build_entrypoint_surface_projections_for_repository(
                     base_repository,
                     snapshot_id,
                 )

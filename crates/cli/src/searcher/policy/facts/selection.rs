@@ -3,9 +3,7 @@ use super::super::super::intent::HybridRankingIntent;
 use super::super::super::laravel::LaravelUiSurfaceClass;
 use super::super::super::surfaces::HybridSourceClass;
 use super::super::hybrid_path_quality_multiplier_with_intent;
-use super::shared::{
-    SelectionCoverageState, SharedExcerptQueryMatch, SharedPathQueryMatch,
-};
+use super::shared::{SelectionCoverageState, SharedExcerptQueryMatch, SharedPathQueryMatch};
 use super::{PolicyQueryContext, SharedIntentFacts, SharedPathFacts};
 
 pub(crate) struct SelectionStaticFeatures {
@@ -99,7 +97,9 @@ impl SelectionState {
             candidate.static_features.class,
             candidate.static_features.is_ci_workflow,
             candidate.static_features.is_example_support,
-            candidate.static_features.is_repo_root_runtime_config_artifact,
+            candidate
+                .static_features
+                .is_repo_root_runtime_config_artifact,
             candidate.static_features.is_typescript_runtime_module_index,
         );
     }
@@ -249,8 +249,7 @@ impl SelectionFacts {
             seen_bench_support: coverage.seen_bench_support,
             seen_plain_test_support: coverage.seen_plain_test_support,
             seen_repo_root_runtime_configs: coverage.seen_repo_root_runtime_configs,
-            seen_typescript_runtime_module_indexes: coverage
-                .seen_typescript_runtime_module_indexes,
+            seen_typescript_runtime_module_indexes: coverage.seen_typescript_runtime_module_indexes,
             canonical_match_multiplier: candidate
                 .static_features
                 .path_match
@@ -298,8 +297,7 @@ impl SelectionFacts {
             wants_blade_component_witnesses: shared_intent.wants_blade_component_witnesses,
             wants_laravel_form_action_witnesses: shared_intent.wants_laravel_form_action_witnesses,
             wants_livewire_view_witnesses: shared_intent.wants_livewire_view_witnesses,
-            wants_commands_middleware_witnesses: shared_intent
-                .wants_commands_middleware_witnesses,
+            wants_commands_middleware_witnesses: shared_intent.wants_commands_middleware_witnesses,
             wants_jobs_listeners_witnesses: shared_intent.wants_jobs_listeners_witnesses,
             wants_laravel_layout_witnesses: shared_intent.wants_laravel_layout_witnesses,
             wants_test_witness_recall: shared_intent.wants_test_witness_recall,

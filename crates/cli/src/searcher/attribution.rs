@@ -66,7 +66,13 @@ mod tests {
         let cloned = attribution.clone();
 
         assert_eq!(attribution, cloned);
-        assert_eq!(attribution.freshness_validation.output_count, cloned.freshness_validation.output_count);
-        assert_eq!(attribution.graph_expansion.input_count, cloned.graph_expansion.input_count);
+        assert_eq!(
+            attribution.freshness_validation.output_count,
+            cloned.freshness_validation.output_count
+        );
+        assert_eq!(
+            attribution.graph_expansion.input_count,
+            cloned.graph_expansion.input_count
+        );
     }
 }

@@ -11,21 +11,20 @@ use sqlite_vec as _;
 
 mod db_runtime;
 mod manifest_store;
+mod projection_store;
 mod provenance_path;
 mod provenance_store;
-mod projection_store;
 mod semantic_store;
 mod vector_store;
 #[cfg(test)]
 use db_runtime::set_schema_version;
 use db_runtime::{
-    apply_migration, count_provenance_events, i64_to_u64, latest_schema_version,
-    count_snapshots_for_repository_and_kind, load_snapshot_ids_for_repository_and_kind,
-    load_latest_manifest_metadata_snapshot_for_repository,
+    apply_migration, count_provenance_events, count_snapshots_for_repository_and_kind, i64_to_u64,
+    latest_schema_version, load_latest_manifest_metadata_snapshot_for_repository,
     load_latest_manifest_snapshot_for_repository, load_manifest_entries_for_snapshot,
-    load_semantic_head_snapshot_ids_for_repository, open_connection, option_u64_to_option_i64,
-    prune_provenance_events_on_connection, read_schema_version, run_repository_roundtrip_probe,
-    table_exists, u64_to_i64, usize_to_i64,
+    load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
+    open_connection, option_u64_to_option_i64, prune_provenance_events_on_connection,
+    read_schema_version, run_repository_roundtrip_probe, table_exists, u64_to_i64, usize_to_i64,
 };
 
 pub(super) const SNAPSHOT_KIND_MANIFEST: &str = "manifest";
@@ -975,7 +974,6 @@ impl Storage {
         let conn = open_connection(&self.db_path)?;
         verify_vector_store_on_connection(&conn, expected_dimensions)
     }
-
 }
 
 #[derive(Debug, Default, Clone)]

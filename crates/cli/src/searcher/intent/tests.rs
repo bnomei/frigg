@@ -192,9 +192,8 @@ fn cli_entrypoint_queries_activate_entrypoint_build_flow_without_build_terms() {
 
 #[test]
 fn direct_intent_helpers_reflect_query_witness_and_policy_meaning() {
-    let intent = SearchIntent::from_query(
-        "config examples benches benchmark pyproject requirements tests",
-    );
+    let intent =
+        SearchIntent::from_query("config examples benches benchmark pyproject requirements tests");
 
     assert!(intent.has_goal(SearchGoal::Tests));
     assert!(intent.has_goal(SearchGoal::Examples));

@@ -15,6 +15,7 @@ pub(crate) struct AttachedWorkspace {
 pub(crate) struct WorkspaceRegistry {
     workspaces: Vec<AttachedWorkspace>,
     by_canonical_root: BTreeMap<PathBuf, usize>,
+    active_session_counts: BTreeMap<String, usize>,
 }
 
 impl WorkspaceRegistry {
@@ -32,7 +33,7 @@ impl WorkspaceRegistry {
         registry
     }
 
-    pub(crate) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
+    pub(crate) fn known_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.workspaces.clone()
     }
 
@@ -72,6 +73,34 @@ impl WorkspaceRegistry {
         let display_name = display_name_for_root(&canonical_root);
         let repository_id = format!("repo-{:03}", self.workspaces.len().saturating_add(1));
         self.insert_with_repository_id(canonical_root, repository_id, display_name)
+    }
+
+    pub(crate) fn mark_session_adopted(&mut self, repository_id: &str) -> usize {
+        let count = self
+            .active_session_counts
+            .entry(repository_id.to_owned())
+            .or_insert(0);
+        *count = count.saturating_add(1);
+        *count
+    }
+
+    pub(crate) fn mark_session_released(&mut self, repository_id: &str) -> usize {
+        let Some(count) = self.active_session_counts.get_mut(repository_id) else {
+            return 0;
+        };
+        *count = count.saturating_sub(1);
+        let remaining = *count;
+        if remaining == 0 {
+            self.active_session_counts.remove(repository_id);
+        }
+        remaining
+    }
+
+    pub(crate) fn active_session_count(&self, repository_id: &str) -> usize {
+        self.active_session_counts
+            .get(repository_id)
+            .copied()
+            .unwrap_or(0)
     }
 }
 

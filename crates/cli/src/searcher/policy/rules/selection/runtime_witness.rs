@@ -50,15 +50,13 @@ fn python_config_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let intent = ctx;
     let state = ctx;
 
-    Some(PolicyEffect::Add(
-        if intent.wants_python_workspace_config {
-            if state.seen_count == 0 { 0.18 } else { 0.10 }
-        } else if state.seen_count == 0 {
-            -0.18
-        } else {
-            -0.10
-        },
-    ))
+    Some(PolicyEffect::Add(if intent.wants_python_workspace_config {
+        if state.seen_count == 0 { 0.18 } else { 0.10 }
+    } else if state.seen_count == 0 {
+        -0.18
+    } else {
+        -0.10
+    }))
 }
 
 fn python_test_adjustment(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -279,11 +277,7 @@ fn non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     }
 
     Some(PolicyEffect::Add(if intent.wants_test_witness_recall {
-        if state.seen_count == 0 {
-            -0.18
-        } else {
-            -0.10
-        }
+        if state.seen_count == 0 { -0.18 } else { -0.10 }
     } else if state.seen_count == 0 {
         -0.34
     } else {
@@ -295,11 +289,7 @@ fn non_support_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let candidate = ctx;
     let state = ctx;
     (!candidate.is_example_support && !candidate.is_bench_support).then_some(PolicyEffect::Add(
-        if state.seen_count == 0 {
-            -0.36
-        } else {
-            -0.22
-        },
+        if state.seen_count == 0 { -0.36 } else { -0.22 },
     ))
 }
 

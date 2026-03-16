@@ -67,6 +67,17 @@ use ordering::{
     retain_bounded_match, sort_matches_deterministically,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
+#[cfg(test)]
+use overlay_projection::StoredEntrypointSurfaceProjection;
+pub(crate) use overlay_projection::{
+    StoredTestSubjectProjection, build_entrypoint_surface_projection_records_from_paths,
+    build_test_subject_projection_records as build_test_subject_projection_records_from_paths,
+    decode_entrypoint_surface_projection_records, decode_test_subject_projection_records,
+};
+pub(crate) use path_witness_projection::{
+    StoredPathWitnessProjection, build_path_witness_projection_records_from_paths,
+    decode_path_witness_projection_records,
+};
 use projection_service::ProjectionStoreService;
 use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_exact_identifier_anchor,
@@ -76,17 +87,6 @@ use query_terms::{
 };
 pub use ranker::rank_hybrid_evidence;
 use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
-pub(crate) use overlay_projection::{
-    StoredTestSubjectProjection, build_entrypoint_surface_projection_records_from_paths,
-    build_test_subject_projection_records as build_test_subject_projection_records_from_paths,
-    decode_entrypoint_surface_projection_records, decode_test_subject_projection_records,
-};
-#[cfg(test)]
-use overlay_projection::StoredEntrypointSurfaceProjection;
-pub(crate) use path_witness_projection::{
-    StoredPathWitnessProjection, build_path_witness_projection_records_from_paths,
-    decode_path_witness_projection_records,
-};
 use regex::Regex;
 pub use regex_support::{RegexSearchError, compile_safe_regex};
 use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
@@ -949,9 +949,8 @@ impl TextSearcher {
                     .repositories
                     .iter()
                     .find(|candidate| candidate.repository_id == repository.repository_id);
-                let overlay_boosts_by_path = self
-                    .projection_store_service
-                    .overlay_boosts_for_repository(
+                let overlay_boosts_by_path =
+                    self.projection_store_service.overlay_boosts_for_repository(
                         repository,
                         base_repository,
                         intent,
@@ -1046,7 +1045,6 @@ impl TextSearcher {
             diagnostics: expanded_universe.diagnostics,
         })
     }
-
 }
 
 #[derive(Debug)]

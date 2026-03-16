@@ -1,16 +1,87 @@
 use super::*;
 
+impl FriggMcpSessionState {
+    pub(super) fn new(
+        workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+        watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(FriggMcpSessionStateInner {
+                workspace_registry,
+                watch_runtime,
+                adopted_repository_ids: RwLock::new(BTreeSet::new()),
+                session_default_repository_id: RwLock::new(None),
+            }),
+        }
+    }
+}
+
+impl FriggMcpSessionStateInner {
+    fn release_repository_id(&self, repository_id: &str) {
+        self.workspace_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_session_released(repository_id);
+        if let Some(watch_runtime) = self
+            .watch_runtime
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .cloned()
+        {
+            watch_runtime.release_lease(repository_id);
+        }
+    }
+}
+
+impl Drop for FriggMcpSessionStateInner {
+    fn drop(&mut self) {
+        let adopted_repository_ids = self
+            .adopted_repository_ids
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for repository_id in adopted_repository_ids {
+            self.release_repository_id(&repository_id);
+        }
+    }
+}
+
 impl FriggMcpServer {
-    pub(super) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
+    pub(super) fn known_workspaces(&self) -> Vec<AttachedWorkspace> {
         self.runtime_state
             .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .attached_workspaces()
+            .known_workspaces()
+    }
+
+    pub(super) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
+        let adopted_repository_ids = self
+            .session_state
+            .inner
+            .adopted_repository_ids
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let registry = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        adopted_repository_ids
+            .into_iter()
+            .filter_map(|repository_id| registry.workspace_by_repository_id(&repository_id))
+            .collect()
     }
 
     pub(super) fn current_repository_id(&self) -> Option<String> {
         self.session_state
+            .inner
             .session_default_repository_id
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -20,10 +91,85 @@ impl FriggMcpServer {
     pub(super) fn set_current_repository_id(&self, repository_id: Option<String>) {
         let mut current = self
             .session_state
+            .inner
             .session_default_repository_id
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *current = repository_id;
+    }
+
+    pub(super) fn adopt_workspace(
+        &self,
+        workspace: &AttachedWorkspace,
+        set_default: bool,
+    ) -> Result<(), ErrorData> {
+        let newly_adopted = {
+            let mut adopted = self
+                .session_state
+                .inner
+                .adopted_repository_ids
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            adopted.insert(workspace.repository_id.clone())
+        };
+
+        if newly_adopted {
+            self.runtime_state
+                .workspace_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .mark_session_adopted(&workspace.repository_id);
+            if let Some(watch_runtime) = self
+                .runtime_state
+                .watch_runtime
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .cloned()
+            {
+                watch_runtime
+                    .acquire_lease(workspace)
+                    .map_err(Self::map_frigg_error)?;
+            }
+        }
+
+        if set_default {
+            self.set_current_repository_id(Some(workspace.repository_id.clone()));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn detach_workspace(
+        &self,
+        repository_id: &str,
+    ) -> Result<Option<AttachedWorkspace>, ErrorData> {
+        let removed = {
+            let mut adopted = self
+                .session_state
+                .inner
+                .adopted_repository_ids
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            adopted.remove(repository_id)
+        };
+        if !removed {
+            return Ok(None);
+        }
+
+        if self.current_repository_id().as_deref() == Some(repository_id) {
+            self.set_current_repository_id(None);
+        }
+        self.session_state
+            .inner
+            .release_repository_id(repository_id);
+
+        Ok(self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(repository_id))
     }
 
     pub(super) fn current_workspace(&self) -> Option<AttachedWorkspace> {
@@ -37,19 +183,13 @@ impl FriggMcpServer {
 
     pub(super) fn no_attached_workspaces_error(action: &str) -> ErrorData {
         Self::resource_not_found(
-            "no repositories are attached for this session",
+            "no repositories are adopted for this session",
             Some(json!({
                 "attached_repositories": [],
                 "action": action,
-                "hint": "call workspace_attach first or provide --workspace-root at startup",
+                "hint": "call workspace_attach first or choose a repository_id from list_repositories",
             })),
         )
-    }
-
-    pub(super) fn effective_repository_id(&self, repository_id: Option<&str>) -> Option<String> {
-        repository_id
-            .map(str::to_owned)
-            .or_else(|| self.current_repository_id())
     }
 
     pub(super) fn attached_workspaces_for_repository(
@@ -61,8 +201,20 @@ impl FriggMcpServer {
             .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let adopted_repository_ids = self
+            .session_state
+            .inner
+            .adopted_repository_ids
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
-        if let Some(repository_id) = self.effective_repository_id(repository_id) {
+        if let Some(repository_id) = repository_id
+            .map(str::to_owned)
+            .or_else(|| self.current_repository_id())
+        {
             if let Some(workspace) = registry.workspace_by_repository_id(&repository_id) {
                 return Ok(vec![workspace]);
             }
@@ -72,7 +224,10 @@ impl FriggMcpServer {
             ));
         }
 
-        let workspaces = registry.attached_workspaces();
+        let workspaces = adopted_repository_ids
+            .into_iter()
+            .filter_map(|repository_id| registry.workspace_by_repository_id(&repository_id))
+            .collect::<Vec<_>>();
         if workspaces.is_empty() {
             return Err(Self::no_attached_workspaces_error("workspace_attach"));
         }

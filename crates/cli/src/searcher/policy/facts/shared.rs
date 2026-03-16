@@ -14,18 +14,17 @@ use super::super::super::query_terms::{
     hybrid_specific_witness_query_terms, path_has_exact_query_term_match,
 };
 use super::super::super::surfaces::{
-    HybridSourceClass, has_generic_runtime_anchor_stem, hybrid_source_class,
-    is_bench_support_path, is_ci_workflow_path, is_cli_test_support_path,
-    is_entrypoint_build_workflow_path, is_entrypoint_reference_doc_path,
-    is_entrypoint_runtime_path, is_example_support_path, is_frontend_runtime_noise_path,
-    is_generic_runtime_witness_doc_path, is_kotlin_android_ui_runtime_surface_path,
-    is_loose_python_test_module_path, is_navigation_reference_doc_path,
-    is_navigation_runtime_path, is_non_code_test_doc_path, is_python_entrypoint_runtime_path,
-    is_python_runtime_config_path, is_python_test_witness_path, is_repo_metadata_path,
-    is_root_scoped_runtime_config_path, is_runtime_adjacent_python_test_path,
-    is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
-    is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path,
-    is_test_support_path, is_typescript_runtime_module_index_path,
+    HybridSourceClass, has_generic_runtime_anchor_stem, hybrid_source_class, is_bench_support_path,
+    is_ci_workflow_path, is_cli_test_support_path, is_entrypoint_build_workflow_path,
+    is_entrypoint_reference_doc_path, is_entrypoint_runtime_path, is_example_support_path,
+    is_frontend_runtime_noise_path, is_generic_runtime_witness_doc_path,
+    is_kotlin_android_ui_runtime_surface_path, is_loose_python_test_module_path,
+    is_navigation_reference_doc_path, is_navigation_runtime_path, is_non_code_test_doc_path,
+    is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
+    is_repo_metadata_path, is_root_scoped_runtime_config_path,
+    is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
+    is_runtime_config_artifact_path, is_rust_workspace_config_path, is_scripts_ops_path,
+    is_test_harness_path, is_test_support_path, is_typescript_runtime_module_index_path,
 };
 use super::super::super::{
     is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
@@ -200,15 +199,15 @@ impl PolicyQueryContext {
             excerpt_overlap: if self.query_has_identifier_anchor
                 && (intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow)
             {
-                hybrid_overlap_count(&hybrid_identifier_tokens(excerpt), &self.query_overlap_terms)
+                hybrid_overlap_count(
+                    &hybrid_identifier_tokens(excerpt),
+                    &self.query_overlap_terms,
+                )
             } else {
                 0
             },
             excerpt_has_exact_identifier_anchor: self.has_exact_terms()
-                && hybrid_excerpt_has_exact_identifier_anchor(
-                    excerpt,
-                    &self.exact_terms.join(" "),
-                ),
+                && hybrid_excerpt_has_exact_identifier_anchor(excerpt, &self.exact_terms.join(" ")),
             excerpt_has_build_flow_anchor: intent.wants_entrypoint_build_flow
                 && hybrid_excerpt_has_build_flow_anchor(excerpt, &self.query_overlap_terms),
             excerpt_has_test_double_anchor: intent.wants_entrypoint_build_flow
@@ -388,8 +387,8 @@ impl SharedPathFacts {
         if self.class == HybridSourceClass::Other {
             return match Path::new(path).extension().and_then(|ext| ext.to_str()) {
                 Some(
-                    "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java"
-                    | "kt" | "kts",
+                    "rs" | "php" | "go" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "kt"
+                    | "kts",
                 ) => 1.0,
                 _ => 0.9,
             };
@@ -603,10 +602,10 @@ fn blade_component_specific_path_overlap_count(path: &str, specific_terms: &[Str
 mod tests {
     use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceDocumentRef};
 
-    use super::*;
     use super::super::path_quality::PathQualityFacts;
     use super::super::path_witness::PathWitnessFacts;
     use super::super::selection::{SelectionCandidate, SelectionFacts, SelectionState};
+    use super::*;
     use crate::searcher::path_witness_projection::StoredPathWitnessProjection;
     use crate::searcher::types::HybridRankedEvidence;
 
@@ -658,10 +657,12 @@ mod tests {
         assert!(context.query_mentions_cli);
         assert!(context.query_has_specific_blade_anchors);
         assert!(context.wants_kotlin_android_ui_witnesses);
-        assert!(context
-            .blade_component_specific_terms
-            .iter()
-            .any(|term| term == "invoice"));
+        assert!(
+            context
+                .blade_component_specific_terms
+                .iter()
+                .any(|term| term == "invoice")
+        );
     }
 
     #[test]
@@ -708,7 +709,12 @@ mod tests {
             let context = PolicyQueryContext::new(&intent, case.query);
             let match_result = context.match_excerpt(case.excerpt, &shared_intent);
 
-            assert_eq!(match_result.excerpt_overlap > 0, case.expect_overlap, "query={}", case.query);
+            assert_eq!(
+                match_result.excerpt_overlap > 0,
+                case.expect_overlap,
+                "query={}",
+                case.query
+            );
             assert_eq!(
                 match_result.excerpt_has_exact_identifier_anchor,
                 case.expect_exact_identifier_anchor,
@@ -716,14 +722,12 @@ mod tests {
                 case.query
             );
             assert_eq!(
-                match_result.excerpt_has_build_flow_anchor,
-                case.expect_build_anchor,
+                match_result.excerpt_has_build_flow_anchor, case.expect_build_anchor,
                 "query={}",
                 case.query
             );
             assert_eq!(
-                match_result.excerpt_has_test_double_anchor,
-                case.expect_test_double_anchor,
+                match_result.excerpt_has_test_double_anchor, case.expect_test_double_anchor,
                 "query={}",
                 case.query
             );
@@ -733,7 +737,8 @@ mod tests {
     #[test]
     fn shared_path_facts_normalize_runtime_config_and_laravel_shape_flags() {
         let config = SharedPathFacts::from_path("gradle/wrapper/gradle-wrapper.properties");
-        let laravel = SharedPathFacts::from_path("resources/views/components/invoice-table.blade.php");
+        let laravel =
+            SharedPathFacts::from_path("resources/views/components/invoice-table.blade.php");
 
         assert!(config.is_runtime_config_artifact);
         assert!(config.is_repo_root_runtime_config_artifact);
@@ -749,9 +754,15 @@ mod tests {
         let path = "gradle/wrapper/gradle-wrapper.properties";
         let projection = StoredPathWitnessProjection::from_path(path);
         let path_quality = PathQualityFacts::from_path(path, &intent);
-        let path_witness = PathWitnessFacts::from_projection(path, &projection, &intent, &query_context);
+        let path_witness =
+            PathWitnessFacts::from_projection(path, &projection, &intent, &query_context);
         let candidate = SelectionCandidate::new(make_ranked(path, 1.0), &intent, &query_context);
-        let selection = SelectionFacts::from_candidate(&candidate, &intent, &query_context, &SelectionState::default());
+        let selection = SelectionFacts::from_candidate(
+            &candidate,
+            &intent,
+            &query_context,
+            &SelectionState::default(),
+        );
 
         assert!(path_quality.is_runtime_config_artifact);
         assert!(path_witness.is_config_artifact);
@@ -759,8 +770,14 @@ mod tests {
         assert!(path_quality.is_repo_root_runtime_config_artifact);
         assert!(path_witness.is_repo_root_runtime_config_artifact);
         assert!(selection.is_repo_root_runtime_config_artifact);
-        assert_eq!(path_quality.wants_example_or_bench_witnesses, path_witness.wants_example_or_bench_witnesses);
-        assert_eq!(path_witness.wants_example_or_bench_witnesses, selection.wants_example_or_bench_witnesses);
+        assert_eq!(
+            path_quality.wants_example_or_bench_witnesses,
+            path_witness.wants_example_or_bench_witnesses
+        );
+        assert_eq!(
+            path_witness.wants_example_or_bench_witnesses,
+            selection.wants_example_or_bench_witnesses
+        );
     }
 
     #[test]
@@ -772,9 +789,15 @@ mod tests {
         let projection = StoredPathWitnessProjection::from_path(path);
         let shared_path = SharedPathFacts::from_path(path);
         let path_quality = PathQualityFacts::from_path(path, &intent);
-        let path_witness = PathWitnessFacts::from_projection(path, &projection, &intent, &query_context);
+        let path_witness =
+            PathWitnessFacts::from_projection(path, &projection, &intent, &query_context);
         let candidate = SelectionCandidate::new(make_ranked(path, 1.0), &intent, &query_context);
-        let selection = SelectionFacts::from_candidate(&candidate, &intent, &query_context, &SelectionState::default());
+        let selection = SelectionFacts::from_candidate(
+            &candidate,
+            &intent,
+            &query_context,
+            &SelectionState::default(),
+        );
 
         assert!(path_quality.is_laravel_blade_component);
         assert!(path_witness.is_laravel_blade_component);
@@ -792,7 +815,10 @@ mod tests {
             path_witness.is_laravel_top_level_blade_view
         );
         assert!(!path_witness.is_laravel_top_level_blade_view);
-        assert_eq!(path_quality.is_laravel_layout_blade_view, selection.is_laravel_layout_blade_view);
+        assert_eq!(
+            path_quality.is_laravel_layout_blade_view,
+            selection.is_laravel_layout_blade_view
+        );
     }
 
     #[test]
@@ -824,8 +850,11 @@ mod tests {
             support_shared.is_typescript_runtime_module_index,
         );
 
-        let runtime_snapshot =
-            coverage.snapshot_for(runtime_path, runtime_shared.class, runtime_shared.laravel_surface);
+        let runtime_snapshot = coverage.snapshot_for(
+            runtime_path,
+            runtime_shared.class,
+            runtime_shared.laravel_surface,
+        );
         let blade_snapshot =
             coverage.snapshot_for(blade_path, blade_shared.class, blade_shared.laravel_surface);
 

@@ -141,7 +141,11 @@ fn verify_fails_when_manifest_rows_reference_non_manifest_snapshots() -> FriggRe
             "#,
             [],
         )
-        .map_err(|err| FriggError::Internal(format!("failed to seed non-manifest snapshot for manifest invariant test: {err}")))?;
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to seed non-manifest snapshot for manifest invariant test: {err}"
+            ))
+        })?;
         conn.execute(
             r#"
             INSERT INTO file_manifest (snapshot_id, path, sha256, size_bytes, mtime_ns)
@@ -149,7 +153,11 @@ fn verify_fails_when_manifest_rows_reference_non_manifest_snapshots() -> FriggRe
             "#,
             [],
         )
-        .map_err(|err| FriggError::Internal(format!("failed to seed drifted manifest row for manifest invariant test: {err}")))?;
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to seed drifted manifest row for manifest invariant test: {err}"
+            ))
+        })?;
     }
 
     let err = storage
@@ -254,9 +262,10 @@ fn migration_8_enforces_snapshot_repository_and_manifest_row_references() -> Fri
     storage.initialize()?;
 
     let conn = open_test_connection(&db_path)?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;").map_err(|err| {
-        FriggError::Internal(format!("failed to enable foreign key checks: {err}"))
-    })?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to enable foreign key checks: {err}"))
+        })?;
 
     let snapshot_repo_err = conn
         .execute(
@@ -281,7 +290,9 @@ fn migration_8_enforces_snapshot_repository_and_manifest_row_references() -> Fri
             "#,
         [],
     )
-    .map_err(|err| FriggError::Internal(format!("failed to seed manifest snapshot for test: {err}")))?;
+    .map_err(|err| {
+        FriggError::Internal(format!("failed to seed manifest snapshot for test: {err}"))
+    })?;
     conn.execute(
         r#"
             INSERT INTO file_manifest (snapshot_id, path, sha256, size_bytes, mtime_ns)
@@ -320,7 +331,9 @@ fn migration_8_enforces_snapshot_repository_and_manifest_row_references() -> Fri
         [],
     )
     .map_err(|err| {
-        FriggError::Internal(format!("failed to delete snapshot for cascade assertion: {err}"))
+        FriggError::Internal(format!(
+            "failed to delete snapshot for cascade assertion: {err}"
+        ))
     })?;
 
     let manifest_row_count_after: i64 = conn

@@ -30,8 +30,7 @@ impl FriggMcpServer {
         if let Some(metadata) = normalized_workload {
             payload.insert(
                 "normalized_workload".to_owned(),
-                serde_json::to_value(metadata)
-                    .unwrap_or_else(|_| metadata.as_payload_value()),
+                serde_json::to_value(metadata).unwrap_or_else(|_| metadata.as_payload_value()),
             );
         }
 
@@ -108,10 +107,9 @@ impl FriggMcpServer {
             metadata = metadata.with_fallback_reason_detail(fallback_reason_detail);
         }
         if let Some(stage_attribution) = stage_attribution {
-            metadata = metadata
-                .with_stage_attribution(Self::normalized_workload_from_search_stage_attribution(
-                    stage_attribution,
-                ));
+            metadata = metadata.with_stage_attribution(
+                Self::normalized_workload_from_search_stage_attribution(stage_attribution),
+            );
         }
 
         metadata
@@ -149,9 +147,9 @@ impl FriggMcpServer {
     pub(super) fn provenance_metadata_from_payload(
         payload: &Value,
     ) -> Option<NormalizedWorkloadMetadata> {
-        payload
-            .get("normalized_workload")
-            .and_then(|value| serde_json::from_value::<NormalizedWorkloadMetadata>(value.clone()).ok())
+        payload.get("normalized_workload").and_then(|value| {
+            serde_json::from_value::<NormalizedWorkloadMetadata>(value.clone()).ok()
+        })
     }
 
     pub(super) fn bounded_text(value: &str) -> String {
@@ -530,8 +528,14 @@ mod tests {
             crate::domain::WorkloadToolClass::LiteralLookup
         );
         assert_eq!(parsed.repository_scope.repository_count, 2);
-        assert_eq!(parsed.repository_scope.scope, crate::domain::WorkloadRepositoryScopeKind::Multi);
-        assert_eq!(parsed.precision_mode, crate::domain::WorkloadPrecisionMode::Heuristic);
+        assert_eq!(
+            parsed.repository_scope.scope,
+            crate::domain::WorkloadRepositoryScopeKind::Multi
+        );
+        assert_eq!(
+            parsed.precision_mode,
+            crate::domain::WorkloadPrecisionMode::Heuristic
+        );
         assert_eq!(
             parsed.fallback_reason,
             Some(crate::domain::WorkloadFallbackReason::ResourceBudget)

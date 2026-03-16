@@ -41,12 +41,16 @@ use crate::storage::{Storage, ensure_provenance_db_parent_dir, resolve_provenanc
 use protobuf::Enum;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    Implementation, Meta, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+};
 use rmcp::transport::{
     StreamableHttpServerConfig, StreamableHttpService,
     streamable_http_server::session::local::LocalSessionManager,
 };
-use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::{
+    ErrorData, Peer, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router,
+};
 use scip::types::symbol_information::Kind as ScipSymbolKind;
 use serde_json::{Value, json};
 use tokio::task;
@@ -99,13 +103,16 @@ use crate::mcp::types::{
     ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, ListRepositoriesParams,
     ListRepositoriesResponse, NavigationLocation, OutgoingCallsParams, OutgoingCallsResponse,
     ReadFileParams, ReadFileResponse, RecentProvenanceSummary, RepositorySummary,
-    RuntimeStatusSummary, SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams,
-    SearchHybridResponse, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
-    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
-    SearchTextResponse, WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
-    WorkspaceCurrentResponse, WorkspaceIndexComponentState, WorkspaceIndexComponentSummary,
-    WorkspaceIndexHealthSummary, WorkspaceResolveMode, WorkspaceStorageIndexState,
-    WorkspaceStorageSummary,
+    RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, SearchHybridChannelWeightsParams,
+    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, SearchTextResponse, WRITE_CONFIRM_PARAM,
+    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachParams, WorkspaceAttachResponse,
+    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceDetachParams,
+    WorkspaceDetachResponse, WorkspaceIndexComponentState, WorkspaceIndexComponentSummary,
+    WorkspaceIndexHealthSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
+    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -139,13 +146,21 @@ struct FriggMcpRuntimeState {
     runtime_profile: RuntimeProfile,
     runtime_watch_active: bool,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+    watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
 }
 
 #[derive(Clone)]
 struct FriggMcpSessionState {
-    session_default_repository_id: Arc<RwLock<Option<String>>>,
+    inner: Arc<FriggMcpSessionStateInner>,
+}
+
+struct FriggMcpSessionStateInner {
+    workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+    watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
+    adopted_repository_ids: RwLock<BTreeSet<String>>,
+    session_default_repository_id: RwLock<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -308,6 +323,45 @@ impl FriggMcpServer {
 
     fn internal(message: impl Into<String>, detail: Option<Value>) -> ErrorData {
         Self::internal_with_code(message, "internal", false, detail)
+    }
+
+    fn confirmation_required(tool_name: &'static str) -> ErrorData {
+        Self::internal_with_code(
+            format!("{tool_name} requires explicit {WRITE_CONFIRM_PARAM}=true before side effects"),
+            WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
+            false,
+            Some(json!({
+                "tool_name": tool_name,
+                "confirm_param": WRITE_CONFIRM_PARAM,
+            })),
+        )
+    }
+
+    fn require_confirm(tool_name: &'static str, confirm: Option<bool>) -> Result<(), ErrorData> {
+        if confirm == Some(true) {
+            return Ok(());
+        }
+        Err(Self::confirmation_required(tool_name))
+    }
+
+    async fn notify_progress(
+        meta: &Meta,
+        client: &Peer<RoleServer>,
+        progress: f64,
+        total: f64,
+        message: impl Into<String>,
+    ) {
+        let Some(progress_token) = meta.get_progress_token() else {
+            return;
+        };
+        let _ = client
+            .notify_progress(ProgressNotificationParam {
+                progress_token,
+                progress,
+                total: Some(total),
+                message: Some(message.into()),
+            })
+            .await;
     }
 
     fn build_frigg_error_data(translation: FriggErrorTranslation) -> ErrorData {
@@ -2174,6 +2228,7 @@ impl FriggMcpServer {
             enable_extended_tools,
             runtime_profile,
             runtime_watch_active,
+            None,
             runtime_task_registry,
             validated_manifest_candidate_cache,
         )
@@ -2185,6 +2240,7 @@ impl FriggMcpServer {
         enable_extended_tools: bool,
         runtime_profile: RuntimeProfile,
         runtime_watch_active: bool,
+        watch_runtime: Option<Arc<crate::watch::WatchRuntime>>,
         runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
         validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     ) -> Self {
@@ -2197,11 +2253,13 @@ impl FriggMcpServer {
                 )
             }),
         );
+        let workspace_registry = Arc::new(RwLock::new(workspace_registry));
         let tool_surface_profile = if enable_extended_tools {
             ToolSurfaceProfile::Extended
         } else {
             ToolSurfaceProfile::Core
         };
+        let watch_runtime = Arc::new(RwLock::new(watch_runtime));
         Self {
             config: Arc::new(config),
             tool_router: Self::filtered_tool_router(tool_surface_profile),
@@ -2209,13 +2267,12 @@ impl FriggMcpServer {
             runtime_state: FriggMcpRuntimeState {
                 runtime_profile,
                 runtime_watch_active,
-                workspace_registry: Arc::new(RwLock::new(workspace_registry)),
+                workspace_registry: Arc::clone(&workspace_registry),
+                watch_runtime: Arc::clone(&watch_runtime),
                 runtime_task_registry,
                 validated_manifest_candidate_cache,
             },
-            session_state: FriggMcpSessionState {
-                session_default_repository_id: Arc::new(RwLock::new(None)),
-            },
+            session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
                 symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -2248,6 +2305,7 @@ impl FriggMcpServer {
             enable_extended_tools,
             RuntimeProfile::StdioEphemeral,
             false,
+            None,
             Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
             Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
         )
@@ -2284,9 +2342,10 @@ impl FriggMcpServer {
             tool_router: self.tool_router.clone(),
             tool_surface_profile: self.tool_surface_profile,
             runtime_state: self.runtime_state.clone(),
-            session_state: FriggMcpSessionState {
-                session_default_repository_id: Arc::new(RwLock::new(None)),
-            },
+            session_state: FriggMcpSessionState::new(
+                Arc::clone(&self.runtime_state.workspace_registry),
+                self.runtime_state.watch_runtime.clone(),
+            ),
             cache_state: self.cache_state.clone(),
             provenance_state: self.provenance_state.clone(),
         }
@@ -2301,6 +2360,15 @@ impl FriggMcpServer {
             server.invalidate_repository_search_response_caches(repository_id);
             server.invalidate_repository_navigation_response_caches(repository_id);
         })
+    }
+
+    pub fn set_watch_runtime(&self, watch_runtime: Option<Arc<crate::watch::WatchRuntime>>) {
+        let mut state = self
+            .runtime_state
+            .watch_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *state = watch_runtime;
     }
 
     pub async fn serve_stdio(self) -> Result<(), rmcp::RmcpError> {
@@ -2349,6 +2417,11 @@ impl FriggMcpServer {
             self.attached_workspaces()
                 .into_iter()
                 .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
+                .or_else(|| {
+                    self.known_workspaces()
+                        .into_iter()
+                        .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
+                })
         })
     }
 
@@ -2427,40 +2500,89 @@ impl FriggMcpServer {
         }
     }
 
-    fn attach_workspace_internal(
+    fn resolve_workspace_target(
         &self,
-        path: &Path,
+        path: Option<&str>,
+        repository_id: Option<&str>,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<
+        (
+            AttachedWorkspace,
+            Option<String>,
+            Option<WorkspaceResolveMode>,
+        ),
+        ErrorData,
+    > {
+        match (path, repository_id) {
+            (Some(path), None) => {
+                if path.trim().is_empty() {
+                    return Err(Self::invalid_params(
+                        "workspace_attach.path must not be empty",
+                        None,
+                    ));
+                }
+                let path = Path::new(path);
+                let resolved_from = Self::effective_attach_directory(path)?;
+                let (root, resolution) = match resolve_mode {
+                    WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
+                        Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
+                        None => (resolved_from.clone(), WorkspaceResolveMode::Direct),
+                    },
+                    WorkspaceResolveMode::Direct => {
+                        (resolved_from.clone(), WorkspaceResolveMode::Direct)
+                    }
+                };
+                let workspace = {
+                    let mut registry = self
+                        .runtime_state
+                        .workspace_registry
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    registry.get_or_insert(root)
+                };
+                Ok((
+                    workspace,
+                    Some(resolved_from.display().to_string()),
+                    Some(resolution),
+                ))
+            }
+            (None, Some(repository_id)) => {
+                let workspace = self
+                    .runtime_state
+                    .workspace_registry
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .workspace_by_repository_id(repository_id)
+                    .ok_or_else(|| {
+                        Self::resource_not_found(
+                            "repository_id not found",
+                            Some(json!({ "repository_id": repository_id })),
+                        )
+                    })?;
+                Ok((workspace, None, None))
+            }
+            (Some(_), Some(_)) => Err(Self::invalid_params(
+                "workspace target must provide either `path` or `repository_id`, not both",
+                None,
+            )),
+            (None, None) => Err(Self::invalid_params(
+                "workspace target requires either `path` or `repository_id`",
+                None,
+            )),
+        }
+    }
+
+    fn attach_workspace_target_internal(
+        &self,
+        path: Option<&str>,
+        repository_id: Option<&str>,
         set_default: bool,
         resolve_mode: WorkspaceResolveMode,
     ) -> Result<WorkspaceAttachResponse, ErrorData> {
-        if path.as_os_str().is_empty() {
-            return Err(Self::invalid_params(
-                "workspace_attach.path must not be empty",
-                None,
-            ));
-        }
+        let (workspace, resolved_from, resolution) =
+            self.resolve_workspace_target(path, repository_id, resolve_mode)?;
 
-        let resolved_from = Self::effective_attach_directory(path)?;
-        let (root, resolution) = match resolve_mode {
-            WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
-                Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
-                None => (resolved_from.clone(), WorkspaceResolveMode::Direct),
-            },
-            WorkspaceResolveMode::Direct => (resolved_from.clone(), WorkspaceResolveMode::Direct),
-        };
-
-        let workspace = {
-            let mut registry = self
-                .runtime_state
-                .workspace_registry
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            registry.get_or_insert(root)
-        };
-
-        if set_default {
-            self.set_current_repository_id(Some(workspace.repository_id.clone()));
-        }
+        self.adopt_workspace(&workspace, set_default)?;
 
         self.runtime_state
             .validated_manifest_candidate_cache
@@ -2482,12 +2604,39 @@ impl FriggMcpServer {
 
         Ok(WorkspaceAttachResponse {
             repository,
-            resolved_from: resolved_from.display().to_string(),
-            resolution,
+            resolved_from: resolved_from.unwrap_or_else(|| workspace.root.display().to_string()),
+            resolution: resolution.unwrap_or(WorkspaceResolveMode::Direct),
             session_default: self.current_repository_id().as_deref()
                 == Some(workspace.repository_id.as_str()),
             storage,
         })
+    }
+
+    #[cfg(test)]
+    fn attach_workspace_internal(
+        &self,
+        path: &Path,
+        set_default: bool,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<WorkspaceAttachResponse, ErrorData> {
+        let owned_path = path.display().to_string();
+        self.attach_workspace_target_internal(Some(&owned_path), None, set_default, resolve_mode)
+    }
+
+    fn repository_has_active_runtime_work(&self, repository_id: &str) -> bool {
+        let registry = self
+            .runtime_state
+            .runtime_task_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        [
+            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::WorkspacePrepare,
+            RuntimeTaskKind::WorkspaceReindex,
+        ]
+        .into_iter()
+        .any(|kind| registry.has_active_task_for_repository(kind, repository_id))
     }
 
     fn scoped_search_config(
@@ -2635,43 +2784,45 @@ impl FriggMcpServer {
         let execution_context = self.read_only_tool_execution_context("list_repositories", None);
         let execution_context_for_blocking = execution_context.clone();
         let server = self.clone();
-        let (result, provenance_result) =
-            self.run_read_only_tool_blocking(&execution_context, move || {
-            let repositories = server
-                .attached_workspaces()
-                .into_iter()
-                .map(|workspace| server.repository_summary(&workspace))
-                .collect::<Vec<_>>();
-            let repository_ids = repositories
-                .iter()
-                .map(|repo| repo.repository_id.clone())
-                .collect::<Vec<_>>();
+        let (result, provenance_result) = self
+            .run_read_only_tool_blocking(&execution_context, move || {
+                let repositories = server
+                    .known_workspaces()
+                    .into_iter()
+                    .map(|workspace| server.repository_summary(&workspace))
+                    .collect::<Vec<_>>();
+                let repository_ids = repositories
+                    .iter()
+                    .map(|repo| repo.repository_id.clone())
+                    .collect::<Vec<_>>();
 
-            let response = ListRepositoriesResponse { repositories };
-            let finalization = server.tool_execution_finalization(
-                json!({
-                    "repository_ids": repository_ids,
-                }),
-                Some(execution_context_for_blocking.normalized_workload(
-                    &response
-                        .repositories
-                        .iter()
-                        .map(|repo| repo.repository_id.clone())
-                        .collect::<Vec<_>>(),
-                    WorkloadPrecisionMode::Exact,
-                )),
-            );
-            let result = Ok(Json(response));
-            let provenance_result = server.record_provenance_with_outcome(
-                "list_repositories",
-                None,
-                json!({}),
-                finalization.source_refs,
-                Self::provenance_outcome(&result),
-            );
-            (result, provenance_result)
-        })
-        .await?;
+                let response = ListRepositoriesResponse { repositories };
+                let finalization = server.tool_execution_finalization(
+                    json!({
+                        "repository_ids": repository_ids,
+                    }),
+                    Some(
+                        execution_context_for_blocking.normalized_workload(
+                            &response
+                                .repositories
+                                .iter()
+                                .map(|repo| repo.repository_id.clone())
+                                .collect::<Vec<_>>(),
+                            WorkloadPrecisionMode::Exact,
+                        ),
+                    ),
+                );
+                let result = Ok(Json(response));
+                let provenance_result = server.record_provenance_with_outcome(
+                    "list_repositories",
+                    None,
+                    json!({}),
+                    finalization.source_refs,
+                    Self::provenance_outcome(&result),
+                );
+                (result, provenance_result)
+            })
+            .await?;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
@@ -2691,8 +2842,12 @@ impl FriggMcpServer {
         let params = params.0;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
-        let response =
-            self.attach_workspace_internal(Path::new(&params.path), set_default, resolve_mode)?;
+        let response = self.attach_workspace_target_internal(
+            params.path.as_deref(),
+            params.repository_id.as_deref(),
+            set_default,
+            resolve_mode,
+        )?;
         let finalization = self.tool_execution_finalization(
             json!({
                 "repository_id": response.repository.repository_id.clone(),
@@ -2722,7 +2877,8 @@ impl FriggMcpServer {
                 "workspace_attach",
                 None,
                 json!({
-                    "path": Self::bounded_text(&params.path),
+                    "path": params.path.as_deref().map(Self::bounded_text),
+                    "repository_id": params.repository_id,
                     "set_default": params.set_default,
                     "resolve_mode": params.resolve_mode,
                 }),
@@ -2731,6 +2887,379 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_with_provenance("workspace_attach", result, provenance_result)
+    }
+
+    #[tool(
+        name = "workspace_detach",
+        description = "Detach a repository from this session and release its session-local default and watch lease when applicable.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    pub async fn workspace_detach(
+        &self,
+        params: Parameters<WorkspaceDetachParams>,
+    ) -> Result<Json<WorkspaceDetachResponse>, ErrorData> {
+        let params = params.0;
+        let repository_id = params
+            .repository_id
+            .or_else(|| self.current_repository_id())
+            .ok_or_else(|| Self::no_attached_workspaces_error("workspace_detach"))?;
+        let detached = self.detach_workspace(&repository_id)?;
+        let Some(workspace) = detached else {
+            return Err(Self::resource_not_found(
+                "repository_id is not adopted in this session",
+                Some(json!({ "repository_id": repository_id })),
+            ));
+        };
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        let response = WorkspaceDetachResponse {
+            repository_id: workspace.repository_id.clone(),
+            session_default: self.current_repository_id().as_deref()
+                == Some(workspace.repository_id.as_str()),
+            detached: true,
+        };
+        let finalization = self.tool_execution_finalization(
+            json!({
+                "repository_id": response.repository_id,
+                "detached": response.detached,
+                "session_default": response.session_default,
+            }),
+            Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                "workspace_detach",
+                std::slice::from_ref(&workspace.repository_id),
+                WorkloadPrecisionMode::Exact,
+                None,
+                None,
+                None,
+            )),
+        );
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking(
+                "workspace_detach",
+                None,
+                json!({ "repository_id": repository_id }),
+                finalization.source_refs,
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance("workspace_detach", result, provenance_result)
+    }
+
+    #[tool(
+        name = "workspace_prepare",
+        description = "Initialize and verify repo-local Frigg storage for a target repository, then adopt it for this session.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    pub async fn workspace_prepare(
+        &self,
+        meta: Meta,
+        client: Peer<RoleServer>,
+        params: Parameters<WorkspacePrepareParams>,
+    ) -> Result<Json<WorkspacePrepareResponse>, ErrorData> {
+        let params = params.0;
+        Self::require_confirm("workspace_prepare", params.confirm)?;
+        let set_default = params.set_default.unwrap_or(true);
+        let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
+            params.path.as_deref(),
+            params.repository_id.as_deref(),
+            resolve_mode,
+        )?;
+        if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            return Err(Self::invalid_params(
+                "repository already has active runtime work",
+                Some(json!({ "repository_id": workspace.repository_id })),
+            ));
+        }
+
+        Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
+        let task_id = self
+            .runtime_state
+            .runtime_task_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_task(
+                RuntimeTaskKind::WorkspacePrepare,
+                workspace.repository_id.clone(),
+                "workspace_prepare",
+                Some(format!("prepare {}", workspace.root.display())),
+            );
+
+        Self::notify_progress(&meta, &client, 1.0, 4.0, "initialize storage").await;
+        let prepared_storage = Self::run_blocking_task("workspace_prepare", {
+            let workspace = workspace.clone();
+            move || -> Result<WorkspaceStorageSummary, String> {
+                let db_path = ensure_provenance_db_parent_dir(&workspace.root)
+                    .map_err(|err| err.to_string())?;
+                let storage = Storage::new(&db_path);
+                storage.initialize().map_err(|err| err.to_string())?;
+                storage.verify().map_err(|err| err.to_string())?;
+                Ok(FriggMcpServer::workspace_storage_summary(&workspace))
+            }
+        })
+        .await?
+        .map_err(|err| {
+            self.runtime_state
+                .runtime_task_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .finish_task(&task_id, RuntimeTaskStatus::Failed, Some(err.clone()));
+            Self::internal(
+                err,
+                Some(json!({ "repository_id": workspace.repository_id })),
+            )
+        })?;
+
+        Self::notify_progress(&meta, &client, 2.0, 4.0, "verify storage").await;
+        self.runtime_state
+            .validated_manifest_candidate_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate_root(&workspace.root);
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_search_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+
+        Self::notify_progress(&meta, &client, 3.0, 4.0, "activate watcher lease").await;
+        self.adopt_workspace(&workspace, set_default)
+            .inspect_err(|error| {
+                self.runtime_state
+                    .runtime_task_registry
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .finish_task(
+                        &task_id,
+                        RuntimeTaskStatus::Failed,
+                        Some(error.message.to_string()),
+                    );
+            })?;
+
+        let mut repository = self.repository_summary(&workspace);
+        repository.storage = None;
+        let response = WorkspacePrepareResponse {
+            repository,
+            resolved_from,
+            resolution,
+            session_default: self.current_repository_id().as_deref()
+                == Some(workspace.repository_id.as_str()),
+            storage: prepared_storage,
+        };
+        self.runtime_state
+            .runtime_task_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        Self::notify_progress(&meta, &client, 4.0, 4.0, "finalize").await;
+
+        let finalization = self.tool_execution_finalization(
+            json!({
+                "repository_id": response.repository.repository_id.clone(),
+                "resolved_from": response.resolved_from,
+                "resolution": response.resolution,
+                "session_default": response.session_default,
+                "storage": {
+                    "db_path": response.storage.db_path.clone(),
+                    "exists": response.storage.exists,
+                    "initialized": response.storage.initialized,
+                    "index_state": response.storage.index_state,
+                },
+            }),
+            Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                "workspace_prepare",
+                std::slice::from_ref(&response.repository.repository_id),
+                WorkloadPrecisionMode::Exact,
+                None,
+                None,
+                None,
+            )),
+        );
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking(
+                "workspace_prepare",
+                None,
+                json!({
+                    "path": params.path.as_deref().map(Self::bounded_text),
+                    "repository_id": params.repository_id,
+                    "set_default": params.set_default,
+                    "resolve_mode": params.resolve_mode,
+                    "confirm": params.confirm,
+                }),
+                finalization.source_refs,
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance("workspace_prepare", result, provenance_result)
+    }
+
+    #[tool(
+        name = "workspace_reindex",
+        description = "Run a changed-only foreground reindex for a target repository, bootstrapping initial state when needed, then adopt it for this session.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    pub async fn workspace_reindex(
+        &self,
+        meta: Meta,
+        client: Peer<RoleServer>,
+        params: Parameters<WorkspaceReindexParams>,
+    ) -> Result<Json<WorkspaceReindexResponse>, ErrorData> {
+        let params = params.0;
+        Self::require_confirm("workspace_reindex", params.confirm)?;
+        let set_default = params.set_default.unwrap_or(true);
+        let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
+            params.path.as_deref(),
+            params.repository_id.as_deref(),
+            resolve_mode,
+        )?;
+        if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            return Err(Self::invalid_params(
+                "repository already has active runtime work",
+                Some(json!({ "repository_id": workspace.repository_id })),
+            ));
+        }
+
+        let task_id = self
+            .runtime_state
+            .runtime_task_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_task(
+                RuntimeTaskKind::WorkspaceReindex,
+                workspace.repository_id.clone(),
+                "workspace_reindex",
+                Some(format!("reindex {}", workspace.root.display())),
+            );
+        Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
+        Self::notify_progress(&meta, &client, 1.0, 4.0, "lexical refresh").await;
+        let semantic_runtime = self.config.semantic_runtime.clone();
+        let reindex_summary = Self::run_blocking_task("workspace_reindex", {
+            let workspace = workspace.clone();
+            move || -> Result<crate::indexer::ReindexSummary, String> {
+                let db_path = ensure_provenance_db_parent_dir(&workspace.root)
+                    .map_err(|err| err.to_string())?;
+                let credentials = SemanticRuntimeCredentials::from_process_env();
+                reindex_repository_with_runtime_config(
+                    &workspace.repository_id,
+                    &workspace.root,
+                    &db_path,
+                    ReindexMode::ChangedOnly,
+                    &semantic_runtime,
+                    &credentials,
+                )
+                .map_err(|err| err.to_string())
+            }
+        })
+        .await?
+        .map_err(|err| {
+            self.runtime_state
+                .runtime_task_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .finish_task(&task_id, RuntimeTaskStatus::Failed, Some(err.clone()));
+            Self::internal(
+                err,
+                Some(json!({ "repository_id": workspace.repository_id })),
+            )
+        })?;
+
+        Self::notify_progress(&meta, &client, 2.0, 4.0, "semantic refresh").await;
+        self.runtime_state
+            .validated_manifest_candidate_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate_root(&workspace.root);
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_search_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+
+        Self::notify_progress(&meta, &client, 3.0, 4.0, "finalize").await;
+        self.adopt_workspace(&workspace, set_default)
+            .inspect_err(|error| {
+                self.runtime_state
+                    .runtime_task_registry
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .finish_task(
+                        &task_id,
+                        RuntimeTaskStatus::Failed,
+                        Some(error.message.to_string()),
+                    );
+            })?;
+        let mut repository = self.repository_summary(&workspace);
+        let storage = repository
+            .storage
+            .clone()
+            .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
+        repository.storage = None;
+        let response = WorkspaceReindexResponse {
+            repository,
+            resolved_from,
+            resolution,
+            session_default: self.current_repository_id().as_deref()
+                == Some(workspace.repository_id.as_str()),
+            storage,
+            snapshot_id: reindex_summary.snapshot_id.clone(),
+            files_scanned: reindex_summary.files_scanned,
+            files_changed: reindex_summary.files_changed,
+            files_deleted: reindex_summary.files_deleted,
+            diagnostics_count: reindex_summary.diagnostics.total_count(),
+        };
+        self.runtime_state
+            .runtime_task_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        Self::notify_progress(&meta, &client, 4.0, 4.0, "done").await;
+
+        let finalization = self.tool_execution_finalization(
+            json!({
+                "repository_id": response.repository.repository_id.clone(),
+                "snapshot_id": response.snapshot_id,
+                "files_scanned": response.files_scanned,
+                "files_changed": response.files_changed,
+                "files_deleted": response.files_deleted,
+                "diagnostics_count": response.diagnostics_count,
+                "session_default": response.session_default,
+            }),
+            Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                "workspace_reindex",
+                std::slice::from_ref(&response.repository.repository_id),
+                WorkloadPrecisionMode::Exact,
+                None,
+                None,
+                None,
+            )),
+        );
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking(
+                "workspace_reindex",
+                None,
+                json!({
+                    "path": params.path.as_deref().map(Self::bounded_text),
+                    "repository_id": params.repository_id,
+                    "set_default": params.set_default,
+                    "resolve_mode": params.resolve_mode,
+                    "confirm": params.confirm,
+                }),
+                finalization.source_refs,
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance("workspace_reindex", result, provenance_result)
     }
 
     #[tool(
@@ -2794,8 +3323,7 @@ impl FriggMcpServer {
         });
         let normalized_workload =
             execution_context.normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact);
-        let finalization =
-            self.tool_execution_finalization(source_refs, Some(normalized_workload));
+        let finalization = self.tool_execution_finalization(source_refs, Some(normalized_workload));
         let result = Ok(Json(response));
         let provenance_result = self
             .record_provenance_blocking_with_metadata(

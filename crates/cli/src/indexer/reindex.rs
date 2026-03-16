@@ -470,8 +470,7 @@ fn execute_semantic_refresh_phase(
     );
 
     if let Err(err) = semantic_result {
-        let semantic_error =
-            wrap_reindex_phase_error(ReindexExecutionPhase::SemanticRefresh, err);
+        let semantic_error = wrap_reindex_phase_error(ReindexExecutionPhase::SemanticRefresh, err);
         if plan.snapshot_plan.rollback_on_semantic_failure() {
             if let Err(rollback_err) =
                 execute_snapshot_rollback_phase(manifest_store, plan.snapshot_plan.snapshot_id())
@@ -505,12 +504,19 @@ fn execute_retention_phase(
 ) -> FriggResult<()> {
     storage
         .prune_repository_snapshots(repository_id, plan.retained_manifest_snapshots)
-        .map_err(|err| wrap_reindex_phase_error(ReindexExecutionPhase::PruneManifestSnapshots, err))?;
+        .map_err(|err| {
+            wrap_reindex_phase_error(ReindexExecutionPhase::PruneManifestSnapshots, err)
+        })?;
     Ok(())
 }
 
 fn wrap_reindex_phase_error(phase: ReindexExecutionPhase, err: FriggError) -> FriggError {
-    let prefix = |message: String| format!("reindex execution failed phase={}: {message}", phase.as_str());
+    let prefix = |message: String| {
+        format!(
+            "reindex execution failed phase={}: {message}",
+            phase.as_str()
+        )
+    };
 
     match err {
         FriggError::InvalidInput(message) => FriggError::InvalidInput(prefix(message)),
@@ -520,7 +526,9 @@ fn wrap_reindex_phase_error(phase: ReindexExecutionPhase, err: FriggError) -> Fr
         FriggError::StrictSemanticFailure { reason } => FriggError::StrictSemanticFailure {
             reason: prefix(reason),
         },
-        FriggError::Io(err) => FriggError::Io(std::io::Error::new(err.kind(), prefix(err.to_string()))),
+        FriggError::Io(err) => {
+            FriggError::Io(std::io::Error::new(err.kind(), prefix(err.to_string())))
+        }
     }
 }
 
@@ -593,14 +601,12 @@ fn build_manifest_snapshot_plan(
         && previous_snapshot_id.is_some()
     {
         return Ok(ManifestSnapshotPlan::ReuseExisting {
-            snapshot_id: previous_snapshot_id
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| {
-                    FriggError::Internal(
-                        "failed to resolve previous snapshot identifier for unchanged manifest"
-                            .to_owned(),
-                    )
-                })?,
+            snapshot_id: previous_snapshot_id.map(ToOwned::to_owned).ok_or_else(|| {
+                FriggError::Internal(
+                    "failed to resolve previous snapshot identifier for unchanged manifest"
+                        .to_owned(),
+                )
+            })?,
         });
     }
 
@@ -714,9 +720,10 @@ fn execute_semantic_refresh_plan(
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     storage: &Storage,
 ) -> FriggResult<()> {
-    let provider = semantic_refresh.provider.as_deref().ok_or_else(|| {
-        FriggError::Internal("semantic refresh plan missing provider".to_owned())
-    })?;
+    let provider = semantic_refresh
+        .provider
+        .as_deref()
+        .ok_or_else(|| FriggError::Internal("semantic refresh plan missing provider".to_owned()))?;
     let model = semantic_refresh
         .model
         .as_deref()

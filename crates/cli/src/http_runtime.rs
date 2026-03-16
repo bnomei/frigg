@@ -25,12 +25,24 @@ impl HttpRuntimeConfig {
 
 pub(super) fn resolve_http_runtime_config(
     cli: &Cli,
+    serve_requested: bool,
 ) -> Result<Option<HttpRuntimeConfig>, Box<dyn Error>> {
     let has_http_port = cli.mcp_http_port.is_some();
     let has_http_related_flags =
         cli.mcp_http_host.is_some() || cli.allow_remote_http || cli.mcp_http_auth_token.is_some();
 
     if !has_http_port {
+        if serve_requested {
+            let bind_addr = SocketAddr::new(
+                cli.mcp_http_host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                37_444,
+            );
+            return Ok(Some(HttpRuntimeConfig {
+                bind_addr,
+                auth_token: None,
+                allowed_authorities: allowed_authorities_for_bind(bind_addr),
+            }));
+        }
         if has_http_related_flags {
             return Err(Box::new(io::Error::other(
                 "HTTP transport flags require --mcp-http-port",

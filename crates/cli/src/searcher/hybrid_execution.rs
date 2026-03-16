@@ -13,14 +13,14 @@ use crate::languages::{LanguageSupportCapability, SymbolLanguage};
 use crate::settings::SemanticRuntimeCredentials;
 
 use super::{
-    HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankingIntent,
-    HybridRankedEvidence, SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters,
+    HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankedEvidence,
+    HybridRankingIntent, SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters,
     SearchHybridExecutionOutput, SearchHybridQuery, SearchStageAttribution, SearchStageSample,
     SearchTextQuery, TextSearcher, build_hybrid_lexical_hits_with_intent,
     build_hybrid_lexical_recall_regex, build_hybrid_path_witness_hits_with_intent,
-    empty_channel_result, hybrid_execution_note_from_channel_results,
-    hybrid_lexical_recall_tokens, hybrid_path_has_exact_stem_match, hybrid_query_exact_terms,
-    match_count_for_hits, merge_hybrid_lexical_search_output, normalize_search_filters,
+    empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
+    hybrid_path_has_exact_stem_match, hybrid_query_exact_terms, match_count_for_hits,
+    merge_hybrid_lexical_search_output, normalize_search_filters,
     rank_hybrid_anchor_evidence_for_query_with_witness, retain_semantic_hits_for_query,
     search_diagnostics_to_channel_diagnostics, search_graph_channel_hits,
     search_semantic_channel_hits, sort_search_diagnostics_deterministically,
@@ -104,8 +104,8 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     } else {
         Vec::new()
     };
-    let path_witness_query_context =
-        wants_path_witness_recall.then(|| HybridPathWitnessQueryContext::from_query_text(&query_text));
+    let path_witness_query_context = wants_path_witness_recall
+        .then(|| HybridPathWitnessQueryContext::from_query_text(&query_text));
     let normalized_filters = normalize_search_filters(filters.clone())?;
     let candidate_universe_build = searcher.build_candidate_universe_with_attribution(
         &SearchTextQuery {
@@ -551,7 +551,8 @@ fn run_hybrid_fusion(
     query_text: &str,
     total_rank_input_count: usize,
 ) -> FriggResult<HybridFusionOutput> {
-    let lexical_only_fast_path = witness_hits.is_empty() && graph_hits.is_empty() && semantic_hits.is_empty();
+    let lexical_only_fast_path =
+        witness_hits.is_empty() && graph_hits.is_empty() && semantic_hits.is_empty();
     if lexical_only_fast_path {
         let blend_started_at = Instant::now();
         let ranked_anchors = super::rank_lexical_hybrid_hits(ranking_lexical_hits, weights)?;
@@ -565,7 +566,8 @@ fn run_hybrid_fusion(
             ranked_anchors.len(),
         );
         let aggregation_started_at = Instant::now();
-        let grouped_matches = super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, limit);
+        let grouped_matches =
+            super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, limit);
         let document_aggregation_sample = SearchStageSample::new(
             aggregation_started_at
                 .elapsed()
@@ -576,7 +578,8 @@ fn run_hybrid_fusion(
             grouped_matches.len(),
         );
         let diversification_started_at = Instant::now();
-        let matches = super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+        let matches =
+            super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
         let final_diversification_sample = SearchStageSample::new(
             diversification_started_at
                 .elapsed()
@@ -617,7 +620,8 @@ fn run_hybrid_fusion(
         ranked_anchors.len(),
     );
     let aggregation_started_at = Instant::now();
-    let grouped_matches = super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, rank_limit);
+    let grouped_matches =
+        super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, rank_limit);
     let document_aggregation_sample = SearchStageSample::new(
         aggregation_started_at
             .elapsed()
@@ -628,7 +632,8 @@ fn run_hybrid_fusion(
         grouped_matches.len(),
     );
     let diversification_started_at = Instant::now();
-    let matches = super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+    let matches =
+        super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
     let final_diversification_sample = SearchStageSample::new(
         diversification_started_at
             .elapsed()

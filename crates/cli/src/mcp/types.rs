@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    ChannelHealthStatus,
-    EvidenceAnchor,
+    ChannelHealthStatus, EvidenceAnchor,
     model::{ReferenceMatch, SymbolMatch, TextMatch},
 };
 use crate::settings::RuntimeProfile;
@@ -10,9 +9,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PUBLIC_TOOL_NAMES: [&str; 19] = [
+pub const PUBLIC_TOOL_NAMES: [&str; 22] = [
     "list_repositories",
     "workspace_attach",
+    "workspace_detach",
+    "workspace_prepare",
+    "workspace_reindex",
     "workspace_current",
     "read_file",
     "explore",
@@ -51,15 +53,30 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
     "deep_search_replay",
     "deep_search_compose_citations",
 ];
-pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 1] = ["workspace_attach"];
+pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 2] = ["workspace_attach", "workspace_detach"];
+pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_reindex"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepositorySessionSummary {
+    pub adopted: bool,
+    pub active_session_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RepositoryWatchSummary {
+    pub active: bool,
+    pub lease_count: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RepositorySummary {
     pub repository_id: String,
     pub display_name: String,
     pub root_path: String,
+    pub session: RepositorySessionSummary,
+    pub watch: RepositoryWatchSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<WorkspaceStorageSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +154,9 @@ pub struct WorkspaceIndexHealthSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachParams {
     /// File or directory path to attach. Relative paths resolve against the Frigg server process cwd.
-    pub path: String,
+    pub path: Option<String>,
+    /// Known repository identifier from `list_repositories`.
+    pub repository_id: Option<String>,
     /// Whether to make the attached repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
     /// Workspace resolution strategy. Omit to prefer the enclosing Git root before falling back to the direct directory.
@@ -151,6 +170,74 @@ pub struct WorkspaceAttachResponse {
     pub resolution: WorkspaceResolveMode,
     pub session_default: bool,
     pub storage: WorkspaceStorageSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceDetachParams {
+    /// Repository identifier to detach. Omit to detach the current session-default repository.
+    pub repository_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceDetachResponse {
+    pub repository_id: String,
+    pub session_default: bool,
+    pub detached: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePrepareParams {
+    /// File or directory path to prepare. Relative paths resolve against the Frigg server process cwd.
+    pub path: Option<String>,
+    /// Known repository identifier from `list_repositories`.
+    pub repository_id: Option<String>,
+    /// Whether to make the prepared repository the session default. Omit to default to `true`.
+    pub set_default: Option<bool>,
+    /// Workspace resolution strategy when using `path`. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    pub resolve_mode: Option<WorkspaceResolveMode>,
+    /// Explicit confirmation required before Frigg writes `.frigg/` state or updates storage.
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePrepareResponse {
+    pub repository: RepositorySummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<WorkspaceResolveMode>,
+    pub session_default: bool,
+    pub storage: WorkspaceStorageSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceReindexParams {
+    /// File or directory path to reindex. Relative paths resolve against the Frigg server process cwd.
+    pub path: Option<String>,
+    /// Known repository identifier from `list_repositories`.
+    pub repository_id: Option<String>,
+    /// Whether to make the reindexed repository the session default. Omit to default to `true`.
+    pub set_default: Option<bool>,
+    /// Workspace resolution strategy when using `path`. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    pub resolve_mode: Option<WorkspaceResolveMode>,
+    /// Explicit confirmation required before Frigg updates storage.
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceReindexResponse {
+    pub repository: RepositorySummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<WorkspaceResolveMode>,
+    pub session_default: bool,
+    pub storage: WorkspaceStorageSummary,
+    pub snapshot_id: String,
+    pub files_scanned: usize,
+    pub files_changed: usize,
+    pub files_deleted: usize,
+    pub diagnostics_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -172,6 +259,8 @@ pub enum RuntimeTaskKind {
     ChangedReindex,
     SemanticRefresh,
     PrecisePrewarm,
+    WorkspacePrepare,
+    WorkspaceReindex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -375,7 +375,8 @@ fn projected_path_witness_candidates_apply_entrypoint_surface_overlay_boosts() -
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("runtime config manifest settings");
-    let query_context = HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
+    let query_context =
+        HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
     let candidates = searcher
         .projected_path_witness_candidates_for_repository(
             repository,
@@ -466,7 +467,8 @@ fn overlay_aware_path_witness_seed_universe_promotes_reverse_subject_companions(
         .first()
         .expect("expected manifest-backed repository");
     let intent = HybridRankingIntent::from_query("auth controller test coverage");
-    let query_context = HybridPathWitnessQueryContext::from_query_text("auth controller test coverage");
+    let query_context =
+        HybridPathWitnessQueryContext::from_query_text("auth controller test coverage");
 
     let baseline_paths = base_path_witness_seed_paths(repository, &intent, &query_context, 8);
     assert!(

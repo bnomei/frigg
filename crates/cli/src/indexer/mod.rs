@@ -35,9 +35,9 @@ use manifest::diff;
 #[cfg(test)]
 use manifest::file_digest_order;
 #[cfg(test)]
-use reindex::reindex_repository_with_semantic_executor;
-#[cfg(test)]
 pub(crate) use reindex::build_reindex_plan_for_tests;
+#[cfg(test)]
+use reindex::reindex_repository_with_semantic_executor;
 pub use reindex::{
     ManifestSnapshotPlan, ManifestStore, ReindexDiagnostics, ReindexMode, ReindexPlan,
     ReindexSummary, SemanticRefreshMode, SemanticRefreshPlan, reindex_repository,

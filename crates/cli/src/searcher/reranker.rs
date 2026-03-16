@@ -1,7 +1,7 @@
 use super::HybridRankedEvidence;
 use super::intent::HybridRankingIntent;
 use super::policy::{
-    SelectionCandidate, SelectionFacts, PolicyQueryContext, SelectionState,
+    PolicyQueryContext, SelectionCandidate, SelectionFacts, SelectionState,
     hybrid_selection_score_from_context,
 };
 

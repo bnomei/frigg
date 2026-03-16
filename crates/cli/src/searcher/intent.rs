@@ -104,7 +104,6 @@ impl SearchIntentQuerySignals<'_> {
     pub(super) fn wants_tool_contracts(self) -> bool {
         self.intent.wants_tool_contracts
     }
-
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -285,12 +284,8 @@ impl SearchIntent {
         let witness = self.witness_signals();
 
         match class {
-            SourceClass::ErrorContracts => {
-                query.wants_error_taxonomy() || query.wants_contracts()
-            }
-            SourceClass::ToolContracts => {
-                query.wants_tool_contracts() || query.wants_contracts()
-            }
+            SourceClass::ErrorContracts => query.wants_error_taxonomy() || query.wants_contracts(),
+            SourceClass::ToolContracts => query.wants_tool_contracts() || query.wants_contracts(),
             SourceClass::BenchmarkDocs => query.wants_benchmarks(),
             SourceClass::Documentation => query.wants_docs(),
             SourceClass::Readme => query.wants_readme(),
@@ -304,9 +299,7 @@ impl SearchIntent {
                     || witness.wants_scripts_ops_witnesses()
             }
             SourceClass::Tests => {
-                query.wants_tests()
-                    || witness.wants_runtime_witnesses()
-                    || query.wants_examples()
+                query.wants_tests() || witness.wants_runtime_witnesses() || query.wants_examples()
             }
             SourceClass::Fixtures => query.wants_fixtures(),
             _ => false,

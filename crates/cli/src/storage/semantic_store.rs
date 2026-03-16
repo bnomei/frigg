@@ -5,9 +5,10 @@ use super::vector_store::{
     validate_semantic_chunk_embedding_record,
 };
 use super::{
-    DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, SemanticStorageHealth, Storage,
-    SNAPSHOT_KIND_MANIFEST, VECTOR_TABLE_NAME, load_semantic_head_snapshot_ids_for_repository,
-    load_snapshot_ids_for_repository_and_kind, open_connection,
+    DEFAULT_VECTOR_DIMENSIONS, SNAPSHOT_KIND_MANIFEST, SemanticChunkEmbeddingRecord,
+    SemanticStorageHealth, Storage, VECTOR_TABLE_NAME,
+    load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
+    open_connection,
 };
 
 #[path = "semantic_store_read.rs"]

@@ -5,8 +5,8 @@ pub(super) use super::super::{
     DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, MIGRATIONS, ManifestEntry,
     PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathWitnessProjection,
     SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord, Storage, TestSubjectProjection,
-    VECTOR_TABLE_NAME, encode_f32_vector,
-    ensure_provenance_db_parent_dir, ensure_sqlite_vec_pinned_version,
+    VECTOR_TABLE_NAME, encode_f32_vector, ensure_provenance_db_parent_dir,
+    ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
     resolve_provenance_db_path, set_schema_version, table_exists,
     verify_vector_store_on_connection_with_detected_capability,
@@ -322,8 +322,7 @@ pub(super) fn entrypoint_surface_projection_record(
         path_class: PathClass::from_str(path_class).expect("valid path_class"),
         source_class: SourceClass::from_str(source_class).expect("valid source_class"),
         path_terms: serde_json::from_str(path_terms_json).expect("valid path terms json"),
-        surface_terms: serde_json::from_str(surface_terms_json)
-            .expect("valid surface terms json"),
+        surface_terms: serde_json::from_str(surface_terms_json).expect("valid surface terms json"),
         flags_json: flags_json.to_owned(),
     }
 }

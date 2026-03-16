@@ -17,11 +17,11 @@ pub(super) use super::super::{
     RuntimeSemanticEmbeddingExecutor, SEMANTIC_CHUNK_MAX_CHARS, SemanticRefreshMode,
     SemanticRuntimeEmbeddingExecutor, SourceSpan, SymbolDefinition, SymbolKind, SymbolLanguage,
     build_file_semantic_chunks, build_reindex_plan_for_tests, build_semantic_chunk_candidates,
-    diff, extract_blade_source_evidence_from_source,
-    extract_php_declaration_relations_from_source, extract_php_source_evidence_from_source,
-    extract_symbols_for_paths, extract_symbols_from_source, file_digest_order,
-    mark_local_flux_overlays, navigation_symbol_target_rank, register_symbol_definitions,
-    reindex_repository, reindex_repository_with_semantic_executor, resolve_heuristic_references,
+    diff, extract_blade_source_evidence_from_source, extract_php_declaration_relations_from_source,
+    extract_php_source_evidence_from_source, extract_symbols_for_paths,
+    extract_symbols_from_source, file_digest_order, mark_local_flux_overlays,
+    navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
+    reindex_repository_with_semantic_executor, resolve_heuristic_references,
     search_structural_in_source, semantic_chunk_language_for_path,
 };
 pub(super) use crate::domain::{FriggError, FriggResult};

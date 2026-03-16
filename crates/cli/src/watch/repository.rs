@@ -4,6 +4,7 @@ use ignore::gitignore::Gitignore;
 use notify::EventKind;
 
 use crate::domain::{FriggError, FriggResult};
+use crate::mcp::workspace_registry::AttachedWorkspace;
 use crate::settings::{FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::{Storage, resolve_provenance_db_path};
 
@@ -19,6 +20,31 @@ pub(super) struct WatchedRepository {
     pub db_path: PathBuf,
 }
 
+pub(super) fn watched_repository_for_root(
+    repository_id: String,
+    root: PathBuf,
+    db_path: PathBuf,
+) -> FriggResult<WatchedRepository> {
+    Ok(WatchedRepository {
+        repository_id,
+        canonical_root: root.canonicalize().ok(),
+        root_ignore_matcher: build_root_ignore_matcher(&root),
+        root,
+        db_path,
+    })
+}
+
+pub(super) fn watched_repository_for_workspace(
+    workspace: &AttachedWorkspace,
+) -> FriggResult<WatchedRepository> {
+    watched_repository_for_root(
+        workspace.repository_id.clone(),
+        workspace.root.clone(),
+        workspace.db_path.clone(),
+    )
+}
+
+#[allow(dead_code)]
 pub(super) fn build_watched_repositories(
     config: &FriggConfig,
 ) -> FriggResult<Vec<WatchedRepository>> {
@@ -28,13 +54,7 @@ pub(super) fn build_watched_repositories(
         .map(|repository| {
             let root = PathBuf::from(&repository.root_path);
             let db_path = resolve_provenance_db_path(&root)?;
-            Ok(WatchedRepository {
-                repository_id: repository.repository_id.0,
-                canonical_root: root.canonicalize().ok(),
-                root_ignore_matcher: build_root_ignore_matcher(&root),
-                root,
-                db_path,
-            })
+            watched_repository_for_root(repository.repository_id.0, root, db_path)
         })
         .collect()
 }
@@ -101,16 +121,15 @@ pub(super) fn event_kind_is_relevant(kind: &EventKind) -> bool {
     !matches!(kind, EventKind::Access(_))
 }
 
-pub(super) fn repository_index_for_path(
-    repositories: &[WatchedRepository],
+pub(super) fn repository_id_for_path(
+    repositories: impl IntoIterator<Item = WatchedRepository>,
     path: &Path,
-) -> Option<usize> {
+) -> Option<String> {
     repositories
-        .iter()
-        .enumerate()
-        .filter(|(_, repository)| repository_relative_watch_path(repository, path).is_some())
-        .max_by_key(|(_, repository)| repository.root.components().count())
-        .map(|(idx, _)| idx)
+        .into_iter()
+        .filter(|repository| repository_relative_watch_path(repository, path).is_some())
+        .max_by_key(|repository| repository.root.components().count())
+        .map(|repository| repository.repository_id)
 }
 
 pub(super) fn repository_relative_watch_path<'a>(

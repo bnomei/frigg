@@ -1,4 +1,5 @@
 use super::*;
+use crate::mcp::types::{RepositorySessionSummary, RepositoryWatchSummary};
 
 impl FriggMcpServer {
     fn workspace_has_dirty_root(&self, workspace: &AttachedWorkspace) -> bool {
@@ -129,10 +130,39 @@ impl FriggMcpServer {
 
         let storage = Self::workspace_storage_summary(workspace);
         let health = self.workspace_index_health_summary(workspace, &storage);
+        let session_adopted = self
+            .session_state
+            .inner
+            .adopted_repository_ids
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&workspace.repository_id);
+        let active_session_count = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_session_count(&workspace.repository_id);
+        let watch = self
+            .runtime_state
+            .watch_runtime
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|runtime| runtime.lease_status(&workspace.repository_id))
+            .unwrap_or_default();
         let summary = RepositorySummary {
             repository_id: workspace.repository_id.clone(),
             display_name: workspace.display_name.clone(),
             root_path: workspace.root.display().to_string(),
+            session: RepositorySessionSummary {
+                adopted: session_adopted,
+                active_session_count,
+            },
+            watch: RepositoryWatchSummary {
+                active: watch.active,
+                lease_count: watch.lease_count,
+            },
             storage: Some(storage),
             health: Some(health),
         };

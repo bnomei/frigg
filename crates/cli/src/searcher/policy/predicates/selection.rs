@@ -304,23 +304,19 @@ fn is_laravel_layout_blade_view(ctx: &SelectionFacts) -> bool {
 }
 
 fn laravel_surface_is_blade_view(ctx: &SelectionFacts) -> bool {
-    ctx.laravel_surface
-        == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeView)
+    ctx.laravel_surface == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeView)
 }
 
 fn laravel_surface_is_livewire_component(ctx: &SelectionFacts) -> bool {
-    ctx.laravel_surface
-        == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireComponent)
+    ctx.laravel_surface == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireComponent)
 }
 
 fn laravel_surface_is_livewire_view(ctx: &SelectionFacts) -> bool {
-    ctx.laravel_surface
-        == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireView)
+    ctx.laravel_surface == Some(crate::searcher::laravel::LaravelUiSurfaceClass::LivewireView)
 }
 
 fn laravel_surface_is_blade_component(ctx: &SelectionFacts) -> bool {
-    ctx.laravel_surface
-        == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeComponent)
+    ctx.laravel_surface == Some(crate::searcher::laravel::LaravelUiSurfaceClass::BladeComponent)
 }
 
 fn is_repo_metadata(ctx: &SelectionFacts) -> bool {

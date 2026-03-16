@@ -9,7 +9,7 @@ mod server_cache;
 mod server_state;
 pub mod tool_surface;
 pub mod types;
-mod workspace_registry;
+pub(crate) mod workspace_registry;
 
 pub use advanced::deep_search::{
     DeepSearchCitation, DeepSearchCitationPayload, DeepSearchClaim, DeepSearchFileSpan,

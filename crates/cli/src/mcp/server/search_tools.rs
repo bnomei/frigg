@@ -3,10 +3,9 @@ use std::collections::BTreeMap;
 use super::*;
 use crate::domain::ChannelHealthStatus;
 use crate::mcp::types::{
-    SearchHybridChannelDiagnostic, SearchHybridChannelMetadata,
-    SearchHybridDiagnosticsSummary, SearchHybridLanguageCapabilityMetadata,
-    SearchHybridMetadata, SearchHybridSemanticAcceleratorMetadata,
-    SearchHybridStageAttribution,
+    SearchHybridChannelDiagnostic, SearchHybridChannelMetadata, SearchHybridDiagnosticsSummary,
+    SearchHybridLanguageCapabilityMetadata, SearchHybridMetadata,
+    SearchHybridSemanticAcceleratorMetadata, SearchHybridStageAttribution,
 };
 
 impl FriggMcpServer {
@@ -55,191 +54,200 @@ impl FriggMcpServer {
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
-            let mut scoped_repository_ids: Vec<String> = Vec::new();
-            let mut effective_limit: Option<usize> = None;
-            let mut effective_pattern_type: Option<SearchPatternType> = None;
-            let mut diagnostics_count = 0usize;
-            let mut walk_diagnostics_count = 0usize;
-            let mut read_diagnostics_count = 0usize;
-            let mut response_source_refs = json!({});
-            let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
-                let query = params_for_blocking.query.trim().to_owned();
-                if query.is_empty() {
-                    return Err(Self::invalid_params("query must not be empty", None));
-                }
-
-                let path_regex = match params_for_blocking.path_regex.clone() {
-                    Some(raw) => Some(server.compile_cached_safe_regex(&raw).map_err(|err| {
-                        Self::invalid_params(
-                            format!("invalid path_regex: {err}"),
-                            Some(serde_json::json!({
-                                "path_regex": raw,
-                                "regex_error_code": err.code(),
-                            })),
-                        )
-                    })?),
-                    None => None,
-                };
-
-                let pattern_type = params_for_blocking
-                    .pattern_type
-                    .clone()
-                    .unwrap_or(SearchPatternType::Literal);
-                effective_pattern_type = Some(pattern_type.clone());
-
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
-                effective_limit = Some(limit);
-
-                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
-                    execution_context_for_blocking.tool_name,
-                    execution_context_for_blocking.repository_hint.clone(),
-                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
-                )?;
-                let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
-                scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
-                let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                    SearchTextResponseCacheKey {
-                        scoped_repository_ids: scoped_repository_ids.clone(),
-                        freshness_scopes: freshness_scopes.clone(),
-                        query: query.clone(),
-                        pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
-                        path_regex: params_for_blocking.path_regex.clone(),
-                        limit,
+        let execution = self
+            .run_read_only_tool_blocking(&execution_context, move || {
+                let mut scoped_repository_ids: Vec<String> = Vec::new();
+                let mut effective_limit: Option<usize> = None;
+                let mut effective_pattern_type: Option<SearchPatternType> = None;
+                let mut diagnostics_count = 0usize;
+                let mut walk_diagnostics_count = 0usize;
+                let mut read_diagnostics_count = 0usize;
+                let mut response_source_refs = json!({});
+                let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
+                    let query = params_for_blocking.query.trim().to_owned();
+                    if query.is_empty() {
+                        return Err(Self::invalid_params("query must not be empty", None));
                     }
-                });
-                if let Some(cache_key) = cache_key.as_ref()
-                    && let Some(cached) = server.cached_search_text_response(cache_key)
-                {
-                    response_source_refs = cached.source_refs.clone();
-                    diagnostics_count = cached
-                        .source_refs
-                        .get("diagnostics_count")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0) as usize;
-                    walk_diagnostics_count = cached
-                        .source_refs
-                        .get("diagnostics")
-                        .and_then(|value| value.get("walk"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0) as usize;
-                    read_diagnostics_count = cached
-                        .source_refs
-                        .get("diagnostics")
-                        .and_then(|value| value.get("read"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0) as usize;
-                    return Ok(Json(cached.response));
-                }
-                let (scoped_config, repository_id_map) =
-                    server.scoped_search_config(&scoped_workspaces);
 
-                let searcher = TextSearcher::with_validated_manifest_candidate_cache(
-                    scoped_config,
-                    Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
-                );
-                let search_output = match pattern_type {
-                    SearchPatternType::Literal => searcher.search_literal_with_filters_diagnostics(
-                        SearchTextQuery {
-                            query,
-                            path_regex,
+                    let path_regex = match params_for_blocking.path_regex.clone() {
+                        Some(raw) => {
+                            Some(server.compile_cached_safe_regex(&raw).map_err(|err| {
+                                Self::invalid_params(
+                                    format!("invalid path_regex: {err}"),
+                                    Some(serde_json::json!({
+                                        "path_regex": raw,
+                                        "regex_error_code": err.code(),
+                                    })),
+                                )
+                            })?)
+                        }
+                        None => None,
+                    };
+
+                    let pattern_type = params_for_blocking
+                        .pattern_type
+                        .clone()
+                        .unwrap_or(SearchPatternType::Literal);
+                    effective_pattern_type = Some(pattern_type.clone());
+
+                    let limit = params_for_blocking
+                        .limit
+                        .unwrap_or(server.config.max_search_results)
+                        .min(server.config.max_search_results.max(1));
+                    effective_limit = Some(limit);
+
+                    let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?;
+                    let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
+                    scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
+                    let cache_freshness = scoped_execution_context.cache_freshness.clone();
+                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                        SearchTextResponseCacheKey {
+                            scoped_repository_ids: scoped_repository_ids.clone(),
+                            freshness_scopes: freshness_scopes.clone(),
+                            query: query.clone(),
+                            pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
+                            path_regex: params_for_blocking.path_regex.clone(),
                             limit,
-                        },
-                        SearchFilters::default(),
-                    ),
-                    SearchPatternType::Regex => searcher.search_regex_with_filters_diagnostics(
-                        SearchTextQuery {
-                            query,
-                            path_regex,
-                            limit,
-                        },
-                        SearchFilters::default(),
-                    ),
-                }
-                .map_err(Self::map_frigg_error)?;
-                diagnostics_count = search_output.diagnostics.total_count();
-                walk_diagnostics_count = search_output
-                    .diagnostics
-                    .count_by_kind(SearchDiagnosticKind::Walk);
-                read_diagnostics_count = search_output
-                    .diagnostics
-                    .count_by_kind(SearchDiagnosticKind::Read);
-                let mut matches = search_output.matches;
-                let total_matches = search_output.total_matches;
-                for found in &mut matches {
-                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id)
+                        }
+                    });
+                    if let Some(cache_key) = cache_key.as_ref()
+                        && let Some(cached) = server.cached_search_text_response(cache_key)
                     {
-                        found.repository_id = actual_repository_id.clone();
+                        response_source_refs = cached.source_refs.clone();
+                        diagnostics_count = cached
+                            .source_refs
+                            .get("diagnostics_count")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize;
+                        walk_diagnostics_count = cached
+                            .source_refs
+                            .get("diagnostics")
+                            .and_then(|value| value.get("walk"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize;
+                        read_diagnostics_count = cached
+                            .source_refs
+                            .get("diagnostics")
+                            .and_then(|value| value.get("read"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0) as usize;
+                        return Ok(Json(cached.response));
                     }
-                }
-                let response = SearchTextResponse {
+                    let (scoped_config, repository_id_map) =
+                        server.scoped_search_config(&scoped_workspaces);
+
+                    let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+                        scoped_config,
+                        Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
+                    );
+                    let search_output = match pattern_type {
+                        SearchPatternType::Literal => searcher
+                            .search_literal_with_filters_diagnostics(
+                                SearchTextQuery {
+                                    query,
+                                    path_regex,
+                                    limit,
+                                },
+                                SearchFilters::default(),
+                            ),
+                        SearchPatternType::Regex => searcher.search_regex_with_filters_diagnostics(
+                            SearchTextQuery {
+                                query,
+                                path_regex,
+                                limit,
+                            },
+                            SearchFilters::default(),
+                        ),
+                    }
+                    .map_err(Self::map_frigg_error)?;
+                    diagnostics_count = search_output.diagnostics.total_count();
+                    walk_diagnostics_count = search_output
+                        .diagnostics
+                        .count_by_kind(SearchDiagnosticKind::Walk);
+                    read_diagnostics_count = search_output
+                        .diagnostics
+                        .count_by_kind(SearchDiagnosticKind::Read);
+                    let mut matches = search_output.matches;
+                    let total_matches = search_output.total_matches;
+                    for found in &mut matches {
+                        if let Some(actual_repository_id) =
+                            repository_id_map.get(&found.repository_id)
+                        {
+                            found.repository_id = actual_repository_id.clone();
+                        }
+                    }
+                    let response = SearchTextResponse {
+                        total_matches,
+                        matches,
+                    };
+                    response_source_refs = json!({
+                        "scoped_repository_ids": scoped_repository_ids.clone(),
+                        "freshness_basis": cache_freshness.basis.clone(),
+                        "total_matches": response.total_matches,
+                        "diagnostics_count": diagnostics_count,
+                        "diagnostics": {
+                            "walk": walk_diagnostics_count,
+                            "read": read_diagnostics_count,
+                            "total": diagnostics_count,
+                        },
+                    });
+                    if let Some(cache_key) = cache_key {
+                        server.cache_search_text_response(
+                            cache_key,
+                            &response,
+                            &response_source_refs,
+                        );
+                    }
+
+                    Ok(Json(response))
+                })();
+
+                let total_matches = result
+                    .as_ref()
+                    .map(|response| response.0.total_matches)
+                    .unwrap_or(0);
+                let normalized_workload = execution_context_for_blocking
+                    .normalized_workload(&scoped_repository_ids, WorkloadPrecisionMode::Exact);
+                let finalization = server.tool_execution_finalization(
+                    response_source_refs.clone(),
+                    Some(normalized_workload),
+                );
+                let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                    "search_text",
+                    execution_context_for_blocking.repository_hint.as_deref(),
+                    json!({
+                        "repository_id": execution_context_for_blocking.repository_hint,
+                        "query": Self::bounded_text(&params_for_blocking.query),
+                        "pattern_type": effective_pattern_type.clone(),
+                        "path_regex": params_for_blocking
+                            .path_regex
+                            .as_ref()
+                            .map(|raw| Self::bounded_text(raw)),
+                        "limit": params_for_blocking.limit,
+                        "effective_limit": effective_limit,
+                    }),
+                    finalization.source_refs,
+                    Self::provenance_outcome(&result),
+                    finalization.normalized_workload,
+                );
+
+                SearchTextExecution {
+                    result,
+                    provenance_result,
+                    scoped_repository_ids,
                     total_matches,
-                    matches,
-                };
-                response_source_refs = json!({
-                    "scoped_repository_ids": scoped_repository_ids.clone(),
-                    "freshness_basis": cache_freshness.basis.clone(),
-                    "total_matches": response.total_matches,
-                    "diagnostics_count": diagnostics_count,
-                    "diagnostics": {
-                        "walk": walk_diagnostics_count,
-                        "read": read_diagnostics_count,
-                        "total": diagnostics_count,
-                    },
-                });
-                if let Some(cache_key) = cache_key {
-                    server.cache_search_text_response(cache_key, &response, &response_source_refs);
+                    effective_limit,
+                    effective_pattern_type,
+                    diagnostics_count,
+                    walk_diagnostics_count,
+                    read_diagnostics_count,
                 }
-
-                Ok(Json(response))
-            })();
-
-            let total_matches = result
-                .as_ref()
-                .map(|response| response.0.total_matches)
-                .unwrap_or(0);
-            let normalized_workload = execution_context_for_blocking
-                .normalized_workload(&scoped_repository_ids, WorkloadPrecisionMode::Exact);
-            let finalization = server.tool_execution_finalization(
-                response_source_refs.clone(),
-                Some(normalized_workload),
-            );
-            let provenance_result = server.record_provenance_with_outcome_and_metadata(
-                "search_text",
-                execution_context_for_blocking.repository_hint.as_deref(),
-                json!({
-                    "repository_id": execution_context_for_blocking.repository_hint,
-                    "query": Self::bounded_text(&params_for_blocking.query),
-                    "pattern_type": effective_pattern_type.clone(),
-                    "path_regex": params_for_blocking
-                        .path_regex
-                        .as_ref()
-                        .map(|raw| Self::bounded_text(raw)),
-                    "limit": params_for_blocking.limit,
-                    "effective_limit": effective_limit,
-                }),
-                finalization.source_refs,
-                Self::provenance_outcome(&result),
-                finalization.normalized_workload,
-            );
-
-            SearchTextExecution {
-                result,
-                provenance_result,
-                scoped_repository_ids,
-                total_matches,
-                effective_limit,
-                effective_pattern_type,
-                diagnostics_count,
-                walk_diagnostics_count,
-                read_diagnostics_count,
-            }
-        })
-        .await?;
+            })
+            .await?;
 
         let result = execution.result;
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
@@ -254,311 +262,319 @@ impl FriggMcpServer {
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
-            let mut scoped_repository_ids: Vec<String> = Vec::new();
-            let mut effective_limit: Option<usize> = None;
-            let mut effective_weights: Option<SearchHybridChannelWeightsParams> = None;
-            let mut diagnostics_count = 0usize;
-            let mut walk_diagnostics_count = 0usize;
-            let mut read_diagnostics_count = 0usize;
-            let mut semantic_requested: Option<bool> = None;
-            let mut semantic_enabled: Option<bool> = None;
-            let mut semantic_status: Option<ChannelHealthStatus> = None;
-            let mut semantic_reason: Option<String> = None;
-            let mut semantic_candidate_count: Option<usize> = None;
-            let mut semantic_hit_count: Option<usize> = None;
-            let mut semantic_match_count: Option<usize> = None;
-            let mut warning: Option<String> = None;
-            let mut channel_metadata: Option<BTreeMap<String, SearchHybridChannelMetadata>> = None;
-            let mut stage_attribution: Option<crate::searcher::SearchStageAttribution> = None;
-            let mut match_anchors: Option<Value> = None;
-            let mut response_source_refs = json!({});
-            let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
-                let query = params_for_blocking.query.trim().to_owned();
-                if query.is_empty() {
-                    return Err(Self::invalid_params("query must not be empty", None));
-                }
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
-                effective_limit = Some(limit);
-
-                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
-                    execution_context_for_blocking.tool_name,
-                    execution_context_for_blocking.repository_hint.clone(),
-                    RepositoryResponseCacheFreshnessMode::SemanticAware,
-                )?;
-                let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
-                scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
-                let (scoped_config, repository_id_map) =
-                    server.scoped_search_config(&scoped_workspaces);
-
-                let weights = {
-                    let mut weights = HybridChannelWeights::default();
-                    if let Some(overrides) = params_for_blocking.weights.clone() {
-                        if let Some(lexical) = overrides.lexical {
-                            weights.lexical = lexical;
-                        }
-                        if let Some(graph) = overrides.graph {
-                            weights.graph = graph;
-                        }
-                        if let Some(semantic) = overrides.semantic {
-                            weights.semantic = semantic;
-                        }
+        let execution = self
+            .run_read_only_tool_blocking(&execution_context, move || {
+                let mut scoped_repository_ids: Vec<String> = Vec::new();
+                let mut effective_limit: Option<usize> = None;
+                let mut effective_weights: Option<SearchHybridChannelWeightsParams> = None;
+                let mut diagnostics_count = 0usize;
+                let mut walk_diagnostics_count = 0usize;
+                let mut read_diagnostics_count = 0usize;
+                let mut semantic_requested: Option<bool> = None;
+                let mut semantic_enabled: Option<bool> = None;
+                let mut semantic_status: Option<ChannelHealthStatus> = None;
+                let mut semantic_reason: Option<String> = None;
+                let mut semantic_candidate_count: Option<usize> = None;
+                let mut semantic_hit_count: Option<usize> = None;
+                let mut semantic_match_count: Option<usize> = None;
+                let mut warning: Option<String> = None;
+                let mut channel_metadata: Option<BTreeMap<String, SearchHybridChannelMetadata>> =
+                    None;
+                let mut stage_attribution: Option<crate::searcher::SearchStageAttribution> = None;
+                let mut match_anchors: Option<Value> = None;
+                let mut response_source_refs = json!({});
+                let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
+                    let query = params_for_blocking.query.trim().to_owned();
+                    if query.is_empty() {
+                        return Err(Self::invalid_params("query must not be empty", None));
                     }
-                    effective_weights = Some(SearchHybridChannelWeightsParams {
-                        lexical: Some(weights.lexical),
-                        graph: Some(weights.graph),
-                        semantic: Some(weights.semantic),
-                    });
-                    weights
-                };
-                let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                    SearchHybridResponseCacheKey {
-                        scoped_repository_ids: scoped_repository_ids.clone(),
-                        freshness_scopes: freshness_scopes.clone(),
-                        query: query.clone(),
-                        language: params_for_blocking.language.clone(),
-                        limit,
-                        semantic: params_for_blocking.semantic,
-                        lexical_weight_bits: weights.lexical.to_bits(),
-                        graph_weight_bits: weights.graph.to_bits(),
-                        semantic_weight_bits: weights.semantic.to_bits(),
-                    }
-                });
-                if let Some(cache_key) = cache_key.as_ref()
-                    && let Some(cached) = server.cached_search_hybrid_response(cache_key)
-                {
-                    response_source_refs = cached.source_refs.clone();
-                    return Ok(Json(cached.response));
-                }
+                    let limit = params_for_blocking
+                        .limit
+                        .unwrap_or(server.config.max_search_results)
+                        .min(server.config.max_search_results.max(1));
+                    effective_limit = Some(limit);
 
-                let searcher = TextSearcher::with_validated_manifest_candidate_cache(
-                    scoped_config,
-                    Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
-                );
-                let search_output = searcher
-                    .search_hybrid_with_filters(
-                        SearchHybridQuery {
-                            query,
-                            limit,
-                            weights,
-                            semantic: params_for_blocking.semantic,
-                        },
-                        SearchFilters {
-                            repository_id: None,
+                    let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::SemanticAware,
+                    )?;
+                    let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
+                    scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
+                    let (scoped_config, repository_id_map) =
+                        server.scoped_search_config(&scoped_workspaces);
+
+                    let weights = {
+                        let mut weights = HybridChannelWeights::default();
+                        if let Some(overrides) = params_for_blocking.weights.clone() {
+                            if let Some(lexical) = overrides.lexical {
+                                weights.lexical = lexical;
+                            }
+                            if let Some(graph) = overrides.graph {
+                                weights.graph = graph;
+                            }
+                            if let Some(semantic) = overrides.semantic {
+                                weights.semantic = semantic;
+                            }
+                        }
+                        effective_weights = Some(SearchHybridChannelWeightsParams {
+                            lexical: Some(weights.lexical),
+                            graph: Some(weights.graph),
+                            semantic: Some(weights.semantic),
+                        });
+                        weights
+                    };
+                    let cache_freshness = scoped_execution_context.cache_freshness.clone();
+                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                        SearchHybridResponseCacheKey {
+                            scoped_repository_ids: scoped_repository_ids.clone(),
+                            freshness_scopes: freshness_scopes.clone(),
+                            query: query.clone(),
                             language: params_for_blocking.language.clone(),
-                        },
-                    )
-                    .map_err(Self::map_frigg_error)?;
-
-                diagnostics_count = search_output.diagnostics.total_count();
-                walk_diagnostics_count = search_output
-                    .diagnostics
-                    .count_by_kind(SearchDiagnosticKind::Walk);
-                read_diagnostics_count = search_output
-                    .diagnostics
-                    .count_by_kind(SearchDiagnosticKind::Read);
-                semantic_requested = Some(
-                    params_for_blocking
-                        .semantic
-                        .unwrap_or(server.config.semantic_runtime.enabled),
-                );
-                let semantic_channel = Self::search_hybrid_channel_result(
-                    &search_output.channel_results,
-                    EvidenceChannel::Semantic,
-                );
-                semantic_enabled =
-                    Some(semantic_channel.is_some_and(|result| result.stats.match_count > 0));
-                semantic_status = semantic_channel
-                    .map(|result| Self::search_hybrid_semantic_status(result.health.status));
-                semantic_reason = semantic_channel.and_then(|result| result.health.reason.clone());
-                semantic_candidate_count =
-                    semantic_channel.map(|result| result.stats.candidate_count);
-                semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
-                semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
-                warning = Self::search_hybrid_warning(
-                    semantic_status,
-                    semantic_reason.as_deref(),
-                    semantic_hit_count,
-                    semantic_match_count,
-                );
-                let semantic_language_capability =
-                    params_for_blocking.language.as_deref().map(|raw_language| {
-                        Self::search_hybrid_language_capability_metadata(
-                            raw_language,
-                            semantic_status,
-                            semantic_reason.as_deref(),
-                        )
+                            limit,
+                            semantic: params_for_blocking.semantic,
+                            lexical_weight_bits: weights.lexical.to_bits(),
+                            graph_weight_bits: weights.graph.to_bits(),
+                            semantic_weight_bits: weights.semantic.to_bits(),
+                        }
                     });
-                channel_metadata = Some(Self::search_hybrid_channels_metadata(
-                    &search_output.channel_results,
-                ));
-                stage_attribution = search_output.stage_attribution.clone();
-
-                let mut matches = search_output
-                    .matches
-                    .into_iter()
-                    .map(|evidence| SearchHybridMatch {
-                        repository_id: evidence.document.repository_id,
-                        path: evidence.document.path,
-                        line: evidence.anchor.start_line,
-                        column: evidence.anchor.start_column,
-                        excerpt: evidence.excerpt,
-                        anchor: Some(evidence.anchor),
-                        blended_score: evidence.blended_score,
-                        lexical_score: evidence.lexical_score,
-                        graph_score: evidence.graph_score,
-                        semantic_score: evidence.semantic_score,
-                        lexical_sources: evidence.lexical_sources,
-                        graph_sources: evidence.graph_sources,
-                        semantic_sources: evidence.semantic_sources,
-                    })
-                    .collect::<Vec<_>>();
-                for found in &mut matches {
-                    if let Some(actual_repository_id) = repository_id_map.get(&found.repository_id)
+                    if let Some(cache_key) = cache_key.as_ref()
+                        && let Some(cached) = server.cached_search_hybrid_response(cache_key)
                     {
-                        found.repository_id = actual_repository_id.clone();
+                        response_source_refs = cached.source_refs.clone();
+                        return Ok(Json(cached.response));
                     }
-                }
-                match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
 
-                let metadata = Some(SearchHybridMetadata {
-                    channels: channel_metadata.clone().unwrap_or_default(),
+                    let searcher = TextSearcher::with_validated_manifest_candidate_cache(
+                        scoped_config,
+                        Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
+                    );
+                    let search_output = searcher
+                        .search_hybrid_with_filters(
+                            SearchHybridQuery {
+                                query,
+                                limit,
+                                weights,
+                                semantic: params_for_blocking.semantic,
+                            },
+                            SearchFilters {
+                                repository_id: None,
+                                language: params_for_blocking.language.clone(),
+                            },
+                        )
+                        .map_err(Self::map_frigg_error)?;
+
+                    diagnostics_count = search_output.diagnostics.total_count();
+                    walk_diagnostics_count = search_output
+                        .diagnostics
+                        .count_by_kind(SearchDiagnosticKind::Walk);
+                    read_diagnostics_count = search_output
+                        .diagnostics
+                        .count_by_kind(SearchDiagnosticKind::Read);
+                    semantic_requested = Some(
+                        params_for_blocking
+                            .semantic
+                            .unwrap_or(server.config.semantic_runtime.enabled),
+                    );
+                    let semantic_channel = Self::search_hybrid_channel_result(
+                        &search_output.channel_results,
+                        EvidenceChannel::Semantic,
+                    );
+                    semantic_enabled =
+                        Some(semantic_channel.is_some_and(|result| result.stats.match_count > 0));
+                    semantic_status = semantic_channel
+                        .map(|result| Self::search_hybrid_semantic_status(result.health.status));
+                    semantic_reason =
+                        semantic_channel.and_then(|result| result.health.reason.clone());
+                    semantic_candidate_count =
+                        semantic_channel.map(|result| result.stats.candidate_count);
+                    semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
+                    semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
+                    warning = Self::search_hybrid_warning(
+                        semantic_status,
+                        semantic_reason.as_deref(),
+                        semantic_hit_count,
+                        semantic_match_count,
+                    );
+                    let semantic_language_capability =
+                        params_for_blocking.language.as_deref().map(|raw_language| {
+                            Self::search_hybrid_language_capability_metadata(
+                                raw_language,
+                                semantic_status,
+                                semantic_reason.as_deref(),
+                            )
+                        });
+                    channel_metadata = Some(Self::search_hybrid_channels_metadata(
+                        &search_output.channel_results,
+                    ));
+                    stage_attribution = search_output.stage_attribution.clone();
+
+                    let mut matches = search_output
+                        .matches
+                        .into_iter()
+                        .map(|evidence| SearchHybridMatch {
+                            repository_id: evidence.document.repository_id,
+                            path: evidence.document.path,
+                            line: evidence.anchor.start_line,
+                            column: evidence.anchor.start_column,
+                            excerpt: evidence.excerpt,
+                            anchor: Some(evidence.anchor),
+                            blended_score: evidence.blended_score,
+                            lexical_score: evidence.lexical_score,
+                            graph_score: evidence.graph_score,
+                            semantic_score: evidence.semantic_score,
+                            lexical_sources: evidence.lexical_sources,
+                            graph_sources: evidence.graph_sources,
+                            semantic_sources: evidence.semantic_sources,
+                        })
+                        .collect::<Vec<_>>();
+                    for found in &mut matches {
+                        if let Some(actual_repository_id) =
+                            repository_id_map.get(&found.repository_id)
+                        {
+                            found.repository_id = actual_repository_id.clone();
+                        }
+                    }
+                    match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
+
+                    let metadata = Some(SearchHybridMetadata {
+                        channels: channel_metadata.clone().unwrap_or_default(),
+                        semantic_requested,
+                        semantic_enabled,
+                        semantic_status: semantic_status.clone(),
+                        semantic_reason: semantic_reason.clone(),
+                        semantic_candidate_count,
+                        semantic_hit_count,
+                        semantic_match_count,
+                        warning: warning.clone(),
+                        diagnostics_count,
+                        diagnostics: SearchHybridDiagnosticsSummary {
+                            walk: walk_diagnostics_count,
+                            read: read_diagnostics_count,
+                            total: diagnostics_count,
+                        },
+                        stage_attribution: stage_attribution
+                            .as_ref()
+                            .map(SearchHybridStageAttribution::from),
+                        semantic_capability: semantic_language_capability.clone(),
+                        freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
+                            .expect("search_hybrid freshness basis should deserialize"),
+                    });
+
+                    let response = SearchHybridResponse {
+                        matches,
+                        semantic_requested: None,
+                        semantic_enabled: None,
+                        semantic_status: None,
+                        semantic_reason: None,
+                        semantic_hit_count: None,
+                        semantic_match_count: None,
+                        warning: None,
+                        metadata,
+                        note: None,
+                    };
+                    let mut response_source_refs_value = serde_json::to_value(
+                        response
+                            .metadata
+                            .as_ref()
+                            .expect("search_hybrid metadata should exist"),
+                    )
+                    .expect("search_hybrid metadata should serialize");
+                    response_source_refs_value
+                        .as_object_mut()
+                        .expect("search_hybrid source refs should be an object")
+                        .insert(
+                            "scoped_repository_ids".to_owned(),
+                            json!(scoped_repository_ids.clone()),
+                        );
+                    response_source_refs_value
+                        .as_object_mut()
+                        .expect("search_hybrid source refs should be an object")
+                        .insert(
+                            "matches".to_owned(),
+                            match_anchors.clone().unwrap_or_else(|| json!([])),
+                        );
+                    response_source_refs = response_source_refs_value;
+                    if let Some(cache_key) = cache_key {
+                        server.cache_search_hybrid_response(
+                            cache_key,
+                            &response,
+                            &response_source_refs,
+                        );
+                    }
+
+                    Ok(Json(response))
+                })();
+                let fallback_reason =
+                    if matches!(semantic_status, Some(ChannelHealthStatus::Unavailable)) {
+                        Self::provenance_fallback_reason_from_label(Some("semantic_unavailable"))
+                    } else if matches!(semantic_status, Some(ChannelHealthStatus::Disabled)) {
+                        Self::provenance_fallback_reason_from_label(Some("unsupported_feature"))
+                    } else if matches!(semantic_status, Some(ChannelHealthStatus::Degraded)) {
+                        Self::provenance_fallback_reason_from_label(Some("stage_filtered"))
+                    } else {
+                        Self::provenance_fallback_reason_from_label(None)
+                    };
+                let fallback_reason_detail = semantic_reason.clone();
+                let precision_mode = if fallback_reason.is_some() {
+                    WorkloadPrecisionMode::Fallback
+                } else {
+                    WorkloadPrecisionMode::Precise
+                };
+                let normalized_workload = FriggMcpServer::provenance_normalized_workload_metadata(
+                    "search_hybrid",
+                    &scoped_repository_ids,
+                    precision_mode,
+                    fallback_reason,
+                    fallback_reason_detail,
+                    stage_attribution.as_ref(),
+                );
+                let finalization = server.tool_execution_finalization(
+                    response_source_refs.clone(),
+                    Some(normalized_workload),
+                );
+                let provenance_result = server.record_provenance_with_outcome_and_metadata(
+                    "search_hybrid",
+                    execution_context_for_blocking.repository_hint.as_deref(),
+                    json!({
+                        "repository_id": execution_context_for_blocking.repository_hint.clone(),
+                        "query": Self::bounded_text(&params_for_blocking.query),
+                        "language": params_for_blocking
+                            .language
+                            .as_ref()
+                            .map(|language| Self::bounded_text(language)),
+                        "limit": params_for_blocking.limit,
+                        "effective_limit": effective_limit,
+                        "semantic": params_for_blocking.semantic,
+                        "weights": effective_weights.clone(),
+                    }),
+                    finalization.source_refs,
+                    Self::provenance_outcome(&result),
+                    finalization.normalized_workload,
+                );
+
+                SearchHybridExecution {
+                    result,
+                    provenance_result,
+                    scoped_repository_ids,
+                    effective_limit,
+                    effective_weights,
+                    diagnostics_count,
+                    walk_diagnostics_count,
+                    read_diagnostics_count,
                     semantic_requested,
                     semantic_enabled,
-                    semantic_status: semantic_status.clone(),
-                    semantic_reason: semantic_reason.clone(),
+                    semantic_status,
+                    semantic_reason,
                     semantic_candidate_count,
                     semantic_hit_count,
                     semantic_match_count,
-                    warning: warning.clone(),
-                    diagnostics_count,
-                    diagnostics: SearchHybridDiagnosticsSummary {
-                        walk: walk_diagnostics_count,
-                        read: read_diagnostics_count,
-                        total: diagnostics_count,
-                    },
-                    stage_attribution: stage_attribution
-                        .as_ref()
-                        .map(SearchHybridStageAttribution::from),
-                    semantic_capability: semantic_language_capability.clone(),
-                    freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
-                        .expect("search_hybrid freshness basis should deserialize"),
-                });
-
-                let response = SearchHybridResponse {
-                    matches,
-                    semantic_requested: None,
-                    semantic_enabled: None,
-                    semantic_status: None,
-                    semantic_reason: None,
-                    semantic_hit_count: None,
-                    semantic_match_count: None,
-                    warning: None,
-                    metadata,
-                    note: None,
-                };
-                let mut response_source_refs_value = serde_json::to_value(
-                    response
-                        .metadata
-                        .as_ref()
-                        .expect("search_hybrid metadata should exist"),
-                )
-                .expect("search_hybrid metadata should serialize");
-                response_source_refs_value
-                    .as_object_mut()
-                    .expect("search_hybrid source refs should be an object")
-                    .insert(
-                        "scoped_repository_ids".to_owned(),
-                        json!(scoped_repository_ids.clone()),
-                    );
-                response_source_refs_value
-                    .as_object_mut()
-                    .expect("search_hybrid source refs should be an object")
-                    .insert(
-                        "matches".to_owned(),
-                        match_anchors.clone().unwrap_or_else(|| json!([])),
-                    );
-                response_source_refs = response_source_refs_value;
-                if let Some(cache_key) = cache_key {
-                    server.cache_search_hybrid_response(cache_key, &response, &response_source_refs);
+                    warning,
+                    channel_metadata,
+                    match_anchors,
                 }
-
-                Ok(Json(response))
-            })();
-            let fallback_reason = if matches!(semantic_status, Some(ChannelHealthStatus::Unavailable))
-            {
-                Self::provenance_fallback_reason_from_label(Some("semantic_unavailable"))
-            } else if matches!(semantic_status, Some(ChannelHealthStatus::Disabled)) {
-                Self::provenance_fallback_reason_from_label(Some("unsupported_feature"))
-            } else if matches!(semantic_status, Some(ChannelHealthStatus::Degraded)) {
-                Self::provenance_fallback_reason_from_label(Some("stage_filtered"))
-            } else {
-                Self::provenance_fallback_reason_from_label(None)
-            };
-            let fallback_reason_detail = semantic_reason.clone();
-            let precision_mode = if fallback_reason.is_some() {
-                WorkloadPrecisionMode::Fallback
-            } else {
-                WorkloadPrecisionMode::Precise
-            };
-            let normalized_workload = FriggMcpServer::provenance_normalized_workload_metadata(
-                "search_hybrid",
-                &scoped_repository_ids,
-                precision_mode,
-                fallback_reason,
-                fallback_reason_detail,
-                stage_attribution.as_ref(),
-            );
-            let finalization = server.tool_execution_finalization(
-                response_source_refs.clone(),
-                Some(normalized_workload),
-            );
-            let provenance_result = server.record_provenance_with_outcome_and_metadata(
-                "search_hybrid",
-                execution_context_for_blocking.repository_hint.as_deref(),
-                json!({
-                    "repository_id": execution_context_for_blocking.repository_hint.clone(),
-                    "query": Self::bounded_text(&params_for_blocking.query),
-                    "language": params_for_blocking
-                        .language
-                        .as_ref()
-                        .map(|language| Self::bounded_text(language)),
-                    "limit": params_for_blocking.limit,
-                    "effective_limit": effective_limit,
-                    "semantic": params_for_blocking.semantic,
-                    "weights": effective_weights.clone(),
-                }),
-                finalization.source_refs,
-                Self::provenance_outcome(&result),
-                finalization.normalized_workload,
-            );
-
-            SearchHybridExecution {
-                result,
-                provenance_result,
-                scoped_repository_ids,
-                effective_limit,
-                effective_weights,
-                diagnostics_count,
-                walk_diagnostics_count,
-                read_diagnostics_count,
-                semantic_requested,
-                semantic_enabled,
-                semantic_status,
-                semantic_reason,
-                semantic_candidate_count,
-                semantic_hit_count,
-                semantic_match_count,
-                warning,
-                channel_metadata,
-                match_anchors,
-            }
-        })
-        .await?;
+            })
+            .await?;
 
         let result = execution.result;
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
@@ -573,129 +589,157 @@ impl FriggMcpServer {
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
-        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
-            let mut scoped_repository_ids: Vec<String> = Vec::new();
-            let mut diagnostics_count = 0usize;
-            let mut manifest_walk_diagnostics_count = 0usize;
-            let mut manifest_read_diagnostics_count = 0usize;
-            let mut symbol_extraction_diagnostics_count = 0usize;
-            let mut effective_limit: Option<usize> = None;
-            let result = (|| -> Result<Json<SearchSymbolResponse>, ErrorData> {
-                let query = params_for_blocking.query.trim().to_owned();
-                if query.is_empty() {
-                    return Err(Self::invalid_params("query must not be empty", None));
-                }
-
-                let path_regex = match params_for_blocking.path_regex.clone() {
-                    Some(raw) => Some(compile_safe_regex(&raw).map_err(|err| {
-                        Self::invalid_params(
-                            format!("invalid path_regex: {err}"),
-                            Some(serde_json::json!({
-                                "path_regex": raw,
-                                "regex_error_code": err.code(),
-                            })),
-                        )
-                    })?),
-                    None => None,
-                };
-                let path_class_filter = params_for_blocking.path_class;
-                let query_lower = query.to_ascii_lowercase();
-                let query_looks_canonical =
-                    query.contains('\\') || query.contains("::") || query.contains('$');
-                let limit = params_for_blocking
-                    .limit
-                    .unwrap_or(server.config.max_search_results)
-                    .min(server.config.max_search_results.max(1));
-                effective_limit = Some(limit);
-                let scoped_execution_context = server.scoped_read_only_tool_execution_context(
-                    execution_context_for_blocking.tool_name,
-                    execution_context_for_blocking.repository_hint.clone(),
-                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
-                )?;
-                let scoped_workspaces = scoped_execution_context.scoped_workspaces;
-                let scoped_repository_ids_for_cache = scoped_workspaces
-                    .iter()
-                    .map(|workspace| workspace.repository_id.clone())
-                    .collect::<Vec<_>>();
-                let cache_freshness = scoped_execution_context.cache_freshness;
-                let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                    SearchSymbolResponseCacheKey {
-                        scoped_repository_ids: scoped_repository_ids_for_cache,
-                        freshness_scopes: freshness_scopes.clone(),
-                        query: query.clone(),
-                        path_class: path_class_filter.map(|value| value.as_str().to_owned()),
-                        path_regex: params_for_blocking.path_regex.clone(),
-                        limit,
+        let execution = self
+            .run_read_only_tool_blocking(&execution_context, move || {
+                let mut scoped_repository_ids: Vec<String> = Vec::new();
+                let mut diagnostics_count = 0usize;
+                let mut manifest_walk_diagnostics_count = 0usize;
+                let mut manifest_read_diagnostics_count = 0usize;
+                let mut symbol_extraction_diagnostics_count = 0usize;
+                let mut effective_limit: Option<usize> = None;
+                let result = (|| -> Result<Json<SearchSymbolResponse>, ErrorData> {
+                    let query = params_for_blocking.query.trim().to_owned();
+                    if query.is_empty() {
+                        return Err(Self::invalid_params("query must not be empty", None));
                     }
-                });
-                if let Some(cache_key) = cache_key.as_ref()
-                    && let Some(cached) = server.cached_search_symbol_response(cache_key)
-                {
-                    scoped_repository_ids = cached.scoped_repository_ids;
-                    diagnostics_count = cached.diagnostics_count;
-                    manifest_walk_diagnostics_count = cached.manifest_walk_diagnostics_count;
-                    manifest_read_diagnostics_count = cached.manifest_read_diagnostics_count;
-                    symbol_extraction_diagnostics_count =
-                        cached.symbol_extraction_diagnostics_count;
-                    effective_limit = Some(cached.effective_limit);
-                    return Ok(Json(cached.response));
-                }
 
-                let corpora = server.collect_repository_symbol_corpora(
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
-                scoped_repository_ids = corpora
-                    .iter()
-                    .map(|corpus| corpus.repository_id.clone())
-                    .collect::<Vec<_>>();
-                manifest_walk_diagnostics_count = corpora
-                    .iter()
-                    .map(|corpus| corpus.diagnostics.manifest_walk_count)
-                    .sum::<usize>();
-                manifest_read_diagnostics_count = corpora
-                    .iter()
-                    .map(|corpus| corpus.diagnostics.manifest_read_count)
-                    .sum::<usize>();
-                symbol_extraction_diagnostics_count = corpora
-                    .iter()
-                    .map(|corpus| corpus.diagnostics.symbol_extraction_count)
-                    .sum::<usize>();
-                diagnostics_count = manifest_walk_diagnostics_count
-                    + manifest_read_diagnostics_count
-                    + symbol_extraction_diagnostics_count;
-
-                let mut ranked_matches: Vec<RankedSymbolMatch> = Vec::new();
-                for corpus in &corpora {
-                    if query_looks_canonical {
-                        if let Some(symbol_indices) =
-                            corpus.symbol_indices_by_canonical_name.get(&query)
-                        {
-                            for symbol_index in symbol_indices {
-                                if let Some(candidate) = Self::build_ranked_symbol_match(
-                                    corpus,
-                                    *symbol_index,
-                                    0,
-                                    path_class_filter,
-                                    path_regex.as_ref(),
-                                ) {
-                                    ranked_matches.push(candidate);
-                                }
-                            }
+                    let path_regex = match params_for_blocking.path_regex.clone() {
+                        Some(raw) => Some(compile_safe_regex(&raw).map_err(|err| {
+                            Self::invalid_params(
+                                format!("invalid path_regex: {err}"),
+                                Some(serde_json::json!({
+                                    "path_regex": raw,
+                                    "regex_error_code": err.code(),
+                                })),
+                            )
+                        })?),
+                        None => None,
+                    };
+                    let path_class_filter = params_for_blocking.path_class;
+                    let query_lower = query.to_ascii_lowercase();
+                    let query_looks_canonical =
+                        query.contains('\\') || query.contains("::") || query.contains('$');
+                    let limit = params_for_blocking
+                        .limit
+                        .unwrap_or(server.config.max_search_results)
+                        .min(server.config.max_search_results.max(1));
+                    effective_limit = Some(limit);
+                    let scoped_execution_context = server.scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?;
+                    let scoped_workspaces = scoped_execution_context.scoped_workspaces;
+                    let scoped_repository_ids_for_cache = scoped_workspaces
+                        .iter()
+                        .map(|workspace| workspace.repository_id.clone())
+                        .collect::<Vec<_>>();
+                    let cache_freshness = scoped_execution_context.cache_freshness;
+                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                        SearchSymbolResponseCacheKey {
+                            scoped_repository_ids: scoped_repository_ids_for_cache,
+                            freshness_scopes: freshness_scopes.clone(),
+                            query: query.clone(),
+                            path_class: path_class_filter.map(|value| value.as_str().to_owned()),
+                            path_regex: params_for_blocking.path_regex.clone(),
+                            limit,
                         }
-                        if let Some(symbol_indices) = corpus
-                            .symbol_indices_by_lower_canonical_name
-                            .get(&query_lower)
-                        {
-                            for symbol_index in symbol_indices {
-                                if corpus
-                                    .canonical_symbol_name_by_stable_id
-                                    .get(corpus.symbols[*symbol_index].stable_id.as_str())
-                                    .is_some_and(|canonical| canonical != &query)
-                                {
+                    });
+                    if let Some(cache_key) = cache_key.as_ref()
+                        && let Some(cached) = server.cached_search_symbol_response(cache_key)
+                    {
+                        scoped_repository_ids = cached.scoped_repository_ids;
+                        diagnostics_count = cached.diagnostics_count;
+                        manifest_walk_diagnostics_count = cached.manifest_walk_diagnostics_count;
+                        manifest_read_diagnostics_count = cached.manifest_read_diagnostics_count;
+                        symbol_extraction_diagnostics_count =
+                            cached.symbol_extraction_diagnostics_count;
+                        effective_limit = Some(cached.effective_limit);
+                        return Ok(Json(cached.response));
+                    }
+
+                    let corpora = server.collect_repository_symbol_corpora(
+                        params_for_blocking.repository_id.as_deref(),
+                    )?;
+                    scoped_repository_ids = corpora
+                        .iter()
+                        .map(|corpus| corpus.repository_id.clone())
+                        .collect::<Vec<_>>();
+                    manifest_walk_diagnostics_count = corpora
+                        .iter()
+                        .map(|corpus| corpus.diagnostics.manifest_walk_count)
+                        .sum::<usize>();
+                    manifest_read_diagnostics_count = corpora
+                        .iter()
+                        .map(|corpus| corpus.diagnostics.manifest_read_count)
+                        .sum::<usize>();
+                    symbol_extraction_diagnostics_count = corpora
+                        .iter()
+                        .map(|corpus| corpus.diagnostics.symbol_extraction_count)
+                        .sum::<usize>();
+                    diagnostics_count = manifest_walk_diagnostics_count
+                        + manifest_read_diagnostics_count
+                        + symbol_extraction_diagnostics_count;
+
+                    let mut ranked_matches: Vec<RankedSymbolMatch> = Vec::new();
+                    for corpus in &corpora {
+                        if query_looks_canonical {
+                            if let Some(symbol_indices) =
+                                corpus.symbol_indices_by_canonical_name.get(&query)
+                            {
+                                for symbol_index in symbol_indices {
                                     if let Some(candidate) = Self::build_ranked_symbol_match(
                                         corpus,
                                         *symbol_index,
-                                        1,
+                                        0,
+                                        path_class_filter,
+                                        path_regex.as_ref(),
+                                    ) {
+                                        ranked_matches.push(candidate);
+                                    }
+                                }
+                            }
+                            if let Some(symbol_indices) = corpus
+                                .symbol_indices_by_lower_canonical_name
+                                .get(&query_lower)
+                            {
+                                for symbol_index in symbol_indices {
+                                    if corpus
+                                        .canonical_symbol_name_by_stable_id
+                                        .get(corpus.symbols[*symbol_index].stable_id.as_str())
+                                        .is_some_and(|canonical| canonical != &query)
+                                    {
+                                        if let Some(candidate) = Self::build_ranked_symbol_match(
+                                            corpus,
+                                            *symbol_index,
+                                            1,
+                                            path_class_filter,
+                                            path_regex.as_ref(),
+                                        ) {
+                                            ranked_matches.push(candidate);
+                                        }
+                                    }
+                                }
+                            }
+                            let canonical_matches: std::collections::btree_map::Range<
+                                '_,
+                                String,
+                                Vec<usize>,
+                            > = corpus
+                                .symbol_indices_by_lower_canonical_name
+                                .range(query_lower.clone()..);
+                            for (canonical_name, symbol_indices) in canonical_matches {
+                                if !canonical_name.starts_with(&query_lower) {
+                                    break;
+                                }
+                                if canonical_name == &query_lower {
+                                    continue;
+                                }
+                                for symbol_index in symbol_indices {
+                                    if let Some(candidate) = Self::build_ranked_symbol_match(
+                                        corpus,
+                                        *symbol_index,
+                                        2,
                                         path_class_filter,
                                         path_regex.as_ref(),
                                     ) {
@@ -704,25 +748,57 @@ impl FriggMcpServer {
                                 }
                             }
                         }
-                        let canonical_matches: std::collections::btree_map::Range<
+
+                        let name_rank_offset = if query_looks_canonical { 3 } else { 0 };
+                        if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(&query) {
+                            for symbol_index in symbol_indices {
+                                if let Some(candidate) = Self::build_ranked_symbol_match(
+                                    corpus,
+                                    *symbol_index,
+                                    name_rank_offset,
+                                    path_class_filter,
+                                    path_regex.as_ref(),
+                                ) {
+                                    ranked_matches.push(candidate);
+                                }
+                            }
+                        }
+                        if let Some(symbol_indices) =
+                            corpus.symbol_indices_by_lower_name.get(&query_lower)
+                        {
+                            for symbol_index in symbol_indices {
+                                if corpus.symbols[*symbol_index].name != query {
+                                    if let Some(candidate) = Self::build_ranked_symbol_match(
+                                        corpus,
+                                        *symbol_index,
+                                        name_rank_offset + 1,
+                                        path_class_filter,
+                                        path_regex.as_ref(),
+                                    ) {
+                                        ranked_matches.push(candidate);
+                                    }
+                                }
+                            }
+                        }
+                        let normalized_matches: std::collections::btree_map::Range<
                             '_,
                             String,
                             Vec<usize>,
                         > = corpus
-                            .symbol_indices_by_lower_canonical_name
+                            .symbol_indices_by_lower_name
                             .range(query_lower.clone()..);
-                        for (canonical_name, symbol_indices) in canonical_matches {
-                            if !canonical_name.starts_with(&query_lower) {
+                        for (normalized_name, symbol_indices) in normalized_matches {
+                            if !normalized_name.starts_with(&query_lower) {
                                 break;
                             }
-                            if canonical_name == &query_lower {
+                            if normalized_name == &query_lower {
                                 continue;
                             }
                             for symbol_index in symbol_indices {
                                 if let Some(candidate) = Self::build_ranked_symbol_match(
                                     corpus,
                                     *symbol_index,
-                                    2,
+                                    name_rank_offset + 2,
                                     path_class_filter,
                                     path_regex.as_ref(),
                                 ) {
@@ -731,152 +807,95 @@ impl FriggMcpServer {
                             }
                         }
                     }
-
-                    let name_rank_offset = if query_looks_canonical { 3 } else { 0 };
-                    if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(&query) {
-                        for symbol_index in symbol_indices {
-                            if let Some(candidate) = Self::build_ranked_symbol_match(
-                                corpus,
-                                *symbol_index,
-                                name_rank_offset,
-                                path_class_filter,
-                                path_regex.as_ref(),
-                            ) {
-                                ranked_matches.push(candidate);
-                            }
-                        }
-                    }
-                    if let Some(symbol_indices) =
-                        corpus.symbol_indices_by_lower_name.get(&query_lower)
-                    {
-                        for symbol_index in symbol_indices {
-                            if corpus.symbols[*symbol_index].name != query {
+                    if ranked_matches.len() < limit {
+                        let infix_limit = limit.saturating_sub(ranked_matches.len());
+                        let mut infix_matches = Vec::new();
+                        for corpus in &corpora {
+                            for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
+                                if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
+                                    != Some(3)
+                                {
+                                    continue;
+                                }
                                 if let Some(candidate) = Self::build_ranked_symbol_match(
                                     corpus,
-                                    *symbol_index,
-                                    name_rank_offset + 1,
+                                    symbol_index,
+                                    if query_looks_canonical { 6 } else { 3 },
                                     path_class_filter,
                                     path_regex.as_ref(),
                                 ) {
-                                    ranked_matches.push(candidate);
+                                    Self::retain_bounded_ranked_symbol_match(
+                                        &mut infix_matches,
+                                        infix_limit,
+                                        candidate,
+                                    );
                                 }
                             }
                         }
+                        ranked_matches.extend(infix_matches);
                     }
-                    let normalized_matches: std::collections::btree_map::Range<
-                        '_,
-                        String,
-                        Vec<usize>,
-                    > = corpus
-                        .symbol_indices_by_lower_name
-                        .range(query_lower.clone()..);
-                    for (normalized_name, symbol_indices) in normalized_matches {
-                        if !normalized_name.starts_with(&query_lower) {
-                            break;
-                        }
-                        if normalized_name == &query_lower {
-                            continue;
-                        }
-                        for symbol_index in symbol_indices {
-                            if let Some(candidate) = Self::build_ranked_symbol_match(
-                                corpus,
-                                *symbol_index,
-                                name_rank_offset + 2,
-                                path_class_filter,
-                                path_regex.as_ref(),
-                            ) {
-                                ranked_matches.push(candidate);
-                            }
-                        }
+
+                    Self::sort_ranked_symbol_matches(&mut ranked_matches);
+                    Self::dedup_ranked_symbol_matches(&mut ranked_matches);
+                    let matches = ranked_matches
+                        .into_iter()
+                        .take(limit)
+                        .map(|ranked| ranked.matched)
+                        .collect::<Vec<_>>();
+
+                    let metadata = json!({
+                        "source": "tree_sitter",
+                        "freshness_basis": cache_freshness.basis.clone(),
+                        "diagnostics_count": diagnostics_count,
+                        "diagnostics": {
+                            "manifest_walk": manifest_walk_diagnostics_count,
+                            "manifest_read": manifest_read_diagnostics_count,
+                            "symbol_extraction": symbol_extraction_diagnostics_count,
+                            "total": diagnostics_count,
+                        },
+                        "heuristic": false,
+                        "path_class": path_class_filter.map(|value| value.as_str()),
+                        "path_regex": params_for_blocking.path_regex.clone(),
+                        "path_class_sort": "runtime_first",
+                    });
+                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let response = SearchSymbolResponse {
+                        matches,
+                        metadata,
+                        note,
+                    };
+                    if let Some(cache_key) = cache_key {
+                        server.cache_search_symbol_response(
+                            cache_key,
+                            &response,
+                            &scoped_repository_ids,
+                            diagnostics_count,
+                            manifest_walk_diagnostics_count,
+                            manifest_read_diagnostics_count,
+                            symbol_extraction_diagnostics_count,
+                            limit,
+                        );
                     }
-                }
-                if ranked_matches.len() < limit {
-                    let infix_limit = limit.saturating_sub(ranked_matches.len());
-                    let mut infix_matches = Vec::new();
-                    for corpus in &corpora {
-                        for (symbol_index, symbol) in corpus.symbols.iter().enumerate() {
-                            if Self::symbol_name_match_rank(&symbol.name, &query, &query_lower)
-                                != Some(3)
-                            {
-                                continue;
-                            }
-                            if let Some(candidate) = Self::build_ranked_symbol_match(
-                                corpus,
-                                symbol_index,
-                                if query_looks_canonical { 6 } else { 3 },
-                                path_class_filter,
-                                path_regex.as_ref(),
-                            ) {
-                                Self::retain_bounded_ranked_symbol_match(
-                                    &mut infix_matches,
-                                    infix_limit,
-                                    candidate,
-                                );
-                            }
-                        }
-                    }
-                    ranked_matches.extend(infix_matches);
-                }
+                    Ok(Json(response))
+                })();
 
-                Self::sort_ranked_symbol_matches(&mut ranked_matches);
-                Self::dedup_ranked_symbol_matches(&mut ranked_matches);
-                let matches = ranked_matches
-                    .into_iter()
-                    .take(limit)
-                    .map(|ranked| ranked.matched)
-                    .collect::<Vec<_>>();
-
-                let metadata = json!({
-                    "source": "tree_sitter",
-                    "freshness_basis": cache_freshness.basis.clone(),
-                    "diagnostics_count": diagnostics_count,
-                    "diagnostics": {
-                        "manifest_walk": manifest_walk_diagnostics_count,
-                        "manifest_read": manifest_read_diagnostics_count,
-                        "symbol_extraction": symbol_extraction_diagnostics_count,
-                        "total": diagnostics_count,
-                    },
-                    "heuristic": false,
-                    "path_class": path_class_filter.map(|value| value.as_str()),
-                    "path_regex": params_for_blocking.path_regex.clone(),
-                    "path_class_sort": "runtime_first",
-                });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
-                let response = SearchSymbolResponse {
-                    matches,
-                    metadata,
-                    note,
-                };
-                if let Some(cache_key) = cache_key {
-                    server.cache_search_symbol_response(
-                        cache_key,
-                        &response,
-                        &scoped_repository_ids,
-                        diagnostics_count,
-                        manifest_walk_diagnostics_count,
-                        manifest_read_diagnostics_count,
-                        symbol_extraction_diagnostics_count,
-                        limit,
-                    );
+                SearchSymbolExecution {
+                    result,
+                    scoped_repository_ids,
+                    diagnostics_count,
+                    manifest_walk_diagnostics_count,
+                    manifest_read_diagnostics_count,
+                    symbol_extraction_diagnostics_count,
+                    effective_limit,
                 }
-                Ok(Json(response))
-            })();
-
-            SearchSymbolExecution {
-                result,
-                scoped_repository_ids,
-                diagnostics_count,
-                manifest_walk_diagnostics_count,
-                manifest_read_diagnostics_count,
-                symbol_extraction_diagnostics_count,
-                effective_limit,
-            }
-        })
-        .await?;
+            })
+            .await?;
 
         let result = execution.result;
-        let metadata = execution_context
-            .normalized_workload(&execution.scoped_repository_ids, WorkloadPrecisionMode::Precise);
+        let metadata = execution_context.normalized_workload(
+            &execution.scoped_repository_ids,
+            WorkloadPrecisionMode::Precise,
+        );
         let provenance_result = self
             .record_provenance_blocking_with_metadata(
                 "search_symbol",
@@ -910,8 +929,8 @@ impl FriggMcpServer {
         &self,
         params: DocumentSymbolsParams,
     ) -> Result<Json<DocumentSymbolsResponse>, ErrorData> {
-        let execution_context = self
-            .read_only_tool_execution_context("document_symbols", params.repository_id.clone());
+        let execution_context =
+            self.read_only_tool_execution_context("document_symbols", params.repository_id.clone());
         let params_for_blocking = params.clone();
         let server = self.clone();
         let execution = self.run_read_only_tool_blocking(&execution_context, move || {

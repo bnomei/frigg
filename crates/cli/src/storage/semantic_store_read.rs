@@ -10,9 +10,9 @@ use super::{
 };
 use crate::storage::vector_store::{decode_f32_vector, encode_f32_vector};
 use crate::storage::{
-    SQLITE_VEC_MAX_KNN_LIMIT, SemanticChunkEmbeddingProjection, SemanticChunkEmbeddingRecord,
-    SemanticChunkPayload, SemanticChunkVectorMatch, SemanticHeadRecord, Storage, VECTOR_TABLE_NAME,
-    SNAPSHOT_KIND_MANIFEST, i64_to_u64, open_connection, usize_to_i64,
+    SNAPSHOT_KIND_MANIFEST, SQLITE_VEC_MAX_KNN_LIMIT, SemanticChunkEmbeddingProjection,
+    SemanticChunkEmbeddingRecord, SemanticChunkPayload, SemanticChunkVectorMatch,
+    SemanticHeadRecord, Storage, VECTOR_TABLE_NAME, i64_to_u64, open_connection, usize_to_i64,
 };
 
 impl Storage {

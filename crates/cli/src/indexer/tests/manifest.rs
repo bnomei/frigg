@@ -341,7 +341,10 @@ fn reindex_plan_changed_only_unchanged_workspace_reuses_existing_snapshot() -> F
         &[],
     )?;
 
-    assert_eq!(plan.previous_snapshot_id.as_deref(), Some(full_summary.snapshot_id.as_str()));
+    assert_eq!(
+        plan.previous_snapshot_id.as_deref(),
+        Some(full_summary.snapshot_id.as_str())
+    );
     assert_eq!(plan.files_changed, 0);
     assert_eq!(plan.files_deleted, 0);
     assert!(matches!(

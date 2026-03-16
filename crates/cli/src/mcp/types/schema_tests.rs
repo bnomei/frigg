@@ -102,7 +102,8 @@ fn expand_local_refs(root: &Value, schema: &Value) -> Value {
                         if let Value::Object(resolved_map) = &mut resolved {
                             for (key, value) in map {
                                 if key != "$ref" {
-                                    resolved_map.insert(key.clone(), expand_local_refs(root, value));
+                                    resolved_map
+                                        .insert(key.clone(), expand_local_refs(root, value));
                                 }
                             }
                         }
@@ -117,9 +118,12 @@ fn expand_local_refs(root: &Value, schema: &Value) -> Value {
             }
             Value::Object(expanded)
         }
-        Value::Array(items) => {
-            Value::Array(items.iter().map(|item| expand_local_refs(root, item)).collect())
-        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| expand_local_refs(root, item))
+                .collect(),
+        ),
         _ => schema.clone(),
     }
 }
@@ -405,6 +409,36 @@ fn schema_workspace_attach_contract_matches_wrappers() {
         "workspace_attach",
         "WorkspaceAttachParams",
         "WorkspaceAttachResponse",
+    );
+}
+
+#[test]
+fn schema_workspace_detach_contract_matches_wrappers() {
+    assert_contract::<WorkspaceDetachParams, WorkspaceDetachResponse>(
+        "workspace_detach.v1.schema.json",
+        "workspace_detach",
+        "WorkspaceDetachParams",
+        "WorkspaceDetachResponse",
+    );
+}
+
+#[test]
+fn schema_workspace_prepare_contract_matches_wrappers() {
+    assert_contract::<WorkspacePrepareParams, WorkspacePrepareResponse>(
+        "workspace_prepare.v1.schema.json",
+        "workspace_prepare",
+        "WorkspacePrepareParams",
+        "WorkspacePrepareResponse",
+    );
+}
+
+#[test]
+fn schema_workspace_reindex_contract_matches_wrappers() {
+    assert_contract::<WorkspaceReindexParams, WorkspaceReindexResponse>(
+        "workspace_reindex.v1.schema.json",
+        "workspace_reindex",
+        "WorkspaceReindexParams",
+        "WorkspaceReindexResponse",
     );
 }
 
@@ -762,11 +796,12 @@ fn schema_docs_presence_for_public_tools() {
 }
 
 #[test]
-fn schema_core_public_tool_input_fields_exclude_confirm_param() {
+fn schema_core_read_only_and_session_tools_exclude_confirm_param() {
     let confirm = WRITE_CONFIRM_PARAM.to_owned();
     let input_field_sets = [
         field_set::<ListRepositoriesParams>(),
         field_set::<WorkspaceAttachParams>(),
+        field_set::<WorkspaceDetachParams>(),
         field_set::<WorkspaceCurrentParams>(),
         field_set::<ReadFileParams>(),
         field_set::<ExploreParams>(),
@@ -796,6 +831,21 @@ fn schema_core_public_tool_input_fields_exclude_confirm_param() {
 }
 
 #[test]
+fn schema_confirmed_write_tools_require_confirm_param() {
+    let confirm = WRITE_CONFIRM_PARAM.to_owned();
+    for fields in [
+        field_set::<WorkspacePrepareParams>(),
+        field_set::<WorkspaceReindexParams>(),
+    ] {
+        assert!(
+            fields.contains(&confirm),
+            "confirmed write tool params must expose `{}`",
+            WRITE_CONFIRM_PARAM
+        );
+    }
+}
+
+#[test]
 fn schema_write_surface_policy_markers_are_present_in_contract_docs() {
     let tools_readme_path = docs_dir().join("README.md");
     let tools_readme = fs::read_to_string(&tools_readme_path).unwrap_or_else(|err| {
@@ -806,7 +856,7 @@ fn schema_write_surface_policy_markers_are_present_in_contract_docs() {
     });
     for marker in [
         "write_surface_policy: v1",
-        "current_public_tool_surface: read_only",
+        "current_public_tool_surface: confirmed_write_enabled",
         "write_confirm_required: true",
         "write_confirm_semantics: reject_missing_or_false_confirm_before_side_effects",
         "write_safety_invariant_workspace_boundary: required",

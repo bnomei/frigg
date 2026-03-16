@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -15,13 +16,14 @@ use crate::indexer::{
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
+use crate::mcp::workspace_registry::AttachedWorkspace;
 use crate::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
 };
 
 use super::repository::{
-    WatchedRepository, build_watched_repositories, event_kind_is_relevant,
-    repository_index_for_path, should_ignore_watch_path, startup_refresh_status,
+    WatchedRepository, event_kind_is_relevant, repository_id_for_path, should_ignore_watch_path,
+    startup_refresh_status, watched_repository_for_workspace,
 };
 use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
 
@@ -31,21 +33,140 @@ pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 
 
 enum SupervisorCommand {
     Event(Event),
-    InitialSync {
-        root_idx: usize,
-        class: WatchRefreshClass,
+    LeaseAcquired {
+        repository: WatchedRepository,
+    },
+    LeaseReleased {
+        repository_id: String,
     },
     ReindexCompleted {
-        root_idx: usize,
+        repository_id: String,
         class: WatchRefreshClass,
         result: Result<crate::indexer::ReindexSummary, String>,
     },
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WatchLeaseStatus {
+    pub active: bool,
+    pub lease_count: usize,
+}
+
 pub struct WatchRuntime {
-    _watcher: RecommendedWatcher,
+    watcher: Mutex<RecommendedWatcher>,
+    repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
+    lease_counts: Arc<RwLock<BTreeMap<String, usize>>>,
     supervisor_handle: JoinHandle<()>,
-    _command_tx: mpsc::UnboundedSender<SupervisorCommand>,
+    command_tx: mpsc::UnboundedSender<SupervisorCommand>,
+}
+
+impl WatchRuntime {
+    pub(crate) fn acquire_lease(&self, workspace: &AttachedWorkspace) -> FriggResult<usize> {
+        let repository = watched_repository_for_workspace(workspace)?;
+
+        let lease_count = {
+            let mut lease_counts = self
+                .lease_counts
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let count = lease_counts
+                .entry(repository.repository_id.clone())
+                .or_insert(0);
+            *count = count.saturating_add(1);
+            *count
+        };
+
+        if lease_count > 1 {
+            return Ok(lease_count);
+        }
+
+        self.watcher
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .watch(&repository.root, RecursiveMode::Recursive)
+            .map_err(|err| {
+                let mut lease_counts = self
+                    .lease_counts
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                lease_counts.remove(&repository.repository_id);
+                FriggError::Internal(format!(
+                    "failed to register watcher for root {}: {err}",
+                    repository.root.display()
+                ))
+            })?;
+
+        self.repositories
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(repository.repository_id.clone(), repository.clone());
+        let _ = self
+            .command_tx
+            .send(SupervisorCommand::LeaseAcquired { repository });
+
+        Ok(lease_count)
+    }
+
+    pub(crate) fn release_lease(&self, repository_id: &str) -> usize {
+        let remaining = {
+            let mut lease_counts = self
+                .lease_counts
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(count) = lease_counts.get_mut(repository_id) else {
+                return 0;
+            };
+            *count = count.saturating_sub(1);
+            let remaining = *count;
+            if remaining == 0 {
+                lease_counts.remove(repository_id);
+            }
+            remaining
+        };
+
+        if remaining > 0 {
+            return remaining;
+        }
+
+        if let Some(repository) = self
+            .repositories
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(repository_id)
+            && let Err(error) = self
+                .watcher
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwatch(&repository.root)
+        {
+            warn!(
+                repository_id,
+                root = %repository.root.display(),
+                error = %error,
+                "built-in watch mode failed to unregister workspace root"
+            );
+        }
+
+        let _ = self.command_tx.send(SupervisorCommand::LeaseReleased {
+            repository_id: repository_id.to_owned(),
+        });
+
+        remaining
+    }
+
+    pub(crate) fn lease_status(&self, repository_id: &str) -> WatchLeaseStatus {
+        let lease_count = self
+            .lease_counts
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(repository_id)
+            .copied()
+            .unwrap_or(0);
+        WatchLeaseStatus {
+            active: lease_count > 0,
+            lease_count,
+        }
+    }
 }
 
 impl Drop for WatchRuntime {
@@ -70,10 +191,11 @@ pub fn maybe_start_watch_runtime(
         return Ok(None);
     }
 
-    let repositories = build_watched_repositories(config)?;
+    let repositories = Arc::new(RwLock::new(BTreeMap::new()));
+    let lease_counts = Arc::new(RwLock::new(BTreeMap::new()));
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let callback_tx = command_tx.clone();
-    let mut watcher = notify::recommended_watcher(move |result| match result {
+    let watcher = notify::recommended_watcher(move |result| match result {
         Ok(event) => {
             let _ = callback_tx.send(SupervisorCommand::Event(event));
         }
@@ -83,31 +205,14 @@ pub fn maybe_start_watch_runtime(
     })
     .map_err(|err| FriggError::Internal(format!("failed to create filesystem watcher: {err}")))?;
 
-    for repository in &repositories {
-        watcher
-            .watch(&repository.root, RecursiveMode::Recursive)
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "failed to register watcher for root {}: {err}",
-                    repository.root.display()
-                ))
-            })?;
-        info!(
-            repository_id = %repository.repository_id,
-            root = %repository.root.display(),
-            "built-in watch mode registered workspace root"
-        );
-    }
-
     let watch_config = config.watch.clone();
     let semantic_runtime = config.semantic_runtime.clone();
     let semantic_credentials = SemanticRuntimeCredentials::from_process_env();
-    let repositories = Arc::new(repositories);
     let supervisor_handle = tokio::spawn(run_supervisor(
-        repositories.clone(),
-        watch_config.clone(),
-        semantic_runtime.clone(),
-        semantic_credentials.clone(),
+        Arc::clone(&repositories),
+        watch_config,
+        semantic_runtime,
+        semantic_credentials,
         task_registry,
         validated_manifest_candidate_cache,
         repository_cache_invalidation_callback,
@@ -115,48 +220,17 @@ pub fn maybe_start_watch_runtime(
         command_tx.clone(),
     ));
 
-    for (root_idx, repository) in repositories.iter().enumerate() {
-        let startup_status =
-            startup_refresh_status(repository, &semantic_runtime, &semantic_credentials)?;
-        if !startup_status.should_refresh {
-            info!(
-                repository_id = %repository.repository_id,
-                root = %repository.root.display(),
-                snapshot_id = startup_status.snapshot_id.as_deref().unwrap_or("-"),
-                "built-in watch mode found refreshable startup state already satisfied"
-            );
-            continue;
-        }
-
-        info!(
-            repository_id = %repository.repository_id,
-            root = %repository.root.display(),
-            refresh_class = %startup_status
-                .refresh_class
-                .unwrap_or(WatchRefreshClass::ManifestFast)
-                .as_str(),
-            startup_reason = %startup_status.reason,
-            snapshot_id = startup_status.snapshot_id.as_deref().unwrap_or("-"),
-            debounce_ms = watch_config.debounce_ms,
-            "built-in watch mode queued initial refresh"
-        );
-        let _ = command_tx.send(SupervisorCommand::InitialSync {
-            root_idx,
-            class: startup_status
-                .refresh_class
-                .unwrap_or(WatchRefreshClass::ManifestFast),
-        });
-    }
-
     Ok(Some(WatchRuntime {
-        _watcher: watcher,
+        watcher: Mutex::new(watcher),
+        repositories,
+        lease_counts,
         supervisor_handle,
-        _command_tx: command_tx,
+        command_tx,
     }))
 }
 
 async fn run_supervisor(
-    repositories: Arc<Vec<WatchedRepository>>,
+    repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     watch_config: crate::settings::WatchConfig,
     semantic_runtime: SemanticRuntimeConfig,
     semantic_credentials: SemanticRuntimeCredentials,
@@ -168,7 +242,7 @@ async fn run_supervisor(
 ) {
     let debounce = Duration::from_millis(watch_config.debounce_ms);
     let retry = Duration::from_millis(watch_config.retry_ms);
-    let mut scheduler = WatchSchedulerState::new(repositories.len());
+    let mut scheduler = WatchSchedulerState::new(0);
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -189,18 +263,29 @@ async fn run_supervisor(
                         now,
                         debounce,
                     ),
-                    SupervisorCommand::InitialSync { root_idx, class } => {
-                        scheduler.enqueue_initial_sync(root_idx, class, now)
+                    SupervisorCommand::LeaseAcquired { repository } => {
+                        scheduler.add_repository(&repository.repository_id);
+                        queue_startup_refresh_if_needed(
+                            &repository,
+                            &mut scheduler,
+                            now,
+                            &semantic_runtime,
+                            &semantic_credentials,
+                            watch_config.debounce_ms,
+                        );
+                    }
+                    SupervisorCommand::LeaseReleased { repository_id } => {
+                        scheduler.remove_repository(&repository_id);
                     }
                     SupervisorCommand::ReindexCompleted {
-                        root_idx,
+                        repository_id,
                         class,
                         result,
                     } => {
                         handle_reindex_completed(
                             &repositories,
                             &mut scheduler,
-                            root_idx,
+                            &repository_id,
                             class,
                             result,
                             repository_cache_invalidation_callback.as_ref(),
@@ -216,10 +301,20 @@ async fn run_supervisor(
         }
 
         let now = Instant::now();
-        if let Some(ScheduledRefresh { root_idx, class }) = scheduler.next_ready_refresh(now) {
-            let recent_paths = scheduler.mark_started(root_idx, class);
-            let Some(repository) = repositories.get(root_idx).cloned() else {
-                warn!(root_idx, "built-in watch mode resolved invalid root index");
+        if let Some(ScheduledRefresh {
+            repository_id,
+            class,
+            ..
+        }) = scheduler.next_ready_refresh(now)
+        {
+            let recent_paths = scheduler.mark_started(&repository_id, class);
+            let repository = repositories
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&repository_id)
+                .cloned();
+            let Some(repository) = repository else {
+                scheduler.mark_succeeded(&repository_id, class, now);
                 continue;
             };
             if class == WatchRefreshClass::SemanticFollowup
@@ -231,7 +326,7 @@ async fn run_supervisor(
                         &repository.repository_id,
                     )
             {
-                scheduler.mark_succeeded(root_idx, class, now);
+                scheduler.mark_succeeded(&repository_id, class, now);
                 continue;
             }
             info!(
@@ -260,7 +355,6 @@ async fn run_supervisor(
             let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
-            let recent_paths = recent_paths;
             tokio::task::spawn_blocking(move || {
                 let result = match class {
                     WatchRefreshClass::ManifestFast => {
@@ -303,7 +397,7 @@ async fn run_supervisor(
                     .expect("watch runtime task registry poisoned")
                     .finish_task(&task_id, status, detail);
                 let _ = completion_tx.send(SupervisorCommand::ReindexCompleted {
-                    root_idx,
+                    repository_id: repository.repository_id.clone(),
                     class,
                     result,
                 });
@@ -327,7 +421,7 @@ fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
 }
 
 fn handle_notify_event(
-    repositories: &[WatchedRepository],
+    repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,
     validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
@@ -339,28 +433,38 @@ fn handle_notify_event(
         return;
     }
 
-    let mut invalidated_root_indices = Vec::new();
+    let mut invalidated_repository_ids = Vec::new();
     for path in event.paths {
-        let Some(root_idx) = repository_index_for_path(repositories, &path) else {
+        let repository = {
+            let repositories_guard = repositories
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let repository_id = repository_id_for_path(
+                repositories_guard.values().cloned().collect::<Vec<_>>(),
+                &path,
+            );
+            repository_id.and_then(|repository_id| repositories_guard.get(&repository_id).cloned())
+        };
+        let Some(repository) = repository else {
             continue;
         };
-        if should_ignore_watch_path(&repositories[root_idx], &path) {
+        if should_ignore_watch_path(&repository, &path) {
             continue;
         }
 
-        scheduler.record_path_change(root_idx, path.clone(), now, debounce);
+        scheduler.record_path_change(&repository.repository_id, path.clone(), now, debounce);
         validated_manifest_candidate_cache
             .write()
             .expect("validated manifest candidate cache poisoned")
-            .mark_dirty_root(&repositories[root_idx].root);
-        if !invalidated_root_indices.contains(&root_idx) {
+            .mark_dirty_root(&repository.root);
+        if !invalidated_repository_ids.contains(&repository.repository_id) {
             if let Some(callback) = repository_cache_invalidation_callback {
-                callback(&repositories[root_idx].repository_id);
+                callback(&repository.repository_id);
             }
-            invalidated_root_indices.push(root_idx);
+            invalidated_repository_ids.push(repository.repository_id.clone());
         }
         info!(
-            repository_id = %repositories[root_idx].repository_id,
+            repository_id = %repository.repository_id,
             path = %path.display(),
             "built-in watch mode accepted path change"
         );
@@ -368,9 +472,9 @@ fn handle_notify_event(
 }
 
 fn handle_reindex_completed(
-    repositories: &[WatchedRepository],
+    repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,
-    root_idx: usize,
+    repository_id: &str,
     class: WatchRefreshClass,
     result: Result<crate::indexer::ReindexSummary, String>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
@@ -379,17 +483,18 @@ fn handle_reindex_completed(
     semantic_runtime: &SemanticRuntimeConfig,
     semantic_credentials: &SemanticRuntimeCredentials,
 ) {
-    let Some(repository) = repositories.get(root_idx) else {
-        warn!(
-            root_idx,
-            "built-in watch mode completed for unknown root index"
-        );
+    let repository = repositories
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(repository_id)
+        .cloned();
+    let Some(repository) = repository else {
         return;
     };
 
     match result {
         Ok(summary) => {
-            scheduler.mark_succeeded(root_idx, class, now);
+            scheduler.mark_succeeded(repository_id, class, now);
             if let Some(callback) = repository_cache_invalidation_callback {
                 callback(&repository.repository_id);
             }
@@ -406,9 +511,8 @@ fn handle_reindex_completed(
             );
             if class == WatchRefreshClass::ManifestFast {
                 queue_semantic_followup_if_needed(
-                    repository,
+                    &repository,
                     scheduler,
-                    root_idx,
                     now,
                     semantic_runtime,
                     semantic_credentials,
@@ -416,7 +520,7 @@ fn handle_reindex_completed(
             }
         }
         Err(error) => {
-            scheduler.mark_failed(root_idx, class, now, retry);
+            scheduler.mark_failed(repository_id, class, now, retry);
             warn!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -429,10 +533,47 @@ fn handle_reindex_completed(
     }
 }
 
+fn queue_startup_refresh_if_needed(
+    repository: &WatchedRepository,
+    scheduler: &mut WatchSchedulerState,
+    now: Instant,
+    semantic_runtime: &SemanticRuntimeConfig,
+    semantic_credentials: &SemanticRuntimeCredentials,
+    debounce_ms: u64,
+) {
+    let Ok(startup_status) =
+        startup_refresh_status(repository, semantic_runtime, semantic_credentials)
+    else {
+        return;
+    };
+    if !startup_status.should_refresh {
+        info!(
+            repository_id = %repository.repository_id,
+            root = %repository.root.display(),
+            snapshot_id = startup_status.snapshot_id.as_deref().unwrap_or("-"),
+            "built-in watch mode found refreshable startup state already satisfied"
+        );
+        return;
+    }
+
+    let class = startup_status
+        .refresh_class
+        .unwrap_or(WatchRefreshClass::ManifestFast);
+    scheduler.enqueue_initial_sync(&repository.repository_id, class, now);
+    info!(
+        repository_id = %repository.repository_id,
+        root = %repository.root.display(),
+        refresh_class = %class.as_str(),
+        startup_reason = %startup_status.reason,
+        snapshot_id = startup_status.snapshot_id.as_deref().unwrap_or("-"),
+        debounce_ms,
+        "built-in watch mode queued initial refresh"
+    );
+}
+
 fn queue_semantic_followup_if_needed(
     repository: &WatchedRepository,
     scheduler: &mut WatchSchedulerState,
-    root_idx: usize,
     now: Instant,
     semantic_runtime: &SemanticRuntimeConfig,
     semantic_credentials: &SemanticRuntimeCredentials,
@@ -445,7 +586,7 @@ fn queue_semantic_followup_if_needed(
         return;
     }
 
-    scheduler.enqueue_semantic_followup(root_idx, now);
+    scheduler.enqueue_semantic_followup(&repository.repository_id, now);
     info!(
         repository_id = %repository.repository_id,
         root = %repository.root.display(),

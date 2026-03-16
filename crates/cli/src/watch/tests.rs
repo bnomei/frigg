@@ -149,6 +149,7 @@ fn scheduler_debounces_roots_and_serializes_execution() {
         scheduler.next_ready_refresh(now + Duration::from_millis(750)),
         Some(ScheduledRefresh {
             root_idx: 0,
+            repository_id: "repo-000".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -169,6 +170,7 @@ fn scheduler_debounces_roots_and_serializes_execution() {
         scheduler.next_ready_refresh(now + Duration::from_millis(760)),
         Some(ScheduledRefresh {
             root_idx: 1,
+            repository_id: "repo-001".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -205,6 +207,7 @@ fn scheduler_coalesces_rerun_when_event_arrives_in_flight() {
         scheduler.next_ready_refresh(now + Duration::from_millis(850)),
         Some(ScheduledRefresh {
             root_idx: 0,
+            repository_id: "repo-000".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -235,6 +238,7 @@ fn scheduler_failure_schedules_retry_without_parallel_restart() {
         scheduler.next_ready_refresh(now + Duration::from_millis(5_000)),
         Some(ScheduledRefresh {
             root_idx: 0,
+            repository_id: "repo-000".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -282,6 +286,7 @@ fn scheduler_allows_manifest_fast_while_other_root_runs_semantic_followup() {
         scheduler.next_ready_refresh(now + Duration::from_millis(750)),
         Some(ScheduledRefresh {
             root_idx: 1,
+            repository_id: "repo-001".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -290,6 +295,7 @@ fn scheduler_allows_manifest_fast_while_other_root_runs_semantic_followup() {
         scheduler.next_ready_refresh(now + Duration::from_millis(750)),
         Some(ScheduledRefresh {
             root_idx: 1,
+            repository_id: "repo-001".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -317,6 +323,7 @@ fn watch_runtime_fairness_allows_unrelated_manifest_fast_while_semantic_followup
         scheduler.next_ready_refresh(now + Duration::from_millis(750)),
         Some(ScheduledRefresh {
             root_idx: 1,
+            repository_id: "repo-001".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -340,6 +347,7 @@ fn watch_runtime_fairness_noisy_root_rerun_does_not_starve_other_manifest_fast_w
         scheduler.next_ready_refresh(now + Duration::from_millis(750)),
         Some(ScheduledRefresh {
             root_idx: 0,
+            repository_id: "repo-000".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );
@@ -368,6 +376,7 @@ fn watch_runtime_fairness_noisy_root_rerun_does_not_starve_other_manifest_fast_w
         scheduler.next_ready_refresh(now + Duration::from_millis(760)),
         Some(ScheduledRefresh {
             root_idx: 1,
+            repository_id: "repo-001".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
     );

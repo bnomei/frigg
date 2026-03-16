@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const WORKLOAD_REPOSITORY_ID_LIMIT: usize = 8;
 const WORKLOAD_TEXT_LIMIT: usize = 256;
@@ -97,6 +97,9 @@ impl WorkloadToolClass {
             "deep_search_compose_citations" => Self::DeepSearchComposeCitations,
             "list_repositories" => Self::WorkspaceMetadata,
             "workspace_attach" => Self::WorkspaceMetadata,
+            "workspace_detach" => Self::WorkspaceMetadata,
+            "workspace_prepare" => Self::WorkspaceMetadata,
+            "workspace_reindex" => Self::WorkspaceMetadata,
             "workspace_current" => Self::WorkspaceMetadata,
             _ => Self::Unknown,
         }
@@ -110,9 +113,9 @@ impl WorkloadToolClass {
             Self::CallHierarchy => WorkloadToolFamily::Navigation,
             Self::ReferenceNavigation => WorkloadToolFamily::Navigation,
             Self::DocumentLookup => WorkloadToolFamily::Content,
-            Self::DeepSearchComposeCitations
-            | Self::DeepSearchReplay
-            | Self::DeepSearchRun => WorkloadToolFamily::DeepSearch,
+            Self::DeepSearchComposeCitations | Self::DeepSearchReplay | Self::DeepSearchRun => {
+                WorkloadToolFamily::DeepSearch
+            }
             Self::LiteralLookup
             | Self::HybridDiscovery
             | Self::SymbolLookup
@@ -358,13 +361,25 @@ impl WorkloadStageAttribution {
         }
     }
 
-    pub fn with_candidate_intake(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
-        self.candidate_intake = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+    pub fn with_candidate_intake(
+        mut self,
+        elapsed_us: usize,
+        input_count: usize,
+        output_count: usize,
+    ) -> Self {
+        self.candidate_intake =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
-    pub fn with_freshness_validation(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
-        self.freshness_validation = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+    pub fn with_freshness_validation(
+        mut self,
+        elapsed_us: usize,
+        input_count: usize,
+        output_count: usize,
+    ) -> Self {
+        self.freshness_validation =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
@@ -373,13 +388,25 @@ impl WorkloadStageAttribution {
         self
     }
 
-    pub fn with_witness_scoring(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
-        self.witness_scoring = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+    pub fn with_witness_scoring(
+        mut self,
+        elapsed_us: usize,
+        input_count: usize,
+        output_count: usize,
+    ) -> Self {
+        self.witness_scoring =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
-    pub fn with_graph_expansion(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
-        self.graph_expansion = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+    pub fn with_graph_expansion(
+        mut self,
+        elapsed_us: usize,
+        input_count: usize,
+        output_count: usize,
+    ) -> Self {
+        self.graph_expansion =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
@@ -389,12 +416,19 @@ impl WorkloadStageAttribution {
         input_count: usize,
         output_count: usize,
     ) -> Self {
-        self.semantic_retrieval = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+        self.semantic_retrieval =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
-    pub fn with_anchor_blending(mut self, elapsed_us: usize, input_count: usize, output_count: usize) -> Self {
-        self.anchor_blending = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+    pub fn with_anchor_blending(
+        mut self,
+        elapsed_us: usize,
+        input_count: usize,
+        output_count: usize,
+    ) -> Self {
+        self.anchor_blending =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
@@ -404,7 +438,8 @@ impl WorkloadStageAttribution {
         input_count: usize,
         output_count: usize,
     ) -> Self {
-        self.document_aggregation = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+        self.document_aggregation =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
@@ -414,7 +449,8 @@ impl WorkloadStageAttribution {
         input_count: usize,
         output_count: usize,
     ) -> Self {
-        self.final_diversification = WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
+        self.final_diversification =
+            WorkloadStageSample::bounded_from_usizes(elapsed_us, input_count, output_count);
         self
     }
 
@@ -461,7 +497,11 @@ impl NormalizedWorkloadMetadata {
         }
     }
 
-    pub fn with_fallback_reason(mut self, fallback_reason: WorkloadFallbackReason, detail: Option<String>) -> Self {
+    pub fn with_fallback_reason(
+        mut self,
+        fallback_reason: WorkloadFallbackReason,
+        detail: Option<String>,
+    ) -> Self {
         self.fallback_reason = Some(fallback_reason);
         self.fallback_reason_detail = detail.map(|value| bounded_text(&value, WORKLOAD_TEXT_LIMIT));
         self
@@ -472,7 +512,11 @@ impl NormalizedWorkloadMetadata {
         repository_ids: &[String],
         precision_mode: WorkloadPrecisionMode,
     ) -> Self {
-        Self::new(tool_name, WorkloadRepositoryScope::from_repository_ids(repository_ids), precision_mode)
+        Self::new(
+            tool_name,
+            WorkloadRepositoryScope::from_repository_ids(repository_ids),
+            precision_mode,
+        )
     }
 
     pub fn with_repository_scope(mut self, repository_scope: WorkloadRepositoryScope) -> Self {
@@ -540,9 +584,18 @@ mod tests {
 
     #[test]
     fn normalized_precision_from_str() {
-        assert_eq!(WorkloadPrecisionMode::from_str("exact"), WorkloadPrecisionMode::Exact);
-        assert_eq!(WorkloadPrecisionMode::from_str("heuristic"), WorkloadPrecisionMode::Heuristic);
-        assert_eq!(WorkloadPrecisionMode::from_str("missing"), WorkloadPrecisionMode::Unknown);
+        assert_eq!(
+            WorkloadPrecisionMode::from_str("exact"),
+            WorkloadPrecisionMode::Exact
+        );
+        assert_eq!(
+            WorkloadPrecisionMode::from_str("heuristic"),
+            WorkloadPrecisionMode::Heuristic
+        );
+        assert_eq!(
+            WorkloadPrecisionMode::from_str("missing"),
+            WorkloadPrecisionMode::Unknown
+        );
     }
 
     #[test]
@@ -578,7 +631,10 @@ mod tests {
             &["repo-one".to_owned()],
             WorkloadPrecisionMode::Heuristic,
         )
-        .with_fallback_reason(WorkloadFallbackReason::PreciseAbsent, Some("no matches".to_owned()));
+        .with_fallback_reason(
+            WorkloadFallbackReason::PreciseAbsent,
+            Some("no matches".to_owned()),
+        );
 
         assert_eq!(metadata.tool_class, WorkloadToolClass::LiteralLookup);
         assert_eq!(metadata.precision_mode, WorkloadPrecisionMode::Heuristic);
@@ -588,7 +644,13 @@ mod tests {
 
     #[test]
     fn call_hierarchy_tool_class_is_stable() {
-        assert_eq!(WorkloadToolClass::from_tool_name("incoming_calls"), WorkloadToolClass::CallHierarchy);
-        assert_eq!(WorkloadToolClass::from_tool_name("outgoing_calls"), WorkloadToolClass::CallHierarchy);
+        assert_eq!(
+            WorkloadToolClass::from_tool_name("incoming_calls"),
+            WorkloadToolClass::CallHierarchy
+        );
+        assert_eq!(
+            WorkloadToolClass::from_tool_name("outgoing_calls"),
+            WorkloadToolClass::CallHierarchy
+        );
     }
 }
