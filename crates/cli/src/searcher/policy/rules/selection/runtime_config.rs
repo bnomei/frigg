@@ -149,6 +149,75 @@ fn exact_runtime_config_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect
         }))
 }
 
+fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_entrypoint_runtime {
+        if ctx.seen_count == 0 { 0.36 } else { 0.18 }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { 0.22 } else { 0.12 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_entrypoint_runtime {
+        if ctx.seen_count == 0 { -0.34 } else { -0.18 }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { -0.20 } else { -0.10 }
+    } else {
+        0.0
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.runtime_subtree_affinity >= 2 {
+        if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
+            0.34
+        } else {
+            0.18
+        }
+    } else if ctx.runtime_subtree_affinity > 0 {
+        if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
+            0.18
+        } else {
+            0.10
+        }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.has_path_witness_source || ctx.runtime_subtree_affinity < 2 {
+        return None;
+    }
+
+    let delta = if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
+        if ctx.seen_count == 0 { 0.56 } else { 0.30 }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { 0.30 } else { 0.16 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 fn doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_config_artifacts
         && matches!(
@@ -162,12 +231,73 @@ fn doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     }))
 }
 
+fn generic_doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_generic_runtime_witness_doc
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+            if ctx.runtime_seen == 0 { -0.74 } else { -0.42 }
+        } else if ctx.runtime_seen == 0 {
+            -0.38
+        } else {
+            -0.22
+        }))
+}
+
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_config_artifacts && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
         .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
-            -0.32
+            if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+                -0.56
+            } else {
+                -0.32
+            }
+        } else {
+            if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+                -0.28
+            } else {
+                -0.18
+            }
+        }))
+}
+
+fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_frontend_runtime_noise
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+            if ctx.runtime_seen == 0 { -0.62 } else { -0.36 }
+        } else if ctx.runtime_seen == 0 {
+            -0.30
         } else {
             -0.18
+        }))
+}
+
+fn example_support_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && !ctx.wants_examples && ctx.is_example_support).then_some(
+        PolicyEffect::Add(
+            if ctx.specific_witness_path_overlap > 0 || ctx.has_exact_query_term_match {
+                -0.44
+            } else if ctx.path_overlap > 0 {
+                -0.66
+            } else if ctx.runtime_seen == 0 {
+                -0.92
+            } else {
+                -0.48
+            },
+        ),
+    )
+}
+
+fn ci_workflow_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && !ctx.wants_ci_workflow_witnesses && ctx.is_ci_workflow)
+        .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+            if ctx.seen_count == 0 { -1.22 } else { -0.72 }
+        } else if ctx.seen_count == 0 {
+            -0.68
+        } else {
+            -0.40
         }))
 }
 
@@ -336,6 +466,50 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         exact_runtime_config_match_bonus,
     ),
     ScoreRule::when(
+        "selection.runtime_config.same_language_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::wants_language_locality_bias_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+        ]),
+        same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.language_mismatch_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::new(
+            &[
+                pred::wants_runtime_config_artifacts_leaf(),
+                pred::wants_language_locality_bias_leaf(),
+                pred::candidate_language_known_leaf(),
+            ],
+            &[],
+            &[pred::matches_query_language_leaf()],
+        ),
+        language_mismatch_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.subtree_affinity_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::runtime_subtree_affinity_positive_leaf(),
+        ]),
+        subtree_affinity_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.path_witness_subtree_locality_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::has_path_witness_source_leaf(),
+            pred::runtime_subtree_affinity_at_least_two_leaf(),
+        ]),
+        path_witness_subtree_locality_bonus,
+    ),
+    ScoreRule::when(
         "selection.runtime_config.doc_penalty",
         PolicyStage::SelectionRuntimeConfig,
         Predicate::new(
@@ -349,6 +523,15 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         doc_penalty,
     ),
     ScoreRule::when(
+        "selection.runtime_config.generic_doc_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_generic_runtime_witness_doc_leaf(),
+        ]),
+        generic_doc_penalty,
+    ),
+    ScoreRule::when(
         "selection.runtime_config.repo_metadata_penalty",
         PolicyStage::SelectionRuntimeConfig,
         Predicate::all(&[
@@ -356,6 +539,37 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::is_repo_metadata_leaf(),
         ]),
         repo_metadata_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.frontend_noise_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_frontend_runtime_noise_leaf(),
+        ]),
+        frontend_noise_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.example_support_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_example_support_leaf(),
+        ]),
+        example_support_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.ci_workflow_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::new(
+            &[
+                pred::wants_runtime_config_artifacts_leaf(),
+                pred::is_ci_workflow_leaf(),
+            ],
+            &[],
+            &[pred::wants_ci_workflow_witnesses_leaf()],
+        ),
+        ci_workflow_penalty,
     ),
     ScoreRule::when(
         "selection.runtime_config.ci_penalty_without_runtime",

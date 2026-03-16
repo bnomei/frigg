@@ -81,7 +81,7 @@ fn typescript_index_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 fn repo_root_runtime_config_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_entrypoint_build_flow && ctx.is_repo_root_runtime_config_artifact).then_some(
         PolicyEffect::Add(if ctx.seen_repo_root_runtime_configs == 0 {
-            7.40
+            5.40
         } else {
             1.20
         }),
@@ -135,6 +135,105 @@ fn python_config_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_entrypoint_build_flow && ctx.is_python_runtime_config).then_some(PolicyEffect::Add(
         if ctx.seen_count == 0 { 0.32 } else { 0.16 },
     ))
+}
+
+fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_entrypoint_runtime {
+        if ctx.runtime_seen == 0 {
+            0.48
+        } else if ctx.seen_count == 0 {
+            0.28
+        } else {
+            0.16
+        }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { 0.18 } else { 0.10 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_entrypoint_runtime {
+        if ctx.runtime_seen == 0 {
+            -0.44
+        } else if ctx.seen_count == 0 {
+            -0.24
+        } else {
+            -0.14
+        }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { -0.18 } else { -0.10 }
+    } else {
+        0.0
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.runtime_subtree_affinity >= 2 {
+        if ctx.is_entrypoint_runtime {
+            0.52
+        } else if ctx.is_runtime_config_artifact {
+            0.32
+        } else {
+            0.16
+        }
+    } else if ctx.runtime_subtree_affinity > 0 {
+        if ctx.is_entrypoint_runtime {
+            0.26
+        } else if ctx.is_runtime_config_artifact {
+            0.18
+        } else {
+            0.08
+        }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.has_path_witness_source || ctx.runtime_subtree_affinity < 2 {
+        return None;
+    }
+
+    let delta = if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
+        if ctx.seen_count == 0 { 0.68 } else { 0.36 }
+    } else if matches!(
+        ctx.class,
+        HybridSourceClass::Runtime | HybridSourceClass::Tests
+    ) {
+        if ctx.seen_count == 0 { 0.30 } else { 0.16 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn repo_root_runtime_config_without_locality_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_entrypoint_build_flow
+        && ctx.is_repo_root_runtime_config_artifact
+        && ctx.runtime_subtree_affinity == 0
+        && ctx.specific_witness_path_overlap == 0
+        && !ctx.has_path_witness_source
+        && !ctx.excerpt_has_build_flow_anchor)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            -3.20
+        } else {
+            -1.40
+        }))
 }
 
 fn cli_test_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -233,9 +332,51 @@ fn reference_doc_without_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyE
         .then_some(PolicyEffect::Add(-0.14))
 }
 
+fn ci_workflow_without_build_signal_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_entrypoint_build_flow
+        && ctx.is_ci_workflow
+        && !ctx.excerpt_has_build_flow_anchor
+        && ctx.specific_witness_path_overlap == 0)
+        .then_some(PolicyEffect::Add(if ctx.runtime_seen == 0 {
+            -2.40
+        } else {
+            -0.88
+        }))
+}
+
+fn generic_doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_entrypoint_build_flow
+        && ctx.is_generic_runtime_witness_doc
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Add(if ctx.runtime_seen == 0 {
+            -0.56
+        } else {
+            -0.30
+        }))
+}
+
+fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_entrypoint_build_flow && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Add(if ctx.runtime_seen == 0 {
+            -0.52
+        } else {
+            -0.26
+        }))
+}
+
 fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_entrypoint_build_flow && ctx.is_frontend_runtime_noise).then_some(PolicyEffect::Add(
-        if ctx.runtime_seen == 0 { -0.22 } else { -0.14 },
+        if ctx.runtime_seen == 0 {
+            if ctx.path_overlap == 0 && !ctx.excerpt_has_build_flow_anchor {
+                -0.52
+            } else {
+                -0.22
+            }
+        } else if ctx.path_overlap == 0 && !ctx.excerpt_has_build_flow_anchor {
+            -0.28
+        } else {
+            -0.14
+        },
     ))
 }
 
@@ -258,10 +399,17 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
     ScoreRule::when(
         "selection.entrypoint.workflow_bonus",
         PolicyStage::SelectionEntrypoint,
-        Predicate::all(&[
-            pred::wants_entrypoint_build_flow_leaf(),
-            pred::is_entrypoint_build_workflow_leaf(),
-        ]),
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::is_entrypoint_build_workflow_leaf(),
+            ],
+            &[
+                pred::excerpt_has_build_flow_anchor_leaf(),
+                pred::specific_witness_path_overlap_leaf(),
+            ],
+            &[],
+        ),
         workflow_bonus,
     ),
     ScoreRule::when(
@@ -405,6 +553,59 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         python_config_bonus,
     ),
     ScoreRule::when(
+        "selection.entrypoint.same_language_bonus",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::wants_language_locality_bias_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+        ]),
+        same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.language_mismatch_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::wants_language_locality_bias_leaf(),
+                pred::candidate_language_known_leaf(),
+            ],
+            &[],
+            &[pred::matches_query_language_leaf()],
+        ),
+        language_mismatch_penalty,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.subtree_affinity_bonus",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::runtime_subtree_affinity_positive_leaf(),
+        ]),
+        subtree_affinity_bonus,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.path_witness_subtree_locality_bonus",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::has_path_witness_source_leaf(),
+            pred::runtime_subtree_affinity_at_least_two_leaf(),
+        ]),
+        path_witness_subtree_locality_bonus,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.repo_root_runtime_config_without_locality_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_repo_root_runtime_config_artifact_leaf(),
+        ]),
+        repo_root_runtime_config_without_locality_penalty,
+    ),
+    ScoreRule::when(
         "selection.entrypoint.cli_test_support_bonus",
         PolicyStage::SelectionEntrypoint,
         Predicate::all(&[
@@ -508,6 +709,40 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::runtime_seen_is_zero_leaf(),
         ]),
         reference_doc_without_runtime_penalty,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.ci_workflow_without_build_signal_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::is_ci_workflow_leaf(),
+            ],
+            &[],
+            &[
+                pred::excerpt_has_build_flow_anchor_leaf(),
+                pred::specific_witness_path_overlap_leaf(),
+            ],
+        ),
+        ci_workflow_without_build_signal_penalty,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.generic_doc_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_generic_runtime_witness_doc_leaf(),
+        ]),
+        generic_doc_penalty,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.repo_metadata_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_repo_metadata_leaf(),
+        ]),
+        repo_metadata_penalty,
     ),
     ScoreRule::when(
         "selection.entrypoint.frontend_noise_penalty",

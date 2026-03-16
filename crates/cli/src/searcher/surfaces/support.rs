@@ -242,25 +242,55 @@ pub(in crate::searcher) fn is_readme_path(path: &str) -> bool {
     path == "README.md" || path.ends_with("/README.md")
 }
 
+fn has_docs_like_segment(path: &str) -> bool {
+    path.split('/').any(|segment| {
+        matches!(
+            segment,
+            "content" | "doc" | "docs" | "documentation" | "guide" | "guides" | "site" | "website"
+        )
+    })
+}
+
 pub(in crate::searcher) fn is_generic_runtime_witness_doc_path(path: &str) -> bool {
     if is_readme_path(path) {
         return true;
     }
 
-    let normalized = path.trim_start_matches("./");
-    let Some(file_name) = Path::new(normalized)
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let candidate = Path::new(&normalized);
+    let Some(file_name) = Path::new(&normalized)
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.to_ascii_lowercase())
     else {
         return false;
     };
 
-    matches!(
-        file_name.as_str(),
-        "index.md" | "overview.md" | "examples.md"
-    ) && (normalized == format!("docs/{file_name}")
-        || normalized.ends_with(&format!("/docs/{file_name}")))
+    if matches!(
+        file_name,
+        "agents.md"
+            | "architecture.md"
+            | "changelog.md"
+            | "claude.md"
+            | "code_of_conduct.md"
+            | "contributing.md"
+            | "developers.md"
+            | "development.md"
+            | "examples.md"
+            | "faq.md"
+            | "index.md"
+            | "overview.md"
+            | "roadmap.md"
+            | "security.md"
+            | "support.md"
+    ) {
+        return true;
+    }
+
+    let is_markdownish = matches!(
+        candidate.extension().and_then(|ext| ext.to_str()),
+        Some("adoc" | "markdown" | "md" | "mdx" | "rst" | "txt")
+    );
+    is_markdownish && has_docs_like_segment(&normalized)
 }
 
 pub(in crate::searcher) fn is_repo_metadata_path(path: &str) -> bool {
@@ -275,15 +305,31 @@ pub(in crate::searcher) fn is_repo_metadata_path(path: &str) -> bool {
 
     matches!(
         file_name.as_str(),
-        "composer.json"
+        "agents.md"
+            | "architecture.md"
+            | "changelog.md"
+            | "claude.md"
+            | "composer.json"
+            | "contributing.md"
             | "cargo.toml"
             | "cargo.lock"
+            | "developers.md"
+            | "development.md"
             | "package.json"
             | "package-lock.json"
             | "pnpm-lock.yaml"
+            | "pnpm-workspace.yaml"
             | "yarn.lock"
             | "pyproject.toml"
             | "poetry.lock"
+            | "makefile"
+            | "justfile"
+            | "lerna.json"
+            | "nx.json"
+            | "security.md"
+            | "taskfile.yml"
+            | "taskfile.yaml"
+            | "turbo.json"
     )
 }
 

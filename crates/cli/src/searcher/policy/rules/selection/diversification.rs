@@ -109,21 +109,35 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
     ScoreRule::when(
         "selection.diversification.first_build_workflow_bonus",
         PolicyStage::SelectionDiversification,
-        Predicate::all(&[
-            pred::wants_entrypoint_build_flow_leaf(),
-            pred::is_entrypoint_build_workflow_leaf(),
-            pred::seen_ci_workflows_is_zero_leaf(),
-        ]),
+        Predicate::new(
+            &[
+                pred::wants_entrypoint_build_flow_leaf(),
+                pred::is_entrypoint_build_workflow_leaf(),
+                pred::seen_ci_workflows_is_zero_leaf(),
+            ],
+            &[
+                pred::excerpt_has_build_flow_anchor_leaf(),
+                pred::specific_witness_path_overlap_leaf(),
+            ],
+            &[],
+        ),
         first_build_workflow_bonus,
     ),
     ScoreRule::when(
         "selection.diversification.first_ci_workflow_bonus",
         PolicyStage::SelectionDiversification,
-        Predicate::all(&[
-            pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
-            pred::is_ci_workflow_leaf(),
-            pred::seen_ci_workflows_is_zero_leaf(),
-        ]),
+        Predicate::new(
+            &[
+                pred::wants_runtime_config_or_entrypoint_build_flow_leaf(),
+                pred::is_ci_workflow_leaf(),
+                pred::seen_ci_workflows_is_zero_leaf(),
+            ],
+            &[
+                pred::excerpt_has_build_flow_anchor_leaf(),
+                pred::specific_witness_path_overlap_leaf(),
+            ],
+            &[],
+        ),
         first_ci_workflow_bonus,
     ),
     ScoreRule::when(

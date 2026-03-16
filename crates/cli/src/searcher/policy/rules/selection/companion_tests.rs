@@ -160,6 +160,54 @@ fn scripts_ops_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> 
     }))
 }
 
+fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            0.30
+        } else {
+            0.18
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        0.18
+    } else {
+        0.10
+    }))
+}
+
+fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            -0.42
+        } else {
+            -0.24
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        -0.24
+    } else {
+        -0.14
+    }))
+}
+
+fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.runtime_subtree_affinity >= 2 {
+        if ctx.prefer_runtime_anchor_tests {
+            0.74
+        } else {
+            0.38
+        }
+    } else if ctx.runtime_subtree_affinity > 0 {
+        if ctx.prefer_runtime_anchor_tests {
+            0.34
+        } else {
+            0.18
+        }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 const CLI_OR_HARNESS_ANY: &[super::super::super::dsl::PredicateLeaf<SelectionFacts>] = &[
     pred::is_cli_test_support_leaf(),
     pred::is_test_harness_leaf(),
@@ -202,6 +250,43 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::is_cli_test_support_leaf(),
         ]),
         cli_test_support_bonus,
+    ),
+    ScoreRule::when(
+        "selection.companion.same_language_bonus",
+        PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::wants_language_locality_bias_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+            pred::is_test_support_leaf(),
+        ]),
+        same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.companion.language_mismatch_penalty",
+        PolicyStage::SelectionTestWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_companion_tests_leaf(),
+                pred::wants_language_locality_bias_leaf(),
+                pred::candidate_language_known_leaf(),
+                pred::is_test_support_leaf(),
+            ],
+            &[],
+            &[pred::matches_query_language_leaf()],
+        ),
+        language_mismatch_penalty,
+    ),
+    ScoreRule::when(
+        "selection.companion.subtree_affinity_bonus",
+        PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_test_support_leaf(),
+            pred::runtime_subtree_affinity_positive_leaf(),
+        ]),
+        subtree_affinity_bonus,
     ),
     ScoreRule::when(
         "selection.companion.family_affinity_bonus",

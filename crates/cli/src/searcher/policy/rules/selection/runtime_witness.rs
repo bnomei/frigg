@@ -115,13 +115,105 @@ fn path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
 }
 
+fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.seen_count == 0 {
+                0.34
+            } else {
+                0.18
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 {
+                0.22
+            } else {
+                0.12
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.seen_count == 0 {
+                -0.28
+            } else {
+                -0.16
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 {
+                -0.20
+            } else {
+                -0.12
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.runtime_subtree_affinity >= 2 {
+                0.26
+            } else {
+                0.12
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.runtime_subtree_affinity >= 2 {
+                0.18
+            } else {
+                0.10
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.has_path_witness_source || ctx.runtime_subtree_affinity < 2 {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.seen_count == 0 {
+                0.72
+            } else {
+                0.38
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 {
+                0.42
+            } else {
+                0.22
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 fn generic_doc_repeat_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let state = ctx;
-    (state.seen_count > 0).then_some(PolicyEffect::Add(-0.16 * state.seen_count as f32))
+    (state.seen_count > 0).then_some(PolicyEffect::Add(-0.24 * state.seen_count as f32))
 }
 
 fn generic_doc_first_penalty(_ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    Some(PolicyEffect::Add(-0.18))
+    Some(PolicyEffect::Add(-0.42))
 }
 
 fn doc_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -145,9 +237,17 @@ fn doc_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let state = ctx;
     Some(PolicyEffect::Add(if state.runtime_seen == 0 {
-        -0.26
+        if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+            -0.86
+        } else {
+            -0.52
+        }
     } else {
-        -0.18
+        if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+            -0.44
+        } else {
+            -0.24
+        }
     }))
 }
 
@@ -207,10 +307,89 @@ fn missing_anchor_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let state = ctx;
     Some(PolicyEffect::Add(if state.runtime_seen == 0 {
-        -0.28
+        if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+            -0.40
+        } else {
+            -0.28
+        }
     } else {
-        -0.18
+        if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
+            -0.24
+        } else {
+            -0.18
+        }
     }))
+}
+
+fn locality_with_path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.has_path_witness_source || ctx.runtime_subtree_affinity == 0 {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.runtime_subtree_affinity >= 2 {
+                if ctx.seen_count == 0 { 0.72 } else { 0.38 }
+            } else if ctx.seen_count == 0 {
+                0.28
+            } else {
+                0.14
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.runtime_subtree_affinity >= 2 {
+                if ctx.seen_count == 0 { 0.48 } else { 0.26 }
+            } else if ctx.seen_count == 0 {
+                0.18
+            } else {
+                0.10
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn ci_workflow_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses && !ctx.wants_ci_workflow_witnesses && ctx.is_ci_workflow)
+        .then_some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+            if ctx.seen_count == 0 { -1.80 } else { -1.12 }
+        } else if ctx.seen_count == 0 {
+            -1.18
+        } else {
+            -0.72
+        }))
+}
+
+fn example_support_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && !ctx.wants_examples
+        && !ctx.wants_benchmarks
+        && ctx.is_example_support)
+        .then_some(PolicyEffect::Add(
+            if ctx.specific_witness_path_overlap > 0 || ctx.has_exact_query_term_match {
+                -0.52
+            } else if ctx.path_overlap > 0 {
+                -0.78
+            } else if ctx.seen_count == 0 {
+                -1.08
+            } else {
+                -0.64
+            },
+        ))
+}
+
+fn repo_metadata_locality_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && ctx.is_repo_metadata
+        && ctx.runtime_subtree_affinity == 0
+        && !ctx.has_path_witness_source)
+        .then_some(PolicyEffect::Add(if ctx.seen_count == 0 {
+            -0.56
+        } else {
+            -0.32
+        }))
 }
 
 fn example_support_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -403,6 +582,50 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         path_overlap_bonus,
     ),
     ScoreRule::when(
+        "selection.runtime.same_language_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::wants_language_locality_bias_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+        ]),
+        same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.language_mismatch_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_witnesses_leaf(),
+                pred::wants_language_locality_bias_leaf(),
+                pred::candidate_language_known_leaf(),
+            ],
+            &[],
+            &[pred::matches_query_language_leaf()],
+        ),
+        language_mismatch_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.subtree_affinity_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::runtime_subtree_affinity_positive_leaf(),
+        ]),
+        subtree_affinity_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.path_witness_subtree_locality_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::has_path_witness_source_leaf(),
+            pred::runtime_subtree_affinity_at_least_two_leaf(),
+        ]),
+        path_witness_subtree_locality_bonus,
+    ),
+    ScoreRule::when(
         "selection.runtime.generic_doc_repeat_penalty",
         PolicyStage::SelectionRuntimeWitness,
         Predicate::all(&[
@@ -482,6 +705,47 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::is_frontend_runtime_noise_leaf(),
         ]),
         frontend_noise_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.locality_with_path_witness_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::has_path_witness_source_leaf(),
+            pred::runtime_subtree_affinity_positive_leaf(),
+        ]),
+        locality_with_path_witness_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.ci_workflow_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_witnesses_leaf(),
+                pred::is_ci_workflow_leaf(),
+            ],
+            &[],
+            &[pred::wants_ci_workflow_witnesses_leaf()],
+        ),
+        ci_workflow_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.example_support_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_example_support_leaf(),
+        ]),
+        example_support_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.repo_metadata_locality_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_repo_metadata_leaf(),
+        ]),
+        repo_metadata_locality_penalty,
     ),
     ScoreRule::when(
         "selection.runtime.example_support_bonus",

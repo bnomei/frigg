@@ -232,6 +232,164 @@ fn hybrid_ranking_examples_queries_keep_examples_and_benches_visible_over_test_n
 }
 
 #[test]
+#[ignore = "workstream-c escalation target"]
+fn hybrid_ranking_graphite_queries_prefer_editor_subtree_over_sibling_runtime_noise()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-graphite-editor-subtree");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "editor/src/messages/panels/layers.rs",
+                "pub fn canvas_panel_runtime() { let _ = \"editor panels canvas runtime\"; }\n",
+            ),
+            ("editor/tests/canvas_runtime.rs", "mod canvas_runtime {}\n"),
+            (
+                "node-graph/src/runtime.rs",
+                "pub fn node_graph_runtime() { let _ = \"node graph runtime\"; }\n",
+            ),
+            (
+                "desktop/wrapper/src/messages.rs",
+                "pub fn desktop_wrapper_messages() { let _ = \"graphite editor panels canvas layout messages desktop wrapper svelte\"; }\n",
+            ),
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"editor\", \"desktop\"]\n",
+            ),
+            ("Cargo.lock", "[[package]]\nname = \"graphite\"\n"),
+            (
+                "website/content/editor.md",
+                "# Editor runtime\neditor panels canvas runtime\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "graphite editor panels canvas layout messages desktop wrapper svelte"
+                .to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let editor_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "editor/src/messages/panels/layers.rs" | "editor/tests/canvas_runtime.rs"
+            )
+        })
+        .expect("an editor subtree witness should be ranked");
+    let sibling_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "node-graph/src/runtime.rs"
+                    | "website/content/editor.md"
+                    | "desktop/wrapper/src/messages.rs"
+                    | "Cargo.toml"
+                    | "Cargo.lock"
+            )
+        })
+        .expect("sibling runtime noise should still be ranked");
+
+    assert!(
+        editor_position < sibling_position,
+        "editor subtree witnesses should outrank sibling runtime noise: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+#[ignore = "workstream-c escalation target"]
+fn hybrid_ranking_ruff_queries_keep_runtime_surfaces_above_docs_and_readme() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-ruff-runtime-vs-docs");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "crates/ruff_server/src/lib.rs",
+                "pub fn formatter_server() { let _ = \"formatter server wasm flow\"; }\n",
+            ),
+            (
+                "crates/ruff_wasm/src/lib.rs",
+                "pub fn formatter_wasm() { let _ = \"formatter server wasm flow\"; }\n",
+            ),
+            ("README.md", "# Ruff\nformatter server wasm flow overview\n"),
+            (
+                "docs/formatter.md",
+                "# Formatter\nformatter server wasm flow guide\n",
+            ),
+            (
+                "CONTRIBUTING.md",
+                "# Contributing\nformatter server wasm flow guide\n",
+            ),
+            ("Cargo.lock", "[[package]]\nname = \"ruff\"\n"),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "formatter server wasm flow rust runtime".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let runtime_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "crates/ruff_server/src/lib.rs" | "crates/ruff_wasm/src/lib.rs"
+            )
+        })
+        .expect("a runtime surface should be ranked");
+    let docs_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "README.md" | "docs/formatter.md" | "CONTRIBUTING.md" | "Cargo.lock"
+            )
+        })
+        .expect("docs/readme/meta drift should still be ranked");
+
+    assert!(
+        runtime_position < docs_position,
+        "runtime surfaces should outrank docs/readme/meta drift: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_rust_tests_queries_keep_required_tests_visible_under_examples_and_benches_crowding()
 -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-rust-tests-vs-examples-benches-crowding");

@@ -126,7 +126,13 @@ pub enum SearchGoal {
 pub enum FrameworkHint {
     Rust,
     Php,
+    TypeScript,
     Python,
+    Go,
+    Kotlin,
+    Lua,
+    Roc,
+    Nim,
     Blade,
     Laravel,
     Livewire,

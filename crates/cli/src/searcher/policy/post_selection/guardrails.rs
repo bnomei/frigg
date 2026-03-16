@@ -237,6 +237,11 @@ pub(super) fn selection_guardrail_cmp(
         })
         .then_with(|| {
             left_facts
+                .runtime_subtree_affinity
+                .cmp(&right_facts.runtime_subtree_affinity)
+        })
+        .then_with(|| {
+            left_facts
                 .runtime_family_prefix_overlap
                 .cmp(&right_facts.runtime_family_prefix_overlap)
         })

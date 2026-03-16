@@ -164,6 +164,40 @@ fn runtime_config_test_tree_harness_bonus(ctx: &PathWitnessFacts) -> Option<Poli
     Some(PolicyEffect::Add(if ctx.is_cli_test { 4.8 } else { 3.6 }))
 }
 
+fn runtime_focus_ci_workflow_penalty(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    let wants_runtime_focus = ctx.wants_entrypoint_build_flow
+        || ctx.wants_runtime_config_artifacts
+        || ctx.wants_test_witness_recall;
+    (wants_runtime_focus && ctx.is_ci_workflow && !ctx.wants_ci_workflow_witnesses).then_some(
+        PolicyEffect::Add(
+            if ctx.specific_path_overlap > 0 || ctx.has_exact_query_term_match {
+                -3.8
+            } else if ctx.path_overlap > 0 {
+                -4.6
+            } else {
+                -5.8
+            },
+        ),
+    )
+}
+
+fn runtime_focus_example_support_penalty(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    let wants_runtime_focus = ctx.wants_entrypoint_build_flow
+        || ctx.wants_runtime_config_artifacts
+        || ctx.wants_test_witness_recall;
+    (wants_runtime_focus && ctx.is_example_support && !ctx.wants_examples).then_some(
+        PolicyEffect::Add(
+            if ctx.specific_path_overlap > 0 || ctx.has_exact_query_term_match {
+                -1.8
+            } else if ctx.path_overlap > 0 {
+                -2.8
+            } else {
+                -3.6
+            },
+        ),
+    )
+}
+
 fn examples_unwanted_example_support_penalty(_ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
     Some(PolicyEffect::Add(-3.8))
 }
@@ -602,6 +636,32 @@ const SCORE_RULES: &[ScoreRule<PathWitnessFacts>] = &[
             pred::path_overlap_leaf(),
         ]),
         runtime_config_test_tree_harness_bonus,
+    ),
+    ScoreRule::when(
+        "runtime_focus.ci_workflow_penalty",
+        PolicyStage::PathWitness,
+        Predicate::new(
+            &[
+                pred::is_ci_workflow_leaf(),
+                pred::wants_entrypoint_or_runtime_config_or_test_leaf(),
+            ],
+            &[],
+            &[pred::wants_ci_workflow_witnesses_leaf()],
+        ),
+        runtime_focus_ci_workflow_penalty,
+    ),
+    ScoreRule::when(
+        "runtime_focus.example_support_penalty",
+        PolicyStage::PathWitness,
+        Predicate::new(
+            &[
+                pred::is_example_support_leaf(),
+                pred::wants_entrypoint_or_runtime_config_or_test_leaf(),
+            ],
+            &[],
+            &[pred::wants_examples_leaf()],
+        ),
+        runtime_focus_example_support_penalty,
     ),
     ScoreRule::when(
         "examples.unwanted_example_support_penalty",

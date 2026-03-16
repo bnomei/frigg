@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::domain::FrameworkHint;
+use crate::languages::SymbolLanguage;
 
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::laravel::{LaravelUiSurfaceClass, laravel_ui_surface_class};
@@ -71,6 +72,7 @@ pub(crate) struct SharedIntentFacts {
     pub(crate) wants_python_workspace_config: bool,
     pub(crate) wants_runtime_companion_tests: bool,
     pub(crate) prefer_runtime_anchor_tests: bool,
+    pub(crate) wants_language_locality_bias: bool,
 }
 
 impl SharedIntentFacts {
@@ -85,6 +87,7 @@ impl SharedIntentFacts {
             || intent.wants_runtime_config_artifacts;
         let prefer_runtime_anchor_tests =
             wants_runtime_companion_tests && !intent.wants_test_witness_recall;
+        let wants_language_locality_bias = intent.wants_language_locality_bias();
 
         Self {
             wants_docs: intent.wants_docs,
@@ -120,6 +123,7 @@ impl SharedIntentFacts {
             wants_python_workspace_config,
             wants_runtime_companion_tests,
             prefer_runtime_anchor_tests,
+            wants_language_locality_bias,
         }
     }
 }
@@ -255,6 +259,7 @@ impl PolicyQueryContext {
 #[derive(Debug, Clone)]
 pub(crate) struct SharedPathFacts {
     pub(crate) class: HybridSourceClass,
+    pub(crate) language: Option<SymbolLanguage>,
     pub(crate) path_depth: usize,
     pub(crate) is_root_readme: bool,
     pub(crate) is_entrypoint_runtime: bool,
@@ -327,6 +332,7 @@ impl SharedPathFacts {
 
         Self {
             class: hybrid_source_class(path),
+            language: SymbolLanguage::from_path(Path::new(path)),
             path_depth: path_depth(path),
             is_root_readme: normalized_path.eq_ignore_ascii_case("README.md"),
             is_entrypoint_runtime: is_entrypoint_runtime_path(path),
@@ -381,6 +387,21 @@ impl SharedPathFacts {
             is_laravel_provider: is_laravel_provider_path(path),
             laravel_surface: laravel_ui_surface_class(path),
         }
+    }
+
+    pub(crate) fn matches_query_language(&self, intent: &HybridRankingIntent) -> bool {
+        self.language
+            .is_some_and(|language| intent.prefers_symbol_language(language))
+    }
+
+    pub(crate) fn workspace_subtree_affinity(left: &str, right: &str) -> usize {
+        let left_segments = workspace_subtree_segments(left);
+        let right_segments = workspace_subtree_segments(right);
+        left_segments
+            .iter()
+            .zip(right_segments.iter())
+            .take_while(|(left, right)| left == right)
+            .count()
     }
 
     pub(crate) fn path_quality_base_multiplier(&self, path: &str) -> f32 {
@@ -455,6 +476,7 @@ pub(crate) struct SelectionCoverageSnapshot {
     pub(crate) seen_typescript_runtime_module_indexes: usize,
     pub(crate) laravel_surface_seen: usize,
     pub(crate) runtime_family_prefix_overlap: usize,
+    pub(crate) runtime_subtree_affinity: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -536,8 +558,81 @@ impl SelectionCoverageState {
                 .map(|anchor| SharedPathFacts::shared_prefix_segments(path, anchor))
                 .max()
                 .unwrap_or(0),
+            runtime_subtree_affinity: self
+                .runtime_anchor_paths
+                .iter()
+                .map(|anchor| SharedPathFacts::workspace_subtree_affinity(path, anchor))
+                .max()
+                .unwrap_or(0),
         }
     }
+}
+
+const GENERIC_WORKSPACE_BUCKETS: &[&str] = &["apps", "packages", "crates", "libs", "services"];
+const WORKSPACE_SUBTREE_BOUNDARIES: &[&str] = &[
+    "src",
+    "source",
+    "lib",
+    "app",
+    "pages",
+    "tests",
+    "test",
+    "__tests__",
+    "benches",
+    "bench",
+    "examples",
+    "example",
+    "docs",
+    "doc",
+    "scripts",
+    "script",
+    "fixtures",
+    "migrations",
+    "resources",
+    "public",
+    "dist",
+    "build",
+    "out",
+    "generated",
+    "vendor",
+    "node_modules",
+];
+
+fn workspace_subtree_segments(path: &str) -> Vec<String> {
+    let normalized = path.trim_start_matches("./");
+    let parts = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() <= 1 {
+        return Vec::new();
+    }
+
+    let directory_parts = &parts[..parts.len() - 1];
+    let mut index = usize::from(
+        directory_parts
+            .first()
+            .is_some_and(|segment| GENERIC_WORKSPACE_BUCKETS.contains(segment)),
+    );
+    let mut root = Vec::new();
+
+    while let Some(segment) = directory_parts.get(index) {
+        let normalized_segment = segment.trim();
+        if normalized_segment.is_empty() {
+            index += 1;
+            continue;
+        }
+        if !root.is_empty() && WORKSPACE_SUBTREE_BOUNDARIES.contains(&normalized_segment) {
+            break;
+        }
+        root.push(normalized_segment.to_ascii_lowercase());
+        index += 1;
+        if root.len() >= 6 {
+            break;
+        }
+    }
+
+    root
 }
 
 fn blade_component_specific_query_terms(query_text: &str) -> Vec<String> {
@@ -867,5 +962,62 @@ mod tests {
         assert_eq!(blade_snapshot.seen_plain_test_support, 1);
         assert_eq!(blade_snapshot.laravel_surface_seen, 0);
         assert_eq!(blade_snapshot.runtime_family_prefix_overlap, 0);
+    }
+
+    #[test]
+    fn selection_facts_seed_subtree_affinity_from_path_witness_sources() {
+        let query = "workflow runtime executions cli integrations typescript tests";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = PolicyQueryContext::new(&intent, query);
+        let mut ranked = make_ranked("packages/cli/src/workflow_runner.ts", 1.0);
+        ranked.lexical_sources = vec![
+            "path_witness:packages/cli/test/integration/workflow_runner.test.ts:1:1".to_owned(),
+        ];
+
+        let candidate = SelectionCandidate::new(ranked, &intent, &query_context);
+        let selection = SelectionFacts::from_candidate(
+            &candidate,
+            &intent,
+            &query_context,
+            &SelectionState::default(),
+        );
+
+        assert_eq!(selection.runtime_subtree_affinity, 1);
+        assert!(selection.has_path_witness_source);
+    }
+
+    #[test]
+    fn shared_path_facts_match_query_language_for_typescript_intent() {
+        let intent = HybridRankingIntent::from_query("editor ui playwright tsconfig tests");
+        let ts_path = SharedPathFacts::from_path("packages/editor-ui/src/app.ts");
+        let py_path = SharedPathFacts::from_path("sdk/python/firecrawl/client.py");
+
+        assert!(ts_path.matches_query_language(&intent));
+        assert!(!py_path.matches_query_language(&intent));
+    }
+
+    #[test]
+    fn workspace_subtree_affinity_uses_meaningful_workspace_segments() {
+        assert_eq!(
+            SharedPathFacts::workspace_subtree_affinity(
+                "packages/cli/src/commands/start.ts",
+                "packages/cli/test/integration/start.test.ts",
+            ),
+            1
+        );
+        assert_eq!(
+            SharedPathFacts::workspace_subtree_affinity(
+                "packages/cli/src/commands/start.ts",
+                "packages/editor-ui/src/app.ts",
+            ),
+            0
+        );
+        assert_eq!(
+            SharedPathFacts::workspace_subtree_affinity(
+                "crates/ruff/src/commands/check.rs",
+                "crates/ruff/tests/cli/check.rs",
+            ),
+            1
+        );
     }
 }

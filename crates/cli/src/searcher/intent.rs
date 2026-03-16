@@ -4,6 +4,7 @@ use crate::domain::{
     ArtifactBias, FrameworkHint, PlannerStrictness, PlaybookReferencePolicy, SearchGoal,
     SearchIntentRuleId, SourceClass,
 };
+use crate::languages::SymbolLanguage;
 use context::QueryContext;
 use rules::SEARCH_INTENT_RULES;
 
@@ -259,6 +260,55 @@ impl SearchIntent {
         self.artifact_biases.contains(&bias)
     }
 
+    pub(super) fn has_language_hint(&self) -> bool {
+        self.framework_hints.iter().any(|hint| {
+            matches!(
+                hint,
+                FrameworkHint::Rust
+                    | FrameworkHint::Php
+                    | FrameworkHint::TypeScript
+                    | FrameworkHint::Python
+                    | FrameworkHint::Go
+                    | FrameworkHint::Kotlin
+                    | FrameworkHint::Lua
+                    | FrameworkHint::Roc
+                    | FrameworkHint::Nim
+                    | FrameworkHint::Blade
+            )
+        })
+    }
+
+    pub(super) fn wants_language_locality_bias(&self) -> bool {
+        self.has_language_hint()
+            && (self.wants_runtime_witnesses
+                || self.wants_runtime_config_artifacts
+                || self.wants_entrypoint_build_flow
+                || self.wants_test_witness_recall)
+    }
+
+    pub(super) fn prefers_symbol_language(&self, language: SymbolLanguage) -> bool {
+        match language {
+            SymbolLanguage::Rust => self.has_framework_hint(FrameworkHint::Rust),
+            SymbolLanguage::Php => {
+                self.has_framework_hint(FrameworkHint::Php)
+                    || self.has_framework_hint(FrameworkHint::Blade)
+                    || self.has_framework_hint(FrameworkHint::Laravel)
+            }
+            SymbolLanguage::Blade => {
+                self.has_framework_hint(FrameworkHint::Blade)
+                    || self.has_framework_hint(FrameworkHint::Php)
+                    || self.has_framework_hint(FrameworkHint::Laravel)
+            }
+            SymbolLanguage::TypeScript => self.has_framework_hint(FrameworkHint::TypeScript),
+            SymbolLanguage::Python => self.has_framework_hint(FrameworkHint::Python),
+            SymbolLanguage::Go => self.has_framework_hint(FrameworkHint::Go),
+            SymbolLanguage::Kotlin => self.has_framework_hint(FrameworkHint::Kotlin),
+            SymbolLanguage::Lua => self.has_framework_hint(FrameworkHint::Lua),
+            SymbolLanguage::Roc => self.has_framework_hint(FrameworkHint::Roc),
+            SymbolLanguage::Nim => self.has_framework_hint(FrameworkHint::Nim),
+        }
+    }
+
     pub(super) fn wants_path_witness_recall(&self) -> bool {
         let query = self.query_signals();
         let witness = self.witness_signals();
@@ -345,29 +395,32 @@ impl SearchIntentBuilder {
     }
 
     fn populate_framework_hints(&mut self, context: &QueryContext) {
-        if context.has_any(&[
-            "cargo",
-            "cargo.toml",
-            "cargo.lock",
-            "rust",
-            "crate",
-            "crates",
-        ]) {
+        if context.mentions_rust_family() {
             self.insert_framework_hint(FrameworkHint::Rust);
         }
-        if context.has_any(&[
-            "php", "composer", "artisan", "laravel", "blade", "livewire", "flux",
-        ]) {
+        if context.mentions_php_family() {
             self.insert_framework_hint(FrameworkHint::Php);
         }
-        if context.has_any(&[
-            "python",
-            "pyproject",
-            "pipfile",
-            "requirements.txt",
-            "pytest",
-        ]) {
+        if context.mentions_typescript_family() {
+            self.insert_framework_hint(FrameworkHint::TypeScript);
+        }
+        if context.mentions_python_family() {
             self.insert_framework_hint(FrameworkHint::Python);
+        }
+        if context.mentions_go_family() {
+            self.insert_framework_hint(FrameworkHint::Go);
+        }
+        if context.mentions_kotlin_family() {
+            self.insert_framework_hint(FrameworkHint::Kotlin);
+        }
+        if context.mentions_lua_family() {
+            self.insert_framework_hint(FrameworkHint::Lua);
+        }
+        if context.mentions_roc_family() {
+            self.insert_framework_hint(FrameworkHint::Roc);
+        }
+        if context.mentions_nim_family() {
+            self.insert_framework_hint(FrameworkHint::Nim);
         }
         if context.has_any(&["blade"]) {
             self.insert_framework_hint(FrameworkHint::Blade);

@@ -534,7 +534,11 @@ pub(super) fn apply_runtime_companion_surface_visibility(
     ctx: &PostSelectionContext<'_>,
     meta: PostSelectionRuleMeta,
 ) -> Vec<HybridRankedEvidence> {
-    if !ctx.intent.wants_test_witness_recall
+    let wants_runtime_companion_surface = ctx.intent.wants_runtime_witnesses
+        || ctx.intent.wants_test_witness_recall
+        || ctx.intent.wants_entrypoint_build_flow
+        || ctx.intent.wants_runtime_config_artifacts;
+    if !wants_runtime_companion_surface
         || ctx
             .selection_query_context
             .specific_witness_terms
@@ -549,8 +553,17 @@ pub(super) fn apply_runtime_companion_surface_visibility(
     let state = selection_guardrail_state(&matches, ctx);
     let query_wants_android_ui_surface = hybrid_query_has_kotlin_android_ui_terms(ctx.query_text);
     let surface_matches_query = |entry: &HybridRankedEvidence| {
+        let facts = selection_guardrail_facts(entry, &state, ctx);
         query_wants_android_ui_surface
-            || selection_guardrail_facts(entry, &state, ctx).specific_witness_path_overlap > 0
+            || facts.specific_witness_path_overlap > 0
+            || (facts.runtime_subtree_affinity > 0
+                && matches!(
+                    facts.class,
+                    HybridSourceClass::Runtime
+                        | HybridSourceClass::Support
+                        | HybridSourceClass::Tests
+                ))
+            || (facts.has_path_witness_source && facts.path_overlap > 0)
     };
     let surface_hit_matches_query = |hit: &HybridChannelHit| {
         let evidence = hybrid_ranked_evidence_from_witness_hit(hit);

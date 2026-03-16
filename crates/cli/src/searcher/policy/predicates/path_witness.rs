@@ -11,6 +11,10 @@ fn wants_runtime_config_artifacts(ctx: &PathWitnessFacts) -> bool {
     ctx.wants_runtime_config_artifacts
 }
 
+fn wants_ci_workflow_witnesses(ctx: &PathWitnessFacts) -> bool {
+    ctx.wants_ci_workflow_witnesses
+}
+
 fn wants_examples(ctx: &PathWitnessFacts) -> bool {
     ctx.wants_examples
 }
@@ -283,6 +287,10 @@ pub(crate) const fn wants_runtime_config_artifacts_leaf() -> PredicateLeaf<PathW
         "intent.runtime_config_artifacts",
         wants_runtime_config_artifacts,
     )
+}
+
+pub(crate) const fn wants_ci_workflow_witnesses_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new("intent.ci_workflow_witnesses", wants_ci_workflow_witnesses)
 }
 
 pub(crate) const fn wants_examples_leaf() -> PredicateLeaf<PathWitnessFacts> {

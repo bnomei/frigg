@@ -21,9 +21,10 @@ mod tests {
 
     use super::{
         hybrid_source_class, is_cli_command_entrypoint_path, is_entrypoint_runtime_path,
-        is_fixture_support_path, is_frontend_runtime_noise_path, is_go_entrypoint_runtime_path,
+        is_fixture_support_path, is_frontend_runtime_noise_path,
+        is_generic_runtime_witness_doc_path, is_go_entrypoint_runtime_path,
         is_kotlin_android_entrypoint_runtime_path, is_kotlin_android_ui_runtime_surface_path,
-        is_python_test_witness_path, is_root_scoped_runtime_config_path,
+        is_python_test_witness_path, is_repo_metadata_path, is_root_scoped_runtime_config_path,
         is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
         is_runtime_config_artifact_path, is_rust_workspace_config_path, is_test_support_path,
         is_typescript_runtime_module_index_path,
@@ -557,7 +558,13 @@ mod tests {
 
     #[test]
     fn web_typescript_surfaces_count_as_frontend_runtime_noise() {
-        for path in ["web/frps/tsconfig.json", "docs/frontend/openapi.json"] {
+        for path in [
+            "web/frps/tsconfig.json",
+            "docs/frontend/openapi.json",
+            "apps/docs/generator/cli.ts",
+            "website/src/runtime.tsx",
+            "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+        ] {
             assert!(
                 is_frontend_runtime_noise_path(path),
                 "{path} should be treated as frontend runtime noise"
@@ -575,6 +582,64 @@ mod tests {
             assert!(
                 !is_frontend_runtime_noise_path(path),
                 "{path} should remain available until stronger frontend evidence exists"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_runtime_witness_docs_capture_repo_meta_docs_and_docs_subtrees() {
+        for path in [
+            "README.md",
+            "CLAUDE.md",
+            "DEVELOPERS.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "website/content/editor.md",
+            "docs/guides/studio.mdx",
+        ] {
+            assert!(
+                is_generic_runtime_witness_doc_path(path),
+                "{path} should be treated as a generic runtime witness doc"
+            );
+        }
+
+        for path in [
+            "src/server.rs",
+            "apps/api/src/routes.ts",
+            "packages/cli/src/index.ts",
+        ] {
+            assert!(
+                !is_generic_runtime_witness_doc_path(path),
+                "{path} should remain eligible as a non-doc runtime surface"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_metadata_paths_capture_make_and_task_entrypoints() {
+        for path in [
+            "AGENTS.md",
+            "Cargo.toml",
+            "CLAUDE.md",
+            "CONTRIBUTING.md",
+            "DEVELOPERS.md",
+            "package.json",
+            "Makefile",
+            "justfile",
+            "pnpm-workspace.yaml",
+            "Taskfile.yml",
+            "turbo.json",
+        ] {
+            assert!(
+                is_repo_metadata_path(path),
+                "{path} should be treated as repo metadata"
+            );
+        }
+
+        for path in ["src/main.rs", "apps/api/src/server.ts", "Dockerfile"] {
+            assert!(
+                !is_repo_metadata_path(path),
+                "{path} should not be treated as repo metadata"
             );
         }
     }

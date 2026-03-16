@@ -205,6 +205,385 @@ fn hybrid_ranking_scripts_ops_queries_surface_script_and_justfile_witnesses() ->
 }
 
 #[test]
+fn hybrid_ranking_firecrawl_queries_prefer_typescript_runtime_over_python_drift() -> FriggResult<()>
+{
+    let root = temp_workspace_root("hybrid-firecrawl-typescript-locality");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "apps/api/src/workers/playwright_service.ts",
+                "export function playwrightService() { return 'typescript runtime'; }\n",
+            ),
+            (
+                "apps/api/tests/playwright_service.test.ts",
+                "describe('playwright service tests', () => {});\n",
+            ),
+            (
+                "sdk/python/firecrawl/client.py",
+                "def playwright_service_client():\n    return 'python drift'\n",
+            ),
+            (
+                "docs/python-sdk.md",
+                "# Python SDK\nplaywright service runtime tests\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "api workers playwright service typescript runtime tests".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ranked_paths.iter().take(2).any(|path| {
+            matches!(
+                *path,
+                "apps/api/src/workers/playwright_service.ts"
+                    | "apps/api/tests/playwright_service.test.ts"
+            )
+        }),
+        "typescript runtime/test witnesses should land near the top: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_n8n_queries_prefer_same_workspace_subtree_over_sibling_packages()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-n8n-workspace-subtree");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "packages/cli/src/workflow_runner.ts",
+                "export function workflowRunner() { return 'cli runtime'; }\n",
+            ),
+            (
+                "packages/cli/test/integration/workflow_runner.test.ts",
+                "describe('workflow runner integration', () => {});\n",
+            ),
+            (
+                "packages/core/src/execution_engine.ts",
+                "export function executionEngine() { return 'core runtime'; }\n",
+            ),
+            (
+                "packages/editor-ui/src/workflow_editor.tsx",
+                "export function WorkflowEditor() { return null; }\n",
+            ),
+            (
+                "packages/editor-ui/cypress/e2e/workflow_editor.cy.ts",
+                "describe('workflow editor playwright', () => {});\n",
+            ),
+            (
+                ".github/workflows/build-base-image.yml",
+                "name: build image\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+            ),
+            (
+                ".github/workflows/test-workflow-scripts-reusable.yml",
+                "name: reusable workflow\njobs:\n  test:\n    steps:\n      - run: pnpm test\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "workflow runtime executions cli integrations typescript tests".to_owned(),
+            limit: 6,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let cli_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "packages/cli/src/workflow_runner.ts"
+                    | "packages/cli/test/integration/workflow_runner.test.ts"
+            )
+        })
+        .expect("a cli subtree witness should be ranked");
+    let sibling_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "packages/core/src/execution_engine.ts"
+                    | "packages/editor-ui/src/workflow_editor.tsx"
+            )
+        })
+        .expect("sibling workspace noise should still be ranked");
+
+    assert!(
+        cli_position < sibling_position,
+        "same-subtree cli witnesses should outrank sibling workspace noise: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+#[ignore = "workstream-c escalation target"]
+fn hybrid_ranking_n8n_editor_queries_demote_ci_workflow_noise() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-n8n-editor-vs-workflow-noise");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "packages/editor-ui/src/components/canvas/NodeDetails.vue",
+                "export const canvasNodeDetails = 'editor ui vue canvas workflow node details playwright';\n",
+            ),
+            (
+                "packages/editor-ui/cypress/e2e/canvas/node-details.cy.ts",
+                "describe('editor ui vue canvas workflow node details playwright', () => {});\n",
+            ),
+            (
+                "packages/core/src/workflow_runner.ts",
+                "export const workflowRunner = 'workflow runtime';\n",
+            ),
+            (
+                ".github/workflows/build-base-image.yml",
+                "name: build image\njobs:\n  build:\n    steps:\n      - run: docker build .\n",
+            ),
+            (
+                ".github/workflows/test-workflow-scripts-reusable.yml",
+                "name: reusable workflow\njobs:\n  test:\n    steps:\n      - run: pnpm test\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "editor ui vue canvas workflow node details playwright".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let editor_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "packages/editor-ui/src/components/canvas/NodeDetails.vue"
+                    | "packages/editor-ui/cypress/e2e/canvas/node-details.cy.ts"
+            )
+        })
+        .expect("an editor-ui witness should be ranked");
+    let workflow_position = ranked_paths
+        .iter()
+        .position(|path| path.starts_with(".github/workflows/"))
+        .expect("workflow noise should still be ranked");
+
+    assert!(
+        editor_position < workflow_position,
+        "editor-ui witnesses should outrank CI workflow noise for UI workflow queries: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_supabase_queries_keep_studio_ui_and_tests_above_docs() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-supabase-studio-ui");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "apps/studio/pages/dashboard.tsx",
+                "export default function Dashboard() { return <div>studio dashboard</div>; }\n",
+            ),
+            (
+                "apps/studio/tests/e2e/dashboard.spec.ts",
+                "test('studio dashboard', async () => {});\n",
+            ),
+            (
+                "docs/guides/studio.md",
+                "# Studio guide\nstudio ui tests dashboard\n",
+            ),
+            (
+                "supabase/functions/hello/index.ts",
+                "export const hello = () => 'edge function';\n",
+            ),
+            (
+                "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                "export const templateServer = 'studio ui tests dashboard tsconfig typescript';\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "studio ui tests dashboard tsconfig typescript".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let studio_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "apps/studio/pages/dashboard.tsx" | "apps/studio/tests/e2e/dashboard.spec.ts"
+            )
+        })
+        .expect("a studio witness should be ranked");
+    let docs_position = ranked_paths
+        .iter()
+        .position(|path| *path == "docs/guides/studio.md")
+        .expect("docs drift should still be ranked");
+
+    assert!(
+        studio_position < docs_position,
+        "studio ui/test witnesses should outrank docs drift: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+#[ignore = "workstream-c escalation target"]
+fn hybrid_ranking_supabase_runtime_queries_demote_repo_meta_and_template_noise() -> FriggResult<()>
+{
+    let root = temp_workspace_root("hybrid-supabase-runtime-vs-meta-noise");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "supabase/functions/hello/index.ts",
+                "export const hello = () => 'edge functions self hosted api runtime docker typescript';\n",
+            ),
+            (
+                "apps/studio/pages/dashboard.tsx",
+                "export default function Dashboard() { return <div>edge functions self hosted api runtime docker typescript</div>; }\n",
+            ),
+            (
+                "apps/studio/tests/e2e/dashboard.spec.ts",
+                "test('edge functions self hosted api runtime docker typescript', async () => {});\n",
+            ),
+            (
+                "examples/auth/nextjs-full/lib/supabase/server.ts",
+                "export const exampleServer = 'edge functions self hosted api runtime docker typescript';\n",
+            ),
+            (
+                "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts",
+                "export const templateServer = 'edge functions self hosted api runtime docker typescript';\n",
+            ),
+            (
+                "DEVELOPERS.md",
+                "# Developers\nedge functions self hosted api runtime docker typescript\n",
+            ),
+            (
+                "CONTRIBUTING.md",
+                "# Contributing\nedge functions self hosted api runtime docker typescript\n",
+            ),
+            ("Makefile", "docker:\n\tdocker compose up\n"),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "edge functions self hosted api runtime docker typescript".to_owned(),
+            limit: 6,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let runtime_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "supabase/functions/hello/index.ts"
+                    | "apps/studio/pages/dashboard.tsx"
+                    | "apps/studio/tests/e2e/dashboard.spec.ts"
+            )
+        })
+        .expect("a runtime or nearby test witness should be ranked");
+    let noise_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "DEVELOPERS.md"
+                    | "CONTRIBUTING.md"
+                    | "Makefile"
+                    | "examples/auth/nextjs-full/lib/supabase/server.ts"
+                    | "apps/ui-library/registry/default/clients/react-router/lib/supabase/server.ts"
+            )
+        })
+        .expect("meta or template noise should still be ranked");
+
+    assert!(
+        runtime_position < noise_position,
+        "runtime witnesses should outrank repo-meta and template noise: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs() -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-rust-entrypoint-build-workflows");
     prepare_workspace(

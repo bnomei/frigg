@@ -42,8 +42,8 @@ use laravel::{
 use pipeline::{
     HAS_SPECIFIC_WITNESS_TERMS, PostSelectionPipelineFacts, QUERY_MENTIONS_CLI, TransformFn,
     WANTS_BENCHMARKS, WANTS_CI_WORKFLOW_WITNESSES, WANTS_ENTRYPOINT_BUILD_FLOW, WANTS_EXAMPLES,
-    WANTS_LARAVEL_UI_WITNESSES, WANTS_RUNTIME_CONFIG_ARTIFACTS, WANTS_SCRIPTS_OPS_WITNESSES,
-    WANTS_TEST_WITNESS_RECALL,
+    WANTS_LARAVEL_UI_WITNESSES, WANTS_RUNTIME_CONFIG_ARTIFACTS, WANTS_RUNTIME_WITNESSES,
+    WANTS_SCRIPTS_OPS_WITNESSES, WANTS_TEST_WITNESS_RECALL,
 };
 use runtime::{
     apply_ci_scripts_ops_visibility, apply_cli_entrypoint_visibility,
@@ -139,7 +139,16 @@ const RULES: &[PostSelectionRule] = &[
     PostSelectionRule::new(
         "post_selection.runtime_companion_surface",
         PolicyStage::PostSelectionRuntime,
-        Predicate::all(&[WANTS_TEST_WITNESS_RECALL, HAS_SPECIFIC_WITNESS_TERMS]),
+        Predicate::new(
+            &[HAS_SPECIFIC_WITNESS_TERMS],
+            &[
+                WANTS_RUNTIME_WITNESSES,
+                WANTS_TEST_WITNESS_RECALL,
+                WANTS_ENTRYPOINT_BUILD_FLOW,
+                WANTS_RUNTIME_CONFIG_ARTIFACTS,
+            ],
+            &[],
+        ),
         apply_runtime_companion_surface_visibility,
     ),
     PostSelectionRule::new(

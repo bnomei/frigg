@@ -15,6 +15,7 @@ pub(crate) struct SelectionStaticFeatures {
     pub(crate) is_ci_workflow: bool,
     pub(crate) is_example_support: bool,
     pub(crate) has_path_witness_source: bool,
+    pub(crate) path_witness_subtree_affinity: usize,
     pub(crate) is_repo_root_runtime_config_artifact: bool,
     pub(crate) is_typescript_runtime_module_index: bool,
 }
@@ -42,10 +43,19 @@ impl SelectionCandidate {
         } else {
             1.0
         };
-        let has_path_witness_source = evidence
+        let path_witness_paths = evidence
             .lexical_sources
             .iter()
-            .any(|source| source.starts_with("path_witness:"));
+            .filter_map(|source| parse_path_witness_source_path(source))
+            .collect::<Vec<_>>();
+        let has_path_witness_source = !path_witness_paths.is_empty();
+        let path_witness_subtree_affinity = path_witness_paths
+            .iter()
+            .map(|source_path| {
+                SharedPathFacts::workspace_subtree_affinity(&evidence.document.path, source_path)
+            })
+            .max()
+            .unwrap_or(0);
         let path_depth = shared_path.path_depth;
         let is_ci_workflow = shared_path.is_ci_workflow;
         let is_example_support = shared_path.is_example_support;
@@ -64,11 +74,24 @@ impl SelectionCandidate {
                 is_ci_workflow,
                 is_example_support,
                 has_path_witness_source,
+                path_witness_subtree_affinity,
                 is_repo_root_runtime_config_artifact,
                 is_typescript_runtime_module_index,
             },
         }
     }
+}
+
+fn parse_path_witness_source_path(source: &str) -> Option<String> {
+    let raw = source.strip_prefix("path_witness:")?;
+    let mut parts = raw.rsplitn(3, ':');
+    let column = parts.next()?;
+    let line = parts.next()?;
+    let path = parts.next()?;
+    if line.parse::<usize>().is_err() || column.parse::<usize>().is_err() {
+        return None;
+    }
+    Some(path.to_owned())
 }
 
 #[derive(Debug, Default)]
@@ -136,6 +159,7 @@ pub(crate) struct SelectionFacts {
     pub(crate) query_has_specific_blade_anchors: bool,
     pub(crate) wants_runtime_companion_tests: bool,
     pub(crate) prefer_runtime_anchor_tests: bool,
+    pub(crate) wants_language_locality_bias: bool,
     pub(crate) wants_example_or_bench_witnesses: bool,
     pub(crate) penalize_generic_runtime_docs: bool,
     pub(crate) wants_python_witnesses: bool,
@@ -162,6 +186,8 @@ pub(crate) struct SelectionFacts {
     pub(crate) wants_entrypoint_build_flow: bool,
     pub(crate) wants_examples: bool,
     pub(crate) wants_benchmarks: bool,
+    pub(crate) candidate_language_known: bool,
+    pub(crate) matches_query_language: bool,
     pub(crate) is_ci_workflow: bool,
     pub(crate) is_example_support: bool,
     pub(crate) is_runtime_config_artifact: bool,
@@ -208,6 +234,7 @@ pub(crate) struct SelectionFacts {
     pub(crate) is_laravel_bootstrap_entrypoint: bool,
     pub(crate) laravel_surface: Option<LaravelUiSurfaceClass>,
     pub(crate) laravel_surface_seen: usize,
+    pub(crate) runtime_subtree_affinity: usize,
 }
 
 impl SelectionFacts {
@@ -281,6 +308,7 @@ impl SelectionFacts {
             query_has_specific_blade_anchors: query_context.query_has_specific_blade_anchors,
             wants_runtime_companion_tests: shared_intent.wants_runtime_companion_tests,
             prefer_runtime_anchor_tests: shared_intent.prefer_runtime_anchor_tests,
+            wants_language_locality_bias: shared_intent.wants_language_locality_bias,
             wants_example_or_bench_witnesses: shared_intent.wants_example_or_bench_witnesses,
             penalize_generic_runtime_docs: shared_intent.penalize_generic_runtime_docs,
             wants_python_witnesses: shared_intent.wants_python_witnesses,
@@ -307,6 +335,8 @@ impl SelectionFacts {
             wants_entrypoint_build_flow: shared_intent.wants_entrypoint_build_flow,
             wants_examples: shared_intent.wants_examples,
             wants_benchmarks: shared_intent.wants_benchmarks,
+            candidate_language_known: shared_path.language.is_some(),
+            matches_query_language: shared_path.matches_query_language(intent),
             is_ci_workflow: candidate.static_features.is_ci_workflow,
             is_example_support: shared_path.is_example_support,
             is_runtime_config_artifact: shared_path.is_runtime_config_artifact,
@@ -355,6 +385,9 @@ impl SelectionFacts {
             is_laravel_bootstrap_entrypoint: shared_path.is_laravel_bootstrap_entrypoint,
             laravel_surface,
             laravel_surface_seen: coverage.laravel_surface_seen,
+            runtime_subtree_affinity: coverage
+                .runtime_subtree_affinity
+                .max(candidate.static_features.path_witness_subtree_affinity),
         }
     }
 }
@@ -393,6 +426,7 @@ impl Default for SelectionFacts {
             query_has_specific_blade_anchors: false,
             wants_runtime_companion_tests: false,
             prefer_runtime_anchor_tests: false,
+            wants_language_locality_bias: false,
             wants_example_or_bench_witnesses: false,
             penalize_generic_runtime_docs: false,
             wants_python_witnesses: false,
@@ -419,6 +453,8 @@ impl Default for SelectionFacts {
             wants_entrypoint_build_flow: false,
             wants_examples: false,
             wants_benchmarks: false,
+            candidate_language_known: false,
+            matches_query_language: false,
             is_ci_workflow: false,
             is_example_support: false,
             is_runtime_config_artifact: false,
@@ -465,6 +501,7 @@ impl Default for SelectionFacts {
             is_laravel_bootstrap_entrypoint: false,
             laravel_surface: None,
             laravel_surface_seen: 0,
+            runtime_subtree_affinity: 0,
         }
     }
 }

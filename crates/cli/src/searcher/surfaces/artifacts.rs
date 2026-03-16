@@ -1,5 +1,9 @@
 use std::path::Path;
 
+fn path_has_segment(path: &str, segments: &[&str]) -> bool {
+    path.split('/').any(|segment| segments.contains(&segment))
+}
+
 pub(in crate::searcher) fn is_python_runtime_config_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     matches!(
@@ -148,16 +152,22 @@ pub(in crate::searcher) fn is_frontend_runtime_noise_path(path: &str) -> bool {
     }
 
     let candidate = Path::new(&normalized);
+    let extension = candidate.extension().and_then(|ext| ext.to_str());
+    let file_name = candidate.file_name().and_then(|name| name.to_str());
+    let docs_like_segment = path_has_segment(
+        &normalized,
+        &["doc", "docs", "documentation", "site", "website"],
+    );
+    let registry_or_template_segment =
+        path_has_segment(&normalized, &["registry", "template", "templates"]);
+
     if normalized.starts_with("web/") || normalized.contains("/web/") {
-        if matches!(
-            candidate.extension().and_then(|ext| ext.to_str()),
-            Some("css" | "scss" | "svg")
-        ) {
+        if matches!(extension, Some("css" | "scss" | "svg")) {
             return true;
         }
 
         if matches!(
-            candidate.file_name().and_then(|name| name.to_str()),
+            file_name,
             Some(
                 "openapi.json"
                     | "package-lock.json"
@@ -171,8 +181,38 @@ pub(in crate::searcher) fn is_frontend_runtime_noise_path(path: &str) -> bool {
         }
     }
 
+    if docs_like_segment
+        && matches!(
+            extension,
+            Some(
+                "cjs"
+                    | "css"
+                    | "js"
+                    | "json"
+                    | "jsx"
+                    | "mdx"
+                    | "mjs"
+                    | "scss"
+                    | "svg"
+                    | "ts"
+                    | "tsx"
+            )
+        )
+    {
+        return true;
+    }
+
+    if registry_or_template_segment
+        && matches!(
+            extension,
+            Some("js" | "json" | "jsx" | "mjs" | "ts" | "tsx")
+        )
+    {
+        return true;
+    }
+
     matches!(
-        candidate.file_name().and_then(|name| name.to_str()),
+        file_name,
         Some(
             "package.json"
                 | "package-lock.json"

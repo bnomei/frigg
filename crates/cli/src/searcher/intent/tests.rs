@@ -2,6 +2,7 @@ use crate::domain::{
     ArtifactBias, FrameworkHint, PlannerStrictness, PlaybookReferencePolicy, SearchGoal,
     SearchIntentRuleId,
 };
+use crate::languages::SymbolLanguage;
 
 use super::SearchIntent;
 
@@ -228,4 +229,51 @@ fn strong_python_test_focus_queries_keep_test_witness_recall_even_with_setup_rea
     assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
     assert!(intent.has_artifact_bias(ArtifactBias::TestWitness));
     assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+}
+
+#[test]
+fn go_manifest_queries_expose_language_locality_bias_without_matching_plain_go_substrings() {
+    let intent = SearchIntent::from_query("main.go cmd cli binary go.mod goreleaser workflow");
+
+    assert!(intent.has_framework_hint(FrameworkHint::Go));
+    assert!(intent.has_language_hint());
+    assert!(intent.wants_language_locality_bias());
+    assert!(intent.prefers_symbol_language(SymbolLanguage::Go));
+    assert!(!intent.prefers_symbol_language(SymbolLanguage::Python));
+}
+
+#[test]
+fn governance_queries_do_not_trigger_go_language_hints() {
+    let intent = SearchIntent::from_query("governance controls docs workflow runtime");
+
+    assert!(!intent.has_framework_hint(FrameworkHint::Go));
+    assert!(!intent.prefers_symbol_language(SymbolLanguage::Go));
+}
+
+#[test]
+fn nim_queries_use_token_matching_for_language_hints() {
+    let intent = SearchIntent::from_query("nim package config nimble nims tests");
+
+    assert!(intent.has_framework_hint(FrameworkHint::Nim));
+    assert!(intent.has_language_hint());
+    assert!(intent.wants_language_locality_bias());
+    assert!(intent.prefers_symbol_language(SymbolLanguage::Nim));
+}
+
+#[test]
+fn playwright_and_deno_queries_activate_typescript_language_hints() {
+    let intent = SearchIntent::from_query("editor ui playwright deno js sdk tests");
+
+    assert!(intent.has_framework_hint(FrameworkHint::TypeScript));
+    assert!(intent.has_language_hint());
+    assert!(intent.wants_language_locality_bias());
+    assert!(intent.prefers_symbol_language(SymbolLanguage::TypeScript));
+}
+
+#[test]
+fn rocker_queries_do_not_trigger_roc_language_hints() {
+    let intent = SearchIntent::from_query("rocker platform runtime package build docs");
+
+    assert!(!intent.has_framework_hint(FrameworkHint::Roc));
+    assert!(!intent.prefers_symbol_language(SymbolLanguage::Roc));
 }

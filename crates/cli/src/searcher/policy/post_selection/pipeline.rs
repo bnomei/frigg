@@ -12,6 +12,7 @@ pub(super) type TransformFn = for<'a> fn(
 
 #[derive(Clone, Copy)]
 pub(super) struct PostSelectionPipelineFacts {
+    wants_runtime_witnesses: bool,
     wants_runtime_config_artifacts: bool,
     wants_entrypoint_build_flow: bool,
     wants_test_witness_recall: bool,
@@ -27,6 +28,7 @@ pub(super) struct PostSelectionPipelineFacts {
 impl PostSelectionPipelineFacts {
     pub(super) fn from_context(ctx: &PostSelectionContext<'_>) -> Self {
         Self {
+            wants_runtime_witnesses: ctx.intent.wants_runtime_witnesses,
             wants_runtime_config_artifacts: ctx.intent.wants_runtime_config_artifacts,
             wants_entrypoint_build_flow: ctx.intent.wants_entrypoint_build_flow,
             wants_test_witness_recall: ctx.intent.wants_test_witness_recall,
@@ -42,6 +44,10 @@ impl PostSelectionPipelineFacts {
                 .is_empty(),
         }
     }
+}
+
+fn wants_runtime_witnesses(facts: &PostSelectionPipelineFacts) -> bool {
+    facts.wants_runtime_witnesses
 }
 
 fn wants_runtime_config_artifacts(facts: &PostSelectionPipelineFacts) -> bool {
@@ -84,6 +90,8 @@ fn has_specific_witness_terms(facts: &PostSelectionPipelineFacts) -> bool {
     facts.has_specific_witness_terms
 }
 
+pub(super) const WANTS_RUNTIME_WITNESSES: PredicateLeaf<PostSelectionPipelineFacts> =
+    PredicateLeaf::new("intent.runtime_witnesses", wants_runtime_witnesses);
 pub(super) const WANTS_RUNTIME_CONFIG_ARTIFACTS: PredicateLeaf<PostSelectionPipelineFacts> =
     PredicateLeaf::new(
         "intent.runtime_config_artifacts",

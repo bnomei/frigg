@@ -363,6 +363,18 @@ fn wants_mixed_query_example_or_bench(ctx: &SelectionFacts) -> bool {
     ctx.wants_test_witness_recall && ctx.wants_example_or_bench_witnesses
 }
 
+fn wants_language_locality_bias(ctx: &SelectionFacts) -> bool {
+    ctx.wants_language_locality_bias
+}
+
+fn candidate_language_known(ctx: &SelectionFacts) -> bool {
+    ctx.candidate_language_known
+}
+
+fn matches_query_language(ctx: &SelectionFacts) -> bool {
+    ctx.matches_query_language
+}
+
 fn class_is_documentation(ctx: &SelectionFacts) -> bool {
     ctx.class == crate::searcher::surfaces::HybridSourceClass::Documentation
 }
@@ -425,6 +437,14 @@ fn runtime_family_prefix_overlap_one_or_two(ctx: &SelectionFacts) -> bool {
 
 fn path_depth_at_least_four(ctx: &SelectionFacts) -> bool {
     ctx.path_depth >= 4
+}
+
+fn runtime_subtree_affinity_positive(ctx: &SelectionFacts) -> bool {
+    ctx.runtime_subtree_affinity > 0
+}
+
+fn runtime_subtree_affinity_at_least_two(ctx: &SelectionFacts) -> bool {
+    ctx.runtime_subtree_affinity >= 2
 }
 
 fn seen_count_positive(ctx: &SelectionFacts) -> bool {
@@ -506,6 +526,13 @@ pub(crate) const fn wants_example_or_bench_witnesses_leaf() -> PredicateLeaf<Sel
     PredicateLeaf::new(
         "intent.example_or_bench_witnesses",
         wants_example_or_bench_witnesses,
+    )
+}
+
+pub(crate) const fn wants_language_locality_bias_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new(
+        "intent.language_locality_bias",
+        wants_language_locality_bias,
     )
 }
 
@@ -712,6 +739,14 @@ pub(crate) const fn is_bench_support_leaf() -> PredicateLeaf<SelectionFacts> {
 
 pub(crate) const fn is_test_support_leaf() -> PredicateLeaf<SelectionFacts> {
     PredicateLeaf::new("candidate.test_support", is_test_support)
+}
+
+pub(crate) const fn candidate_language_known_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new("candidate.language_known", candidate_language_known)
+}
+
+pub(crate) const fn matches_query_language_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new("candidate.language_matches_query", matches_query_language)
 }
 
 pub(crate) const fn is_examples_rs_leaf() -> PredicateLeaf<SelectionFacts> {
@@ -1073,6 +1108,20 @@ pub(crate) const fn path_depth_at_least_four_leaf() -> PredicateLeaf<SelectionFa
     )
 }
 
+pub(crate) const fn runtime_subtree_affinity_positive_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new(
+        "candidate.runtime_subtree_affinity_positive",
+        runtime_subtree_affinity_positive,
+    )
+}
+
+pub(crate) const fn runtime_subtree_affinity_at_least_two_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new(
+        "candidate.runtime_subtree_affinity_at_least_two",
+        runtime_subtree_affinity_at_least_two,
+    )
+}
+
 pub(crate) const fn seen_count_positive_leaf() -> PredicateLeaf<SelectionFacts> {
     PredicateLeaf::new("state.seen_count_positive", seen_count_positive)
 }
@@ -1315,6 +1364,11 @@ mod tests {
         assert!(!(wants_mcp_runtime_surface_leaf().eval)(&facts));
         assert!(!(wants_runtime_companion_tests_leaf().eval)(&facts));
         assert!(!(prefer_runtime_anchor_tests_leaf().eval)(&facts));
+        assert!(!(wants_language_locality_bias_leaf().eval)(&facts));
+        assert!(!(candidate_language_known_leaf().eval)(&facts));
+        assert!(!(matches_query_language_leaf().eval)(&facts));
+        assert!(!(runtime_subtree_affinity_positive_leaf().eval)(&facts));
+        assert!(!(runtime_subtree_affinity_at_least_two_leaf().eval)(&facts));
 
         facts.query_has_exact_terms = true;
         facts.query_has_identifier_anchor = true;
@@ -1329,6 +1383,10 @@ mod tests {
         facts.runtime_seen = 1;
         facts.wants_contracts = true;
         facts.wants_error_taxonomy = true;
+        facts.wants_language_locality_bias = true;
+        facts.candidate_language_known = true;
+        facts.matches_query_language = true;
+        facts.runtime_subtree_affinity = 2;
 
         assert!((query_has_exact_terms_leaf().eval)(&facts));
         assert!((query_has_identifier_anchor_leaf().eval)(&facts));
@@ -1340,6 +1398,11 @@ mod tests {
         assert!((excerpt_has_test_double_anchor_leaf().eval)(&facts));
         assert!(!(wants_runtime_companion_tests_leaf().eval)(&facts));
         assert!(!(prefer_runtime_anchor_tests_leaf().eval)(&facts));
+        assert!((wants_language_locality_bias_leaf().eval)(&facts));
+        assert!((candidate_language_known_leaf().eval)(&facts));
+        assert!((matches_query_language_leaf().eval)(&facts));
+        assert!((runtime_subtree_affinity_positive_leaf().eval)(&facts));
+        assert!((runtime_subtree_affinity_at_least_two_leaf().eval)(&facts));
 
         facts.wants_runtime_companion_tests = true;
         facts.prefer_runtime_anchor_tests = true;

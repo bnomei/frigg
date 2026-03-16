@@ -310,24 +310,36 @@ fn runtime_witness_penalizes_docs(ctx: &PathQualityFacts) -> Option<PolicyEffect
             ctx.class,
             HybridSourceClass::Documentation | HybridSourceClass::Readme
         ))
-    .then_some(PolicyEffect::Multiply(0.64))
+    .then_some(PolicyEffect::Multiply(0.48))
 }
 
 fn runtime_witness_penalizes_generic_runtime_docs(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_witnesses
         && ctx.penalize_generic_runtime_docs
         && ctx.is_generic_runtime_witness_doc)
-        .then_some(PolicyEffect::Multiply(0.58))
+        .then_some(PolicyEffect::Multiply(0.34))
 }
 
 fn runtime_witness_penalizes_repo_metadata(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_witnesses && ctx.is_repo_metadata && !ctx.is_python_runtime_config)
-        .then_some(PolicyEffect::Multiply(0.26))
+        .then_some(PolicyEffect::Multiply(0.14))
 }
 
 fn runtime_config_penalizes_test_support(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_config_artifacts && ctx.is_test_support && !ctx.is_runtime_config_artifact)
         .then_some(PolicyEffect::Multiply(0.58))
+}
+
+fn runtime_config_penalizes_generic_runtime_docs(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && ctx.is_generic_runtime_witness_doc
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Multiply(0.28))
+}
+
+fn runtime_config_penalizes_repo_metadata(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Multiply(0.16))
 }
 
 fn entrypoint_penalizes_reference_docs(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
@@ -786,6 +798,24 @@ const PATH_QUALITY_RULES: &[ScoreRule<PathQualityFacts>] = &[
             pred::is_test_support_leaf(),
         ]),
         runtime_config_penalizes_test_support,
+    ),
+    ScoreRule::when(
+        "runtime_config.penalizes_generic_runtime_docs",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_generic_runtime_witness_doc_leaf(),
+        ]),
+        runtime_config_penalizes_generic_runtime_docs,
+    ),
+    ScoreRule::when(
+        "runtime_config.penalizes_repo_metadata",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_repo_metadata_leaf(),
+        ]),
+        runtime_config_penalizes_repo_metadata,
     ),
     ScoreRule::when(
         "entrypoint.penalizes_reference_docs",
