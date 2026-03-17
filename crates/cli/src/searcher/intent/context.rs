@@ -14,6 +14,10 @@ impl QueryContext {
         needles.iter().any(|needle| self.query.contains(needle))
     }
 
+    pub(super) fn has_any_token(&self, needles: &[&str]) -> bool {
+        needles.iter().any(|needle| self.has_token(needle))
+    }
+
     fn has_token(&self, needle: &str) -> bool {
         self.query
             .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')))
@@ -28,6 +32,22 @@ impl QueryContext {
             "views",
             "slot",
             "section",
+        ])
+    }
+
+    pub(super) fn has_ui_runtime_surface_terms(&self) -> bool {
+        self.has_any(&[
+            "canvas",
+            "dashboard",
+            "editor",
+            "layout",
+            "message",
+            "messages",
+            "node details",
+            "panel",
+            "panels",
+            "screen",
+            "viewmodel",
         ])
     }
 

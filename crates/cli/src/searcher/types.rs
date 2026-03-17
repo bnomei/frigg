@@ -10,6 +10,7 @@ use crate::indexer::PhpDeclarationRelation;
 use crate::languages::{BladeSourceEvidence, PhpSourceEvidence, SymbolLanguage};
 
 use super::attribution::SearchStageAttribution;
+use super::policy::PostSelectionTrace;
 
 #[derive(Debug, Clone)]
 pub struct SearchTextQuery {
@@ -177,10 +178,12 @@ impl Default for HybridExecutionNote {
 pub struct SearchHybridExecutionOutput {
     pub matches: Vec<HybridRankedEvidence>,
     pub ranked_anchors: Vec<HybridRankedEvidence>,
+    pub(crate) coverage_grouped_pool: Vec<HybridRankedEvidence>,
     pub diagnostics: SearchExecutionDiagnostics,
     pub channel_results: Vec<ChannelResult>,
     pub note: HybridExecutionNote,
     pub stage_attribution: Option<SearchStageAttribution>,
+    pub(crate) post_selection_trace: Option<PostSelectionTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,9 +193,11 @@ pub struct HybridRankedEvidence {
     pub excerpt: String,
     pub blended_score: f32,
     pub lexical_score: f32,
+    pub witness_score: f32,
     pub graph_score: f32,
     pub semantic_score: f32,
     pub lexical_sources: Vec<String>,
+    pub witness_sources: Vec<String>,
     pub graph_sources: Vec<String>,
     pub semantic_sources: Vec<String>,
 }

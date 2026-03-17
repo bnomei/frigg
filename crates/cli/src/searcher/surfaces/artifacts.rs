@@ -97,6 +97,80 @@ pub(in crate::searcher) fn is_runtime_config_artifact_path(path: &str) -> bool {
     )
 }
 
+pub(in crate::searcher) fn is_package_surface_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let file_name = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str());
+
+    if file_name.is_some_and(|name| name.ends_with(".rockspec") || name.ends_with(".nimble")) {
+        return true;
+    }
+
+    matches!(
+        file_name,
+        Some(
+            "cargo.toml"
+                | "composer.json"
+                | "go.mod"
+                | "mix.exs"
+                | "package.json"
+                | "pyproject.toml"
+                | "setup.py"
+        )
+    )
+}
+
+pub(in crate::searcher) fn is_workspace_config_surface_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let file_name = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str());
+
+    is_root_scoped_runtime_config_path(path)
+        || matches!(
+            file_name,
+            Some(
+                "pnpm-workspace.yaml"
+                    | "turbo.json"
+                    | "workspace.json"
+                    | "nx.json"
+                    | "tsconfig.base.json"
+            )
+        )
+}
+
+pub(in crate::searcher) fn is_build_config_surface_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let file_name = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    if matches!(normalized.as_str(), "justfile" | "makefile") {
+        return true;
+    }
+
+    if matches!(
+        file_name,
+        "build.rs"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "build.zig"
+            | "build.zig.zon"
+            | "dockerfile"
+    ) {
+        return true;
+    }
+
+    file_name.starts_with("next.config.")
+        || file_name.starts_with("vite.config.")
+        || file_name.starts_with("vitest.config.")
+        || file_name.starts_with("jest.config.")
+        || file_name.starts_with("playwright.config.")
+        || file_name.starts_with("astro.config.")
+}
+
 pub(in crate::searcher) fn is_root_scoped_runtime_config_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     if !is_runtime_config_artifact_path(&normalized) {

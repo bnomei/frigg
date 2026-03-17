@@ -254,6 +254,212 @@ fn incremental_roundtrip_persist_load_and_diff() -> FriggResult<()> {
 }
 
 #[test]
+fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-materializes-retrieval-projections");
+    let workspace_root = temp_workspace_root("reindex-materializes-retrieval-projections");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/main.rs", "fn main() {}\n"),
+            ("tests/main_test.rs", "#[test]\nfn main_test() {}\n"),
+        ],
+    )?;
+
+    let semantic_runtime = SemanticRuntimeConfig {
+        enabled: false,
+        provider: None,
+        model: None,
+        strict_mode: false,
+    };
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: None,
+        gemini_api_key: None,
+    };
+    let summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+    )?;
+
+    let storage = Storage::new(&db_path);
+    for family in [
+        "path_witness",
+        "test_subject",
+        "entrypoint_surface",
+        "subtree_coverage",
+    ] {
+        let head = storage
+            .load_retrieval_projection_head_for_repository_snapshot_family(
+                "repo-001",
+                &summary.snapshot_id,
+                family,
+            )?
+            .unwrap_or_else(|| panic!("expected retrieval projection head for family '{family}'"));
+        assert_eq!(head.heuristic_version, 1);
+        assert_eq!(head.input_modes, vec!["path".to_owned()]);
+    }
+    let path_relation_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_relation",
+        )?
+        .expect("expected path relation head");
+    assert_eq!(path_relation_head.heuristic_version, 1);
+    assert_eq!(path_relation_head.input_modes, vec!["path".to_owned()]);
+
+    let path_surface_term_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_surface_term",
+        )?
+        .expect("expected path surface term head");
+    assert_eq!(path_surface_term_head.heuristic_version, 1);
+    assert_eq!(
+        path_surface_term_head.input_modes,
+        vec!["ast".to_owned(), "path".to_owned()]
+    );
+
+    let path_anchor_sketch_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_anchor_sketch",
+        )?
+        .expect("expected path anchor sketch head");
+    assert_eq!(path_anchor_sketch_head.heuristic_version, 1);
+    assert_eq!(
+        path_anchor_sketch_head.input_modes,
+        vec!["ast".to_owned(), "path".to_owned()]
+    );
+    assert!(
+        !storage
+            .load_path_witness_projections_for_repository_snapshot(
+                "repo-001",
+                &summary.snapshot_id
+            )?
+            .is_empty()
+    );
+    assert!(
+        !storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &summary.snapshot_id
+            )?
+            .is_empty()
+    );
+    assert!(
+        !storage
+            .load_path_surface_term_projections_for_repository_snapshot(
+                "repo-001",
+                &summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn reindex_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggResult<()> {
+    let db_path = temp_db_path("reindex-materializes-retrieval-projections-scip");
+    let workspace_root = temp_workspace_root("reindex-materializes-retrieval-projections-scip");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "src/a.rs",
+                "pub struct User;\nimpl User { pub fn helper() {} }\n",
+            ),
+            ("src/base.rs", "pub struct Entity;\n"),
+            (
+                ".frigg/scip/fixture.json",
+                "{\n  \"documents\": [\n    {\n      \"relative_path\": \"src/a.rs\",\n      \"occurrences\": [\n        { \"symbol\": \"scip-rust pkg repo#User\", \"range\": [0, 11, 15], \"symbol_roles\": 1 }\n      ],\n      \"symbols\": [\n        {\n          \"symbol\": \"scip-rust pkg repo#User\",\n          \"display_name\": \"User\",\n          \"kind\": \"struct\",\n          \"relationships\": [\n            { \"symbol\": \"scip-rust pkg repo#Entity\", \"is_reference\": true },\n            { \"symbol\": \"scip-rust pkg repo#Entity\", \"is_implementation\": true }\n          ]\n        }\n      ]\n    },\n    {\n      \"relative_path\": \"src/base.rs\",\n      \"occurrences\": [\n        { \"symbol\": \"scip-rust pkg repo#Entity\", \"range\": [0, 11, 17], \"symbol_roles\": 1 }\n      ],\n      \"symbols\": [\n        { \"symbol\": \"scip-rust pkg repo#Entity\", \"display_name\": \"Entity\", \"kind\": \"struct\", \"relationships\": [] }\n      ]\n    }\n  ]\n}\n",
+            ),
+        ],
+    )?;
+
+    let semantic_runtime = SemanticRuntimeConfig {
+        enabled: false,
+        provider: None,
+        model: None,
+        strict_mode: false,
+    };
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: None,
+        gemini_api_key: None,
+    };
+    let summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+    )?;
+
+    let storage = Storage::new(&db_path);
+    let path_relation_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_relation",
+        )?
+        .expect("expected path relation head");
+    assert_eq!(
+        path_relation_head.input_modes,
+        vec!["path".to_owned(), "scip".to_owned()]
+    );
+
+    let path_surface_term_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_surface_term",
+        )?
+        .expect("expected path surface term head");
+    assert_eq!(
+        path_surface_term_head.input_modes,
+        vec!["ast".to_owned(), "path".to_owned(), "scip".to_owned()]
+    );
+
+    let path_anchor_sketch_head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-001",
+            &summary.snapshot_id,
+            "path_anchor_sketch",
+        )?
+        .expect("expected path anchor sketch head");
+    assert_eq!(
+        path_anchor_sketch_head.input_modes,
+        vec!["ast".to_owned(), "path".to_owned(), "scip".to_owned()]
+    );
+
+    let path_relations = storage
+        .load_path_relation_projections_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+    assert!(
+        path_relations
+            .iter()
+            .any(|relation| relation.evidence_source == "scip"),
+        "expected at least one SCIP-backed relation row: {path_relations:?}"
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn incremental_roundtrip_changed_only_reports_zero_for_unchanged_workspace() -> FriggResult<()> {
     let db_path = temp_db_path("incremental-unchanged-db");
     let workspace_root = temp_workspace_root("incremental-unchanged-workspace");

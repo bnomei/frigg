@@ -35,6 +35,7 @@ use super::graph_channel;
 
 mod ecosystem_ranking;
 mod entrypoint_ranking;
+mod hard_pack_trace;
 mod laravel_path_witness;
 mod overlay_projection;
 mod python_ranking;

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
+use crate::searcher::build_retrieval_projection_bundle;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
 use serde::{Deserialize, Serialize};
@@ -407,6 +408,13 @@ fn execute_reindex_plan(
 ) -> FriggResult<()> {
     let storage = Storage::new(db_path);
     execute_manifest_snapshot_phase(manifest_store, workspace_root, plan)?;
+    execute_retrieval_projection_phase(
+        manifest_store,
+        repository_id,
+        workspace_root,
+        plan,
+        &storage,
+    )?;
     execute_semantic_refresh_phase(
         manifest_store,
         repository_id,
@@ -441,6 +449,59 @@ fn execute_manifest_snapshot_phase(
                 })
         }
     }
+}
+
+fn execute_retrieval_projection_phase(
+    manifest_store: &ManifestStore,
+    repository_id: &str,
+    workspace_root: &Path,
+    plan: &ReindexPlan,
+    storage: &Storage,
+) -> FriggResult<()> {
+    let ManifestSnapshotPlan::PersistNew { snapshot_id, .. } = &plan.snapshot_plan else {
+        return Ok(());
+    };
+
+    let manifest_paths = plan
+        .current_manifest
+        .iter()
+        .map(|entry| normalize_repository_relative_path(workspace_root, &entry.path))
+        .collect::<FriggResult<Vec<_>>>()?;
+
+    let projection_bundle =
+        build_retrieval_projection_bundle(repository_id, workspace_root, &manifest_paths)
+            .map_err(|err| {
+                wrap_reindex_phase_error(ReindexExecutionPhase::PersistManifestSnapshot, err)
+            })
+            .and_then(|bundle| {
+                storage
+                    .replace_retrieval_projection_bundle_for_repository_snapshot(
+                        repository_id,
+                        snapshot_id,
+                        &bundle,
+                    )
+                    .map_err(|err| {
+                        wrap_reindex_phase_error(
+                            ReindexExecutionPhase::PersistManifestSnapshot,
+                            err,
+                        )
+                    })
+            });
+
+    if let Err(err) = projection_bundle {
+        if let Err(rollback_err) = execute_snapshot_rollback_phase(manifest_store, snapshot_id) {
+            return Err(FriggError::Internal(format!(
+                "{err}; {}",
+                wrap_reindex_phase_error(
+                    ReindexExecutionPhase::RollbackManifestSnapshot,
+                    rollback_err,
+                )
+            )));
+        }
+        return Err(err);
+    }
+
+    Ok(())
 }
 
 fn execute_semantic_refresh_phase(

@@ -10,11 +10,23 @@ struct HybridScoreAccumulator {
     anchor: EvidenceAnchor,
     excerpt: String,
     lexical_score: f32,
+    witness_score: f32,
     graph_score: f32,
     semantic_score: f32,
     lexical_sources: Vec<String>,
+    witness_sources: Vec<String>,
     graph_sources: Vec<String>,
     semantic_sources: Vec<String>,
+}
+
+fn blended_lexical_family_score(lexical_score: f32, witness_score: f32) -> f32 {
+    let lexical_score = lexical_score.clamp(0.0, 1.0);
+    let witness_score = witness_score.clamp(0.0, 1.0);
+    if witness_score <= 0.0 {
+        lexical_score
+    } else {
+        (lexical_score * 0.7 + witness_score * 0.3).clamp(0.0, 1.0)
+    }
 }
 
 pub fn rank_hybrid_evidence(
@@ -47,11 +59,14 @@ pub(super) fn rank_lexical_hybrid_hits(
             document: state.document,
             anchor: state.anchor,
             excerpt: state.excerpt,
-            blended_score: state.lexical_score * weights.lexical,
+            blended_score: blended_lexical_family_score(state.lexical_score, state.witness_score)
+                * weights.lexical,
             lexical_score: state.lexical_score,
+            witness_score: state.witness_score,
             graph_score: 0.0,
             semantic_score: 0.0,
             lexical_sources: state.lexical_sources,
+            witness_sources: state.witness_sources,
             graph_sources: Vec::new(),
             semantic_sources: Vec::new(),
         })
@@ -62,6 +77,7 @@ pub(super) fn rank_lexical_hybrid_hits(
             .blended_score
             .total_cmp(&left.blended_score)
             .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
+            .then_with(|| right.witness_score.total_cmp(&left.witness_score))
             .then(left.document.cmp(&right.document))
             .then(left.anchor.cmp(&right.anchor))
             .then(left.excerpt.cmp(&right.excerpt))
@@ -87,18 +103,22 @@ pub(super) fn blend_hybrid_evidence(
     let mut ranked = by_anchor
         .into_values()
         .map(|state| {
-            let blended_score = (state.lexical_score * weights.lexical)
-                + (state.graph_score * weights.graph)
-                + (state.semantic_score * weights.semantic);
+            let blended_score =
+                (blended_lexical_family_score(state.lexical_score, state.witness_score)
+                    * weights.lexical)
+                    + (state.graph_score * weights.graph)
+                    + (state.semantic_score * weights.semantic);
             HybridRankedEvidence {
                 document: state.document,
                 anchor: state.anchor,
                 excerpt: state.excerpt,
                 blended_score,
                 lexical_score: state.lexical_score,
+                witness_score: state.witness_score,
                 graph_score: state.graph_score,
                 semantic_score: state.semantic_score,
                 lexical_sources: state.lexical_sources,
+                witness_sources: state.witness_sources,
                 graph_sources: state.graph_sources,
                 semantic_sources: state.semantic_sources,
             }
@@ -110,6 +130,7 @@ pub(super) fn blend_hybrid_evidence(
             .blended_score
             .total_cmp(&left.blended_score)
             .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
+            .then_with(|| right.witness_score.total_cmp(&left.witness_score))
             .then_with(|| right.graph_score.total_cmp(&left.graph_score))
             .then_with(|| right.semantic_score.total_cmp(&left.semantic_score))
             .then(left.document.cmp(&right.document))
@@ -124,6 +145,15 @@ pub(super) fn group_hybrid_ranked_evidence(
     ranked_anchors: Vec<HybridRankedEvidence>,
     weights: HybridChannelWeights,
     limit: usize,
+) -> Vec<HybridRankedEvidence> {
+    let mut grouped = group_all_hybrid_ranked_evidence(ranked_anchors, weights);
+    grouped.truncate(limit);
+    grouped
+}
+
+pub(super) fn group_all_hybrid_ranked_evidence(
+    ranked_anchors: Vec<HybridRankedEvidence>,
+    weights: HybridChannelWeights,
 ) -> Vec<HybridRankedEvidence> {
     #[derive(Clone)]
     struct GroupedEvidence {
@@ -153,6 +183,11 @@ pub(super) fn group_hybrid_ranked_evidence(
                     anchor.lexical_score,
                     corroborating_anchor_count,
                 );
+                winner.witness_score = corroborate_channel_score(
+                    winner.witness_score,
+                    anchor.witness_score,
+                    corroborating_anchor_count,
+                );
                 winner.graph_score = corroborate_channel_score(
                     winner.graph_score,
                     anchor.graph_score,
@@ -163,11 +198,16 @@ pub(super) fn group_hybrid_ranked_evidence(
                     anchor.semantic_score,
                     corroborating_anchor_count,
                 );
-                winner.blended_score = (winner.lexical_score * weights.lexical)
-                    + (winner.graph_score * weights.graph)
-                    + (winner.semantic_score * weights.semantic);
+                winner.blended_score =
+                    (blended_lexical_family_score(winner.lexical_score, winner.witness_score)
+                        * weights.lexical)
+                        + (winner.graph_score * weights.graph)
+                        + (winner.semantic_score * weights.semantic);
                 for source in anchor.lexical_sources {
                     insert_sorted_unique(&mut winner.lexical_sources, source);
+                }
+                for source in anchor.witness_sources {
+                    insert_sorted_unique(&mut winner.witness_sources, source);
                 }
                 for source in anchor.graph_sources {
                     insert_sorted_unique(&mut winner.graph_sources, source);
@@ -190,13 +230,13 @@ pub(super) fn group_hybrid_ranked_evidence(
             .blended_score
             .total_cmp(&left.blended_score)
             .then_with(|| right.lexical_score.total_cmp(&left.lexical_score))
+            .then_with(|| right.witness_score.total_cmp(&left.witness_score))
             .then_with(|| right.graph_score.total_cmp(&left.graph_score))
             .then_with(|| right.semantic_score.total_cmp(&left.semantic_score))
             .then(left.document.cmp(&right.document))
             .then(left.anchor.cmp(&right.anchor))
             .then(left.excerpt.cmp(&right.excerpt))
     });
-    grouped.truncate(limit);
     grouped
 }
 
@@ -247,9 +287,11 @@ fn apply_hybrid_channel_hits(
                 anchor: hit.anchor.clone(),
                 excerpt: hit.excerpt.clone(),
                 lexical_score: 0.0,
+                witness_score: 0.0,
                 graph_score: 0.0,
                 semantic_score: 0.0,
                 lexical_sources: Vec::new(),
+                witness_sources: Vec::new(),
                 graph_sources: Vec::new(),
                 semantic_sources: Vec::new(),
             });
@@ -259,12 +301,20 @@ fn apply_hybrid_channel_hits(
         }
 
         match hit.channel {
-            EvidenceChannel::LexicalManifest | EvidenceChannel::PathSurfaceWitness => {
+            EvidenceChannel::LexicalManifest => {
                 if normalized_score > state.lexical_score {
                     state.lexical_score = normalized_score;
                 }
                 for provenance_id in hit.provenance_ids {
                     insert_sorted_unique(&mut state.lexical_sources, provenance_id);
+                }
+            }
+            EvidenceChannel::PathSurfaceWitness => {
+                if normalized_score > state.witness_score {
+                    state.witness_score = normalized_score;
+                }
+                for provenance_id in hit.provenance_ids {
+                    insert_sorted_unique(&mut state.witness_sources, provenance_id);
                 }
             }
             EvidenceChannel::GraphPrecise => {
@@ -305,13 +355,25 @@ fn insert_sorted_unique(values: &mut Vec<String>, value: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceDocumentRef};
+    use crate::domain::{
+        EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceDocumentRef, EvidenceHit,
+    };
 
     fn ranked_evidence(
         path: &str,
         line: usize,
         blended_score: f32,
         lexical_score: f32,
+    ) -> HybridRankedEvidence {
+        ranked_evidence_with_channels(path, line, blended_score, lexical_score, 0.0)
+    }
+
+    fn ranked_evidence_with_channels(
+        path: &str,
+        line: usize,
+        blended_score: f32,
+        lexical_score: f32,
+        witness_score: f32,
     ) -> HybridRankedEvidence {
         HybridRankedEvidence {
             document: EvidenceDocumentRef {
@@ -324,11 +386,36 @@ mod tests {
             excerpt: format!("{path}:{line}"),
             blended_score,
             lexical_score,
+            witness_score,
             graph_score: 0.0,
             semantic_score: 0.0,
             lexical_sources: vec![format!("lexical:{path}:{line}")],
+            witness_sources: (witness_score > 0.0)
+                .then(|| vec![format!("witness:{path}:{line}")])
+                .unwrap_or_default(),
             graph_sources: Vec::new(),
             semantic_sources: Vec::new(),
+        }
+    }
+
+    fn evidence_hit(
+        path: &str,
+        line: usize,
+        channel: EvidenceChannel,
+        raw_score: f32,
+    ) -> EvidenceHit {
+        EvidenceHit {
+            channel,
+            document: EvidenceDocumentRef {
+                repository_id: "repo-001".to_owned(),
+                path: path.to_owned(),
+                line,
+                column: 1,
+            },
+            anchor: EvidenceAnchor::new(EvidenceAnchorKind::TextSpan, line, 1, line, 24),
+            raw_score,
+            excerpt: format!("{path}:{line}"),
+            provenance_ids: vec![format!("{}:{path}:{line}", channel.as_str())],
         }
     }
 
@@ -365,6 +452,106 @@ mod tests {
             vec![
                 "lexical:src/a.rs:10".to_owned(),
                 "lexical:src/a.rs:30".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn hybrid_ranking_routes_path_surface_witness_hits_into_witness_channel() {
+        let weights = HybridChannelWeights {
+            lexical: 1.0,
+            graph: 0.0,
+            semantic: 0.0,
+        };
+        let ranked = blend_hybrid_evidence(
+            &[
+                evidence_hit("src/server.rs", 12, EvidenceChannel::LexicalManifest, 0.8),
+                evidence_hit(
+                    "src/server.rs",
+                    12,
+                    EvidenceChannel::PathSurfaceWitness,
+                    0.6,
+                ),
+            ],
+            &[],
+            &[],
+            weights,
+        )
+        .expect("hybrid blend should succeed");
+
+        assert_eq!(ranked.len(), 1);
+        assert!(ranked[0].lexical_score > 0.0);
+        assert!(ranked[0].witness_score > 0.0);
+        assert_eq!(
+            ranked[0].lexical_sources,
+            vec!["lexical_manifest:src/server.rs:12".to_owned()]
+        );
+        assert_eq!(
+            ranked[0].witness_sources,
+            vec!["path_surface_witness:src/server.rs:12".to_owned()]
+        );
+    }
+
+    #[test]
+    fn hybrid_ranking_without_witness_hits_preserves_lexical_only_behavior() {
+        let weights = HybridChannelWeights {
+            lexical: 1.0,
+            graph: 0.0,
+            semantic: 0.0,
+        };
+        let lexical_only = rank_lexical_hybrid_hits(
+            &[evidence_hit(
+                "src/server.rs",
+                12,
+                EvidenceChannel::LexicalManifest,
+                0.8,
+            )],
+            weights,
+        )
+        .expect("lexical ranking should succeed");
+        let blended = blend_hybrid_evidence(
+            &[evidence_hit(
+                "src/server.rs",
+                12,
+                EvidenceChannel::LexicalManifest,
+                0.8,
+            )],
+            &[],
+            &[],
+            weights,
+        )
+        .expect("hybrid blend should succeed");
+
+        assert_eq!(blended.len(), 1);
+        assert_eq!(blended[0].lexical_score, lexical_only[0].lexical_score);
+        assert_eq!(blended[0].blended_score, lexical_only[0].blended_score);
+        assert_eq!(blended[0].witness_score, 0.0);
+        assert!(blended[0].witness_sources.is_empty());
+    }
+
+    #[test]
+    fn hybrid_ranking_document_aggregation_corroborates_witness_channel() {
+        let weights = HybridChannelWeights {
+            lexical: 1.0,
+            graph: 0.0,
+            semantic: 0.0,
+        };
+        let corroborated = ranked_evidence_with_channels("src/a.rs", 10, 0.68, 0.60, 0.40);
+        let corroborating = ranked_evidence_with_channels("src/a.rs", 30, 0.65, 0.55, 0.35);
+
+        let grouped = group_hybrid_ranked_evidence(
+            vec![corroborated.clone(), corroborating.clone()],
+            weights,
+            10,
+        );
+
+        assert_eq!(grouped.len(), 1);
+        assert!(grouped[0].witness_score > corroborated.witness_score);
+        assert_eq!(
+            grouped[0].witness_sources,
+            vec![
+                "witness:src/a.rs:10".to_owned(),
+                "witness:src/a.rs:30".to_owned(),
             ]
         );
     }

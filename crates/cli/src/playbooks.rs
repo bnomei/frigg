@@ -1,10 +1,15 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
-use crate::searcher::{SearchFilters, SearchHybridQuery, TextSearcher};
+use crate::searcher::{
+    HybridRankedEvidence, HybridRankingIntent, SearchFilters, SearchHybridExecutionOutput,
+    SearchHybridQuery, SearchStageAttribution, TextSearcher, path_quality_rule_trace,
+    path_witness_rule_trace, selection_rule_trace,
+};
 use crate::text_sanitization::{leading_metadata_comment_bounds, scrub_leading_metadata_comment};
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +41,19 @@ pub struct HybridWitnessGroup {
     pub group_id: String,
     pub match_any: Vec<String>,
     #[serde(default)]
+    pub match_mode: HybridWitnessMatchMode,
+    #[serde(default)]
+    pub accepted_prefixes: Vec<String>,
+    #[serde(default)]
     pub required_when: HybridWitnessRequirement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HybridWitnessMatchMode {
+    #[default]
+    ExactAny,
+    ExactOrPrefix,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -60,12 +77,98 @@ pub struct LoadedHybridPlaybookRegression {
     pub spec: HybridPlaybookRegression,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HybridPlaybookChannelHitSnapshot {
+    pub rank: usize,
+    pub repository_id: String,
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+    pub score: f32,
+    pub excerpt: String,
+    pub provenance_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HybridPlaybookChannelTrace {
+    pub channel: String,
+    pub health_status: String,
+    pub health_reason: Option<String>,
+    pub candidate_count: usize,
+    pub hit_count: usize,
+    pub match_count: usize,
+    pub hits: Vec<HybridPlaybookChannelHitSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HybridPlaybookRankedHitSnapshot {
+    pub rank: usize,
+    pub repository_id: String,
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+    pub blended_score: f32,
+    pub lexical_score: f32,
+    pub witness_score: f32,
+    pub graph_score: f32,
+    pub semantic_score: f32,
+    pub excerpt: String,
+    pub lexical_sources: Vec<String>,
+    pub witness_sources: Vec<String>,
+    pub graph_sources: Vec<String>,
+    pub semantic_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HybridPlaybookCandidateTraceSnapshot {
+    pub rank: usize,
+    pub path: String,
+    pub selection_rules: Vec<String>,
+    pub path_witness_rules: Vec<String>,
+    pub path_quality_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HybridPlaybookTracePacket {
+    pub playbook_id: String,
+    pub file_name: String,
+    pub query: String,
+    pub top_k: usize,
+    pub semantic_status: String,
+    pub semantic_reason: Option<String>,
+    pub status_allowed: bool,
+    pub duration_ms: u128,
+    pub matched_paths: Vec<String>,
+    pub required_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
+    pub target_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
+    pub stage_attribution: Option<SearchStageAttribution>,
+    pub channels: Vec<HybridPlaybookChannelTrace>,
+    pub ranked_anchors: Vec<HybridPlaybookRankedHitSnapshot>,
+    pub coverage_grouped_pool: Vec<HybridPlaybookRankedHitSnapshot>,
+    pub final_matches: Vec<HybridPlaybookRankedHitSnapshot>,
+    pub candidate_traces: Vec<HybridPlaybookCandidateTraceSnapshot>,
+    pub post_selection_repairs: Vec<BTreeMap<String, String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HybridPlaybookWitnessOutcome {
     pub group_id: String,
     pub match_any: Vec<String>,
+    pub match_mode: HybridWitnessMatchMode,
+    pub accepted_prefixes: Vec<String>,
     pub required_when: HybridWitnessRequirement,
+    pub matched_by: HybridWitnessMatchBy,
+    pub matched_path: Option<String>,
     pub passed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HybridWitnessMatchBy {
+    #[default]
+    None,
+    Exact,
+    Prefix,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -78,6 +181,7 @@ pub struct HybridPlaybookProbeOutcome {
     pub duration_ms: u128,
     pub execution_error: Option<String>,
     pub matched_paths: Vec<String>,
+    pub trace_path: Option<String>,
     pub required_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
     pub target_witness_groups: Vec<HybridPlaybookWitnessOutcome>,
 }
@@ -210,6 +314,10 @@ struct RawHybridWitnessGroup {
     #[serde(default)]
     paths: Vec<String>,
     #[serde(default)]
+    match_mode: HybridWitnessMatchMode,
+    #[serde(default)]
+    accepted_prefixes: Vec<String>,
+    #[serde(default)]
     required_when: HybridWitnessRequirement,
 }
 
@@ -255,6 +363,8 @@ fn normalize_hybrid_regression(
         target_witness_groups.push(HybridWitnessGroup {
             group_id: path.clone(),
             match_any: vec![path],
+            match_mode: HybridWitnessMatchMode::ExactAny,
+            accepted_prefixes: Vec::new(),
             required_when: HybridWitnessRequirement::SemanticOk,
         });
     }
@@ -286,12 +396,72 @@ fn normalize_hybrid_witness_group(raw: RawHybridWitnessGroup) -> FriggResult<Hyb
             "hybrid witness group '{group_id}' must include at least one path"
         )));
     }
+    let accepted_prefixes = raw
+        .accepted_prefixes
+        .into_iter()
+        .map(|prefix| prefix.trim().trim_matches('/').to_owned())
+        .filter(|prefix| !prefix.is_empty())
+        .fold(Vec::<String>::new(), |mut acc, prefix| {
+            if !acc.iter().any(|existing| existing == &prefix) {
+                acc.push(prefix);
+            }
+            acc
+        });
 
     Ok(HybridWitnessGroup {
         group_id,
         match_any,
+        match_mode: raw.match_mode,
+        accepted_prefixes,
         required_when: raw.required_when,
     })
+}
+
+fn path_matches_prefix(candidate: &str, prefix: &str) -> bool {
+    let normalized_candidate = candidate.trim().trim_matches('/');
+    let normalized_prefix = prefix.trim().trim_matches('/');
+    if normalized_candidate.is_empty() || normalized_prefix.is_empty() {
+        return false;
+    }
+    normalized_candidate == normalized_prefix
+        || normalized_candidate
+            .strip_prefix(normalized_prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn witness_group_match(
+    group: &HybridWitnessGroup,
+    matched_paths: &[String],
+) -> (HybridWitnessMatchBy, Option<String>, bool) {
+    if let Some(path) = group
+        .match_any
+        .iter()
+        .find_map(|expected| {
+            matched_paths
+                .iter()
+                .find(|candidate| *candidate == expected)
+        })
+        .cloned()
+    {
+        return (HybridWitnessMatchBy::Exact, Some(path), true);
+    }
+
+    if group.match_mode == HybridWitnessMatchMode::ExactOrPrefix {
+        if let Some(path) = group
+            .accepted_prefixes
+            .iter()
+            .find_map(|prefix| {
+                matched_paths
+                    .iter()
+                    .find(|candidate| path_matches_prefix(candidate, prefix))
+            })
+            .cloned()
+        {
+            return (HybridWitnessMatchBy::Prefix, Some(path), false);
+        }
+    }
+
+    (HybridWitnessMatchBy::None, None, false)
 }
 
 pub fn load_playbook_document(path: &Path) -> FriggResult<PlaybookDocument> {
@@ -365,15 +535,17 @@ fn witness_outcomes(
                     HybridWitnessRequirement::SemanticOk => semantic_status_ok,
                 }
             };
-            let passed = !required
-                || group
-                    .match_any
-                    .iter()
-                    .any(|path| matched_paths.iter().any(|candidate| candidate == path));
+            let (matched_by, matched_path, exact_matched) =
+                witness_group_match(group, matched_paths);
+            let passed = !required || exact_matched;
             HybridPlaybookWitnessOutcome {
                 group_id: group.group_id.clone(),
                 match_any: group.match_any.clone(),
+                match_mode: group.match_mode,
+                accepted_prefixes: group.accepted_prefixes.clone(),
                 required_when: group.required_when,
+                matched_by,
+                matched_path,
                 passed,
             }
         })
@@ -399,9 +571,200 @@ fn semantic_status_allowed(allowed_statuses: &[String], semantic_status: &str) -
             .any(|status| status.trim().eq_ignore_ascii_case("disabled"))
 }
 
+fn sanitize_trace_component(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut last_was_dash = false;
+    for ch in value.chars() {
+        let lowered = ch.to_ascii_lowercase();
+        if lowered.is_ascii_alphanumeric() {
+            sanitized.push(lowered);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            sanitized.push('-');
+            last_was_dash = true;
+        }
+    }
+    sanitized.trim_matches('-').to_owned()
+}
+
+fn collect_channel_traces(
+    output: &SearchHybridExecutionOutput,
+    trace_limit: usize,
+) -> Vec<HybridPlaybookChannelTrace> {
+    output
+        .channel_results
+        .iter()
+        .map(|result| HybridPlaybookChannelTrace {
+            channel: result.channel.as_str().to_owned(),
+            health_status: result.health.status.as_str().to_owned(),
+            health_reason: result.health.reason.clone(),
+            candidate_count: result.stats.candidate_count,
+            hit_count: result.stats.hit_count,
+            match_count: result.stats.match_count,
+            hits: result
+                .hits
+                .iter()
+                .take(trace_limit)
+                .enumerate()
+                .map(|(index, hit)| HybridPlaybookChannelHitSnapshot {
+                    rank: index + 1,
+                    repository_id: hit.document.repository_id.clone(),
+                    path: hit.document.path.clone(),
+                    line: hit.document.line,
+                    column: hit.document.column,
+                    score: hit.raw_score,
+                    excerpt: hit.excerpt.clone(),
+                    provenance_ids: hit.provenance_ids.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn collect_ranked_hit_snapshots(
+    hits: &[HybridRankedEvidence],
+    trace_limit: usize,
+) -> Vec<HybridPlaybookRankedHitSnapshot> {
+    hits.iter()
+        .take(trace_limit)
+        .enumerate()
+        .map(|(index, hit)| HybridPlaybookRankedHitSnapshot {
+            rank: index + 1,
+            repository_id: hit.document.repository_id.clone(),
+            path: hit.document.path.clone(),
+            line: hit.document.line,
+            column: hit.document.column,
+            blended_score: hit.blended_score,
+            lexical_score: hit.lexical_score,
+            witness_score: hit.witness_score,
+            graph_score: hit.graph_score,
+            semantic_score: hit.semantic_score,
+            excerpt: hit.excerpt.clone(),
+            lexical_sources: hit.lexical_sources.clone(),
+            witness_sources: hit.witness_sources.clone(),
+            graph_sources: hit.graph_sources.clone(),
+            semantic_sources: hit.semantic_sources.clone(),
+        })
+        .collect()
+}
+
+fn collect_candidate_traces(
+    candidates: &[HybridRankedEvidence],
+    intent: &HybridRankingIntent,
+    query_text: &str,
+    trace_limit: usize,
+) -> Vec<HybridPlaybookCandidateTraceSnapshot> {
+    let mut selected: Vec<HybridRankedEvidence> = Vec::new();
+    let mut traces = Vec::new();
+    for (index, candidate) in candidates.iter().take(trace_limit).enumerate() {
+        traces.push(HybridPlaybookCandidateTraceSnapshot {
+            rank: index + 1,
+            path: candidate.document.path.clone(),
+            selection_rules: selection_rule_trace(candidate.clone(), &selected, intent, query_text),
+            path_witness_rules: path_witness_rule_trace(
+                &candidate.document.path,
+                intent,
+                query_text,
+            ),
+            path_quality_rules: path_quality_rule_trace(&candidate.document.path, intent),
+        });
+        selected.push(candidate.clone());
+    }
+    traces
+}
+
+fn collect_post_selection_repairs(
+    output: &SearchHybridExecutionOutput,
+) -> Vec<BTreeMap<String, String>> {
+    output
+        .post_selection_trace
+        .as_ref()
+        .map(|trace| {
+            trace
+                .events
+                .iter()
+                .map(|event| {
+                    let mut entry = BTreeMap::new();
+                    entry.insert("rule_id".to_owned(), event.rule_id.to_owned());
+                    entry.insert(
+                        "rule_stage".to_owned(),
+                        format!("{:?}", event.rule_stage).to_ascii_lowercase(),
+                    );
+                    entry.insert(
+                        "action".to_owned(),
+                        format!("{:?}", event.action).to_ascii_lowercase(),
+                    );
+                    entry.insert("candidate_path".to_owned(), event.candidate_path.clone());
+                    entry.insert(
+                        "replaced_path".to_owned(),
+                        event.replaced_path.clone().unwrap_or_default(),
+                    );
+                    entry
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_trace_packet(
+    trace_root: &Path,
+    regression: &LoadedHybridPlaybookRegression,
+    output: &SearchHybridExecutionOutput,
+    outcome: &HybridPlaybookProbeOutcome,
+) -> FriggResult<String> {
+    let trace_limit = regression.spec.top_k.max(10);
+    let intent = HybridRankingIntent::from_query(&regression.spec.query);
+    let file_name = format!(
+        "{}.json",
+        sanitize_trace_component(&regression.metadata.playbook_id)
+    );
+    let trace_path = trace_root.join(file_name);
+    let packet = HybridPlaybookTracePacket {
+        playbook_id: regression.metadata.playbook_id.clone(),
+        file_name: regression
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned(),
+        query: regression.spec.query.clone(),
+        top_k: regression.spec.top_k,
+        semantic_status: outcome.semantic_status.clone(),
+        semantic_reason: outcome.semantic_reason.clone(),
+        status_allowed: outcome.status_allowed,
+        duration_ms: outcome.duration_ms,
+        matched_paths: outcome.matched_paths.clone(),
+        required_witness_groups: outcome.required_witness_groups.clone(),
+        target_witness_groups: outcome.target_witness_groups.clone(),
+        stage_attribution: output.stage_attribution.clone(),
+        channels: collect_channel_traces(output, trace_limit),
+        ranked_anchors: collect_ranked_hit_snapshots(&output.ranked_anchors, trace_limit),
+        coverage_grouped_pool: collect_ranked_hit_snapshots(
+            &output.coverage_grouped_pool,
+            trace_limit,
+        ),
+        final_matches: collect_ranked_hit_snapshots(&output.matches, trace_limit),
+        candidate_traces: collect_candidate_traces(
+            &output.coverage_grouped_pool,
+            &intent,
+            &regression.spec.query,
+            trace_limit,
+        ),
+        post_selection_repairs: collect_post_selection_repairs(output),
+    };
+    let payload = serde_json::to_string_pretty(&packet)
+        .map_err(|error| FriggError::Internal(error.to_string()))?;
+    if let Some(parent) = trace_path.parent() {
+        fs::create_dir_all(parent).map_err(FriggError::Io)?;
+    }
+    fs::write(&trace_path, payload).map_err(FriggError::Io)?;
+    Ok(trace_path.display().to_string())
+}
+
 pub fn run_hybrid_playbook_regression(
     searcher: &TextSearcher,
     regression: &LoadedHybridPlaybookRegression,
+    trace_root: Option<&Path>,
 ) -> HybridPlaybookProbeOutcome {
     let started = Instant::now();
     let query = SearchHybridQuery {
@@ -410,7 +773,11 @@ pub fn run_hybrid_playbook_regression(
         weights: Default::default(),
         semantic: Some(true),
     };
-    let result = searcher.search_hybrid_with_filters(query, SearchFilters::default());
+    let result = if trace_root.is_some() {
+        searcher.search_hybrid_with_filters_with_trace(query, SearchFilters::default())
+    } else {
+        searcher.search_hybrid_with_filters(query, SearchFilters::default())
+    };
 
     match result {
         Ok(output) => {
@@ -428,7 +795,19 @@ pub fn run_hybrid_playbook_regression(
                 .map(|entry| entry.document.path.clone())
                 .collect::<Vec<_>>();
             let semantic_status_ok = output.note.semantic_status.as_str() == "ok";
-            HybridPlaybookProbeOutcome {
+            let required_witness_groups = witness_outcomes(
+                &regression.spec.witness_groups,
+                &matched_paths,
+                semantic_status_ok,
+                false,
+            );
+            let target_witness_groups = witness_outcomes(
+                &regression.spec.target_witness_groups,
+                &matched_paths,
+                semantic_status_ok,
+                true,
+            );
+            let mut outcome = HybridPlaybookProbeOutcome {
                 file_name: regression
                     .path
                     .file_name()
@@ -441,20 +820,19 @@ pub fn run_hybrid_playbook_regression(
                 status_allowed,
                 duration_ms: started.elapsed().as_millis(),
                 execution_error: None,
-                required_witness_groups: witness_outcomes(
-                    &regression.spec.witness_groups,
-                    &matched_paths,
-                    semantic_status_ok,
-                    false,
-                ),
-                target_witness_groups: witness_outcomes(
-                    &regression.spec.target_witness_groups,
-                    &matched_paths,
-                    semantic_status_ok,
-                    true,
-                ),
                 matched_paths,
+                trace_path: None,
+                required_witness_groups,
+                target_witness_groups,
+            };
+            if let Some(trace_root) = trace_root {
+                if let Ok(trace_path) =
+                    write_trace_packet(trace_root, regression, &output, &outcome)
+                {
+                    outcome.trace_path = Some(trace_path);
+                }
             }
+            outcome
         }
         Err(err) => HybridPlaybookProbeOutcome {
             file_name: regression
@@ -470,6 +848,7 @@ pub fn run_hybrid_playbook_regression(
             duration_ms: started.elapsed().as_millis(),
             execution_error: Some(err.to_string()),
             matched_paths: Vec::new(),
+            trace_path: None,
             required_witness_groups: regression
                 .spec
                 .witness_groups
@@ -477,7 +856,11 @@ pub fn run_hybrid_playbook_regression(
                 .map(|group| HybridPlaybookWitnessOutcome {
                     group_id: group.group_id.clone(),
                     match_any: group.match_any.clone(),
+                    match_mode: group.match_mode,
+                    accepted_prefixes: group.accepted_prefixes.clone(),
                     required_when: group.required_when,
+                    matched_by: HybridWitnessMatchBy::None,
+                    matched_path: None,
                     passed: false,
                 })
                 .collect(),
@@ -488,7 +871,11 @@ pub fn run_hybrid_playbook_regression(
                 .map(|group| HybridPlaybookWitnessOutcome {
                     group_id: group.group_id.clone(),
                     match_any: group.match_any.clone(),
+                    match_mode: group.match_mode,
+                    accepted_prefixes: group.accepted_prefixes.clone(),
                     required_when: group.required_when,
+                    matched_by: HybridWitnessMatchBy::None,
+                    matched_path: None,
                     passed: false,
                 })
                 .collect(),
@@ -500,11 +887,12 @@ pub fn run_hybrid_playbook_regressions(
     searcher: &TextSearcher,
     playbooks_root: &Path,
     enforce_targets: bool,
+    trace_root: Option<&Path>,
 ) -> FriggResult<HybridPlaybookRunSummary> {
     let regressions = load_hybrid_playbook_regressions(playbooks_root)?;
     let outcomes = regressions
         .iter()
-        .map(|regression| run_hybrid_playbook_regression(searcher, regression))
+        .map(|regression| run_hybrid_playbook_regression(searcher, regression, trace_root))
         .collect::<Vec<_>>();
     let required_failures = outcomes
         .iter()
@@ -532,9 +920,9 @@ pub fn run_hybrid_playbook_regressions(
 mod tests {
     use super::{
         HybridPlaybookProbeOutcome, HybridPlaybookWitnessOutcome, HybridWitnessGroup,
-        HybridWitnessRequirement, PlaybookDocument, load_hybrid_playbook_regressions,
-        parse_playbook_document, scrub_playbook_metadata_header, semantic_status_allowed,
-        witness_outcomes,
+        HybridWitnessMatchBy, HybridWitnessMatchMode, HybridWitnessRequirement, PlaybookDocument,
+        load_hybrid_playbook_regressions, parse_playbook_document, scrub_playbook_metadata_header,
+        semantic_status_allowed, witness_outcomes,
     };
     use crate::domain::FriggResult;
     use std::env;
@@ -550,6 +938,8 @@ mod tests {
         HybridWitnessGroup {
             group_id: group_id.to_owned(),
             match_any: match_any.into_iter().map(str::to_owned).collect(),
+            match_mode: HybridWitnessMatchMode::ExactAny,
+            accepted_prefixes: Vec::new(),
             required_when,
         }
     }
@@ -563,7 +953,11 @@ mod tests {
         HybridPlaybookWitnessOutcome {
             group_id: group_id.to_owned(),
             match_any: match_any.into_iter().map(str::to_owned).collect(),
+            match_mode: HybridWitnessMatchMode::ExactAny,
+            accepted_prefixes: Vec::new(),
             required_when,
+            matched_by: HybridWitnessMatchBy::None,
+            matched_path: None,
             passed,
         }
     }
@@ -728,17 +1122,47 @@ Body text.
         let all_required = witness_outcomes(&groups, &["src/lib.rs".to_owned()], true, false);
         assert_eq!(all_required.len(), 3);
         assert_eq!(all_required[0].passed, true);
+        assert_eq!(all_required[0].matched_by, HybridWitnessMatchBy::Exact);
         assert_eq!(all_required[1].passed, false);
+        assert_eq!(all_required[1].matched_by, HybridWitnessMatchBy::None);
         assert_eq!(all_required[2].passed, false);
+        assert_eq!(all_required[2].matched_by, HybridWitnessMatchBy::None);
 
         let all_required = witness_outcomes(&groups, &["src/ignored".to_owned()], false, true);
         assert_eq!(all_required.len(), 1);
         assert_eq!(all_required[0].passed, false);
+        assert_eq!(all_required[0].matched_by, HybridWitnessMatchBy::None);
         let all_required = witness_outcomes(&groups, &["docs/ok.md".to_owned()], true, false);
         assert_eq!(all_required.len(), 3);
         assert_eq!(all_required[0].passed, false);
         assert_eq!(all_required[1].passed, true);
+        assert_eq!(all_required[1].matched_by, HybridWitnessMatchBy::Exact);
         assert_eq!(all_required[2].passed, false);
+    }
+
+    #[test]
+    fn witness_outcomes_records_prefix_hits_without_flipping_exact_gate() {
+        let groups = vec![HybridWitnessGroup {
+            group_id: "tests".to_owned(),
+            match_any: vec!["apps/server/tests/unit/foo_test.py".to_owned()],
+            match_mode: HybridWitnessMatchMode::ExactOrPrefix,
+            accepted_prefixes: vec!["apps/server/tests".to_owned()],
+            required_when: HybridWitnessRequirement::Always,
+        }];
+
+        let outcomes = witness_outcomes(
+            &groups,
+            &["apps/server/tests/integration/bar_test.py".to_owned()],
+            true,
+            false,
+        );
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].matched_by, HybridWitnessMatchBy::Prefix);
+        assert_eq!(
+            outcomes[0].matched_path,
+            Some("apps/server/tests/integration/bar_test.py".to_owned())
+        );
+        assert!(!outcomes[0].passed);
     }
 
     #[test]
@@ -758,6 +1182,7 @@ Body text.
             duration_ms: 1,
             execution_error: None,
             matched_paths: vec!["src/lib.rs".to_owned()],
+            trace_path: None,
             required_witness_groups: vec![mk_outcome(
                 "runtime",
                 vec!["src/lib.rs"],

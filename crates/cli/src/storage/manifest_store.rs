@@ -223,6 +223,56 @@ impl Storage {
         })?;
 
         tx.execute(
+            "DELETE FROM retrieval_projection_head WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete retrieval projection head rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM path_relation_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete path relation projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM subtree_coverage_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete subtree coverage projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM path_surface_term_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete path surface-term projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
+            "DELETE FROM path_anchor_sketch_projection WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to delete path anchor sketch projection rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+        tx.execute(
             "DELETE FROM file_manifest WHERE snapshot_id = ?1",
             [snapshot_id],
         )

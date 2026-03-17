@@ -378,7 +378,7 @@ fn apply_jobs_listeners_witness_terms(
 }
 
 fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchIntentBuilder) -> bool {
-    if !(context.has_any(&[
+    let explicit_runtime_signal = context.has_any(&[
         "initialize",
         "initialization",
         "server capabilities",
@@ -416,7 +416,51 @@ fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchInten
         "cli main",
         "main module",
         "runtime config",
-    ]) || context.mentions_model_data_surface()
+    ]);
+    let generic_runtime_signal = context.has_any_token(&["runtime"])
+        && (context.has_any(&[
+            "self hosted",
+            "self-hosted",
+            "edge function",
+            "edge functions",
+            "api",
+            "server",
+            "service",
+            "services",
+            "worker",
+            "workers",
+            "handler",
+            "handlers",
+            "router",
+            "route",
+            "routes",
+            "transport",
+            "http",
+            "docker",
+            "wasm",
+            "cli",
+            "bootstrap",
+            "startup",
+            "entrypoint",
+            "entry point",
+            "entry-point",
+        ]) || (context.has_any_token(&["function", "functions"])
+            && context.has_any(&["edge", "self hosted", "self-hosted", "api", "runtime"])));
+    let ui_runtime_signal = context.has_ui_runtime_surface_terms()
+        && context.has_any(&[
+            "android",
+            "compose",
+            "playwright",
+            "react",
+            "svelte",
+            "tsx",
+            "viewmodel",
+            "vue",
+        ]);
+    if !(explicit_runtime_signal
+        || generic_runtime_signal
+        || ui_runtime_signal
+        || context.mentions_model_data_surface()
         || builder.has_artifact_bias(ArtifactBias::LaravelUi)
         || builder.has_goal(SearchGoal::EntryPointBuildFlow)
         || builder.has_goal(SearchGoal::NavigationFallbacks))
@@ -481,16 +525,21 @@ fn apply_ci_workflow_witness_terms(
     context: &QueryContext,
     builder: &mut SearchIntentBuilder,
 ) -> bool {
-    if !context.has_any(&[
-        "workflow",
-        "workflows",
+    let explicit_ci_workflow_signal = context.has_any(&[
+        "github workflow",
         "github action",
         "github actions",
         "autofix",
         "release workflow",
         "publish workflow",
         "deploy workflow",
-    ]) {
+    ]);
+    let generic_workflow_signal = context.has_any(&["workflow", "workflows"])
+        && context.has_any(&[
+            "github", "ci", "action", "actions", "yaml", "yml", "release", "publish", "deploy",
+            "autofix", "build",
+        ]);
+    if !(explicit_ci_workflow_signal || generic_workflow_signal) {
         return false;
     }
 
@@ -502,14 +551,9 @@ fn apply_scripts_ops_witness_terms(
     context: &QueryContext,
     builder: &mut SearchIntentBuilder,
 ) -> bool {
-    if !context.has_any(&[
-        "script",
-        "scripts",
-        "justfile",
-        "makefile",
-        "xtask",
-        "changelog",
-    ]) {
+    if !(context.has_any_token(&["script", "scripts"])
+        || context.has_any(&["justfile", "makefile", "xtask", "changelog"]))
+    {
         return false;
     }
 

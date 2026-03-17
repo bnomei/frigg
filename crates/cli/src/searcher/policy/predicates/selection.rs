@@ -439,6 +439,10 @@ fn path_depth_at_least_four(ctx: &SelectionFacts) -> bool {
     ctx.path_depth >= 4
 }
 
+fn path_depth_is_one_or_less(ctx: &SelectionFacts) -> bool {
+    ctx.path_depth <= 1
+}
+
 fn runtime_subtree_affinity_positive(ctx: &SelectionFacts) -> bool {
     ctx.runtime_subtree_affinity > 0
 }
@@ -1108,6 +1112,13 @@ pub(crate) const fn path_depth_at_least_four_leaf() -> PredicateLeaf<SelectionFa
     )
 }
 
+pub(crate) const fn path_depth_is_one_or_less_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new(
+        "candidate.path_depth_is_one_or_less",
+        path_depth_is_one_or_less,
+    )
+}
+
 pub(crate) const fn runtime_subtree_affinity_positive_leaf() -> PredicateLeaf<SelectionFacts> {
     PredicateLeaf::new(
         "candidate.runtime_subtree_affinity_positive",
@@ -1297,6 +1308,7 @@ mod tests {
         assert!(!(specific_witness_path_overlap_leaf().eval)(&facts));
         assert!(!(blade_specific_path_overlap_leaf().eval)(&facts));
         assert!(!(path_depth_at_least_four_leaf().eval)(&facts));
+        assert!((path_depth_is_one_or_less_leaf().eval)(&facts));
         assert!((runtime_family_prefix_overlap_is_zero_leaf().eval)(&facts));
         assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(
             &facts
@@ -1327,6 +1339,7 @@ mod tests {
         assert!((specific_witness_path_overlap_leaf().eval)(&facts));
         assert!((blade_specific_path_overlap_leaf().eval)(&facts));
         assert!((path_depth_at_least_four_leaf().eval)(&facts));
+        assert!(!(path_depth_is_one_or_less_leaf().eval)(&facts));
         assert!(!(runtime_family_prefix_overlap_is_zero_leaf().eval)(&facts));
         assert!(!(runtime_family_prefix_overlap_at_least_four_leaf().eval)(
             &facts

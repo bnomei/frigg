@@ -4,7 +4,10 @@ use crate::domain::{PathClass, SourceClass};
 use crate::languages::{LanguageCapability, supported_language_for_path};
 use crate::path_class::classify_repository_path;
 
-use super::artifacts::{is_python_named_test_module_path, is_runtime_config_artifact_path};
+use super::artifacts::{
+    is_build_config_surface_path, is_package_surface_path, is_python_named_test_module_path,
+    is_runtime_config_artifact_path, is_workspace_config_surface_path,
+};
 use super::runtime::is_entrypoint_runtime_path;
 use super::tokens::{hybrid_identifier_tokens, normalize_runtime_anchor_test_stem};
 
@@ -69,6 +72,44 @@ pub(in crate::searcher) fn is_test_harness_path(path: &str) -> bool {
                 | "conftest.py"
         )
     )
+}
+
+pub(in crate::searcher) fn coverage_subtree_root(path: &str) -> Option<String> {
+    const CONTAINER_SEGMENTS: &[&str] = &["apps", "packages", "crates", "libs", "services"];
+    const ROLE_SEGMENTS: &[&str] = &[
+        "src", "tests", "test", "pages", "routes", "api", "server", "cli", "bin",
+    ];
+
+    let segments = path
+        .trim_start_matches("./")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() <= 1 {
+        return None;
+    }
+
+    let mut prefix = Vec::new();
+    if CONTAINER_SEGMENTS.contains(&segments[0]) && segments.len() >= 2 {
+        prefix.push(segments[0]);
+        prefix.push(segments[1]);
+        if segments
+            .get(2)
+            .is_some_and(|segment| ROLE_SEGMENTS.contains(segment))
+        {
+            prefix.push(segments[2]);
+        }
+    } else {
+        prefix.push(segments[0]);
+        if segments
+            .get(1)
+            .is_some_and(|segment| ROLE_SEGMENTS.contains(segment))
+        {
+            prefix.push(segments[1]);
+        }
+    }
+
+    Some(prefix.join("/"))
 }
 
 fn is_named_test_script_path(path: &str) -> bool {
@@ -141,6 +182,29 @@ pub(in crate::searcher) fn is_test_support_path(path: &str) -> bool {
 pub(in crate::searcher) fn is_fixture_support_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     normalized.starts_with("fixtures/") || normalized.contains("/fixtures/")
+}
+
+pub(in crate::searcher) fn is_runtime_companion_surface_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    if is_entrypoint_runtime_path(&normalized)
+        || is_runtime_config_artifact_path(&normalized)
+        || is_package_surface_path(&normalized)
+        || is_build_config_surface_path(&normalized)
+        || is_workspace_config_surface_path(&normalized)
+        || is_test_support_path(&normalized)
+        || is_test_harness_path(&normalized)
+        || is_fixture_support_path(&normalized)
+        || is_example_support_path(&normalized)
+        || is_bench_support_path(&normalized)
+        || is_generic_runtime_witness_doc_path(&normalized)
+        || super::runtime::is_ci_workflow_path(&normalized)
+        || super::runtime::is_scripts_ops_path(&normalized)
+        || super::artifacts::is_frontend_runtime_noise_path(&normalized)
+    {
+        return false;
+    }
+
+    matches!(hybrid_source_class(&normalized), SourceClass::Runtime)
 }
 
 pub(in crate::searcher) fn is_runtime_anchor_test_support_path(path: &str) -> bool {

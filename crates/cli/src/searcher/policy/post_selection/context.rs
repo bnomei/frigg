@@ -42,7 +42,6 @@ impl<'a> PostSelectionContext<'a> {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn new_with_trace(
         intent: &'a HybridRankingIntent,
         query_text: &'a str,
@@ -99,28 +98,27 @@ impl<'a> PostSelectionContext<'a> {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn trace_snapshot(&self) -> Option<PostSelectionTrace> {
+    pub(crate) fn trace_snapshot(&self) -> Option<PostSelectionTrace> {
         self.trace.borrow().clone()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PostSelectionRepairAction {
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) enum PostSelectionRepairAction {
     Inserted,
     Replaced,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PostSelectionTraceEvent {
-    pub(super) rule_id: &'static str,
-    pub(super) rule_stage: PolicyStage,
-    pub(super) action: PostSelectionRepairAction,
-    pub(super) candidate_path: String,
-    pub(super) replaced_path: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct PostSelectionTraceEvent {
+    pub(crate) rule_id: &'static str,
+    pub(crate) rule_stage: PolicyStage,
+    pub(crate) action: PostSelectionRepairAction,
+    pub(crate) candidate_path: String,
+    pub(crate) replaced_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct PostSelectionTrace {
-    pub(super) events: Vec<PostSelectionTraceEvent>,
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct PostSelectionTrace {
+    pub(crate) events: Vec<PostSelectionTraceEvent>,
 }

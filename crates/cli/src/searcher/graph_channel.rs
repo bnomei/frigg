@@ -19,8 +19,10 @@ use crate::languages::{
     extract_blade_source_evidence_from_source, php_symbol_indices_by_lower_name,
     php_symbol_indices_by_name, resolve_blade_relation_evidence_edges,
 };
+use crate::storage::PathRelationProjection;
 use blake3::Hasher as SignatureHasher;
 
+use super::projection_service::ProjectedGraphContext;
 use super::{
     HYBRID_GRAPH_CANDIDATE_POOL_MIN, HYBRID_GRAPH_CANDIDATE_POOL_MULTIPLIER,
     HYBRID_GRAPH_MAX_ANCHORS, HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR, HybridChannelHit,
@@ -42,6 +44,15 @@ struct HybridGraphAnchor {
     symbol_name: String,
     symbol_path: String,
     symbol_line: usize,
+    kind: HybridGraphAnchorKind,
+    term: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectedGraphAnchor {
+    path: String,
+    line: usize,
+    excerpt: String,
     kind: HybridGraphAnchorKind,
     term: String,
 }
@@ -106,12 +117,23 @@ pub(super) fn search_graph_channel_hits(
         if allowed_paths.is_empty() {
             continue;
         }
+        let non_exact_seed_paths =
+            select_non_exact_graph_seed_paths(repository, lexical_matches, &allowed_paths);
+        if let Some(projected_hits) = search_projected_graph_channel_hits(
+            searcher,
+            repository,
+            &allowed_paths,
+            &exact_terms,
+            &non_exact_seed_paths,
+            graph_candidate_limit,
+        ) {
+            graph_hits.extend(projected_hits);
+            continue;
+        }
 
         let Some(artifact) = hybrid_graph_artifact(searcher, repository) else {
             continue;
         };
-        let non_exact_seed_paths =
-            select_non_exact_graph_seed_paths(repository, lexical_matches, &allowed_paths);
 
         let anchors = select_hybrid_graph_anchors(
             &artifact.symbols,
@@ -147,6 +169,243 @@ pub(super) fn search_graph_channel_hits(
     }
 
     Ok(graph_hits)
+}
+
+fn search_projected_graph_channel_hits(
+    searcher: &TextSearcher,
+    repository: &super::RepositoryCandidateUniverse,
+    allowed_paths: &BTreeSet<String>,
+    exact_terms: &[String],
+    non_exact_seed_paths: &[String],
+    limit: usize,
+) -> Option<Vec<HybridChannelHit>> {
+    let projected = searcher
+        .projection_store_service
+        .load_projected_graph_context_for_repository(repository)?;
+    let anchors = select_projected_graph_anchors(
+        &projected,
+        allowed_paths,
+        exact_terms,
+        non_exact_seed_paths,
+    );
+    if anchors.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut hits = Vec::new();
+    for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
+        hits.push(HybridChannelHit {
+            channel: EvidenceChannel::GraphPrecise,
+            document: HybridDocumentRef {
+                repository_id: repository.repository_id.clone(),
+                path: anchor.path.clone(),
+                line: anchor.line,
+                column: 1,
+            },
+            anchor: EvidenceAnchor::new(EvidenceAnchorKind::Symbol, anchor.line, 1, anchor.line, 1)
+                .with_detail(anchor.excerpt.clone()),
+            raw_score: hybrid_graph_anchor_kind_score(anchor.kind),
+            excerpt: anchor.excerpt.clone(),
+            provenance_ids: vec![format!(
+                "graph_projection:{}:{}:{}",
+                anchor.term, anchor.path, anchor.line
+            )],
+        });
+
+        let mut adjacency = projected
+            .relations
+            .iter()
+            .filter_map(|relation| {
+                if relation.src_path == anchor.path {
+                    Some((0_u8, &relation.dst_path, relation))
+                } else if relation.dst_path == anchor.path {
+                    Some((1_u8, &relation.src_path, relation))
+                } else {
+                    None
+                }
+            })
+            .filter(|(_, path, _)| allowed_paths.contains(*path))
+            .collect::<Vec<_>>();
+        adjacency.sort_by(|left, right| {
+            projected_graph_relation_order(left.2)
+                .cmp(&projected_graph_relation_order(right.2))
+                .reverse()
+                .then(left.0.cmp(&right.0))
+                .then(left.1.cmp(right.1))
+        });
+        adjacency.truncate(HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR);
+
+        for (direction_rank, target_path, relation) in adjacency {
+            let (line, excerpt) = projected_anchor_excerpt_for_path(&projected, target_path);
+            hits.push(HybridChannelHit {
+                channel: EvidenceChannel::GraphPrecise,
+                document: HybridDocumentRef {
+                    repository_id: repository.repository_id.clone(),
+                    path: target_path.clone(),
+                    line,
+                    column: 1,
+                },
+                anchor: EvidenceAnchor::new(EvidenceAnchorKind::Symbol, line, 1, line, 1)
+                    .with_detail(excerpt.clone()),
+                raw_score: hybrid_graph_anchor_kind_score(anchor.kind)
+                    * projected_graph_relation_score(relation)
+                    * if direction_rank == 0 { 1.0 } else { 0.95 },
+                excerpt,
+                provenance_ids: vec![format!(
+                    "graph_projection:{}:{}:{}:{}",
+                    anchor.term, relation.relation_kind, target_path, line
+                )],
+            });
+        }
+    }
+
+    hits.sort_by(|left, right| {
+        right
+            .raw_score
+            .total_cmp(&left.raw_score)
+            .then(left.document.cmp(&right.document))
+            .then(left.provenance_ids.cmp(&right.provenance_ids))
+            .then(left.excerpt.cmp(&right.excerpt))
+    });
+    hits.truncate(limit);
+    Some(hits)
+}
+
+fn select_projected_graph_anchors(
+    projected: &ProjectedGraphContext,
+    allowed_paths: &BTreeSet<String>,
+    exact_terms: &[String],
+    non_exact_seed_paths: &[String],
+) -> Vec<ProjectedGraphAnchor> {
+    let mut anchors = allowed_paths
+        .iter()
+        .filter_map(|path| {
+            let surface_terms = projected.surface_terms_by_path.get(path)?;
+            let exact_term = exact_terms
+                .iter()
+                .find(|term| {
+                    surface_terms
+                        .exact_terms
+                        .iter()
+                        .any(|candidate| candidate == *term)
+                })
+                .cloned();
+            let (kind, term) = if let Some(term) = exact_term {
+                (HybridGraphAnchorKind::SymbolNameExact, term)
+            } else if hybrid_path_has_exact_stem_match(path, exact_terms) {
+                let term = Path::new(path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                (HybridGraphAnchorKind::FileStemExact, term)
+            } else {
+                return None;
+            };
+            let (line, excerpt) = projected_anchor_excerpt_for_path(projected, path);
+            Some(ProjectedGraphAnchor {
+                path: path.clone(),
+                line,
+                excerpt,
+                kind,
+                term,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    anchors.sort_by(|left, right| {
+        hybrid_graph_anchor_order(
+            &HybridGraphAnchor {
+                symbol_id: left.path.clone(),
+                symbol_name: left.excerpt.clone(),
+                symbol_path: left.path.clone(),
+                symbol_line: left.line,
+                kind: left.kind,
+                term: left.term.clone(),
+            },
+            &HybridGraphAnchor {
+                symbol_id: right.path.clone(),
+                symbol_name: right.excerpt.clone(),
+                symbol_path: right.path.clone(),
+                symbol_line: right.line,
+                kind: right.kind,
+                term: right.term.clone(),
+            },
+        )
+    });
+    anchors.truncate(HYBRID_GRAPH_MAX_ANCHORS);
+    if !anchors.is_empty() {
+        return anchors;
+    }
+
+    let mut fallback = non_exact_seed_paths
+        .iter()
+        .filter(|path| allowed_paths.contains(*path))
+        .filter_map(|path| {
+            let (line, excerpt) = projected_anchor_excerpt_for_path(projected, path);
+            Some(ProjectedGraphAnchor {
+                path: path.clone(),
+                line,
+                excerpt,
+                kind: HybridGraphAnchorKind::CanonicalFileSymbol,
+                term: Path::new(path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase(),
+            })
+        })
+        .collect::<Vec<_>>();
+    fallback.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
+    fallback.dedup_by(|left, right| left.path == right.path);
+    fallback.truncate(HYBRID_GRAPH_MAX_ANCHORS);
+    fallback
+}
+
+fn projected_anchor_excerpt_for_path(
+    projected: &ProjectedGraphContext,
+    path: &str,
+) -> (usize, String) {
+    if let Some(anchor) = projected
+        .anchors_by_path
+        .get(path)
+        .and_then(|anchors| anchors.first())
+    {
+        return (anchor.line.max(1), anchor.excerpt.clone());
+    }
+
+    let fallback = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(path)
+        .to_owned();
+    (1, fallback)
+}
+
+fn projected_graph_relation_score(relation: &PathRelationProjection) -> f32 {
+    let evidence = match relation.evidence_source.as_str() {
+        "scip" => 1.0,
+        "ast" => 0.88,
+        _ => 0.74,
+    };
+    evidence
+        * match relation.relation_kind.as_str() {
+            "symbol_implementation" => 1.0,
+            "symbol_reference" | "symbol_definition" | "symbol_type_definition" => 0.94,
+            "test_subject" | "entrypoint_workflow" | "entrypoint_config" => 0.9,
+            "entrypoint_package" | "entrypoint_workspace" | "companion_surface" => 0.84,
+            _ => 0.8,
+        }
+}
+
+fn projected_graph_relation_order(relation: &PathRelationProjection) -> (usize, &str, &str) {
+    (
+        relation.score_hint,
+        relation.relation_kind.as_str(),
+        relation.evidence_source.as_str(),
+    )
 }
 
 fn language_supports_relation_evidence(language: SymbolLanguage) -> bool {

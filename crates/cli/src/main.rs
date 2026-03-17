@@ -186,6 +186,9 @@ enum Command {
         /// Optional path for pretty JSON summary output.
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// Optional directory for per-playbook trace packets.
+        #[arg(long = "trace-root", value_name = "PATH")]
+        trace_root: Option<PathBuf>,
     },
     /// Export a deterministic sanitized workload corpus from stored provenance rows.
     ExportWorkloadCorpus {
@@ -271,6 +274,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 playbooks_root,
                 enforce_targets,
                 output,
+                trace_root,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_semantic_runtime_startup_gate(&config)?;
@@ -279,6 +283,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     &playbooks_root,
                     enforce_targets,
                     output.as_deref(),
+                    trace_root.as_deref(),
                 )?
             }
             Command::ExportWorkloadCorpus {

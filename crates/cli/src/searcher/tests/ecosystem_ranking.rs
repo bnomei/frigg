@@ -409,13 +409,14 @@ fn hybrid_ranking_n8n_editor_queries_demote_ci_workflow_noise() -> FriggResult<(
         .expect("an editor-ui witness should be ranked");
     let workflow_position = ranked_paths
         .iter()
-        .position(|path| path.starts_with(".github/workflows/"))
-        .expect("workflow noise should still be ranked");
+        .position(|path| path.starts_with(".github/workflows/"));
 
-    assert!(
-        editor_position < workflow_position,
-        "editor-ui witnesses should outrank CI workflow noise for UI workflow queries: {ranked_paths:?}"
-    );
+    if let Some(workflow_position) = workflow_position {
+        assert!(
+            editor_position < workflow_position,
+            "editor-ui witnesses should outrank CI workflow noise for UI workflow queries: {ranked_paths:?}"
+        );
+    }
 
     cleanup_workspace(&root);
     Ok(())

@@ -277,3 +277,40 @@ fn rocker_queries_do_not_trigger_roc_language_hints() {
     assert!(!intent.has_framework_hint(FrameworkHint::Roc));
     assert!(!intent.prefers_symbol_language(SymbolLanguage::Roc));
 }
+
+#[test]
+fn bare_workflow_ui_queries_do_not_activate_ci_workflow_bias() {
+    let intent = SearchIntent::from_query("editor ui vue canvas workflow node details playwright");
+
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}
+
+#[test]
+fn typescript_runtime_queries_do_not_activate_scripts_ops_from_script_substrings() {
+    let intent =
+        SearchIntent::from_query("edge functions self hosted api runtime docker typescript");
+
+    assert!(!intent.has_artifact_bias(ArtifactBias::ScriptsOps));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+    assert!(intent.has_framework_hint(FrameworkHint::TypeScript));
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+}
+
+#[test]
+fn rust_runtime_queries_with_server_and_wasm_activate_runtime_witnesses() {
+    let intent = SearchIntent::from_query("formatter server wasm flow rust runtime");
+
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+    assert!(intent.has_framework_hint(FrameworkHint::Rust));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}
+
+#[test]
+fn ui_runtime_surface_queries_activate_runtime_witnesses() {
+    let intent = SearchIntent::from_query(
+        "graphite editor panels canvas layout messages desktop wrapper svelte",
+    );
+
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}

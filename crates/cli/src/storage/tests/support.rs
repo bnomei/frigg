@@ -3,8 +3,10 @@ pub(super) use std::{env, fs};
 
 pub(super) use super::super::{
     DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, MIGRATIONS, ManifestEntry,
-    PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathWitnessProjection,
-    SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord, Storage, TestSubjectProjection,
+    PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathAnchorSketchProjection,
+    PathRelationProjection, PathSurfaceTermProjection, PathWitnessProjection,
+    RetrievalProjectionBundle, RetrievalProjectionHeadRecord, SQLITE_VEC_REQUIRED_VERSION,
+    SemanticChunkEmbeddingRecord, Storage, SubtreeCoverageProjection, TestSubjectProjection,
     VECTOR_TABLE_NAME, encode_f32_vector, ensure_provenance_db_parent_dir,
     ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
@@ -284,8 +286,16 @@ pub(super) fn path_witness_projection_record(
         path: path.to_owned(),
         path_class: PathClass::from_str(path_class).expect("valid path_class"),
         source_class: SourceClass::from_str(source_class).expect("valid source_class"),
+        file_stem: Path::new(path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
         path_terms: serde_json::from_str(path_terms_json).expect("valid path terms json"),
+        subtree_root: None,
+        family_bits: 0,
         flags_json: flags_json.to_owned(),
+        heuristic_version: 1,
     }
 }
 

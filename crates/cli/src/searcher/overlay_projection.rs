@@ -4,9 +4,16 @@ use std::path::Path;
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::languages::SymbolLanguage;
 use crate::path_class::classify_repository_path;
-use crate::storage::{EntrypointSurfaceProjection, TestSubjectProjection};
+use crate::storage::{
+    EntrypointSurfaceProjection, PathRelationProjection, PathSurfaceTermProjection,
+    TestSubjectProjection,
+};
 use serde::{Deserialize, Serialize};
 
+use super::path_witness_projection::{
+    GenericWitnessSurfaceFamily, StoredPathWitnessProjection,
+    generic_surface_families_for_projection, generic_surface_families_from_bits,
+};
 use super::{
     HybridPathWitnessQueryContext, HybridRankingIntent, hybrid_identifier_tokens,
     hybrid_overlap_count, hybrid_path_overlap_tokens, hybrid_source_class, is_ci_workflow_path,
@@ -415,6 +422,420 @@ pub(super) fn accumulate_test_subject_overlay_boosts(
     }
 
     boosts
+}
+
+pub(super) fn accumulate_companion_surface_overlay_boosts(
+    projections: &[StoredPathWitnessProjection],
+    intent: &HybridRankingIntent,
+    query_context: &HybridPathWitnessQueryContext,
+) -> BTreeMap<String, PathOverlayBoost> {
+    if !wants_companion_surface_overlay(intent) {
+        return BTreeMap::new();
+    }
+
+    let anchors = projections
+        .iter()
+        .filter_map(|projection| companion_surface_anchor(projection, query_context))
+        .collect::<Vec<_>>();
+    if anchors.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut boosts = BTreeMap::<String, PathOverlayBoost>::new();
+    for projection in projections {
+        let Some(subtree_root) = projection.subtree_root.as_deref() else {
+            continue;
+        };
+        let families = generic_surface_families_for_projection(projection);
+        if families.is_empty() {
+            continue;
+        }
+
+        let query_match =
+            query_context.match_projection_path(&projection.path, &projection.path_terms);
+        let mut best_boost = PathOverlayBoost::default();
+        for anchor in &anchors {
+            if anchor.path == projection.path {
+                continue;
+            }
+            if !subtree_roots_related(subtree_root, &anchor.subtree_root) {
+                continue;
+            }
+
+            let family_bonus = companion_surface_family_bonus(&families, &anchor.families, intent);
+            if family_bonus == 0 {
+                continue;
+            }
+
+            let same_family = families
+                .iter()
+                .any(|family| anchor.families.contains(family));
+            let mut bonus_millis = 120_u32.saturating_add(family_bonus);
+            if same_family {
+                bonus_millis = bonus_millis.saturating_add(70);
+            }
+            let term_overlap = (query_match.path_overlap.min(3) as u32)
+                .saturating_add(anchor.path_overlap.min(3) as u32)
+                .min(4);
+            bonus_millis = bonus_millis.saturating_add(term_overlap.saturating_mul(45));
+            if query_match.has_exact_query_term_match || anchor.exact_term_match {
+                bonus_millis = bonus_millis.saturating_add(80);
+            }
+            if query_match.specific_witness_path_overlap > 0 || anchor.specific_witness_overlap > 0
+            {
+                bonus_millis = bonus_millis.saturating_add(120);
+            }
+
+            let mut provenance_ids = vec![format!(
+                "overlay:companion_surface:subtree:{}:{}",
+                anchor.path, projection.path
+            )];
+            if same_family {
+                provenance_ids.push(format!(
+                    "overlay:companion_surface:family:{}:{}",
+                    anchor.path, projection.path
+                ));
+            } else {
+                provenance_ids.push(format!(
+                    "overlay:companion_surface:companion:{}:{}",
+                    anchor.path, projection.path
+                ));
+            }
+            if query_match.specific_witness_path_overlap > 0 || anchor.specific_witness_overlap > 0
+            {
+                provenance_ids.push(format!(
+                    "overlay:companion_surface:specific:{}:{}",
+                    anchor.path, projection.path
+                ));
+            }
+            if query_match.has_exact_query_term_match || anchor.exact_term_match {
+                provenance_ids.push(format!(
+                    "overlay:companion_surface:exact:{}:{}",
+                    anchor.path, projection.path
+                ));
+            }
+
+            if bonus_millis > best_boost.bonus_millis {
+                best_boost = PathOverlayBoost {
+                    bonus_millis,
+                    provenance_ids,
+                };
+            }
+        }
+
+        if best_boost.bonus_millis > 0 {
+            boosts.insert(projection.path.clone(), best_boost);
+        }
+    }
+
+    boosts
+}
+
+pub(super) fn accumulate_relation_overlay_boosts(
+    relations: &[PathRelationProjection],
+    surface_terms_by_path: &BTreeMap<String, PathSurfaceTermProjection>,
+    intent: &HybridRankingIntent,
+    query_context: &HybridPathWitnessQueryContext,
+) -> BTreeMap<String, PathOverlayBoost> {
+    if !wants_companion_surface_overlay(intent) {
+        return BTreeMap::new();
+    }
+
+    let mut boosts = BTreeMap::<String, PathOverlayBoost>::new();
+    for relation in relations {
+        let relation_bonus = relation_kind_bonus(relation, intent);
+        if relation_bonus == 0 {
+            continue;
+        }
+
+        let src_match = surface_term_match_score(
+            surface_terms_by_path.get(&relation.src_path),
+            &relation.shared_terms,
+            query_context,
+        );
+        let dst_match = surface_term_match_score(
+            surface_terms_by_path.get(&relation.dst_path),
+            &relation.shared_terms,
+            query_context,
+        );
+        if src_match.total == 0 && dst_match.total == 0 {
+            continue;
+        }
+
+        if src_match.total >= dst_match.total && src_match.total > 0 {
+            let boost = relation_overlay_boost(
+                relation,
+                &relation.dst_path,
+                "dst",
+                src_match,
+                relation_bonus,
+            );
+            boosts
+                .entry(relation.dst_path.clone())
+                .or_default()
+                .merge(boost);
+        }
+        if dst_match.total >= src_match.total && dst_match.total > 0 {
+            let boost = relation_overlay_boost(
+                relation,
+                &relation.src_path,
+                "src",
+                dst_match,
+                relation_bonus,
+            );
+            boosts
+                .entry(relation.src_path.clone())
+                .or_default()
+                .merge(boost);
+        }
+    }
+
+    boosts
+}
+
+#[derive(Debug, Clone)]
+struct CompanionSurfaceAnchor {
+    path: String,
+    subtree_root: String,
+    families: Vec<GenericWitnessSurfaceFamily>,
+    path_overlap: usize,
+    specific_witness_overlap: usize,
+    exact_term_match: bool,
+}
+
+fn wants_companion_surface_overlay(intent: &HybridRankingIntent) -> bool {
+    intent.wants_runtime_witnesses
+        || intent.wants_tests
+        || intent.wants_test_witness_recall
+        || intent.wants_entrypoint_build_flow
+        || intent.wants_runtime_config_artifacts
+}
+
+fn companion_surface_anchor(
+    projection: &StoredPathWitnessProjection,
+    query_context: &HybridPathWitnessQueryContext,
+) -> Option<CompanionSurfaceAnchor> {
+    let subtree_root = projection.subtree_root.clone()?;
+    let families = generic_surface_families_for_projection(projection);
+    if families.is_empty() {
+        return None;
+    }
+
+    let query_match = query_context.match_projection_path(&projection.path, &projection.path_terms);
+    if query_match.path_overlap == 0
+        && query_match.specific_witness_path_overlap == 0
+        && !query_match.has_exact_query_term_match
+    {
+        return None;
+    }
+
+    Some(CompanionSurfaceAnchor {
+        path: projection.path.clone(),
+        subtree_root,
+        families,
+        path_overlap: query_match.path_overlap,
+        specific_witness_overlap: query_match.specific_witness_path_overlap,
+        exact_term_match: query_match.has_exact_query_term_match,
+    })
+}
+
+fn companion_surface_family_bonus(
+    left: &[GenericWitnessSurfaceFamily],
+    right: &[GenericWitnessSurfaceFamily],
+    intent: &HybridRankingIntent,
+) -> u32 {
+    let mut best = 0_u32;
+    for &left_family in left {
+        for &right_family in right {
+            let bonus = family_pair_bonus(left_family, right_family, intent);
+            if bonus > best {
+                best = bonus;
+            }
+        }
+    }
+    best
+}
+
+fn family_pair_bonus(
+    left: GenericWitnessSurfaceFamily,
+    right: GenericWitnessSurfaceFamily,
+    intent: &HybridRankingIntent,
+) -> u32 {
+    use GenericWitnessSurfaceFamily::{
+        BuildConfig, Entrypoint, PackageSurface, Runtime, Tests, WorkspaceConfig,
+    };
+
+    if left == right && left == Tests {
+        return 0;
+    }
+    if left == right {
+        return 140;
+    }
+
+    match (left, right) {
+        (Runtime, Tests) | (Tests, Runtime)
+            if intent.wants_runtime_witnesses
+                || intent.wants_tests
+                || intent.wants_test_witness_recall =>
+        {
+            120
+        }
+        (Runtime, Entrypoint) | (Entrypoint, Runtime)
+            if intent.wants_runtime_witnesses || intent.wants_entrypoint_build_flow =>
+        {
+            110
+        }
+        (Runtime, PackageSurface)
+        | (PackageSurface, Runtime)
+        | (Runtime, BuildConfig)
+        | (BuildConfig, Runtime)
+        | (Runtime, WorkspaceConfig)
+        | (WorkspaceConfig, Runtime)
+            if intent.wants_runtime_witnesses || intent.wants_runtime_config_artifacts =>
+        {
+            100
+        }
+        (Entrypoint, BuildConfig)
+        | (BuildConfig, Entrypoint)
+        | (Entrypoint, WorkspaceConfig)
+        | (WorkspaceConfig, Entrypoint)
+        | (Entrypoint, PackageSurface)
+        | (PackageSurface, Entrypoint)
+            if intent.wants_entrypoint_build_flow || intent.wants_runtime_config_artifacts =>
+        {
+            95
+        }
+        (PackageSurface, BuildConfig)
+        | (BuildConfig, PackageSurface)
+        | (PackageSurface, WorkspaceConfig)
+        | (WorkspaceConfig, PackageSurface)
+        | (BuildConfig, WorkspaceConfig)
+        | (WorkspaceConfig, BuildConfig)
+            if intent.wants_runtime_config_artifacts =>
+        {
+            90
+        }
+        (Tests, Entrypoint) | (Entrypoint, Tests)
+            if intent.wants_test_witness_recall || intent.wants_entrypoint_build_flow =>
+        {
+            85
+        }
+        _ => 0,
+    }
+}
+
+fn subtree_roots_related(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SurfaceTermMatch {
+    total: u32,
+    weighted_overlap: u32,
+    shared_overlap: u32,
+    exact_term_match: bool,
+}
+
+fn surface_term_match_score(
+    projection: Option<&PathSurfaceTermProjection>,
+    shared_terms: &[String],
+    query_context: &HybridPathWitnessQueryContext,
+) -> SurfaceTermMatch {
+    let Some(projection) = projection else {
+        return SurfaceTermMatch::default();
+    };
+    let weighted_overlap = query_context
+        .query_overlap_terms
+        .iter()
+        .filter_map(|term| projection.term_weights.get(term))
+        .map(|weight| *weight as u32)
+        .sum::<u32>()
+        .min(20);
+    let shared_overlap =
+        hybrid_overlap_count(shared_terms, &query_context.query_overlap_terms).min(4) as u32;
+    let exact_term_match = query_context.exact_terms.iter().any(|term| {
+        projection
+            .exact_terms
+            .iter()
+            .any(|candidate| candidate == term)
+    });
+    let total = weighted_overlap
+        .saturating_add(shared_overlap.saturating_mul(3))
+        .saturating_add(u32::from(exact_term_match).saturating_mul(6));
+    SurfaceTermMatch {
+        total,
+        weighted_overlap,
+        shared_overlap,
+        exact_term_match,
+    }
+}
+
+fn relation_kind_bonus(relation: &PathRelationProjection, intent: &HybridRankingIntent) -> u32 {
+    match relation.relation_kind.as_str() {
+        "companion_surface" if wants_companion_surface_overlay(intent) => 220,
+        "entrypoint_workflow" if intent.wants_entrypoint_build_flow => 240,
+        "entrypoint_config"
+            if intent.wants_runtime_config_artifacts || intent.wants_entrypoint_build_flow =>
+        {
+            230
+        }
+        "entrypoint_package"
+            if intent.wants_runtime_config_artifacts || intent.wants_runtime_witnesses =>
+        {
+            215
+        }
+        "entrypoint_workspace"
+            if intent.wants_runtime_config_artifacts || intent.wants_entrypoint_build_flow =>
+        {
+            205
+        }
+        "test_subject" if intent.wants_tests || intent.wants_test_witness_recall => 200,
+        _ => {
+            let left = generic_surface_families_from_bits(relation.src_family_bits);
+            let right = generic_surface_families_from_bits(relation.dst_family_bits);
+            companion_surface_family_bonus(&left, &right, intent)
+        }
+    }
+}
+
+fn relation_overlay_boost(
+    relation: &PathRelationProjection,
+    target_path: &str,
+    direction: &str,
+    surface_match: SurfaceTermMatch,
+    relation_bonus: u32,
+) -> PathOverlayBoost {
+    let bonus_millis = relation_bonus
+        .saturating_add(surface_match.weighted_overlap.saturating_mul(20))
+        .saturating_add(surface_match.shared_overlap.saturating_mul(35))
+        .saturating_add(u32::from(surface_match.exact_term_match).saturating_mul(90))
+        .saturating_add((relation.score_hint.min(32) as u32).saturating_mul(4));
+    let mut provenance_ids = vec![format!(
+        "overlay:path_relation:{}:{}:{}",
+        relation.relation_kind, direction, target_path
+    )];
+    if surface_match.exact_term_match {
+        provenance_ids.push(format!(
+            "overlay:path_relation:exact:{}:{}",
+            relation.src_path, relation.dst_path
+        ));
+    }
+    if surface_match.shared_overlap > 0 {
+        provenance_ids.push(format!(
+            "overlay:path_relation:shared:{}:{}",
+            relation.src_path, relation.dst_path
+        ));
+    }
+    PathOverlayBoost {
+        bonus_millis,
+        provenance_ids,
+    }
 }
 
 fn encode_test_subject_projection_record(
@@ -862,6 +1283,42 @@ mod tests {
             boosts
                 .get("src/user_service.rs")
                 .is_some_and(|boost| boost.bonus_millis > 0)
+        );
+    }
+
+    #[test]
+    fn companion_surface_overlay_boosts_promote_same_subtree_runtime_and_config_surfaces() {
+        let projections = vec![
+            StoredPathWitnessProjection::from_path("packages/editor-ui/src/main.ts"),
+            StoredPathWitnessProjection::from_path("packages/editor-ui/package.json"),
+            StoredPathWitnessProjection::from_path("packages/editor-ui/tsconfig.base.json"),
+            StoredPathWitnessProjection::from_path("packages/worker/src/main.ts"),
+        ];
+        let intent = HybridRankingIntent::from_query("editor ui runtime config main tsconfig");
+        let query_context = HybridPathWitnessQueryContext::from_query_text(
+            "editor ui runtime config main tsconfig",
+        );
+
+        let boosts =
+            accumulate_companion_surface_overlay_boosts(&projections, &intent, &query_context);
+
+        assert!(
+            boosts
+                .get("packages/editor-ui/package.json")
+                .is_some_and(|boost| boost.bonus_millis > 0),
+            "same-subtree package surface should receive a companion boost"
+        );
+        assert!(
+            boosts
+                .get("packages/editor-ui/tsconfig.base.json")
+                .is_some_and(|boost| boost.bonus_millis > 0),
+            "same-subtree workspace config should receive a companion boost"
+        );
+        assert!(
+            boosts
+                .get("packages/worker/src/main.ts")
+                .is_none_or(|boost| boost.bonus_millis == 0),
+            "sibling workspace runtime should not inherit an editor-ui companion boost"
         );
     }
 }

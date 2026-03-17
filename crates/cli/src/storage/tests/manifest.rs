@@ -1,4 +1,5 @@
 use super::support::*;
+use std::collections::BTreeMap;
 
 #[test]
 fn manifest_upsert_and_load_for_snapshot_roundtrip() -> FriggResult<()> {
@@ -591,6 +592,238 @@ fn delete_snapshot_removes_overlay_projection_rows() -> FriggResult<()> {
     assert!(
         storage
             .load_entrypoint_surface_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .is_empty()
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn retrieval_projection_bundle_replace_and_load_roundtrip() -> FriggResult<()> {
+    let db_path = temp_db_path("retrieval-projection-bundle-roundtrip");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[
+            manifest_entry("src/main.rs", "hash-main", 10, Some(100)),
+            manifest_entry("Cargo.toml", "hash-cargo", 10, Some(100)),
+        ],
+    )?;
+
+    let bundle = RetrievalProjectionBundle {
+        heads: vec![
+            RetrievalProjectionHeadRecord {
+                family: "path_witness".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            },
+            RetrievalProjectionHeadRecord {
+                family: "path_relation".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            },
+            RetrievalProjectionHeadRecord {
+                family: "subtree_coverage".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            },
+            RetrievalProjectionHeadRecord {
+                family: "path_surface_term".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            },
+            RetrievalProjectionHeadRecord {
+                family: "path_anchor_sketch".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            },
+        ],
+        path_witness: vec![path_witness_projection_record(
+            "repo-1",
+            "snapshot-001",
+            "src/main.rs",
+            "runtime",
+            "runtime",
+            r#"["src","main","rs"]"#,
+            r#"{"is_entrypoint_runtime":true}"#,
+        )],
+        test_subject: Vec::new(),
+        entrypoint_surface: Vec::new(),
+        path_relations: vec![PathRelationProjection {
+            src_path: "src/main.rs".to_owned(),
+            dst_path: "Cargo.toml".to_owned(),
+            relation_kind: "entrypoint_package".to_owned(),
+            evidence_source: "path".to_owned(),
+            src_symbol_id: None,
+            dst_symbol_id: None,
+            src_family_bits: 1,
+            dst_family_bits: 4,
+            shared_terms: vec!["main".to_owned()],
+            score_hint: 110,
+        }],
+        subtree_coverage: vec![SubtreeCoverageProjection {
+            subtree_root: "src".to_owned(),
+            family: "runtime".to_owned(),
+            path_count: 1,
+            exemplar_path: "src/main.rs".to_owned(),
+            exemplar_score_hint: 24,
+        }],
+        path_surface_terms: vec![PathSurfaceTermProjection {
+            path: "src/main.rs".to_owned(),
+            term_weights: BTreeMap::from([("main".to_owned(), 4), ("entrypoint".to_owned(), 2)]),
+            exact_terms: vec!["main".to_owned(), "entrypoint".to_owned()],
+        }],
+        path_anchor_sketches: vec![PathAnchorSketchProjection {
+            path: "src/main.rs".to_owned(),
+            anchor_rank: 0,
+            line: 1,
+            anchor_kind: "line_excerpt".to_owned(),
+            excerpt: "fn main() {}".to_owned(),
+            terms: vec!["main".to_owned()],
+            score_hint: 18,
+        }],
+    };
+
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &bundle,
+    )?;
+
+    let head = storage
+        .load_retrieval_projection_head_for_repository_snapshot_family(
+            "repo-1",
+            "snapshot-001",
+            "path_relation",
+        )?
+        .expect("expected path relation head");
+    assert_eq!(head.row_count, 1);
+    assert_eq!(head.input_modes, vec!["path".to_owned()]);
+    assert_eq!(
+        storage
+            .load_path_relation_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .load_subtree_coverage_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .load_path_surface_term_projections_for_repository_snapshot("repo-1", "snapshot-001",)?
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .load_path_anchor_sketch_projections_for_repository_snapshot("repo-1", "snapshot-001",)?
+            .len(),
+        1
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn delete_snapshot_removes_retrieval_projection_bundle_rows() -> FriggResult<()> {
+    let db_path = temp_db_path("retrieval-projection-bundle-delete-snapshot");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        &RetrievalProjectionBundle {
+            heads: vec![RetrievalProjectionHeadRecord {
+                family: "path_anchor_sketch".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            }],
+            path_witness: Vec::new(),
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: vec![PathRelationProjection {
+                src_path: "src/main.rs".to_owned(),
+                dst_path: "src/main.rs".to_owned(),
+                relation_kind: "companion_surface".to_owned(),
+                evidence_source: "path".to_owned(),
+                src_symbol_id: None,
+                dst_symbol_id: None,
+                src_family_bits: 1,
+                dst_family_bits: 1,
+                shared_terms: vec!["main".to_owned()],
+                score_hint: 80,
+            }],
+            subtree_coverage: vec![SubtreeCoverageProjection {
+                subtree_root: "src".to_owned(),
+                family: "runtime".to_owned(),
+                path_count: 1,
+                exemplar_path: "src/main.rs".to_owned(),
+                exemplar_score_hint: 10,
+            }],
+            path_surface_terms: vec![PathSurfaceTermProjection {
+                path: "src/main.rs".to_owned(),
+                term_weights: BTreeMap::from([("main".to_owned(), 4)]),
+                exact_terms: vec!["main".to_owned()],
+            }],
+            path_anchor_sketches: vec![PathAnchorSketchProjection {
+                path: "src/main.rs".to_owned(),
+                anchor_rank: 0,
+                line: 1,
+                anchor_kind: "line_excerpt".to_owned(),
+                excerpt: "fn main() {}".to_owned(),
+                terms: vec!["main".to_owned()],
+                score_hint: 18,
+            }],
+        },
+    )?;
+
+    storage.delete_snapshot("snapshot-001")?;
+
+    assert!(
+        storage
+            .load_retrieval_projection_head_for_repository_snapshot_family(
+                "repo-1",
+                "snapshot-001",
+                "path_anchor_sketch",
+            )?
+            .is_none()
+    );
+    assert!(
+        storage
+            .load_path_relation_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .is_empty()
+    );
+    assert!(
+        storage
+            .load_subtree_coverage_projections_for_repository_snapshot("repo-1", "snapshot-001")?
+            .is_empty()
+    );
+    assert!(
+        storage
+            .load_path_surface_term_projections_for_repository_snapshot("repo-1", "snapshot-001",)?
+            .is_empty()
+    );
+    assert!(
+        storage
+            .load_path_anchor_sketch_projections_for_repository_snapshot("repo-1", "snapshot-001",)?
             .is_empty()
     );
 

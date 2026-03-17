@@ -22,6 +22,7 @@ mod query_terms;
 mod ranker;
 mod regex_support;
 mod reranker;
+mod retrieval_projection;
 mod scan_engine;
 mod semantic;
 mod surfaces;
@@ -44,7 +45,7 @@ use candidates::{
     walk_candidate_files_for_repository,
 };
 use graph_channel::{HybridGraphArtifact, HybridGraphArtifactCacheKey, search_graph_channel_hits};
-use intent::HybridRankingIntent;
+pub(crate) use intent::HybridRankingIntent;
 use laravel::{
     is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
     is_laravel_command_or_middleware_path, is_laravel_core_provider_path,
@@ -75,8 +76,12 @@ pub(crate) use overlay_projection::{
     decode_entrypoint_surface_projection_records, decode_test_subject_projection_records,
 };
 pub(crate) use path_witness_projection::{
-    StoredPathWitnessProjection, build_path_witness_projection_records_from_paths,
-    decode_path_witness_projection_records,
+    PATH_WITNESS_PROJECTION_HEURISTIC_VERSION, StoredPathWitnessProjection,
+    build_path_witness_projection_records_from_paths, decode_path_witness_projection_records,
+};
+pub(crate) use policy::{
+    apply_post_selection_guardrails_with_trace, path_quality_rule_trace, path_witness_rule_trace,
+    selection_rule_trace,
 };
 use projection_service::ProjectionStoreService;
 use query_terms::{
@@ -85,12 +90,20 @@ use query_terms::{
     hybrid_path_overlap_count, hybrid_path_overlap_tokens, hybrid_query_exact_terms,
     hybrid_query_overlap_terms,
 };
+#[cfg(test)]
+use ranker::group_hybrid_ranked_evidence;
 pub use ranker::rank_hybrid_evidence;
-use ranker::{blend_hybrid_evidence, group_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
+use ranker::{blend_hybrid_evidence, group_all_hybrid_ranked_evidence, rank_lexical_hybrid_hits};
 use regex::Regex;
 pub use regex_support::{RegexSearchError, compile_safe_regex};
 use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
-use reranker::diversify_hybrid_ranked_evidence;
+use reranker::{build_coverage_grouped_pool, diversify_hybrid_ranked_evidence};
+pub(crate) use retrieval_projection::{
+    ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION,
+    RETRIEVAL_PROJECTION_FAMILY_ENTRYPOINT_SURFACE, RETRIEVAL_PROJECTION_FAMILY_PATH_WITNESS,
+    RETRIEVAL_PROJECTION_FAMILY_TEST_SUBJECT, TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
+    build_retrieval_projection_bundle,
+};
 use semantic::{
     RuntimeSemanticQueryEmbeddingExecutor, SemanticRuntimeQueryEmbeddingExecutor,
     retain_semantic_hits_for_query, search_semantic_channel_hits,
@@ -98,11 +111,13 @@ use semantic::{
 #[cfg(test)]
 use surfaces::HybridSourceClass;
 use surfaces::{
-    hybrid_source_class, is_bench_support_path, is_ci_workflow_path, is_cli_test_support_path,
+    coverage_subtree_root, hybrid_source_class, is_bench_support_path,
+    is_build_config_surface_path, is_ci_workflow_path, is_cli_test_support_path,
     is_entrypoint_build_workflow_path, is_entrypoint_runtime_path, is_example_support_path,
     is_frontend_runtime_noise_path, is_kotlin_android_ui_runtime_surface_path,
-    is_python_runtime_config_path, is_python_test_witness_path, is_runtime_config_artifact_path,
-    is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_package_surface_path, is_python_runtime_config_path, is_python_test_witness_path,
+    is_runtime_companion_surface_path, is_runtime_config_artifact_path, is_scripts_ops_path,
+    is_test_harness_path, is_test_support_path, is_workspace_config_surface_path,
 };
 pub use types::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridExecutionNote,
@@ -267,6 +282,16 @@ impl TextSearcher {
     #[cfg(test)]
     pub(crate) fn path_witness_projection_cache_len(&self) -> usize {
         self.projection_store_service.path_witness_cache_len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_or_build_path_witness_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
+        self.projection_store_service
+            .load_or_build_path_witness_projections_for_repository(repository, snapshot_id)
     }
 
     pub fn search(&self, query: SearchTextQuery) -> FriggResult<Vec<TextMatch>> {
@@ -464,6 +489,21 @@ impl TextSearcher {
         )
     }
 
+    pub(crate) fn search_hybrid_with_filters_with_trace(
+        &self,
+        query: SearchHybridQuery,
+        filters: SearchFilters,
+    ) -> FriggResult<SearchHybridExecutionOutput> {
+        let credentials = SemanticRuntimeCredentials::from_process_env();
+        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::new(credentials.clone());
+        self.search_hybrid_with_filters_using_executor_with_trace(
+            query,
+            filters,
+            &credentials,
+            &semantic_executor,
+        )
+    }
+
     fn search_hybrid_with_filters_using_executor(
         &self,
         query: SearchHybridQuery,
@@ -477,6 +517,24 @@ impl TextSearcher {
             filters,
             credentials,
             semantic_executor,
+            false,
+        )
+    }
+
+    fn search_hybrid_with_filters_using_executor_with_trace(
+        &self,
+        query: SearchHybridQuery,
+        filters: SearchFilters,
+        credentials: &SemanticRuntimeCredentials,
+        semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
+    ) -> FriggResult<SearchHybridExecutionOutput> {
+        hybrid_execution::search_hybrid_with_filters_using_executor(
+            self,
+            query,
+            filters,
+            credentials,
+            semantic_executor,
+            true,
         )
     }
 
@@ -891,9 +949,19 @@ impl TextSearcher {
                 path,
                 witness_provenance_ids,
             } = candidate;
-            let (line, excerpt) =
-                best_path_witness_anchor_in_file(&rel_path, &path, &query_context)
-                    .unwrap_or_else(|| (1, rel_path.clone()));
+            let projected_anchor = base_repositories
+                .get(&repository_id)
+                .and_then(|repository| {
+                    self.projection_store_service
+                        .best_path_witness_anchor_for_repository(
+                            repository,
+                            &rel_path,
+                            &query_context,
+                        )
+                });
+            let (line, excerpt) = projected_anchor
+                .or_else(|| best_path_witness_anchor_in_file(&rel_path, &path, &query_context))
+                .unwrap_or_else(|| (1, rel_path.clone()));
             matches.push(TextMatch {
                 repository_id,
                 path: rel_path,
@@ -1058,6 +1126,9 @@ pub(super) struct PathWitnessCandidate {
 
 fn overlay_seed_reserve_slots(intent: &HybridRankingIntent, per_repository_limit: usize) -> usize {
     let mut reserve = 0;
+    if intent.wants_runtime_witnesses {
+        reserve += 1;
+    }
     if intent.wants_tests || intent.wants_test_witness_recall {
         reserve += 1;
     }

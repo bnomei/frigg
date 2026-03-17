@@ -20,14 +20,15 @@ mod tests {
     use crate::domain::SourceClass;
 
     use super::{
-        hybrid_source_class, is_cli_command_entrypoint_path, is_entrypoint_runtime_path,
-        is_fixture_support_path, is_frontend_runtime_noise_path,
+        coverage_subtree_root, hybrid_source_class, is_cli_command_entrypoint_path,
+        is_entrypoint_runtime_path, is_fixture_support_path, is_frontend_runtime_noise_path,
         is_generic_runtime_witness_doc_path, is_go_entrypoint_runtime_path,
         is_kotlin_android_entrypoint_runtime_path, is_kotlin_android_ui_runtime_surface_path,
-        is_python_test_witness_path, is_repo_metadata_path, is_root_scoped_runtime_config_path,
-        is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
+        is_package_surface_path, is_python_test_witness_path, is_repo_metadata_path,
+        is_root_scoped_runtime_config_path, is_runtime_adjacent_python_test_path,
+        is_runtime_anchor_test_support_path, is_runtime_companion_surface_path,
         is_runtime_config_artifact_path, is_rust_workspace_config_path, is_test_support_path,
-        is_typescript_runtime_module_index_path,
+        is_typescript_runtime_module_index_path, is_workspace_config_surface_path,
     };
 
     #[test]
@@ -693,5 +694,35 @@ mod tests {
                 "{path} should not be treated as a runtime-anchor test support path"
             );
         }
+    }
+
+    #[test]
+    fn coverage_subtree_root_skips_container_segments_and_keeps_role_buckets() {
+        assert_eq!(
+            coverage_subtree_root("packages/editor-ui/src/components/canvas/NodeDetails.vue")
+                .as_deref(),
+            Some("packages/editor-ui/src")
+        );
+        assert_eq!(
+            coverage_subtree_root("packages/editor-ui/tests/canvas/node_details.spec.ts")
+                .as_deref(),
+            Some("packages/editor-ui/tests")
+        );
+        assert_eq!(
+            coverage_subtree_root("crates/graphite-editor/src/main.rs").as_deref(),
+            Some("crates/graphite-editor/src")
+        );
+        assert_eq!(
+            coverage_subtree_root("src/server/main.rs").as_deref(),
+            Some("src/server")
+        );
+        assert_eq!(coverage_subtree_root("Cargo.toml"), None);
+        assert!(is_package_surface_path("packages/editor-ui/package.json"));
+        assert!(is_workspace_config_surface_path(
+            "packages/editor-ui/tsconfig.base.json"
+        ));
+        assert!(is_runtime_companion_surface_path(
+            "packages/editor-ui/src/components/canvas/NodeDetails.vue"
+        ));
     }
 }

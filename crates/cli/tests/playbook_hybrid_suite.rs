@@ -53,7 +53,7 @@ fn build_searcher() -> TextSearcher {
 
 fn run_all_playbook_probes(enforce_targets: bool) -> Vec<HybridPlaybookProbeOutcome> {
     let searcher = build_searcher();
-    run_hybrid_playbook_regressions(&searcher, &playbooks_root(), enforce_targets)
+    run_hybrid_playbook_regressions(&searcher, &playbooks_root(), enforce_targets, None)
         .expect("playbook metadata should load and execute")
         .outcomes
 }

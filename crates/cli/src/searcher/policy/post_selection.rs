@@ -9,8 +9,6 @@ mod runtime;
 
 use super::super::HybridChannelHit;
 use super::super::HybridRankedEvidence;
-#[cfg(test)]
-use super::super::intent::HybridRankingIntent;
 use super::super::laravel::{
     is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
     is_laravel_command_or_middleware_path, is_laravel_core_provider_path,
@@ -27,8 +25,9 @@ use super::trace::PolicyStage;
 pub(crate) use context::PostSelectionContext;
 use context::PostSelectionRepairAction;
 use context::PostSelectionRuleMeta;
+pub(crate) use context::PostSelectionTrace;
 #[cfg(test)]
-use context::{PostSelectionTrace, PostSelectionTraceEvent};
+use context::PostSelectionTraceEvent;
 use guardrails::{
     choose_best_candidate, hybrid_ranked_evidence_from_witness_hit, insert_guardrail_candidate,
     insert_test_support_guardrail_candidate, selection_guardrail_cmp,
@@ -50,7 +49,7 @@ use runtime::{
     apply_cli_specific_test_visibility, apply_entrypoint_build_workflow_visibility,
     apply_mixed_support_visibility, apply_runtime_companion_surface_visibility,
     apply_runtime_companion_test_visibility, apply_runtime_config_surface_selection,
-    apply_runtime_entrypoint_visibility,
+    apply_runtime_entrypoint_visibility, apply_runtime_witness_rescue_visibility,
 };
 
 #[allow(dead_code)]
@@ -150,6 +149,17 @@ const RULES: &[PostSelectionRule] = &[
             &[],
         ),
         apply_runtime_companion_surface_visibility,
+    ),
+    PostSelectionRule::new(
+        "post_selection.runtime_witness_rescue",
+        PolicyStage::PostSelectionRuntime,
+        Predicate::any(&[
+            WANTS_RUNTIME_WITNESSES,
+            WANTS_TEST_WITNESS_RECALL,
+            WANTS_ENTRYPOINT_BUILD_FLOW,
+            WANTS_RUNTIME_CONFIG_ARTIFACTS,
+        ]),
+        apply_runtime_witness_rescue_visibility,
     ),
     PostSelectionRule::new(
         "post_selection.runtime_companion_tests",
@@ -559,7 +569,9 @@ fn is_ci_workflow_guardrail_replacement(entry: &HybridRankedEvidence) -> bool {
 }
 
 fn is_entrypoint_build_workflow_guardrail_replacement(entry: &HybridRankedEvidence) -> bool {
-    if surfaces::is_entrypoint_build_workflow_path(&entry.document.path) {
+    if surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+        || surfaces::is_ci_workflow_path(&entry.document.path)
+    {
         return false;
     }
     if surfaces::is_entrypoint_runtime_path(&entry.document.path) {

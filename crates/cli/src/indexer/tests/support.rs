@@ -21,8 +21,8 @@ pub(super) use super::super::{
     extract_php_source_evidence_from_source, extract_symbols_for_paths,
     extract_symbols_from_source, file_digest_order, mark_local_flux_overlays,
     navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
-    reindex_repository_with_semantic_executor, resolve_heuristic_references,
-    search_structural_in_source, semantic_chunk_language_for_path,
+    reindex_repository_with_runtime_config, reindex_repository_with_semantic_executor,
+    resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
 };
 pub(super) use crate::domain::{FriggError, FriggResult};
 pub(super) use crate::graph::{RelationKind, SymbolGraph};

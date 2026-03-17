@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
@@ -529,6 +530,105 @@ const MIGRATIONS: &[Migration] = &[
             ON entrypoint_surface_projection (repository_id, snapshot_id, path);
         "#,
     },
+    Migration {
+        version: 9,
+        sql: r#"
+            ALTER TABLE path_witness_projection
+            ADD COLUMN file_stem TEXT NOT NULL DEFAULT '';
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN subtree_root TEXT;
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN family_bits INTEGER NOT NULL DEFAULT 0;
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN heuristic_version INTEGER NOT NULL DEFAULT 0;
+
+            CREATE TABLE IF NOT EXISTS retrieval_projection_head (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              family TEXT NOT NULL,
+              heuristic_version INTEGER NOT NULL,
+              input_modes_json TEXT NOT NULL,
+              row_count INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, family)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_retrieval_projection_head_repo_snapshot_family
+            ON retrieval_projection_head (repository_id, snapshot_id, family);
+
+            CREATE TABLE IF NOT EXISTS path_relation_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              src_path TEXT NOT NULL,
+              dst_path TEXT NOT NULL,
+              relation_kind TEXT NOT NULL,
+              evidence_source TEXT NOT NULL,
+              src_symbol_id TEXT,
+              dst_symbol_id TEXT,
+              src_family_bits INTEGER NOT NULL DEFAULT 0,
+              dst_family_bits INTEGER NOT NULL DEFAULT 0,
+              shared_terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, src_path, dst_path, relation_kind)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_path_relation_projection_repo_snapshot_src
+            ON path_relation_projection (repository_id, snapshot_id, src_path, relation_kind, dst_path);
+
+            CREATE INDEX IF NOT EXISTS idx_path_relation_projection_repo_snapshot_dst
+            ON path_relation_projection (repository_id, snapshot_id, dst_path, relation_kind, src_path);
+
+            CREATE TABLE IF NOT EXISTS subtree_coverage_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              subtree_root TEXT NOT NULL,
+              family TEXT NOT NULL,
+              path_count INTEGER NOT NULL,
+              exemplar_path TEXT NOT NULL,
+              exemplar_score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, subtree_root, family)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_subtree_coverage_projection_repo_snapshot_subtree
+            ON subtree_coverage_projection (repository_id, snapshot_id, subtree_root, family);
+
+            CREATE TABLE IF NOT EXISTS path_surface_term_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              term_weights_json TEXT NOT NULL,
+              exact_terms_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_path_surface_term_projection_repo_snapshot_path
+            ON path_surface_term_projection (repository_id, snapshot_id, path);
+
+            CREATE TABLE IF NOT EXISTS path_anchor_sketch_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              anchor_rank INTEGER NOT NULL,
+              line INTEGER NOT NULL,
+              anchor_kind TEXT NOT NULL,
+              excerpt TEXT NOT NULL,
+              terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path, anchor_rank)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_path_anchor_sketch_projection_repo_snapshot_path
+            ON path_anchor_sketch_projection (repository_id, snapshot_id, path, anchor_rank);
+        "#,
+    },
 ];
 
 const REQUIRED_TABLES: &[&str] = &[
@@ -543,6 +643,11 @@ const REQUIRED_TABLES: &[&str] = &[
     "path_witness_projection",
     "test_subject_projection",
     "entrypoint_surface_projection",
+    "retrieval_projection_head",
+    "path_relation_projection",
+    "subtree_coverage_projection",
+    "path_surface_term_projection",
+    "path_anchor_sketch_projection",
 ];
 
 pub const DEFAULT_VECTOR_DIMENSIONS: usize = 1_536;
@@ -683,8 +788,12 @@ pub struct PathWitnessProjection {
     pub path: String,
     pub path_class: PathClass,
     pub source_class: SourceClass,
+    pub file_stem: String,
     pub path_terms: Vec<String>,
+    pub subtree_root: Option<String>,
+    pub family_bits: u64,
     pub flags_json: String,
+    pub heuristic_version: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -704,6 +813,67 @@ pub struct EntrypointSurfaceProjection {
     pub path_terms: Vec<String>,
     pub surface_terms: Vec<String>,
     pub flags_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalProjectionHeadRecord {
+    pub family: String,
+    pub heuristic_version: i64,
+    pub input_modes: Vec<String>,
+    pub row_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathRelationProjection {
+    pub src_path: String,
+    pub dst_path: String,
+    pub relation_kind: String,
+    pub evidence_source: String,
+    pub src_symbol_id: Option<String>,
+    pub dst_symbol_id: Option<String>,
+    pub src_family_bits: u64,
+    pub dst_family_bits: u64,
+    pub shared_terms: Vec<String>,
+    pub score_hint: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtreeCoverageProjection {
+    pub subtree_root: String,
+    pub family: String,
+    pub path_count: usize,
+    pub exemplar_path: String,
+    pub exemplar_score_hint: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathSurfaceTermProjection {
+    pub path: String,
+    pub term_weights: BTreeMap<String, u16>,
+    pub exact_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathAnchorSketchProjection {
+    pub path: String,
+    pub anchor_rank: usize,
+    pub line: usize,
+    pub anchor_kind: String,
+    pub excerpt: String,
+    pub terms: Vec<String>,
+    pub score_hint: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RetrievalProjectionBundle {
+    pub heads: Vec<RetrievalProjectionHeadRecord>,
+    pub path_witness: Vec<PathWitnessProjection>,
+    pub test_subject: Vec<TestSubjectProjection>,
+    pub entrypoint_surface: Vec<EntrypointSurfaceProjection>,
+    pub path_relations: Vec<PathRelationProjection>,
+    pub subtree_coverage: Vec<SubtreeCoverageProjection>,
+    pub path_surface_terms: Vec<PathSurfaceTermProjection>,
+    pub path_anchor_sketches: Vec<PathAnchorSketchProjection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

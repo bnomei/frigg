@@ -596,6 +596,7 @@ const WORKSPACE_SUBTREE_BOUNDARIES: &[&str] = &[
     "generated",
     "vendor",
     "node_modules",
+    "wrapper",
 ];
 
 fn workspace_subtree_segments(path: &str) -> Vec<String> {
@@ -716,9 +717,11 @@ mod tests {
             excerpt: path.to_owned(),
             blended_score: score,
             lexical_score: score,
+            witness_score: 0.0,
             graph_score: 0.0,
             semantic_score: 0.0,
             lexical_sources: Vec::new(),
+            witness_sources: Vec::new(),
             graph_sources: Vec::new(),
             semantic_sources: Vec::new(),
         }
@@ -982,7 +985,28 @@ mod tests {
             &SelectionState::default(),
         );
 
-        assert_eq!(selection.runtime_subtree_affinity, 1);
+        assert_eq!(selection.runtime_subtree_affinity, 0);
+        assert!(selection.has_path_witness_source);
+    }
+
+    #[test]
+    fn selection_facts_cap_self_sourced_subtree_affinity() {
+        let query = "graphite editor panels canvas layout messages desktop wrapper svelte";
+        let intent = HybridRankingIntent::from_query(query);
+        let query_context = PolicyQueryContext::new(&intent, query);
+        let mut ranked = make_ranked("desktop/wrapper/src/messages.rs", 1.0);
+        ranked.lexical_sources =
+            vec!["path_witness:desktop/wrapper/src/messages.rs:1:1".to_owned()];
+
+        let candidate = SelectionCandidate::new(ranked, &intent, &query_context);
+        let selection = SelectionFacts::from_candidate(
+            &candidate,
+            &intent,
+            &query_context,
+            &SelectionState::default(),
+        );
+
+        assert_eq!(selection.runtime_subtree_affinity, 0);
         assert!(selection.has_path_witness_source);
     }
 
@@ -1016,6 +1040,13 @@ mod tests {
             SharedPathFacts::workspace_subtree_affinity(
                 "crates/ruff/src/commands/check.rs",
                 "crates/ruff/tests/cli/check.rs",
+            ),
+            1
+        );
+        assert_eq!(
+            SharedPathFacts::workspace_subtree_affinity(
+                "desktop/wrapper/src/messages.rs",
+                "desktop/wrapper/tests/messages.rs",
             ),
             1
         );

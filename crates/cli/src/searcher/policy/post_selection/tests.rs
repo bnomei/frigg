@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceDocumentRef};
+use crate::searcher::HybridRankingIntent;
 
 fn make_ranked(path: &str, score: f32) -> HybridRankedEvidence {
     HybridRankedEvidence {
@@ -13,9 +14,11 @@ fn make_ranked(path: &str, score: f32) -> HybridRankedEvidence {
         excerpt: path.to_owned(),
         blended_score: score,
         lexical_score: score,
+        witness_score: 0.0,
         graph_score: 0.0,
         semantic_score: 0.0,
         lexical_sources: Vec::new(),
+        witness_sources: Vec::new(),
         graph_sources: Vec::new(),
         semantic_sources: Vec::new(),
     }
@@ -113,6 +116,41 @@ fn post_selection_policy_runtime_config_recovers_specific_surface_and_root_manif
     assert!(paths.contains(&"package.json"));
     assert!(paths.contains(&"src/server.ts"));
     assert!(!paths.contains(&"src/index.ts"));
+}
+
+#[test]
+fn post_selection_policy_runtime_witness_rescue_recovers_witness_backed_runtime_from_noise() {
+    let matches = vec![
+        make_ranked(".github/workflows/build.yml", 0.98),
+        make_ranked("CONTRIBUTING.md", 0.92),
+    ];
+    let candidate_pool = vec![make_ranked("tests/runtime_server.rs", 0.70)];
+    let witness_hits = vec![make_witness("tests/runtime_server.rs", 0.88)];
+    let intent = HybridRankingIntent::from_query("runtime server docker");
+    assert!(intent.wants_runtime_witnesses);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &candidate_pool,
+        &witness_hits,
+        &intent,
+        "runtime server docker",
+        2,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(paths.contains(&"tests/runtime_server.rs"));
+    assert!(
+        trace.events.iter().any(|event| {
+            event.rule_id == "post_selection.runtime_witness_rescue"
+                && event.action == PostSelectionRepairAction::Replaced
+        }),
+        "trace events: {:?}",
+        trace.events
+    );
 }
 
 #[test]
@@ -902,6 +940,47 @@ fn post_selection_policy_test_focus_queries_recover_runtime_subject_surface_from
                 && matches!(event.action, PostSelectionRepairAction::Replaced)
         }),
         "runtime companion surface rule should record a replacement repair"
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_companion_surface_promotes_best_supported_subtree() {
+    let matches = vec![
+        make_ranked("desktop/wrapper/src/messages.rs", 0.99),
+        make_ranked("editor/src/messages/panels/layers.rs", 0.98),
+        make_ranked("editor/tests/canvas_runtime.rs", 0.97),
+    ];
+    let intent = HybridRankingIntent::from_query(
+        "graphite editor panels canvas layout messages desktop wrapper svelte",
+    );
+    assert!(intent.wants_runtime_witnesses);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &[],
+        &[],
+        &intent,
+        "graphite editor panels canvas layout messages desktop wrapper svelte",
+        3,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert_eq!(
+        paths.first().copied(),
+        Some("editor/src/messages/panels/layers.rs"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        trace.events.iter().any(|event| {
+            event.rule_id == "post_selection.runtime_companion_surface"
+                && matches!(event.action, PostSelectionRepairAction::Replaced)
+                && event.candidate_path == "editor/src/messages/panels/layers.rs"
+                && event.replaced_path.as_deref() == Some("desktop/wrapper/src/messages.rs")
+        }),
+        "runtime companion surface rule should record a subtree-backed promotion"
     );
 }
 

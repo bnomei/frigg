@@ -16,11 +16,11 @@ mod rules;
 #[path = "intent/tests.rs"]
 mod tests;
 
-pub(super) type HybridRankingIntent = SearchIntent;
+pub(crate) type HybridRankingIntent = SearchIntent;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub(super) struct SearchIntent {
+pub(crate) struct SearchIntent {
     pub(super) wants_docs: bool,
     pub(super) wants_onboarding: bool,
     pub(super) wants_runtime: bool,
@@ -188,7 +188,7 @@ impl Default for SearchIntent {
 
 #[allow(dead_code)]
 impl SearchIntent {
-    pub(super) fn from_query(query_text: &str) -> Self {
+    pub(crate) fn from_query(query_text: &str) -> Self {
         let context = QueryContext::new(query_text);
         let mut builder = SearchIntentBuilder::default();
         builder.insert_goal(SearchGoal::Runtime);

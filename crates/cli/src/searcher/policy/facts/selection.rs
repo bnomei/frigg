@@ -49,10 +49,19 @@ impl SelectionCandidate {
             .filter_map(|source| parse_path_witness_source_path(source))
             .collect::<Vec<_>>();
         let has_path_witness_source = !path_witness_paths.is_empty();
+        let normalized_candidate_path = evidence.document.path.trim_start_matches("./");
         let path_witness_subtree_affinity = path_witness_paths
             .iter()
             .map(|source_path| {
-                SharedPathFacts::workspace_subtree_affinity(&evidence.document.path, source_path)
+                let affinity = SharedPathFacts::workspace_subtree_affinity(
+                    &evidence.document.path,
+                    source_path,
+                );
+                if source_path.trim_start_matches("./") == normalized_candidate_path {
+                    0
+                } else {
+                    affinity
+                }
             })
             .max()
             .unwrap_or(0);

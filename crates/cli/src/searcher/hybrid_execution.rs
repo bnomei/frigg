@@ -28,7 +28,7 @@ use super::{
 
 struct HybridFusionOutput {
     ranked_anchors: Vec<HybridRankedEvidence>,
-    grouped_matches: Vec<HybridRankedEvidence>,
+    coverage_grouped_pool: Vec<HybridRankedEvidence>,
     matches: Vec<HybridRankedEvidence>,
     anchor_blending_sample: SearchStageSample,
     document_aggregation_sample: SearchStageSample,
@@ -41,6 +41,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     filters: SearchFilters,
     credentials: &SemanticRuntimeCredentials,
     semantic_executor: &dyn super::SemanticRuntimeQueryEmbeddingExecutor,
+    capture_post_selection_trace: bool,
 ) -> FriggResult<SearchHybridExecutionOutput> {
     let query_text = query.query.trim().to_owned();
     let ranking_intent = HybridRankingIntent::from_query(&query_text);
@@ -446,9 +447,12 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         + witness_hits.len()
         + graph_hits.len()
         + semantic_channel_result.hits.len();
+    let coverage_hints = searcher
+        .projection_store_service
+        .coverage_hint_keys_for_repositories(&candidate_universe.repositories);
     let HybridFusionOutput {
         ranked_anchors,
-        grouped_matches,
+        coverage_grouped_pool,
         matches,
         anchor_blending_sample,
         document_aggregation_sample,
@@ -462,15 +466,30 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         query.limit,
         &query_text,
         total_rank_input_count,
+        &coverage_hints,
     )?;
-    let matches = super::policy::apply_post_selection_guardrails(
-        matches,
-        &grouped_matches,
-        &witness_hits,
-        &ranking_intent,
-        &query_text,
-        query.limit,
-    );
+    let (matches, post_selection_trace) = if capture_post_selection_trace {
+        super::apply_post_selection_guardrails_with_trace(
+            matches,
+            &coverage_grouped_pool,
+            &witness_hits,
+            &ranking_intent,
+            &query_text,
+            query.limit,
+        )
+    } else {
+        (
+            super::policy::apply_post_selection_guardrails(
+                matches,
+                &coverage_grouped_pool,
+                &witness_hits,
+                &ranking_intent,
+                &query_text,
+                query.limit,
+            ),
+            None,
+        )
+    };
     let mut diagnostics = lexical_output.diagnostics.clone();
     merge_execution_diagnostics(&mut diagnostics, witness_output.diagnostics.clone());
     let lexical_match_count = lexical_output.matches.len();
@@ -500,6 +519,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     Ok(SearchHybridExecutionOutput {
         matches,
         ranked_anchors,
+        coverage_grouped_pool,
         diagnostics,
         channel_results,
         note,
@@ -538,6 +558,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             document_aggregation: document_aggregation_sample,
             final_diversification: final_diversification_sample,
         }),
+        post_selection_trace,
     })
 }
 
@@ -550,6 +571,7 @@ fn run_hybrid_fusion(
     limit: usize,
     query_text: &str,
     total_rank_input_count: usize,
+    coverage_hints: &super::reranker::CoverageProjectionHintMap,
 ) -> FriggResult<HybridFusionOutput> {
     let lexical_only_fast_path =
         witness_hits.is_empty() && graph_hits.is_empty() && semantic_hits.is_empty();
@@ -567,7 +589,7 @@ fn run_hybrid_fusion(
         );
         let aggregation_started_at = Instant::now();
         let grouped_matches =
-            super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, limit);
+            super::group_all_hybrid_ranked_evidence(ranked_anchors.clone(), weights);
         let document_aggregation_sample = SearchStageSample::new(
             aggregation_started_at
                 .elapsed()
@@ -577,21 +599,30 @@ fn run_hybrid_fusion(
             ranked_anchors.len(),
             grouped_matches.len(),
         );
+        let coverage_grouped_pool = super::build_coverage_grouped_pool(
+            grouped_matches.clone(),
+            limit,
+            limit,
+            coverage_hints,
+        );
         let diversification_started_at = Instant::now();
-        let matches =
-            super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+        let matches = super::diversify_hybrid_ranked_evidence(
+            coverage_grouped_pool.clone(),
+            limit,
+            query_text,
+        );
         let final_diversification_sample = SearchStageSample::new(
             diversification_started_at
                 .elapsed()
                 .as_micros()
                 .try_into()
                 .unwrap_or(u64::MAX),
-            document_aggregation_sample.output_count,
+            coverage_grouped_pool.len(),
             matches.len(),
         );
         return Ok(HybridFusionOutput {
             ranked_anchors,
-            grouped_matches,
+            coverage_grouped_pool,
             matches,
             anchor_blending_sample,
             document_aggregation_sample,
@@ -620,8 +651,7 @@ fn run_hybrid_fusion(
         ranked_anchors.len(),
     );
     let aggregation_started_at = Instant::now();
-    let grouped_matches =
-        super::group_hybrid_ranked_evidence(ranked_anchors.clone(), weights, rank_limit);
+    let grouped_matches = super::group_all_hybrid_ranked_evidence(ranked_anchors.clone(), weights);
     let document_aggregation_sample = SearchStageSample::new(
         aggregation_started_at
             .elapsed()
@@ -631,21 +661,27 @@ fn run_hybrid_fusion(
         ranked_anchors.len(),
         grouped_matches.len(),
     );
+    let coverage_grouped_pool = super::build_coverage_grouped_pool(
+        grouped_matches.clone(),
+        limit,
+        rank_limit,
+        coverage_hints,
+    );
     let diversification_started_at = Instant::now();
     let matches =
-        super::diversify_hybrid_ranked_evidence(grouped_matches.clone(), limit, query_text);
+        super::diversify_hybrid_ranked_evidence(coverage_grouped_pool.clone(), limit, query_text);
     let final_diversification_sample = SearchStageSample::new(
         diversification_started_at
             .elapsed()
             .as_micros()
             .try_into()
             .unwrap_or(u64::MAX),
-        document_aggregation_sample.output_count,
+        coverage_grouped_pool.len(),
         matches.len(),
     );
     Ok(HybridFusionOutput {
         ranked_anchors,
-        grouped_matches,
+        coverage_grouped_pool,
         matches,
         anchor_blending_sample,
         document_aggregation_sample,

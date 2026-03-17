@@ -1,4 +1,5 @@
 use super::*;
+use crate::searcher::path_witness_projection::family_bits_for_projection;
 
 #[test]
 fn hybrid_ranking_semantic_laravel_ui_queries_surface_livewire_and_blade_witnesses()
@@ -792,6 +793,163 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
     )?;
     assert_eq!(first.matches, second.matches);
     assert_eq!(searcher.path_witness_projection_cache_len(), 1);
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_path_witness_recall_uses_authoritative_current_snapshot_projection_rows()
+-> FriggResult<()> {
+    let root = temp_workspace_root("path-witness-authoritative-current-head");
+    prepare_workspace(&root, &[("src/main.rs", "fn main() {}\n")])?;
+    seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/main.rs"])?;
+
+    let db_path = resolve_provenance_db_path(&root)?;
+    let storage = Storage::new(db_path);
+    let authoritative_projection = StoredPathWitnessProjection::from_path("src/main.rs");
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-001",
+        "snapshot-001",
+        &crate::storage::RetrievalProjectionBundle {
+            heads: vec![crate::storage::RetrievalProjectionHeadRecord {
+                family: "path_witness".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            }],
+            path_witness: vec![crate::storage::PathWitnessProjection {
+                path: "src/main.rs".to_owned(),
+                path_class: authoritative_projection.path_class.clone(),
+                source_class: authoritative_projection.source_class.clone(),
+                file_stem: authoritative_projection.file_stem.clone(),
+                path_terms: vec!["bespokeprojectionterm".to_owned()],
+                subtree_root: authoritative_projection.subtree_root.clone(),
+                family_bits: family_bits_for_projection(&authoritative_projection),
+                flags_json: serde_json::to_string(&authoritative_projection.flags)
+                    .expect("valid authoritative flags json"),
+                heuristic_version: 1,
+            }],
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: Vec::new(),
+            subtree_coverage: Vec::new(),
+            path_surface_terms: Vec::new(),
+            path_anchor_sketches: Vec::new(),
+        },
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let universe = searcher
+        .build_candidate_universe_with_attribution(
+            &SearchTextQuery {
+                query: String::new(),
+                path_regex: None,
+                limit: 32,
+            },
+            &normalize_search_filters(SearchFilters::default())?,
+        )
+        .universe;
+    let repository = universe
+        .repositories
+        .first()
+        .expect("expected manifest-backed repository");
+    let projections = searcher
+        .load_or_build_path_witness_projections_for_repository(repository, "snapshot-001")
+        .expect("expected authoritative path witness projections");
+
+    assert!(
+        projections.iter().any(|projection| {
+            projection.path == "src/main.rs"
+                && projection.path_terms == vec!["bespokeprojectionterm".to_owned()]
+        }),
+        "current-head snapshots should trust authoritative stored path witness terms instead of rebuilding live path terms"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_path_witness_recall_prefers_authoritative_anchor_sketch_excerpt() -> FriggResult<()> {
+    let root = temp_workspace_root("path-witness-authoritative-anchor-sketch");
+    prepare_workspace(&root, &[("src/main.rs", "fn main() {}\n")])?;
+    seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["src/main.rs"])?;
+
+    let db_path = resolve_provenance_db_path(&root)?;
+    let storage = Storage::new(db_path);
+    let authoritative_projection = StoredPathWitnessProjection::from_path("src/main.rs");
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-001",
+        "snapshot-001",
+        &crate::storage::RetrievalProjectionBundle {
+            heads: vec![
+                crate::storage::RetrievalProjectionHeadRecord {
+                    family: "path_witness".to_owned(),
+                    heuristic_version: 1,
+                    input_modes: vec!["path".to_owned()],
+                    row_count: 1,
+                },
+                crate::storage::RetrievalProjectionHeadRecord {
+                    family: "path_anchor_sketch".to_owned(),
+                    heuristic_version: 1,
+                    input_modes: vec!["path".to_owned()],
+                    row_count: 1,
+                },
+            ],
+            path_witness: vec![crate::storage::PathWitnessProjection {
+                path: "src/main.rs".to_owned(),
+                path_class: authoritative_projection.path_class.clone(),
+                source_class: authoritative_projection.source_class.clone(),
+                file_stem: authoritative_projection.file_stem.clone(),
+                path_terms: vec![
+                    "server".to_owned(),
+                    "bootstrap".to_owned(),
+                    "runtime".to_owned(),
+                ],
+                subtree_root: authoritative_projection.subtree_root.clone(),
+                family_bits: family_bits_for_projection(&authoritative_projection),
+                flags_json: serde_json::to_string(&authoritative_projection.flags)
+                    .expect("valid authoritative flags json"),
+                heuristic_version: 1,
+            }],
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: Vec::new(),
+            subtree_coverage: Vec::new(),
+            path_surface_terms: Vec::new(),
+            path_anchor_sketches: vec![crate::storage::PathAnchorSketchProjection {
+                path: "src/main.rs".to_owned(),
+                anchor_rank: 0,
+                line: 7,
+                anchor_kind: "line_excerpt".to_owned(),
+                excerpt: "server bootstrap runtime".to_owned(),
+                terms: vec![
+                    "server".to_owned(),
+                    "bootstrap".to_owned(),
+                    "runtime".to_owned(),
+                ],
+                score_hint: 24,
+            }],
+        },
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let intent = HybridRankingIntent::from_query("server bootstrap runtime");
+    let output = searcher.search_path_witness_recall_with_filters(
+        "server bootstrap runtime",
+        &SearchFilters::default(),
+        8,
+        &intent,
+    )?;
+
+    let top = output
+        .matches
+        .first()
+        .expect("expected authoritative anchor-sketch hit");
+    assert_eq!(top.path, "src/main.rs");
+    assert_eq!(top.line, 7);
+    assert_eq!(top.excerpt, "server bootstrap runtime");
 
     cleanup_workspace(&root);
     Ok(())

@@ -1,5 +1,7 @@
 use super::*;
 use crate::searcher::RepositoryCandidateUniverse;
+use crate::searcher::build_path_witness_projection_records_from_paths;
+use crate::searcher::path_witness_projection::family_bits_for_projection;
 
 fn base_path_witness_seed_paths(
     repository: &RepositoryCandidateUniverse,
@@ -407,6 +409,161 @@ fn projected_path_witness_candidates_apply_entrypoint_surface_overlay_boosts() -
             .iter()
             .any(|id| id.starts_with("overlay:entrypoint_surface:config:")),
         "runtime config artifact should carry entrypoint-surface overlay provenance"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn projected_path_witness_candidates_apply_relation_overlay_boosts_from_snapshot_rows()
+-> FriggResult<()> {
+    let root = temp_workspace_root("relation-overlay-candidate-boosts");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "packages/editor-ui/src/main.ts",
+                "export const start = true;\n",
+            ),
+            (
+                "packages/editor-ui/package.json",
+                "{ \"name\": \"editor-ui\", \"version\": \"0.1.0\" }\n",
+            ),
+            ("README.md", "# docs\n"),
+        ],
+    )?;
+    seed_manifest_snapshot(
+        &root,
+        "repo-001",
+        "snapshot-001",
+        &[
+            "packages/editor-ui/src/main.ts",
+            "packages/editor-ui/package.json",
+            "README.md",
+        ],
+    )?;
+
+    let db_path = resolve_provenance_db_path(&root)?;
+    let storage = Storage::new(db_path);
+    let path_witness = build_path_witness_projection_records_from_paths(&[
+        "packages/editor-ui/src/main.ts".to_owned(),
+        "packages/editor-ui/package.json".to_owned(),
+        "README.md".to_owned(),
+    ])?;
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-001",
+        "snapshot-001",
+        &crate::storage::RetrievalProjectionBundle {
+            heads: vec![
+                crate::storage::RetrievalProjectionHeadRecord {
+                    family: "path_witness".to_owned(),
+                    heuristic_version: 1,
+                    input_modes: vec!["path".to_owned()],
+                    row_count: path_witness.len(),
+                },
+                crate::storage::RetrievalProjectionHeadRecord {
+                    family: "path_relation".to_owned(),
+                    heuristic_version: 1,
+                    input_modes: vec!["path".to_owned()],
+                    row_count: 1,
+                },
+                crate::storage::RetrievalProjectionHeadRecord {
+                    family: "path_surface_term".to_owned(),
+                    heuristic_version: 1,
+                    input_modes: vec!["path".to_owned()],
+                    row_count: 2,
+                },
+            ],
+            path_witness,
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: vec![crate::storage::PathRelationProjection {
+                src_path: "packages/editor-ui/src/main.ts".to_owned(),
+                dst_path: "packages/editor-ui/package.json".to_owned(),
+                relation_kind: "entrypoint_package".to_owned(),
+                evidence_source: "path".to_owned(),
+                src_symbol_id: None,
+                dst_symbol_id: None,
+                src_family_bits: family_bits_for_projection(
+                    &StoredPathWitnessProjection::from_path("packages/editor-ui/src/main.ts"),
+                ),
+                dst_family_bits: family_bits_for_projection(
+                    &StoredPathWitnessProjection::from_path("packages/editor-ui/package.json"),
+                ),
+                shared_terms: vec!["runtime".to_owned(), "manifest".to_owned()],
+                score_hint: 24,
+            }],
+            subtree_coverage: Vec::new(),
+            path_surface_terms: vec![
+                crate::storage::PathSurfaceTermProjection {
+                    path: "packages/editor-ui/src/main.ts".to_owned(),
+                    term_weights: [
+                        ("runtime".to_owned(), 3u16),
+                        ("config".to_owned(), 3u16),
+                        ("manifest".to_owned(), 4u16),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    exact_terms: vec![
+                        "runtime".to_owned(),
+                        "config".to_owned(),
+                        "manifest".to_owned(),
+                    ],
+                },
+                crate::storage::PathSurfaceTermProjection {
+                    path: "packages/editor-ui/package.json".to_owned(),
+                    term_weights: [("package".to_owned(), 3u16), ("manifest".to_owned(), 2u16)]
+                        .into_iter()
+                        .collect(),
+                    exact_terms: vec!["package".to_owned(), "manifest".to_owned()],
+                },
+            ],
+            path_anchor_sketches: Vec::new(),
+        },
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let universe = searcher
+        .build_candidate_universe_with_attribution(
+            &SearchTextQuery {
+                query: String::new(),
+                path_regex: None,
+                limit: 32,
+            },
+            &normalize_search_filters(SearchFilters::default())?,
+        )
+        .universe;
+    let repository = universe
+        .repositories
+        .first()
+        .expect("expected manifest-backed repository");
+    let intent = HybridRankingIntent::from_query("runtime config manifest settings");
+    let query_context =
+        HybridPathWitnessQueryContext::from_query_text("runtime config manifest settings");
+    let candidates = searcher
+        .projected_path_witness_candidates_for_repository(
+            repository,
+            Some(repository),
+            &intent,
+            &query_context,
+        )
+        .expect("projected path witness candidates should load");
+
+    let package_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.rel_path == "packages/editor-ui/package.json")
+        .expect("package surface should be present");
+    assert!(
+        package_candidate.score > 0.0,
+        "relation-backed companion surface should remain recallable"
+    );
+    assert!(
+        package_candidate
+            .witness_provenance_ids
+            .iter()
+            .any(|id| id.starts_with("overlay:path_relation:entrypoint_package:dst:")),
+        "package surface should carry relation-overlay provenance"
     );
 
     cleanup_workspace(&root);

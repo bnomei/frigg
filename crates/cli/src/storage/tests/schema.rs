@@ -25,6 +25,11 @@ fn initialize_applies_base_schema_and_version() -> FriggResult<()> {
         "path_witness_projection",
         "test_subject_projection",
         "entrypoint_surface_projection",
+        "retrieval_projection_head",
+        "path_relation_projection",
+        "subtree_coverage_projection",
+        "path_surface_term_projection",
+        "path_anchor_sketch_projection",
     ] {
         assert!(
             table_exists(&conn, table)?,
@@ -210,6 +215,12 @@ fn initialize_creates_hotpath_indexes_for_snapshot_and_provenance_queries() -> F
         "idx_test_subject_projection_repo_snapshot_test",
         "idx_test_subject_projection_repo_snapshot_subject",
         "idx_entrypoint_surface_projection_repo_snapshot_path",
+        "idx_retrieval_projection_head_repo_snapshot_family",
+        "idx_path_relation_projection_repo_snapshot_src",
+        "idx_path_relation_projection_repo_snapshot_dst",
+        "idx_subtree_coverage_projection_repo_snapshot_subtree",
+        "idx_path_surface_term_projection_repo_snapshot_path",
+        "idx_path_anchor_sketch_projection_repo_snapshot_path",
     ] {
         assert!(
             index_exists(&conn, index_name)?,

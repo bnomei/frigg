@@ -322,7 +322,52 @@ fn runtime_witness_penalizes_generic_runtime_docs(ctx: &PathQualityFacts) -> Opt
 
 fn runtime_witness_penalizes_repo_metadata(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_witnesses && ctx.is_repo_metadata && !ctx.is_python_runtime_config)
-        .then_some(PolicyEffect::Multiply(0.14))
+        .then_some(PolicyEffect::Multiply(0.08))
+}
+
+fn runtime_witness_penalizes_example_support(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && !ctx.wants_examples
+        && !ctx.wants_benchmarks
+        && ctx.is_example_support)
+        .then_some(PolicyEffect::Multiply(0.32))
+}
+
+fn runtime_witness_penalizes_root_repo_metadata(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && ctx.is_repo_metadata
+        && ctx.path_depth <= 1
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Multiply(0.42))
+}
+
+fn runtime_witness_penalizes_root_docs_readme(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && ctx.path_depth <= 1
+        && matches!(
+            ctx.class,
+            HybridSourceClass::Documentation | HybridSourceClass::Readme
+        ))
+    .then_some(PolicyEffect::Multiply(0.56))
+}
+
+fn runtime_witness_penalizes_ci_workflow_noise(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && ctx.is_ci_workflow
+        && !ctx.wants_ci_workflow_witnesses
+        && !ctx.wants_entrypoint_build_flow
+        && !ctx.wants_scripts_ops_witnesses)
+        .then_some(PolicyEffect::Multiply(0.08))
+}
+
+fn runtime_witness_penalizes_frontend_runtime_noise(
+    ctx: &PathQualityFacts,
+) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_witnesses
+        && !ctx.wants_examples
+        && !ctx.wants_benchmarks
+        && ctx.is_frontend_runtime_noise)
+        .then_some(PolicyEffect::Multiply(0.42))
 }
 
 fn runtime_config_penalizes_test_support(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
@@ -339,7 +384,21 @@ fn runtime_config_penalizes_generic_runtime_docs(ctx: &PathQualityFacts) -> Opti
 
 fn runtime_config_penalizes_repo_metadata(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
     (ctx.wants_runtime_config_artifacts && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
-        .then_some(PolicyEffect::Multiply(0.16))
+        .then_some(PolicyEffect::Multiply(0.10))
+}
+
+fn runtime_config_penalizes_ci_workflow_noise(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts && ctx.is_ci_workflow && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Multiply(0.08))
+}
+
+fn runtime_config_penalizes_example_support(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
+    (ctx.wants_runtime_config_artifacts
+        && !ctx.wants_examples
+        && !ctx.wants_benchmarks
+        && ctx.is_example_support
+        && !ctx.is_runtime_config_artifact)
+        .then_some(PolicyEffect::Multiply(0.26))
 }
 
 fn entrypoint_penalizes_reference_docs(ctx: &PathQualityFacts) -> Option<PolicyEffect> {
@@ -791,6 +850,54 @@ const PATH_QUALITY_RULES: &[ScoreRule<PathQualityFacts>] = &[
         runtime_witness_penalizes_repo_metadata,
     ),
     ScoreRule::when(
+        "runtime_witness.penalizes_ci_workflow_noise",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_ci_workflow_leaf(),
+        ]),
+        runtime_witness_penalizes_ci_workflow_noise,
+    ),
+    ScoreRule::when(
+        "runtime_witness.penalizes_example_support",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_example_support_leaf(),
+        ]),
+        runtime_witness_penalizes_example_support,
+    ),
+    ScoreRule::when(
+        "runtime_witness.penalizes_root_repo_metadata",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_repo_metadata_leaf(),
+        ]),
+        runtime_witness_penalizes_root_repo_metadata,
+    ),
+    ScoreRule::when(
+        "runtime_witness.penalizes_root_docs_readme",
+        PolicyStage::PathQuality,
+        Predicate::all(&[pred::wants_runtime_witnesses_leaf()]),
+        runtime_witness_penalizes_root_docs_readme,
+    ),
+    ScoreRule::when(
+        "runtime_witness.penalizes_ci_workflow_noise",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::is_ci_workflow_leaf(),
+        ]),
+        runtime_witness_penalizes_ci_workflow_noise,
+    ),
+    ScoreRule::when(
+        "runtime_witness.penalizes_frontend_runtime_noise",
+        PolicyStage::PathQuality,
+        Predicate::all(&[pred::wants_runtime_witnesses_leaf()]),
+        runtime_witness_penalizes_frontend_runtime_noise,
+    ),
+    ScoreRule::when(
         "runtime_config.penalizes_test_support",
         PolicyStage::PathQuality,
         Predicate::all(&[
@@ -816,6 +923,24 @@ const PATH_QUALITY_RULES: &[ScoreRule<PathQualityFacts>] = &[
             pred::is_repo_metadata_leaf(),
         ]),
         runtime_config_penalizes_repo_metadata,
+    ),
+    ScoreRule::when(
+        "runtime_config.penalizes_ci_workflow_noise",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_ci_workflow_leaf(),
+        ]),
+        runtime_config_penalizes_ci_workflow_noise,
+    ),
+    ScoreRule::when(
+        "runtime_config.penalizes_example_support",
+        PolicyStage::PathQuality,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_example_support_leaf(),
+        ]),
+        runtime_config_penalizes_example_support,
     ),
     ScoreRule::when(
         "entrypoint.penalizes_reference_docs",
@@ -978,5 +1103,26 @@ mod tests {
         assert!(with_ids.contains(&"examples_or_bench.penalizes_non_support_tests"));
         assert_eq!(without_effect.effect, PolicyEffect::Multiply(0.68));
         assert_eq!(with_effect.effect, PolicyEffect::Multiply(0.92));
+    }
+
+    #[test]
+    fn policy_trace_path_quality_runtime_witness_demotes_root_meta_ci_and_frontend_noise() {
+        let ctx = PathQualityFacts {
+            class: HybridSourceClass::Support,
+            path_depth: 1,
+            wants_runtime_witnesses: true,
+            is_ci_workflow: true,
+            is_repo_metadata: true,
+            is_frontend_runtime_noise: true,
+            ..Default::default()
+        };
+
+        let evaluation = evaluate(&ctx, true);
+        let rule_ids = trace_rule_ids(&evaluation);
+
+        assert!(rule_ids.contains(&"runtime_witness.penalizes_repo_metadata"));
+        assert!(rule_ids.contains(&"runtime_witness.penalizes_root_repo_metadata"));
+        assert!(rule_ids.contains(&"runtime_witness.penalizes_ci_workflow_noise"));
+        assert!(rule_ids.contains(&"runtime_witness.penalizes_frontend_runtime_noise"));
     }
 }

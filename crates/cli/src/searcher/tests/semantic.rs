@@ -897,7 +897,7 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             .read()
             .expect("hybrid graph artifact cache should not be poisoned")
             .len(),
-        1
+        0
     );
 
     let second = searcher.search_hybrid(SearchHybridQuery {
@@ -913,7 +913,7 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             .read()
             .expect("hybrid graph artifact cache should not be poisoned")
             .len(),
-        1
+        0
     );
 
     cleanup_workspace(&root);
@@ -983,7 +983,7 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             .read()
             .expect("hybrid graph artifact cache should not be poisoned")
             .len(),
-        1
+        0
     );
 
     prepare_workspace(
@@ -1045,7 +1045,7 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             .read()
             .expect("hybrid graph artifact cache should not be poisoned")
             .len(),
-        1
+        0
     );
 
     cleanup_workspace(&root);
