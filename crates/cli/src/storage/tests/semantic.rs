@@ -656,6 +656,287 @@ fn semantic_vector_topk_normalizes_short_canonical_embeddings() -> FriggResult<(
 }
 
 #[test]
+fn semantic_vector_topk_readiness_uses_head_metadata_instead_of_row_count_parity() -> FriggResult<()>
+{
+    let db_path = temp_db_path("semantic-vector-topk-head-readiness");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    replace_semantic_records(
+        &storage,
+        "repo-1",
+        "snapshot-001",
+        &[semantic_record(
+            "chunk-a",
+            "repo-1",
+            "snapshot-001",
+            "src/a.rs",
+            "rust",
+            0,
+            1,
+            10,
+            "openai",
+            "text-embedding-3-small",
+            Some("trace-001"),
+            "hash-a",
+            "fn a() {}",
+            &[1.0, 0.0],
+        )],
+    )?;
+
+    let conn = open_test_connection(&db_path)?;
+    conn.execute(
+        "DELETE FROM semantic_chunk_embedding WHERE repository_id = ?1 AND snapshot_id = ?2 AND provider = ?3 AND model = ?4 AND chunk_id = ?5",
+        ("repo-1", "snapshot-001", "openai", "text-embedding-3-small", "chunk-a"),
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to break semantic parity rows for readiness regression: {err}"
+        ))
+    })?;
+
+    let mut query_embedding = vec![1.0, 0.0];
+    query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
+    reset_semantic_read_trace();
+    let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(
+        "repo-1",
+        "snapshot-001",
+        "openai",
+        "text-embedding-3-small",
+        &query_embedding,
+        1,
+        None,
+    )?;
+    assert!(
+        matches
+            .iter()
+            .map(|entry| entry.chunk_id.as_str())
+            .eq(["chunk-a"].into_iter()),
+        "semantic top-k readiness should rely on the semantic head metadata instead of row-count parity"
+    );
+    let trace = snapshot_semantic_read_trace();
+    assert_eq!(
+        trace.readiness_checks, 1,
+        "semantic vector top-k should perform exactly one head readiness check per request"
+    );
+    assert_eq!(
+        trace.membership_probes, 0,
+        "semantic top-k should not fall back to per-candidate membership probes"
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn semantic_vector_topk_returns_empty_when_semantic_head_is_missing() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-vector-topk-missing-head");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/a.rs", "hash-a", 10, Some(100))],
+    )?;
+
+    let mut query_embedding = vec![1.0, 0.0];
+    query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
+    reset_semantic_read_trace();
+    let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(
+        "repo-1",
+        "snapshot-001",
+        "openai",
+        "text-embedding-3-small",
+        &query_embedding,
+        1,
+        None,
+    )?;
+
+    assert!(
+        matches.is_empty(),
+        "semantic top-k should bypass the vector query when no semantic head is present"
+    );
+    let trace = snapshot_semantic_read_trace();
+    assert_eq!(trace.readiness_checks, 1);
+    assert_eq!(trace.membership_probes, 0);
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn semantic_vector_topk_returns_empty_when_semantic_head_snapshot_is_stale() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-vector-topk-stale-head");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/a.rs", "hash-a", 10, Some(100))],
+    )?;
+    replace_semantic_records(
+        &storage,
+        "repo-1",
+        "snapshot-001",
+        &[semantic_record(
+            "chunk-a",
+            "repo-1",
+            "snapshot-001",
+            "src/a.rs",
+            "rust",
+            0,
+            1,
+            10,
+            "openai",
+            "text-embedding-3-small",
+            Some("trace-001"),
+            "hash-a",
+            "fn a() {}",
+            &[1.0, 0.0],
+        )],
+    )?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-002",
+        &[manifest_entry("src/a.rs", "hash-a2", 11, Some(110))],
+    )?;
+
+    let mut query_embedding = vec![1.0, 0.0];
+    query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
+    reset_semantic_read_trace();
+    let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(
+        "repo-1",
+        "snapshot-002",
+        "openai",
+        "text-embedding-3-small",
+        &query_embedding,
+        1,
+        None,
+    )?;
+
+    assert!(
+        matches.is_empty(),
+        "semantic top-k should bypass stale semantic heads that do not cover the requested snapshot"
+    );
+    let trace = snapshot_semantic_read_trace();
+    assert_eq!(trace.readiness_checks, 1);
+    assert_eq!(trace.membership_probes, 0);
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn semantic_vector_topk_membership_filter_still_probes_each_candidate_row() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-vector-topk-membership-probes");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    replace_semantic_records(
+        &storage,
+        "repo-1",
+        "snapshot-001",
+        &[
+            semantic_record(
+                "chunk-a",
+                "repo-1",
+                "snapshot-001",
+                "src/a.rs",
+                "rust",
+                0,
+                1,
+                10,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-a",
+                "fn a() {}",
+                &[1.0, 0.0],
+            ),
+            semantic_record(
+                "chunk-b",
+                "repo-1",
+                "snapshot-001",
+                "src/b.rs",
+                "rust",
+                1,
+                11,
+                20,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-b",
+                "fn b() {}",
+                &[0.9, 0.1],
+            ),
+            semantic_record(
+                "chunk-d",
+                "repo-1",
+                "snapshot-001",
+                "src/d.py",
+                "python",
+                2,
+                21,
+                30,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-d",
+                "def d(): pass",
+                &[0.8, 0.2],
+            ),
+            semantic_record(
+                "chunk-c",
+                "repo-1",
+                "snapshot-001",
+                "src/c.py",
+                "python",
+                3,
+                31,
+                40,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-c",
+                "def c(): pass",
+                &[0.85, 0.15],
+            ),
+        ],
+    )?;
+
+    let mut query_embedding = vec![1.0, 0.0];
+    query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
+    reset_semantic_read_trace();
+    let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(
+        "repo-1",
+        "snapshot-001",
+        "openai",
+        "text-embedding-3-small",
+        &query_embedding,
+        2,
+        Some("rust"),
+    )?;
+
+    assert_eq!(
+        matches
+            .iter()
+            .map(|entry| entry.chunk_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["chunk-a", "chunk-b"]
+    );
+    let trace = snapshot_semantic_read_trace();
+    assert_eq!(trace.readiness_checks, 1);
+    assert_eq!(
+        trace.membership_probes, 0,
+        "semantic top-k should now filter snapshot and language membership in one set-based vector query"
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_embedding_latest_manifest_snapshot_lookup_prefers_newest_compatible_snapshot()
 -> FriggResult<()> {
     let db_path = temp_db_path("semantic-embedding-latest-compatible-snapshot");

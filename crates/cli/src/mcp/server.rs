@@ -32,8 +32,9 @@ use crate::manifest_validation::{
 };
 use crate::path_class::{repository_path_class, repository_path_class_rank};
 use crate::searcher::{
-    HybridChannelWeights, SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
-    TextSearcher, ValidatedManifestCandidateCache, compile_safe_regex,
+    HybridChannelWeights, ProjectionStoreService, SearchDiagnosticKind, SearchFilters,
+    SearchHybridQuery, SearchTextQuery, TextSearcher, ValidatedManifestCandidateCache,
+    compile_safe_regex,
 };
 use crate::settings::SemanticRuntimeCredentials;
 use crate::settings::{FriggConfig, SemanticRuntimeConfig};
@@ -75,7 +76,8 @@ use crate::mcp::server_cache::{
     CachedRepositorySummary, CachedSearchHybridResponse, CachedSearchSymbolResponse,
     CachedSearchTextResponse, FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey,
     HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope, RepositoryResponseCacheFreshness,
-    RepositoryResponseCacheFreshnessMode, SearchHybridResponseCacheKey,
+    RepositoryResponseCacheFreshnessMode, RuntimeCacheEvent, RuntimeCacheFamily,
+    RuntimeCacheRegistry, RuntimeCacheTelemetry, SearchHybridResponseCacheKey,
     SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
     response_cache_scopes_include_repository,
 };
@@ -149,6 +151,9 @@ struct FriggMcpRuntimeState {
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
+    searcher_projection_store_service: ProjectionStoreService,
+    runtime_cache_registry: Arc<RwLock<RuntimeCacheRegistry>>,
+    runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
 }
 
 #[derive(Clone)]
@@ -237,7 +242,6 @@ impl FriggMcpServer {
     const PRECISE_FAILURE_SAMPLE_LIMIT: usize = 8;
     const PRECISE_DISCOVERY_SAMPLE_LIMIT: usize = 16;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
-    const SAFE_REGEX_CACHE_LIMIT: usize = 128;
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
     const RUNTIME_RECENT_PROVENANCE_LIMIT: usize = 8;
     const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -2271,6 +2275,9 @@ impl FriggMcpServer {
                 watch_runtime: Arc::clone(&watch_runtime),
                 runtime_task_registry,
                 validated_manifest_candidate_cache,
+                searcher_projection_store_service: ProjectionStoreService::new(),
+                runtime_cache_registry: Arc::new(RwLock::new(RuntimeCacheRegistry::default())),
+                runtime_cache_telemetry: Arc::new(RwLock::new(BTreeMap::new())),
             },
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
@@ -2360,6 +2367,138 @@ impl FriggMcpServer {
             server.invalidate_repository_search_response_caches(repository_id);
             server.invalidate_repository_navigation_response_caches(repository_id);
         })
+    }
+
+    fn runtime_cache_max_entries(&self, family: RuntimeCacheFamily) -> Option<usize> {
+        self.runtime_state
+            .runtime_cache_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .policy(family)
+            .and_then(|policy| policy.budget.max_entries)
+    }
+
+    fn runtime_text_searcher(&self, config: FriggConfig) -> TextSearcher {
+        TextSearcher::with_runtime_projection_store_service(
+            config,
+            Arc::clone(&self.runtime_state.validated_manifest_candidate_cache),
+            self.runtime_state.searcher_projection_store_service.clone(),
+        )
+    }
+
+    fn record_runtime_cache_event(
+        &self,
+        family: RuntimeCacheFamily,
+        event: RuntimeCacheEvent,
+        count: usize,
+    ) {
+        if count == 0 {
+            return;
+        }
+        let mut telemetry = self
+            .runtime_state
+            .runtime_cache_telemetry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        telemetry.entry(family).or_default().record(event, count);
+    }
+
+    fn trim_runtime_cache_to_entry_limit<K, V>(
+        &self,
+        family: RuntimeCacheFamily,
+        cache: &mut BTreeMap<K, V>,
+    ) where
+        K: Ord,
+    {
+        let Some(limit) = self.runtime_cache_max_entries(family) else {
+            return;
+        };
+        while cache.len() > limit {
+            let _ = cache.pop_first();
+            self.record_runtime_cache_event(family, RuntimeCacheEvent::Eviction, 1);
+        }
+    }
+
+    fn runtime_cache_contract_summary(&self, families: &[RuntimeCacheFamily]) -> Value {
+        let registry = self
+            .runtime_state
+            .runtime_cache_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let telemetry = self
+            .runtime_state
+            .runtime_cache_telemetry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        Value::Array(
+            families
+                .iter()
+                .filter_map(|family| {
+                    let policy = registry.policy(*family)?;
+                    let counters = telemetry.get(family).copied().unwrap_or_default();
+                    Some(json!({
+                        "family": family.as_str(),
+                        "residency": match policy.residency {
+                            crate::mcp::server_cache::RuntimeCacheResidency::ProcessWide => "process_wide",
+                            crate::mcp::server_cache::RuntimeCacheResidency::RequestLocal => "request_local",
+                        },
+                        "reuse_class": match policy.reuse_class {
+                            crate::mcp::server_cache::RuntimeCacheReuseClass::SnapshotScopedReusable => "snapshot_scoped_reusable",
+                            crate::mcp::server_cache::RuntimeCacheReuseClass::QueryResultMicroCache => "query_result_micro_cache",
+                            crate::mcp::server_cache::RuntimeCacheReuseClass::ProcessMetadata => "process_metadata",
+                            crate::mcp::server_cache::RuntimeCacheReuseClass::RequestLocalOnly => "request_local_only",
+                            crate::mcp::server_cache::RuntimeCacheReuseClass::DeferredUntilReadOnly => "deferred_until_read_only",
+                        },
+                        "freshness_contract": match policy.freshness_contract {
+                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositorySnapshot => "repository_snapshot",
+                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositoryFreshnessScopes => "repository_freshness_scopes",
+                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositoryId => "repository_id",
+                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::ExactInput => "exact_input",
+                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::RequestLocal => "request_local",
+                        },
+                        "budget": {
+                            "max_entries": policy.budget.max_entries,
+                            "max_bytes": policy.budget.max_bytes,
+                        },
+                        "dirty_root_bypass": policy.dirty_root_bypass,
+                        "telemetry": {
+                            "hits": counters.hits,
+                            "misses": counters.misses,
+                            "bypasses": counters.bypasses,
+                            "inserts": counters.inserts,
+                            "evictions": counters.evictions,
+                            "invalidations": counters.invalidations,
+                        },
+                    }))
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[cfg(test)]
+    fn runtime_cache_telemetry(&self, family: RuntimeCacheFamily) -> RuntimeCacheTelemetry {
+        self.runtime_state
+            .runtime_cache_telemetry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&family)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    fn runtime_cache_policy(
+        &self,
+        family: RuntimeCacheFamily,
+    ) -> crate::mcp::server_cache::RuntimeCacheFamilyPolicy {
+        *self
+            .runtime_state
+            .runtime_cache_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .policy(family)
+            .expect("runtime cache family policy should exist")
     }
 
     pub fn set_watch_runtime(&self, watch_runtime: Option<Arc<crate::watch::WatchRuntime>>) {
@@ -2692,19 +2831,25 @@ impl FriggMcpServer {
         params: &ReadFileParams,
     ) -> Result<(String, PathBuf, String), ErrorData> {
         let requested = PathBuf::from(&params.path);
-        let roots = self
-            .roots_for_repository(params.repository_id.as_deref())?
-            .into_iter()
-            .map(|(repository_id, root)| {
-                let root_canonical = root.canonicalize().map_err(|err| {
-                    Self::internal(
-                        format!("failed to canonicalize root {}: {err}", root.display()),
-                        None,
-                    )
-                })?;
-                Ok((repository_id, root_canonical))
-            })
-            .collect::<Result<Vec<_>, ErrorData>>()?;
+        let roots = if requested.is_absolute() && params.repository_id.is_none() {
+            self.known_workspaces()
+                .into_iter()
+                .map(|workspace| (workspace.repository_id, workspace.root))
+                .collect::<Vec<_>>()
+        } else {
+            self.roots_for_repository(params.repository_id.as_deref())?
+        }
+        .into_iter()
+        .map(|(repository_id, root)| {
+            let root_canonical = root.canonicalize().map_err(|err| {
+                Self::internal(
+                    format!("failed to canonicalize root {}: {err}", root.display()),
+                    None,
+                )
+            })?;
+            Ok((repository_id, root_canonical))
+        })
+        .collect::<Result<Vec<_>, ErrorData>>()?;
 
         let mut saw_workspace_candidate = false;
 

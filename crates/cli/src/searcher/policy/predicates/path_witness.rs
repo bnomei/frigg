@@ -149,6 +149,18 @@ fn is_repo_root_runtime_config_artifact(ctx: &PathWitnessFacts) -> bool {
     ctx.is_repo_root_runtime_config_artifact
 }
 
+fn is_package_surface(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_package_surface
+}
+
+fn is_build_config_surface(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_build_config_surface
+}
+
+fn is_workspace_config_surface(ctx: &PathWitnessFacts) -> bool {
+    ctx.is_workspace_config_surface
+}
+
 fn is_python_test(ctx: &PathWitnessFacts) -> bool {
     ctx.is_python_test
 }
@@ -477,6 +489,21 @@ pub(crate) const fn is_repo_root_runtime_config_artifact_leaf() -> PredicateLeaf
     PredicateLeaf::new(
         "candidate.repo_root_runtime_config_artifact",
         is_repo_root_runtime_config_artifact,
+    )
+}
+
+pub(crate) const fn is_package_surface_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new("candidate.package_surface", is_package_surface)
+}
+
+pub(crate) const fn is_build_config_surface_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new("candidate.build_config_surface", is_build_config_surface)
+}
+
+pub(crate) const fn is_workspace_config_surface_leaf() -> PredicateLeaf<PathWitnessFacts> {
+    PredicateLeaf::new(
+        "candidate.workspace_config_surface",
+        is_workspace_config_surface,
     )
 }
 

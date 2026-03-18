@@ -135,6 +135,7 @@ pub(in crate::searcher) fn is_workspace_config_surface_path(path: &str) -> bool 
                     | "turbo.json"
                     | "workspace.json"
                     | "nx.json"
+                    | "tsconfig.json"
                     | "tsconfig.base.json"
             )
         )
@@ -219,6 +220,16 @@ pub(in crate::searcher) fn is_loose_python_test_module_path(path: &str) -> bool 
         && (normalized.starts_with("test/") || normalized.contains("/test/"))
 }
 
+pub(in crate::searcher) fn is_non_prefix_python_test_module_path(path: &str) -> bool {
+    let normalized = path.trim_start_matches("./").to_ascii_lowercase();
+    let file_name = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    is_loose_python_test_module_path(path) || file_name.ends_with("_test.py")
+}
+
 pub(in crate::searcher) fn is_frontend_runtime_noise_path(path: &str) -> bool {
     let normalized = path.trim_start_matches("./").to_ascii_lowercase();
     if normalized.contains("/frontend/") {
@@ -288,8 +299,7 @@ pub(in crate::searcher) fn is_frontend_runtime_noise_path(path: &str) -> bool {
     matches!(
         file_name,
         Some(
-            "package.json"
-                | "package-lock.json"
+            "package-lock.json"
                 | "pnpm-lock.yaml"
                 | "yarn.lock"
                 | "openapi.json"

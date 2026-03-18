@@ -312,6 +312,14 @@ impl FriggMcpServer {
                 "mode": mode.as_str(),
                 "cacheable": cacheable,
                 "repositories": repositories,
+                "runtime_cache_contract": self.runtime_cache_contract_summary(&[
+                    crate::mcp::server_cache::RuntimeCacheFamily::ValidatedManifestCandidate,
+                    crate::mcp::server_cache::RuntimeCacheFamily::SearchTextResponse,
+                    crate::mcp::server_cache::RuntimeCacheFamily::SearchHybridResponse,
+                    crate::mcp::server_cache::RuntimeCacheFamily::SearchSymbolResponse,
+                    crate::mcp::server_cache::RuntimeCacheFamily::GoToDefinitionResponse,
+                    crate::mcp::server_cache::RuntimeCacheFamily::FindDeclarationsResponse,
+                ]),
             }),
         })
     }
@@ -350,16 +358,21 @@ impl FriggMcpServer {
         }
     }
 
-    pub(super) fn workspace_manifest_entry_count(workspace: &AttachedWorkspace) -> Option<usize> {
+    pub(super) fn workspace_manifest_entry_count(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> Option<usize> {
         let db_path = resolve_provenance_db_path(&workspace.root).ok()?;
         if db_path.exists() {
             let storage = Storage::new(db_path.clone());
-            if let Some(snapshot) = crate::manifest_validation::latest_validated_manifest_snapshot(
-                &storage,
-                &workspace.repository_id,
-                &workspace.root,
-                None,
-            ) {
+            if let Some(snapshot) =
+                crate::manifest_validation::latest_validated_manifest_snapshot_shared(
+                    &storage,
+                    &workspace.repository_id,
+                    &workspace.root,
+                    Some(&self.runtime_state.validated_manifest_candidate_cache),
+                )
+            {
                 return Some(snapshot.digests.len());
             }
         }
@@ -394,7 +407,7 @@ impl FriggMcpServer {
                     };
                 }
             };
-        let manifest_entry_count = Self::workspace_manifest_entry_count(workspace);
+        let manifest_entry_count = self.workspace_manifest_entry_count(workspace);
         let dirty_root = self.workspace_has_dirty_root(workspace);
         if dirty_root && freshness.snapshot_id.is_some() {
             return WorkspaceIndexComponentSummary {

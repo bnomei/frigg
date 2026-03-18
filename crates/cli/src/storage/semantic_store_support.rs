@@ -2,6 +2,8 @@ use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};
 
+#[cfg(test)]
+use super::super::db_runtime::record_semantic_readiness_check;
 use crate::storage::vector_store::{decode_f32_vector, encode_f32_vector};
 use crate::storage::{
     DEFAULT_VECTOR_DIMENSIONS, SNAPSHOT_KIND_MANIFEST, SemanticChunkEmbeddingRecord,
@@ -73,6 +75,31 @@ pub(super) fn load_semantic_head_for_repository_model_on_connection(
             "failed to query semantic head for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
         ))
     })
+}
+
+pub(super) fn load_ready_semantic_head_for_repository_snapshot_model_on_connection(
+    conn: &Connection,
+    repository_id: &str,
+    snapshot_id: &str,
+    provider: &str,
+    model: &str,
+) -> FriggResult<Option<SemanticHeadRecord>> {
+    #[cfg(test)]
+    record_semantic_readiness_check();
+
+    let Some(head) = load_semantic_head_for_repository_model_on_connection(
+        conn,
+        repository_id,
+        provider,
+        model,
+    )?
+    else {
+        return Ok(None);
+    };
+    if head.covered_snapshot_id != snapshot_id || head.live_chunk_count == 0 {
+        return Ok(None);
+    }
+    Ok(Some(head))
 }
 
 pub(super) fn clear_live_semantic_corpus_for_repository_model(
@@ -785,24 +812,6 @@ pub(super) fn rebuild_semantic_vector_rows(conn: &Connection) -> FriggResult<()>
             })?;
     }
 
-    Ok(())
-}
-
-pub(super) fn ensure_semantic_vector_rows_current(
-    conn: &Connection,
-    repository_id: &str,
-    provider: &str,
-    model: &str,
-) -> FriggResult<()> {
-    let semantic_rows =
-        count_semantic_embedding_rows_for_repository_model(conn, repository_id, provider, model)?;
-    let vector_rows =
-        count_semantic_vector_rows_for_repository_model(conn, repository_id, provider, model)?;
-    if semantic_rows != vector_rows {
-        return Err(FriggError::Internal(format!(
-            "semantic vector partition out of sync for repository '{repository_id}' provider '{provider}' model '{model}': embeddings={semantic_rows} vectors={vector_rows}; run storage repair to rebuild sqlite-vec from the live semantic corpus"
-        )));
-    }
     Ok(())
 }
 

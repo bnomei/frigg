@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::path::Path;
 
 use crate::domain::{FriggError, FriggResult};
@@ -10,6 +12,67 @@ use super::{
     ManifestEntry, ManifestMetadataEntry, Migration, RepositoryManifestMetadataSnapshot,
     RepositoryManifestSnapshot, SNAPSHOT_KIND_MANIFEST,
 };
+
+#[cfg(test)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct SemanticReadTrace {
+    pub open_connection_calls: usize,
+    pub read_context_opens: usize,
+    pub readiness_checks: usize,
+    pub membership_probes: usize,
+    pub payload_load_calls: usize,
+    pub payload_rows_loaded: usize,
+    pub payload_text_bytes_loaded: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SEMANTIC_READ_TRACE: RefCell<SemanticReadTrace> =
+        RefCell::new(SemanticReadTrace::default());
+}
+
+#[cfg(test)]
+pub(crate) fn reset_semantic_read_trace() {
+    SEMANTIC_READ_TRACE.with(|trace| {
+        *trace.borrow_mut() = SemanticReadTrace::default();
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn snapshot_semantic_read_trace() -> SemanticReadTrace {
+    SEMANTIC_READ_TRACE.with(|trace| trace.borrow().clone())
+}
+
+#[cfg(test)]
+pub(crate) fn record_semantic_open_connection() {
+    SEMANTIC_READ_TRACE.with(|trace| {
+        trace.borrow_mut().open_connection_calls += 1;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn record_semantic_read_context_open() {
+    SEMANTIC_READ_TRACE.with(|trace| {
+        trace.borrow_mut().read_context_opens += 1;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn record_semantic_readiness_check() {
+    SEMANTIC_READ_TRACE.with(|trace| {
+        trace.borrow_mut().readiness_checks += 1;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn record_semantic_payload_load(payload_rows_loaded: usize, payload_text_bytes: usize) {
+    SEMANTIC_READ_TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        trace.payload_load_calls += 1;
+        trace.payload_rows_loaded += payload_rows_loaded;
+        trace.payload_text_bytes_loaded += payload_text_bytes;
+    });
+}
 
 pub(super) fn load_snapshot_ids_for_repository_and_kind(
     conn: &Connection,
@@ -145,6 +208,8 @@ pub(super) fn load_semantic_head_snapshot_ids_for_repository(
 }
 
 pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
+    #[cfg(test)]
+    record_semantic_open_connection();
     ensure_sqlite_vec_auto_extension_registered()?;
     let conn = Connection::open(path)
         .map_err(|err| FriggError::Internal(format!("failed to open sqlite db: {err}")))?;

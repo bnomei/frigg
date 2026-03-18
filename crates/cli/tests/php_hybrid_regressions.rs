@@ -1455,7 +1455,14 @@ fn php_hybrid_graph_channel_uses_php_target_evidence_edges() {
         .matches
         .iter()
         .find(|entry| entry.document.path == "src/Listeners/OrderListener.php")
-        .expect("listener runtime witness should surface in top-k");
+        .unwrap_or_else(|| {
+            panic!(
+                "listener runtime witness should surface in top-k; matches={:?}; ranked_anchors={:?}; channel_results={:?}",
+                output.matches,
+                output.ranked_anchors,
+                output.channel_results
+            )
+        });
 
     assert!(
         listener_match.graph_score > 0.0,
@@ -1753,6 +1760,12 @@ fn php_hybrid_laravel_ui_queries_surface_livewire_components_and_blade_views() {
                 &[
                     "app/Livewire/Dashboard.php",
                     "app/Livewire/MonacoEditor.php",
+                    "app/Livewire/Boarding/Index.php",
+                    "app/Livewire/Team/AdminView.php",
+                    "app/Livewire/Project/Index.php",
+                    "app/Livewire/SharedVariables/Index.php",
+                    "app/Livewire/Destination/Index.php",
+                    "app/Livewire/Subscription/Show.php",
                 ],
             ),
         ],

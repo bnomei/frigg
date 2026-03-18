@@ -5,8 +5,8 @@ use crate::domain::{FriggResult, model::TextMatch};
 
 use super::{
     BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD, SearchCandidateUniverse, SearchDiagnostic,
-    SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery, retain_bounded_match,
-    scrub_search_content, should_scrub_leading_markdown_comment, sort_matches_deterministically,
+    SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery, ordering::BoundedTextMatches,
+    scrub_search_content, should_scrub_leading_markdown_comment,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
 
@@ -19,11 +19,7 @@ where
     F: FnMut(&str, &mut Vec<usize>),
 {
     let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
-    let mut matches = if use_bounded_retention {
-        Vec::with_capacity(query.limit)
-    } else {
-        Vec::new()
-    };
+    let mut matches = BoundedTextMatches::with_limit(query.limit, use_bounded_retention);
     let mut total_matches = 0usize;
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = Vec::new();
@@ -66,8 +62,8 @@ where
                     for &column in &match_columns_buffer {
                         total_matches = total_matches.saturating_add(1);
                         if use_bounded_retention
-                            && matches.len() == query.limit
-                            && matches.last().is_some_and(|worst| {
+                            && matches.is_full()
+                            && matches.worst().is_some_and(|worst| {
                                 !text_match_candidate_order(
                                     &repository_id,
                                     &rel_path,
@@ -93,12 +89,7 @@ where
                             witness_score_hint_millis: None,
                             witness_provenance_ids: None,
                         };
-
-                        if use_bounded_retention {
-                            retain_bounded_match(&mut matches, query.limit, candidate);
-                        } else {
-                            matches.push(candidate);
-                        }
+                        matches.push(candidate);
                     }
                 }
                 continue;
@@ -148,8 +139,8 @@ where
                 for &column in &match_columns_buffer {
                     total_matches = total_matches.saturating_add(1);
                     if use_bounded_retention
-                        && matches.len() == query.limit
-                        && matches.last().is_some_and(|worst| {
+                        && matches.is_full()
+                        && matches.worst().is_some_and(|worst| {
                             !text_match_candidate_order(
                                 &repository_id,
                                 &rel_path,
@@ -173,29 +164,14 @@ where
                         witness_score_hint_millis: None,
                         witness_provenance_ids: None,
                     };
-
-                    if use_bounded_retention {
-                        retain_bounded_match(&mut matches, query.limit, candidate);
-                    } else {
-                        matches.push(candidate);
-                    }
+                    matches.push(candidate);
                 }
             }
         }
     }
 
     sort_search_diagnostics_deterministically(&mut diagnostics.entries);
-
-    if use_bounded_retention {
-        return Ok(SearchExecutionOutput {
-            total_matches,
-            matches,
-            diagnostics,
-        });
-    }
-
-    sort_matches_deterministically(&mut matches);
-    matches.truncate(query.limit);
+    let matches = matches.into_final_matches(query.limit);
 
     Ok(SearchExecutionOutput {
         total_matches,
@@ -216,7 +192,7 @@ where
         return Ok(SearchExecutionOutput::default());
     }
 
-    let mut matches = Vec::with_capacity(query.limit);
+    let mut matches = BoundedTextMatches::with_limit(query.limit, true);
     let mut total_matches = 0usize;
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = Vec::new();
@@ -260,8 +236,8 @@ where
 
                     for &column in &match_columns_buffer {
                         total_matches = total_matches.saturating_add(1);
-                        if matches.len() == query.limit
-                            && matches.last().is_some_and(|worst| {
+                        if matches.is_full()
+                            && matches.worst().is_some_and(|worst| {
                                 !text_match_candidate_order(
                                     repository_id,
                                     rel_path,
@@ -288,7 +264,7 @@ where
                             witness_score_hint_millis: None,
                             witness_provenance_ids: None,
                         };
-                        retain_bounded_match(&mut matches, query.limit, candidate);
+                        matches.push(candidate);
                     }
 
                     if stop_after_prefix {
@@ -341,8 +317,8 @@ where
                 let mut excerpt_for_line: Option<String> = None;
                 for &column in &match_columns_buffer {
                     total_matches = total_matches.saturating_add(1);
-                    if matches.len() == query.limit
-                        && matches.last().is_some_and(|worst| {
+                    if matches.is_full()
+                        && matches.worst().is_some_and(|worst| {
                             !text_match_candidate_order(
                                 repository_id,
                                 rel_path,
@@ -367,7 +343,7 @@ where
                         witness_score_hint_millis: None,
                         witness_provenance_ids: None,
                     };
-                    retain_bounded_match(&mut matches, query.limit, candidate);
+                    matches.push(candidate);
                 }
 
                 if stop_after_prefix {
@@ -378,6 +354,7 @@ where
     }
 
     sort_search_diagnostics_deterministically(&mut diagnostics.entries);
+    let matches = matches.into_final_matches(query.limit);
 
     Ok(SearchExecutionOutput {
         total_matches,
@@ -397,11 +374,7 @@ where
     F: FnMut(&str, &mut Vec<usize>),
 {
     let use_bounded_retention = query.limit <= BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD;
-    let mut matches = if use_bounded_retention {
-        Vec::with_capacity(query.limit)
-    } else {
-        Vec::new()
-    };
+    let mut matches = BoundedTextMatches::with_limit(query.limit, use_bounded_retention);
     let mut total_matches = 0usize;
     let mut diagnostics = candidate_universe.diagnostics.clone();
     let mut match_columns_buffer = Vec::new();
@@ -446,8 +419,8 @@ where
                 for &column in &match_columns_buffer {
                     total_matches = total_matches.saturating_add(1);
                     if use_bounded_retention
-                        && matches.len() == query.limit
-                        && matches.last().is_some_and(|worst| {
+                        && matches.is_full()
+                        && matches.worst().is_some_and(|worst| {
                             !text_match_candidate_order(
                                 &repository_id,
                                 &rel_path,
@@ -473,29 +446,14 @@ where
                         witness_score_hint_millis: None,
                         witness_provenance_ids: None,
                     };
-
-                    if use_bounded_retention {
-                        retain_bounded_match(&mut matches, query.limit, candidate);
-                    } else {
-                        matches.push(candidate);
-                    }
+                    matches.push(candidate);
                 }
             }
         }
     }
 
     sort_search_diagnostics_deterministically(&mut diagnostics.entries);
-
-    if use_bounded_retention {
-        return Ok(SearchExecutionOutput {
-            total_matches,
-            matches,
-            diagnostics,
-        });
-    }
-
-    sort_matches_deterministically(&mut matches);
-    matches.truncate(query.limit);
+    let matches = matches.into_final_matches(query.limit);
 
     Ok(SearchExecutionOutput {
         total_matches,

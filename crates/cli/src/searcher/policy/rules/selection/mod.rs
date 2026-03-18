@@ -146,6 +146,7 @@ mod tests {
             wants_entrypoint_build_flow: true,
             is_entrypoint_build_workflow: true,
             is_ci_workflow: true,
+            excerpt_has_build_flow_anchor: true,
             ..Default::default()
         };
 

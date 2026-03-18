@@ -276,6 +276,25 @@ impl DeepSearchHarness {
 pub(super) fn normalize_trace_response_for_tool(tool_name: &str, response: Value) -> Value {
     match tool_name {
         "list_repositories" => normalize_list_repositories_response(response),
+        "read_file" => normalize_read_file_response(response),
+        "search_text" => normalize_matches_response(
+            response,
+            &[
+                "repository_id",
+                "path",
+                "line",
+                "column",
+                "excerpt",
+                "snippet",
+            ],
+        ),
+        "search_symbol" => {
+            normalize_matches_response(response, &["repository_id", "path", "line", "symbol"])
+        }
+        "find_references" => normalize_matches_response(
+            response,
+            &["repository_id", "path", "line", "column", "symbol"],
+        ),
         _ => response,
     }
 }
@@ -299,6 +318,38 @@ fn normalize_list_repositories_response(response: Value) -> Value {
         .collect::<Vec<_>>();
 
     json!({ "repositories": normalized })
+}
+
+fn normalize_read_file_response(response: Value) -> Value {
+    let mut normalized = serde_json::Map::new();
+    for field in ["repository_id", "path", "content"] {
+        if let Some(value) = response.get(field) {
+            normalized.insert(field.to_owned(), canonicalize_json_value(value));
+        }
+    }
+
+    Value::Object(normalized)
+}
+
+fn normalize_matches_response(response: Value, fields: &[&str]) -> Value {
+    let Some(matches) = response.get("matches").and_then(Value::as_array) else {
+        return response;
+    };
+
+    let normalized_matches = matches
+        .iter()
+        .map(|matched| {
+            let mut normalized = serde_json::Map::new();
+            for field in fields {
+                if let Some(value) = matched.get(*field) {
+                    normalized.insert((*field).to_owned(), canonicalize_json_value(value));
+                }
+            }
+            Value::Object(normalized)
+        })
+        .collect::<Vec<_>>();
+
+    json!({ "matches": normalized_matches })
 }
 
 fn resolve_playbook_steps<'a>(

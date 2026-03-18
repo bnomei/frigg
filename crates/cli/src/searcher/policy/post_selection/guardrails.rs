@@ -35,7 +35,7 @@ pub(super) fn insert_guardrail_candidate(
     candidate: Option<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,
     meta: PostSelectionRuleMeta,
-    replacement_predicate: fn(&HybridRankedEvidence) -> bool,
+    replacement_predicate: impl Fn(&HybridRankedEvidence) -> bool,
 ) -> Vec<HybridRankedEvidence> {
     let Some(candidate) = candidate else {
         return matches;
@@ -179,19 +179,73 @@ pub(super) fn selection_guardrail_cmp(
         && left_facts.is_test_support
         && right_facts.is_test_support
     {
-        let guardrail_cmp = left_facts
-            .path_overlap
-            .cmp(&right_facts.path_overlap)
-            .then_with(|| {
+        let guardrail_cmp = if left_facts.prefer_runtime_anchor_tests {
+            left_facts
+                .path_overlap
+                .cmp(&right_facts.path_overlap)
+                .then_with(|| {
+                    left_facts
+                        .has_exact_query_term_match
+                        .cmp(&right_facts.has_exact_query_term_match)
+                })
+                .then_with(|| {
+                    companion_test_guardrail_priority(&left_facts)
+                        .cmp(&companion_test_guardrail_priority(&right_facts))
+                })
+                .then_with(|| {
+                    left_facts
+                        .runtime_subtree_affinity
+                        .cmp(&right_facts.runtime_subtree_affinity)
+                })
+                .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth))
+        } else {
+            let prefer_package_locality_first = left_facts.wants_entrypoint_build_flow
+                && left_facts.wants_test_witness_recall
+                && !left_facts.is_example_support
+                && !left_facts.is_bench_support
+                && !right_facts.is_example_support
+                && !right_facts.is_bench_support;
+            if prefer_package_locality_first {
                 left_facts
-                    .has_exact_query_term_match
-                    .cmp(&right_facts.has_exact_query_term_match)
-            })
-            .then_with(|| {
-                companion_test_guardrail_priority(&left_facts)
-                    .cmp(&companion_test_guardrail_priority(&right_facts))
-            })
-            .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth));
+                    .runtime_family_prefix_overlap
+                    .cmp(&right_facts.runtime_family_prefix_overlap)
+                    .then_with(|| {
+                        left_facts
+                            .runtime_subtree_affinity
+                            .cmp(&right_facts.runtime_subtree_affinity)
+                    })
+                    .then_with(|| {
+                        companion_test_guardrail_priority(&left_facts)
+                            .cmp(&companion_test_guardrail_priority(&right_facts))
+                    })
+                    .then_with(|| left_facts.path_overlap.cmp(&right_facts.path_overlap))
+                    .then_with(|| {
+                        left_facts
+                            .has_exact_query_term_match
+                            .cmp(&right_facts.has_exact_query_term_match)
+                    })
+                    .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth))
+            } else {
+                left_facts
+                    .path_overlap
+                    .cmp(&right_facts.path_overlap)
+                    .then_with(|| {
+                        left_facts
+                            .has_exact_query_term_match
+                            .cmp(&right_facts.has_exact_query_term_match)
+                    })
+                    .then_with(|| {
+                        left_facts
+                            .runtime_subtree_affinity
+                            .cmp(&right_facts.runtime_subtree_affinity)
+                    })
+                    .then_with(|| {
+                        companion_test_guardrail_priority(&left_facts)
+                            .cmp(&companion_test_guardrail_priority(&right_facts))
+                    })
+                    .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth))
+            }
+        };
         let prefer_family_affinity_first = !left_facts.prefer_runtime_anchor_tests
             && (!left_facts.wants_example_or_bench_witnesses
                 || (left_facts.wants_entrypoint_build_flow
@@ -212,12 +266,12 @@ pub(super) fn selection_guardrail_cmp(
             left_facts
                 .is_runtime_adjacent_python_test
                 .cmp(&right_facts.is_runtime_adjacent_python_test)
+                .then_with(|| guardrail_cmp)
                 .then_with(|| {
                     left_facts
                         .runtime_family_prefix_overlap
                         .cmp(&right_facts.runtime_family_prefix_overlap)
                 })
-                .then_with(|| guardrail_cmp)
         }
     } else {
         Ordering::Equal

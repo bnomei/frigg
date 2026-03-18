@@ -985,7 +985,7 @@ fn hybrid_ranking_python_entrypoint_test_queries_prefer_package_scoped_tests_ove
             .iter()
             .take(16)
             .any(|path| *path == "src/backend/base/pyproject.toml"),
-        "runtime config should stay visible under mixed entrypoint/test crowding: {ranked_paths:?}"
+        "runtime config should stay visible under mixed entrypoint/test crowding: ranked={ranked_paths:?} witness={witness_paths:?}"
     );
     assert!(
         ranked_paths
@@ -1154,7 +1154,7 @@ fn hybrid_ranking_python_entrypoint_queries_recover_saved_wave_backend_tests_und
         "autogpt_platform/backend/backend/blocks/mcp/test_server.py",
         "autogpt_platform/backend/backend/blocks/test/test_block.py",
     ];
-    let _witness_paths = output
+    let witness_paths = output
         .channel_results
         .iter()
         .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
@@ -1172,7 +1172,7 @@ fn hybrid_ranking_python_entrypoint_queries_recover_saved_wave_backend_tests_und
             .iter()
             .take(16)
             .any(|path| *path == "autogpt_platform/backend/pyproject.toml"),
-        "saved-wave entrypoint queries should keep backend runtime config visible: {ranked_paths:?}"
+        "saved-wave entrypoint queries should keep backend runtime config visible: ranked={ranked_paths:?} witness={witness_paths:?}"
     );
     assert!(
         ranked_paths

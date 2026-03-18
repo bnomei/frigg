@@ -9,6 +9,7 @@ struct HybridScoreAccumulator {
     document: HybridDocumentRef,
     anchor: EvidenceAnchor,
     excerpt: String,
+    excerpt_channel_priority: usize,
     lexical_score: f32,
     witness_score: f32,
     graph_score: f32,
@@ -26,6 +27,15 @@ fn blended_lexical_family_score(lexical_score: f32, witness_score: f32) -> f32 {
         lexical_score
     } else {
         (lexical_score * 0.7 + witness_score * 0.3).clamp(0.0, 1.0)
+    }
+}
+
+fn excerpt_channel_priority(channel: EvidenceChannel) -> usize {
+    match channel {
+        EvidenceChannel::LexicalManifest => 4,
+        EvidenceChannel::PathSurfaceWitness => 3,
+        EvidenceChannel::GraphPrecise => 2,
+        EvidenceChannel::Semantic => 1,
     }
 }
 
@@ -178,6 +188,10 @@ pub(super) fn group_all_hybrid_ranked_evidence(
                 let grouped = entry.get_mut();
                 let corroborating_anchor_count = grouped.corroborating_anchor_count;
                 let winner = &mut grouped.winner;
+                let replace_representative = should_replace_group_representative(winner, &anchor);
+                let representative_document = anchor.document.clone();
+                let representative_anchor = anchor.anchor.clone();
+                let representative_excerpt = anchor.excerpt.clone();
                 winner.lexical_score = corroborate_channel_score(
                     winner.lexical_score,
                     anchor.lexical_score,
@@ -215,6 +229,11 @@ pub(super) fn group_all_hybrid_ranked_evidence(
                 for source in anchor.semantic_sources {
                     insert_sorted_unique(&mut winner.semantic_sources, source);
                 }
+                if replace_representative {
+                    winner.document = representative_document;
+                    winner.anchor = representative_anchor;
+                    winner.excerpt = representative_excerpt;
+                }
                 grouped.corroborating_anchor_count =
                     grouped.corroborating_anchor_count.saturating_add(1);
             }
@@ -238,6 +257,55 @@ pub(super) fn group_all_hybrid_ranked_evidence(
             .then(left.excerpt.cmp(&right.excerpt))
     });
     grouped
+}
+
+fn should_replace_group_representative(
+    current: &HybridRankedEvidence,
+    candidate: &HybridRankedEvidence,
+) -> bool {
+    let current_anchor_priority = representative_anchor_priority(current);
+    let candidate_anchor_priority = representative_anchor_priority(candidate);
+    candidate_anchor_priority > current_anchor_priority
+}
+
+fn representative_anchor_priority(entry: &HybridRankedEvidence) -> (usize, usize, i32, i32, i32) {
+    let has_witness = entry.witness_score > 0.0;
+    let has_lexical = entry.lexical_score > 0.0;
+    let has_graph = entry.graph_score > 0.0;
+    let has_semantic = entry.semantic_score > 0.0;
+
+    let channel_tier = if has_lexical {
+        4
+    } else if has_witness {
+        3
+    } else if has_graph {
+        2
+    } else if has_semantic {
+        1
+    } else {
+        0
+    };
+    let corroboration_tier = usize::from(has_witness || has_lexical || has_graph);
+    let excerpt_token_tier = representative_excerpt_token_count(&entry.excerpt) as i32;
+    let excerpt_len_tier = entry.excerpt.len() as i32;
+    let lexical_family_tier =
+        ((entry.lexical_score.max(entry.witness_score)).clamp(0.0, 1.0) * 1000.0).round() as i32;
+    let graph_tier = (entry.graph_score.clamp(0.0, 1.0) * 1000.0).round() as i32;
+
+    (
+        corroboration_tier,
+        excerpt_token_tier.max(0) as usize,
+        excerpt_len_tier,
+        channel_tier as i32,
+        lexical_family_tier.max(graph_tier),
+    )
+}
+
+fn representative_excerpt_token_count(excerpt: &str) -> usize {
+    excerpt
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 2)
+        .count()
 }
 
 fn corroborate_channel_score(
@@ -286,6 +354,7 @@ fn apply_hybrid_channel_hits(
                 document: hit.document.clone(),
                 anchor: hit.anchor.clone(),
                 excerpt: hit.excerpt.clone(),
+                excerpt_channel_priority: excerpt_channel_priority(hit.channel),
                 lexical_score: 0.0,
                 witness_score: 0.0,
                 graph_score: 0.0,
@@ -296,8 +365,15 @@ fn apply_hybrid_channel_hits(
                 semantic_sources: Vec::new(),
             });
 
-        if state.excerpt.is_empty() {
+        let hit_excerpt_priority = excerpt_channel_priority(hit.channel);
+        if state.excerpt.is_empty()
+            || hit_excerpt_priority > state.excerpt_channel_priority
+            || (hit_excerpt_priority == state.excerpt_channel_priority
+                && representative_excerpt_token_count(&hit.excerpt)
+                    > representative_excerpt_token_count(&state.excerpt))
+        {
             state.excerpt = hit.excerpt.clone();
+            state.excerpt_channel_priority = hit_excerpt_priority;
         }
 
         match hit.channel {

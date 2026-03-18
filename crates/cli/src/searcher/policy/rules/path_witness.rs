@@ -13,6 +13,9 @@ const PATH_WITNESS_ELIGIBILITY_ANY: &[super::super::dsl::PredicateLeaf<PathWitne
     pred::is_entrypoint_build_workflow_leaf(),
     pred::is_ci_workflow_leaf(),
     pred::is_config_artifact_leaf(),
+    pred::is_package_surface_leaf(),
+    pred::is_build_config_surface_leaf(),
+    pred::is_workspace_config_surface_leaf(),
     pred::is_typescript_runtime_module_index_leaf(),
     pred::is_python_config_leaf(),
     pred::is_python_test_leaf(),
@@ -361,6 +364,54 @@ fn workspace_python_test_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
         3.4
     } else {
         0.4
+    }))
+}
+
+fn runtime_config_package_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        2.8
+    } else {
+        3.6
+    }))
+}
+
+fn runtime_config_build_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        3.4
+    } else {
+        4.0
+    }))
+}
+
+fn runtime_config_workspace_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        4.4
+    } else {
+        5.2
+    }))
+}
+
+fn entrypoint_package_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        2.4
+    } else {
+        3.0
+    }))
+}
+
+fn entrypoint_build_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        3.0
+    } else {
+        3.8
+    }))
+}
+
+fn entrypoint_workspace_surface_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {
+    Some(PolicyEffect::Add(if ctx.path_overlap == 0 {
+        3.8
+    } else {
+        4.6
     }))
 }
 
@@ -870,6 +921,33 @@ const SCORE_RULES: &[ScoreRule<PathWitnessFacts>] = &[
         runtime_config_typescript_index_bonus_group,
     ),
     ScoreRule::when(
+        "runtime_config.package_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_package_surface_leaf(),
+        ]),
+        runtime_config_package_surface_bonus,
+    ),
+    ScoreRule::when(
+        "runtime_config.build_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_build_config_surface_leaf(),
+        ]),
+        runtime_config_build_surface_bonus,
+    ),
+    ScoreRule::when(
+        "runtime_config.workspace_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::is_workspace_config_surface_leaf(),
+        ]),
+        runtime_config_workspace_surface_bonus,
+    ),
+    ScoreRule::when(
         "entrypoint.config_artifact_bonus",
         PolicyStage::PathWitness,
         Predicate::all(&[
@@ -877,6 +955,33 @@ const SCORE_RULES: &[ScoreRule<PathWitnessFacts>] = &[
             pred::is_config_artifact_leaf(),
         ]),
         entrypoint_config_artifact_bonus,
+    ),
+    ScoreRule::when(
+        "entrypoint.package_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_package_surface_leaf(),
+        ]),
+        entrypoint_package_surface_bonus,
+    ),
+    ScoreRule::when(
+        "entrypoint.build_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_build_config_surface_leaf(),
+        ]),
+        entrypoint_build_surface_bonus,
+    ),
+    ScoreRule::when(
+        "entrypoint.workspace_surface_bonus",
+        PolicyStage::PathWitness,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::is_workspace_config_surface_leaf(),
+        ]),
+        entrypoint_workspace_surface_bonus,
     ),
     ScoreRule::when(
         "entrypoint.typescript_index_bonus",

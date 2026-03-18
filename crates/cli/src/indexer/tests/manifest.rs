@@ -460,6 +460,132 @@ fn reindex_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggRe
 }
 
 #[test]
+fn reindex_changed_only_repairs_missing_retrieval_projection_family_on_reused_snapshot()
+-> FriggResult<()> {
+    let db_path = temp_db_path("reindex-repairs-missing-retrieval-projection-family");
+    let workspace_root = temp_workspace_root("reindex-repairs-missing-retrieval-projection-family");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/main.rs", "fn main() {}\n"),
+            ("tests/main_test.rs", "#[test]\nfn main_test() {}\n"),
+        ],
+    )?;
+
+    let semantic_runtime = SemanticRuntimeConfig {
+        enabled: false,
+        provider: None,
+        model: None,
+        strict_mode: false,
+    };
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: None,
+        gemini_api_key: None,
+    };
+    let initial_summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+    )?;
+
+    let storage = Storage::new(&db_path);
+    assert!(
+        storage
+            .missing_retrieval_projection_families_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+    assert!(
+        !storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+
+    let conn = rusqlite::Connection::open(&db_path).map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to open test db for retrieval projection family deletion: {err}"
+        ))
+    })?;
+    conn.execute(
+        "DELETE FROM retrieval_projection_head WHERE repository_id = ?1 AND snapshot_id = ?2 AND family = 'path_relation'",
+        ("repo-001", initial_summary.snapshot_id.as_str()),
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to delete path_relation head for reused snapshot repair test: {err}"
+        ))
+    })?;
+    conn.execute(
+        "DELETE FROM path_relation_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
+        ("repo-001", initial_summary.snapshot_id.as_str()),
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to delete path_relation rows for reused snapshot repair test: {err}"
+        ))
+    })?;
+
+    assert_eq!(
+        storage.missing_retrieval_projection_families_for_repository_snapshot(
+            "repo-001",
+            &initial_summary.snapshot_id,
+        )?,
+        vec!["path_relation".to_owned()]
+    );
+    assert!(
+        storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+
+    let changed_summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &credentials,
+    )?;
+    assert_eq!(changed_summary.snapshot_id, initial_summary.snapshot_id);
+    assert_eq!(changed_summary.files_changed, 0);
+    assert!(
+        storage
+            .missing_retrieval_projection_families_for_repository_snapshot(
+                "repo-001",
+                &changed_summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+    assert!(
+        !storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &changed_summary.snapshot_id,
+            )?
+            .is_empty()
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn incremental_roundtrip_changed_only_reports_zero_for_unchanged_workspace() -> FriggResult<()> {
     let db_path = temp_db_path("incremental-unchanged-db");
     let workspace_root = temp_workspace_root("incremental-unchanged-workspace");

@@ -18,15 +18,18 @@ use super::overlay_projection::{
     accumulate_test_subject_overlay_boosts, entrypoint_surface_overlay_boost,
 };
 use super::path_witness_projection::{
-    GenericWitnessSurfaceFamily, generic_surface_family_from_name,
+    GenericWitnessSurfaceFamily, generic_surface_families_from_bits,
+    generic_surface_family_from_name,
 };
 use super::retrieval_projection::{
     PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION, PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
     PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION, RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
     RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION, RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
     RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE, SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION,
+    augment_path_relation_projection_records_with_ast_relation_evidence,
     build_path_anchor_sketch_projection_records, build_path_relation_projection_records,
     build_path_surface_term_projection_records, build_subtree_coverage_projection_records,
+    normalize_path_relation_projection_records,
 };
 use super::{
     ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION, HybridPathWitnessProjectionCacheKey,
@@ -42,8 +45,8 @@ use super::{
     normalize_repository_relative_path,
 };
 
-#[derive(Default)]
-pub(super) struct ProjectionStoreService {
+#[derive(Clone, Default)]
+pub(crate) struct ProjectionStoreService {
     path_witness_cache: Arc<
         RwLock<
             BTreeMap<HybridPathWitnessProjectionCacheKey, Arc<Vec<StoredPathWitnessProjection>>>,
@@ -84,6 +87,21 @@ pub(super) struct ProjectionStoreService {
             >,
         >,
     >,
+    projected_graph_adjacency_cache: Arc<
+        RwLock<
+            BTreeMap<
+                HybridPathWitnessProjectionCacheKey,
+                Arc<BTreeMap<String, Vec<ProjectedGraphAdjacentRelation>>>,
+            >,
+        >,
+    >,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectedGraphAdjacentRelation {
+    pub direction_rank: u8,
+    pub target_path: String,
+    pub relation_index: usize,
 }
 
 #[derive(Clone)]
@@ -91,15 +109,22 @@ pub(super) struct ProjectedGraphContext {
     pub relations: Arc<Vec<PathRelationProjection>>,
     pub surface_terms_by_path: Arc<BTreeMap<String, PathSurfaceTermProjection>>,
     pub anchors_by_path: Arc<BTreeMap<String, Vec<PathAnchorSketchProjection>>>,
+    pub adjacency_by_path: Arc<BTreeMap<String, Vec<ProjectedGraphAdjacentRelation>>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectionLoadMode {
+    Retrieval,
+    Repairing,
 }
 
 impl ProjectionStoreService {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     #[cfg(test)]
-    pub(super) fn entrypoint_surface_cache_len(&self) -> usize {
+    pub(crate) fn entrypoint_surface_cache_len(&self) -> usize {
         self.entrypoint_surface_cache
             .read()
             .map(|cache| cache.len())
@@ -107,17 +132,51 @@ impl ProjectionStoreService {
     }
 
     #[cfg(test)]
-    pub(super) fn path_witness_cache_len(&self) -> usize {
+    pub(crate) fn path_witness_cache_len(&self) -> usize {
         self.path_witness_cache
             .read()
             .map(|cache| cache.len())
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub(crate) fn projected_graph_adjacency_cache_len(&self) -> usize {
+        self.projected_graph_adjacency_cache
+            .read()
+            .map(|cache| cache.len())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
     pub(super) fn load_or_build_path_witness_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
+        self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_path_witness_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
+        self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_path_witness_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<Vec<StoredPathWitnessProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -134,9 +193,28 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
+        let live_fallback = || {
+            let candidate_paths = repository_candidate_paths(repository);
+            if candidate_paths.is_empty() {
+                return None;
+            }
+
+            let rows = build_path_witness_projection_records_from_paths(&candidate_paths).ok()?;
+            let projections = Arc::new(decode_path_witness_projection_records(&rows).ok()?);
+            if matches!(mode, ProjectionLoadMode::Repairing) {
+                self.path_witness_cache
+                    .write()
+                    .ok()?
+                    .insert(cache_key.clone(), Arc::clone(&projections));
+            }
+            Some(projections)
+        };
+
+        let Ok(db_path) = resolve_provenance_db_path(&repository.root) else {
+            return live_fallback();
+        };
         if !db_path.exists() {
-            return None;
+            return live_fallback();
         }
 
         let storage = Storage::new(db_path);
@@ -164,6 +242,10 @@ impl ProjectionStoreService {
                     .insert(cache_key, Arc::clone(&projections));
                 return Some(projections);
             }
+        }
+
+        if matches!(mode, ProjectionLoadMode::Retrieval) {
+            return live_fallback();
         }
 
         let expected_paths =
@@ -202,10 +284,36 @@ impl ProjectionStoreService {
         Some(projections)
     }
 
+    #[cfg(test)]
     pub(super) fn load_or_build_test_subject_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredTestSubjectProjection>>> {
+        self.load_test_subject_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_test_subject_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredTestSubjectProjection>>> {
+        self.load_test_subject_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_test_subject_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<Vec<StoredTestSubjectProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -222,9 +330,31 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
+        let live_fallback = || {
+            let candidate_paths = repository_candidate_paths(repository);
+            if candidate_paths.is_empty() {
+                return None;
+            }
+            let rows = build_test_subject_projection_records_from_paths(&candidate_paths).ok()?;
+            let projections = Arc::new(decode_test_subject_projection_records(&rows).ok()?);
+            if matches!(mode, ProjectionLoadMode::Repairing) {
+                self.test_subject_cache
+                    .write()
+                    .ok()?
+                    .insert(cache_key.clone(), Arc::clone(&projections));
+            }
+            Some(projections)
+        };
+
+        let Ok(db_path) = resolve_provenance_db_path(&repository.root) else {
+            return matches!(mode, ProjectionLoadMode::Retrieval)
+                .then(live_fallback)
+                .flatten();
+        };
         if !db_path.exists() {
-            return None;
+            return matches!(mode, ProjectionLoadMode::Retrieval)
+                .then(live_fallback)
+                .flatten();
         }
 
         let storage = Storage::new(db_path);
@@ -252,6 +382,10 @@ impl ProjectionStoreService {
                     .insert(cache_key, Arc::clone(&projections));
                 return Some(projections);
             }
+        }
+
+        if matches!(mode, ProjectionLoadMode::Retrieval) {
+            return live_fallback();
         }
 
         let expected_paths =
@@ -286,10 +420,36 @@ impl ProjectionStoreService {
         Some(projections)
     }
 
+    #[cfg(test)]
     pub(super) fn load_or_build_entrypoint_surface_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredEntrypointSurfaceProjection>>> {
+        self.load_entrypoint_surface_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_entrypoint_surface_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<StoredEntrypointSurfaceProjection>>> {
+        self.load_entrypoint_surface_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_entrypoint_surface_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<Vec<StoredEntrypointSurfaceProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -306,9 +466,32 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
+        let live_fallback = || {
+            let candidate_paths = repository_candidate_paths(repository);
+            if candidate_paths.is_empty() {
+                return None;
+            }
+            let rows =
+                build_entrypoint_surface_projection_records_from_paths(&candidate_paths).ok()?;
+            let projections = Arc::new(decode_entrypoint_surface_projection_records(&rows).ok()?);
+            if matches!(mode, ProjectionLoadMode::Repairing) {
+                self.entrypoint_surface_cache
+                    .write()
+                    .ok()?
+                    .insert(cache_key.clone(), Arc::clone(&projections));
+            }
+            Some(projections)
+        };
+
+        let Ok(db_path) = resolve_provenance_db_path(&repository.root) else {
+            return matches!(mode, ProjectionLoadMode::Retrieval)
+                .then(live_fallback)
+                .flatten();
+        };
         if !db_path.exists() {
-            return None;
+            return matches!(mode, ProjectionLoadMode::Retrieval)
+                .then(live_fallback)
+                .flatten();
         }
 
         let storage = Storage::new(db_path);
@@ -339,6 +522,10 @@ impl ProjectionStoreService {
                     .insert(cache_key, Arc::clone(&projections));
                 return Some(projections);
             }
+        }
+
+        if matches!(mode, ProjectionLoadMode::Retrieval) {
+            return live_fallback();
         }
 
         let expected_paths =
@@ -373,10 +560,36 @@ impl ProjectionStoreService {
         Some(projections)
     }
 
+    #[allow(dead_code)]
     fn load_or_build_path_relation_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<Vec<PathRelationProjection>>> {
+        self.load_path_relation_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_path_relation_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<PathRelationProjection>>> {
+        self.load_path_relation_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_path_relation_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<Vec<PathRelationProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -393,62 +606,111 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        if let Some(head) = storage
-            .load_retrieval_projection_head_for_repository_snapshot_family(
-                &repository.repository_id,
-                snapshot_id,
-                RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
-            )
-            .ok()
-            .flatten()
-            .filter(|head| head.heuristic_version == PATH_RELATION_PROJECTION_HEURISTIC_VERSION)
-        {
-            let rows = storage
-                .load_path_relation_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                )
-                .ok()?;
-            if rows.len() == head.row_count {
-                let projections = Arc::new(rows);
-                self.path_relation_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
-                return Some(projections);
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
+            if db_path.exists() {
+                let storage = Storage::new(db_path);
+                if let Some(head) = storage
+                    .load_retrieval_projection_head_for_repository_snapshot_family(
+                        &repository.repository_id,
+                        snapshot_id,
+                        RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
+                    )
+                    .ok()
+                    .flatten()
+                    .filter(|head| {
+                        head.heuristic_version == PATH_RELATION_PROJECTION_HEURISTIC_VERSION
+                    })
+                {
+                    let rows = storage
+                        .load_path_relation_projections_for_repository_snapshot(
+                            &repository.repository_id,
+                            snapshot_id,
+                        )
+                        .ok()?;
+                    if rows.len() == head.row_count {
+                        let projections = Arc::new(rows);
+                        self.path_relation_cache
+                            .write()
+                            .ok()?
+                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        return Some(projections);
+                    }
+                }
             }
         }
 
-        let path_witness =
-            self.load_or_build_path_witness_projections_for_repository(repository, snapshot_id)?;
+        let path_witness = self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            mode,
+        )?;
         let test_subject = self
-            .load_or_build_test_subject_projections_for_repository(repository, snapshot_id)
+            .load_test_subject_projections_for_repository_with_mode(repository, snapshot_id, mode)
             .unwrap_or_else(|| Arc::new(Vec::new()));
         let entrypoint_surface = self
-            .load_or_build_entrypoint_surface_projections_for_repository(repository, snapshot_id)
+            .load_entrypoint_surface_projections_for_repository_with_mode(
+                repository,
+                snapshot_id,
+                mode,
+            )
             .unwrap_or_else(|| Arc::new(Vec::new()));
-        let projections = Arc::new(build_path_relation_projection_records(
+        let source_paths = repository_candidate_paths(repository);
+        let absolute_source_paths = source_paths
+            .iter()
+            .map(|path| repository.root.join(path))
+            .collect::<Vec<_>>();
+        let mut rows = build_path_relation_projection_records(
             path_witness.as_ref(),
             test_subject.as_ref(),
             entrypoint_surface.as_ref(),
-        ));
-        self.path_relation_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        );
+        augment_path_relation_projection_records_with_ast_relation_evidence(
+            repository.root.as_path(),
+            &absolute_source_paths,
+            path_witness.as_ref(),
+            &mut rows,
+        );
+        normalize_path_relation_projection_records(&mut rows);
+        let projections = Arc::new(rows);
+        if matches!(mode, ProjectionLoadMode::Repairing) {
+            self.path_relation_cache
+                .write()
+                .ok()?
+                .insert(cache_key, Arc::clone(&projections));
+        }
         Some(projections)
     }
 
+    #[allow(dead_code)]
     fn load_or_build_subtree_coverage_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<Vec<SubtreeCoverageProjection>>> {
+        self.load_subtree_coverage_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_subtree_coverage_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<Vec<SubtreeCoverageProjection>>> {
+        self.load_subtree_coverage_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_subtree_coverage_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<Vec<SubtreeCoverageProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -465,54 +727,86 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        if let Some(head) = storage
-            .load_retrieval_projection_head_for_repository_snapshot_family(
-                &repository.repository_id,
-                snapshot_id,
-                RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
-            )
-            .ok()
-            .flatten()
-            .filter(|head| head.heuristic_version == SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION)
-        {
-            let rows = storage
-                .load_subtree_coverage_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                )
-                .ok()?;
-            if rows.len() == head.row_count {
-                let projections = Arc::new(rows);
-                self.subtree_coverage_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
-                return Some(projections);
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
+            if db_path.exists() {
+                let storage = Storage::new(db_path);
+                if let Some(head) = storage
+                    .load_retrieval_projection_head_for_repository_snapshot_family(
+                        &repository.repository_id,
+                        snapshot_id,
+                        RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
+                    )
+                    .ok()
+                    .flatten()
+                    .filter(|head| {
+                        head.heuristic_version == SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION
+                    })
+                {
+                    let rows = storage
+                        .load_subtree_coverage_projections_for_repository_snapshot(
+                            &repository.repository_id,
+                            snapshot_id,
+                        )
+                        .ok()?;
+                    if rows.len() == head.row_count {
+                        let projections = Arc::new(rows);
+                        self.subtree_coverage_cache
+                            .write()
+                            .ok()?
+                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        return Some(projections);
+                    }
+                }
             }
         }
 
-        let path_witness =
-            self.load_or_build_path_witness_projections_for_repository(repository, snapshot_id)?;
+        let path_witness = self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            mode,
+        )?;
         let projections = Arc::new(build_subtree_coverage_projection_records(
             path_witness.as_ref(),
         ));
-        self.subtree_coverage_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        if matches!(mode, ProjectionLoadMode::Repairing) {
+            self.subtree_coverage_cache
+                .write()
+                .ok()?
+                .insert(cache_key, Arc::clone(&projections));
+        }
         Some(projections)
     }
 
+    #[allow(dead_code)]
     fn load_or_build_path_surface_term_projections_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<BTreeMap<String, PathSurfaceTermProjection>>> {
+        self.load_path_surface_term_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_path_surface_term_projections_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<BTreeMap<String, PathSurfaceTermProjection>>> {
+        self.load_path_surface_term_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_path_surface_term_projections_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<BTreeMap<String, PathSurfaceTermProjection>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -529,46 +823,54 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        if let Some(head) = storage
-            .load_retrieval_projection_head_for_repository_snapshot_family(
-                &repository.repository_id,
-                snapshot_id,
-                RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
-            )
-            .ok()
-            .flatten()
-            .filter(|head| head.heuristic_version == PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION)
-        {
-            let rows = storage
-                .load_path_surface_term_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                )
-                .ok()?;
-            if rows.len() == head.row_count {
-                let projections = Arc::new(
-                    rows.into_iter()
-                        .map(|row| (row.path.clone(), row))
-                        .collect::<BTreeMap<_, _>>(),
-                );
-                self.path_surface_term_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
-                return Some(projections);
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
+            if db_path.exists() {
+                let storage = Storage::new(db_path);
+                if let Some(head) = storage
+                    .load_retrieval_projection_head_for_repository_snapshot_family(
+                        &repository.repository_id,
+                        snapshot_id,
+                        RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
+                    )
+                    .ok()
+                    .flatten()
+                    .filter(|head| {
+                        head.heuristic_version == PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION
+                    })
+                {
+                    let rows = storage
+                        .load_path_surface_term_projections_for_repository_snapshot(
+                            &repository.repository_id,
+                            snapshot_id,
+                        )
+                        .ok()?;
+                    if rows.len() == head.row_count {
+                        let projections = Arc::new(
+                            rows.into_iter()
+                                .map(|row| (row.path.clone(), row))
+                                .collect::<BTreeMap<_, _>>(),
+                        );
+                        self.path_surface_term_cache
+                            .write()
+                            .ok()?
+                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        return Some(projections);
+                    }
+                }
             }
         }
 
-        let path_witness =
-            self.load_or_build_path_witness_projections_for_repository(repository, snapshot_id)?;
+        let path_witness = self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            mode,
+        )?;
         let entrypoint_surface = self
-            .load_or_build_entrypoint_surface_projections_for_repository(repository, snapshot_id)
+            .load_entrypoint_surface_projections_for_repository_with_mode(
+                repository,
+                snapshot_id,
+                mode,
+            )
             .unwrap_or_else(|| Arc::new(Vec::new()));
         let projections = Arc::new(
             build_path_surface_term_projection_records(
@@ -579,17 +881,45 @@ impl ProjectionStoreService {
             .map(|row| (row.path.clone(), row))
             .collect::<BTreeMap<_, _>>(),
         );
-        self.path_surface_term_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        if matches!(mode, ProjectionLoadMode::Repairing) {
+            self.path_surface_term_cache
+                .write()
+                .ok()?
+                .insert(cache_key, Arc::clone(&projections));
+        }
         Some(projections)
     }
 
+    #[allow(dead_code)]
     fn load_or_build_path_anchor_sketches_for_repository(
         &self,
         repository: &RepositoryCandidateUniverse,
         snapshot_id: &str,
+    ) -> Option<Arc<BTreeMap<String, Vec<PathAnchorSketchProjection>>>> {
+        self.load_path_anchor_sketches_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Repairing,
+        )
+    }
+
+    fn load_read_only_path_anchor_sketches_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+    ) -> Option<Arc<BTreeMap<String, Vec<PathAnchorSketchProjection>>>> {
+        self.load_path_anchor_sketches_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            ProjectionLoadMode::Retrieval,
+        )
+    }
+
+    fn load_path_anchor_sketches_for_repository_with_mode(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        mode: ProjectionLoadMode,
     ) -> Option<Arc<BTreeMap<String, Vec<PathAnchorSketchProjection>>>> {
         let cache_key = HybridPathWitnessProjectionCacheKey {
             repository_id: repository.repository_id.clone(),
@@ -606,44 +936,49 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        let db_path = resolve_provenance_db_path(&repository.root).ok()?;
-        if !db_path.exists() {
-            return None;
-        }
-
-        let storage = Storage::new(db_path);
-        if let Some(head) = storage
-            .load_retrieval_projection_head_for_repository_snapshot_family(
-                &repository.repository_id,
-                snapshot_id,
-                RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
-            )
-            .ok()
-            .flatten()
-            .filter(|head| {
-                head.heuristic_version == PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION
-            })
-        {
-            let rows = storage
-                .load_path_anchor_sketch_projections_for_repository_snapshot(
-                    &repository.repository_id,
-                    snapshot_id,
-                )
-                .ok()?;
-            if rows.len() == head.row_count {
-                let projections = Arc::new(group_anchor_sketches_by_path(rows));
-                self.path_anchor_sketch_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
-                return Some(projections);
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
+            if db_path.exists() {
+                let storage = Storage::new(db_path);
+                if let Some(head) = storage
+                    .load_retrieval_projection_head_for_repository_snapshot_family(
+                        &repository.repository_id,
+                        snapshot_id,
+                        RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
+                    )
+                    .ok()
+                    .flatten()
+                    .filter(|head| {
+                        head.heuristic_version == PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION
+                    })
+                {
+                    let rows = storage
+                        .load_path_anchor_sketch_projections_for_repository_snapshot(
+                            &repository.repository_id,
+                            snapshot_id,
+                        )
+                        .ok()?;
+                    if rows.len() == head.row_count {
+                        let projections = Arc::new(group_anchor_sketches_by_path(rows));
+                        self.path_anchor_sketch_cache
+                            .write()
+                            .ok()?
+                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        return Some(projections);
+                    }
+                }
             }
         }
 
-        let path_witness =
-            self.load_or_build_path_witness_projections_for_repository(repository, snapshot_id)?;
-        let path_surface_terms = self
-            .load_or_build_path_surface_term_projections_for_repository(repository, snapshot_id)?;
+        let path_witness = self.load_path_witness_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            mode,
+        )?;
+        let path_surface_terms = self.load_path_surface_term_projections_for_repository_with_mode(
+            repository,
+            snapshot_id,
+            mode,
+        )?;
         let path_surface_terms = path_surface_terms.values().cloned().collect::<Vec<_>>();
         let projections = Arc::new(group_anchor_sketches_by_path(
             build_path_anchor_sketch_projection_records(
@@ -652,10 +987,12 @@ impl ProjectionStoreService {
                 &path_surface_terms,
             ),
         ));
-        self.path_anchor_sketch_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        if matches!(mode, ProjectionLoadMode::Repairing) {
+            self.path_anchor_sketch_cache
+                .write()
+                .ok()?
+                .insert(cache_key, Arc::clone(&projections));
+        }
         Some(projections)
     }
 
@@ -664,17 +1001,52 @@ impl ProjectionStoreService {
         repository: &RepositoryCandidateUniverse,
     ) -> Option<ProjectedGraphContext> {
         let snapshot_id = repository.snapshot_id.as_deref()?;
+        let relations =
+            self.load_read_only_path_relation_projections_for_repository(repository, snapshot_id)?;
         Some(ProjectedGraphContext {
-            relations: self
-                .load_or_build_path_relation_projections_for_repository(repository, snapshot_id)?,
+            adjacency_by_path: self.load_projected_graph_adjacency_for_repository(
+                repository,
+                snapshot_id,
+                relations.as_ref(),
+            )?,
+            relations,
             surface_terms_by_path: self
-                .load_or_build_path_surface_term_projections_for_repository(
+                .load_read_only_path_surface_term_projections_for_repository(
                     repository,
                     snapshot_id,
                 )?,
             anchors_by_path: self
-                .load_or_build_path_anchor_sketches_for_repository(repository, snapshot_id)?,
+                .load_read_only_path_anchor_sketches_for_repository(repository, snapshot_id)?,
         })
+    }
+
+    fn load_projected_graph_adjacency_for_repository(
+        &self,
+        repository: &RepositoryCandidateUniverse,
+        snapshot_id: &str,
+        relations: &[PathRelationProjection],
+    ) -> Option<Arc<BTreeMap<String, Vec<ProjectedGraphAdjacentRelation>>>> {
+        let cache_key = HybridPathWitnessProjectionCacheKey {
+            repository_id: repository.repository_id.clone(),
+            root: repository.root.clone(),
+            snapshot_id: snapshot_id.to_owned(),
+        };
+        if let Some(cached) = self
+            .projected_graph_adjacency_cache
+            .read()
+            .ok()?
+            .get(&cache_key)
+            .cloned()
+        {
+            return Some(cached);
+        }
+
+        let adjacency = Arc::new(build_projected_graph_adjacency_index(relations));
+        self.projected_graph_adjacency_cache
+            .write()
+            .ok()?
+            .insert(cache_key, Arc::clone(&adjacency));
+        Some(adjacency)
     }
 
     pub(super) fn projected_path_witness_candidates_for_repository(
@@ -684,10 +1056,15 @@ impl ProjectionStoreService {
         intent: &HybridRankingIntent,
         query_context: &HybridPathWitnessQueryContext,
     ) -> Option<Vec<PathWitnessCandidate>> {
-        let base_repository = base_repository?;
-        let snapshot_id = base_repository.snapshot_id.as_deref()?;
-        let projections = self
-            .load_or_build_path_witness_projections_for_repository(base_repository, snapshot_id)?;
+        let base_repository = base_repository.unwrap_or(repository);
+        let projections = if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
+            self.load_read_only_path_witness_projections_for_repository(
+                base_repository,
+                snapshot_id,
+            )?
+        } else {
+            live_path_witness_projections_for_repository(base_repository)
+        };
         let base_candidates_by_path = base_repository
             .candidates
             .iter()
@@ -708,11 +1085,16 @@ impl ProjectionStoreService {
         {
             return None;
         }
-        let surface_terms_by_path = self
-            .load_or_build_path_surface_term_projections_for_repository(
-                base_repository,
-                snapshot_id,
-            );
+        let surface_terms_by_path =
+            base_repository
+                .snapshot_id
+                .as_deref()
+                .and_then(|snapshot_id| {
+                    self.load_read_only_path_surface_term_projections_for_repository(
+                        base_repository,
+                        snapshot_id,
+                    )
+                });
 
         let overlay_boosts_by_path = self.overlay_boosts_for_repository(
             repository,
@@ -809,7 +1191,7 @@ impl ProjectionStoreService {
         if intent.wants_tests || intent.wants_test_witness_recall {
             if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
                 if let Some(test_subject_projections) = self
-                    .load_or_build_test_subject_projections_for_repository(
+                    .load_read_only_test_subject_projections_for_repository(
                         base_repository,
                         snapshot_id,
                     )
@@ -827,11 +1209,11 @@ impl ProjectionStoreService {
 
         if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
             let relation_overlay_applied = match (
-                self.load_or_build_path_relation_projections_for_repository(
+                self.load_read_only_path_relation_projections_for_repository(
                     base_repository,
                     snapshot_id,
                 ),
-                self.load_or_build_path_surface_term_projections_for_repository(
+                self.load_read_only_path_surface_term_projections_for_repository(
                     base_repository,
                     snapshot_id,
                 ),
@@ -852,7 +1234,7 @@ impl ProjectionStoreService {
 
             if !relation_overlay_applied {
                 if let Some(path_witness_projections) = self
-                    .load_or_build_path_witness_projections_for_repository(
+                    .load_read_only_path_witness_projections_for_repository(
                         base_repository,
                         snapshot_id,
                     )
@@ -865,6 +1247,16 @@ impl ProjectionStoreService {
                         merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
                     }
                 }
+            }
+        } else {
+            let path_witness_projections =
+                live_path_witness_projections_for_repository(base_repository);
+            for (path, boost) in accumulate_companion_surface_overlay_boosts(
+                path_witness_projections.as_ref(),
+                intent,
+                query_context,
+            ) {
+                merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
             }
         }
 
@@ -879,7 +1271,7 @@ impl ProjectionStoreService {
         let mut stored_projection_paths = BTreeSet::<String>::new();
         if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
             if let Some(entrypoint_surface_projections) = self
-                .load_or_build_entrypoint_surface_projections_for_repository(
+                .load_read_only_entrypoint_surface_projections_for_repository(
                     base_repository,
                     snapshot_id,
                 )
@@ -931,9 +1323,10 @@ impl ProjectionStoreService {
             let Some(snapshot_id) = repository.snapshot_id.as_deref() else {
                 continue;
             };
-            let Some(rows) = self
-                .load_or_build_subtree_coverage_projections_for_repository(repository, snapshot_id)
-            else {
+            let Some(rows) = self.load_read_only_subtree_coverage_projections_for_repository(
+                repository,
+                snapshot_id,
+            ) else {
                 continue;
             };
             for row in rows.iter() {
@@ -945,6 +1338,39 @@ impl ProjectionStoreService {
                     .or_default()
                     .push((family, row.subtree_root.clone()));
             }
+
+            if let Some(rows) = self
+                .load_read_only_path_relation_projections_for_repository(repository, snapshot_id)
+            {
+                for row in rows.iter() {
+                    if !Self::coverage_row_relevant_relation_kind(&row.relation_kind) {
+                        continue;
+                    }
+
+                    let src_families = generic_surface_families_from_bits(row.src_family_bits);
+                    let dst_families = generic_surface_families_from_bits(row.dst_family_bits);
+                    let src_projection = StoredPathWitnessProjection::from_path(&row.src_path);
+                    let dst_projection = StoredPathWitnessProjection::from_path(&row.dst_path);
+
+                    if let Some(subtree_root) = src_projection.subtree_root.as_deref() {
+                        for family in &dst_families {
+                            hints
+                                .entry((repository.repository_id.clone(), row.src_path.clone()))
+                                .or_default()
+                                .push((*family, subtree_root.to_owned()));
+                        }
+                    }
+
+                    if let Some(subtree_root) = dst_projection.subtree_root.as_deref() {
+                        for family in &src_families {
+                            hints
+                                .entry((repository.repository_id.clone(), row.dst_path.clone()))
+                                .or_default()
+                                .push((*family, subtree_root.to_owned()));
+                        }
+                    }
+                }
+            }
         }
 
         for values in hints.values_mut() {
@@ -952,6 +1378,10 @@ impl ProjectionStoreService {
             values.dedup();
         }
         hints
+    }
+
+    fn coverage_row_relevant_relation_kind(relation_kind: &str) -> bool {
+        relation_kind == "companion_surface"
     }
 
     pub(super) fn best_path_witness_anchor_for_repository(
@@ -962,7 +1392,7 @@ impl ProjectionStoreService {
     ) -> Option<(usize, String)> {
         let snapshot_id = repository.snapshot_id.as_deref()?;
         let sketches =
-            self.load_or_build_path_anchor_sketches_for_repository(repository, snapshot_id)?;
+            self.load_read_only_path_anchor_sketches_for_repository(repository, snapshot_id)?;
         let anchors = sketches.get(rel_path)?;
         anchors
             .iter()
@@ -1053,6 +1483,17 @@ fn repository_candidate_paths(repository: &RepositoryCandidateUniverse) -> Vec<S
     candidate_paths
 }
 
+fn live_path_witness_projections_for_repository(
+    repository: &RepositoryCandidateUniverse,
+) -> Arc<Vec<StoredPathWitnessProjection>> {
+    Arc::new(
+        repository_candidate_paths(repository)
+            .into_iter()
+            .map(|path| StoredPathWitnessProjection::from_path(&path))
+            .collect(),
+    )
+}
+
 fn group_anchor_sketches_by_path(
     rows: Vec<PathAnchorSketchProjection>,
 ) -> BTreeMap<String, Vec<PathAnchorSketchProjection>> {
@@ -1068,6 +1509,52 @@ fn group_anchor_sketches_by_path(
         });
     }
     grouped
+}
+
+fn build_projected_graph_adjacency_index(
+    relations: &[PathRelationProjection],
+) -> BTreeMap<String, Vec<ProjectedGraphAdjacentRelation>> {
+    let mut adjacency = BTreeMap::<String, Vec<ProjectedGraphAdjacentRelation>>::new();
+    for (relation_index, relation) in relations.iter().enumerate() {
+        adjacency
+            .entry(relation.src_path.clone())
+            .or_default()
+            .push(ProjectedGraphAdjacentRelation {
+                direction_rank: 0,
+                target_path: relation.dst_path.clone(),
+                relation_index,
+            });
+        adjacency
+            .entry(relation.dst_path.clone())
+            .or_default()
+            .push(ProjectedGraphAdjacentRelation {
+                direction_rank: 1,
+                target_path: relation.src_path.clone(),
+                relation_index,
+            });
+    }
+
+    for entries in adjacency.values_mut() {
+        entries.sort_by(|left, right| {
+            let left_relation = &relations[left.relation_index];
+            let right_relation = &relations[right.relation_index];
+            projected_graph_relation_order_key(left_relation)
+                .cmp(&projected_graph_relation_order_key(right_relation))
+                .reverse()
+                .then(left.direction_rank.cmp(&right.direction_rank))
+                .then(left.target_path.cmp(&right.target_path))
+        });
+    }
+
+    adjacency
+}
+
+fn projected_graph_relation_order_key(relation: &PathRelationProjection) -> (usize, &str, &str) {
+    (
+        relation.score_hint,
+        relation.relation_kind.as_str(),
+        relation.evidence_source.as_str(),
+    )
 }
 
 fn path_surface_term_bonus(

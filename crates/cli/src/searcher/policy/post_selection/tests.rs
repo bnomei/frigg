@@ -24,6 +24,13 @@ fn make_ranked(path: &str, score: f32) -> HybridRankedEvidence {
     }
 }
 
+fn make_graph_ranked(path: &str, score: f32, graph_score: f32) -> HybridRankedEvidence {
+    let mut entry = make_ranked(path, score);
+    entry.graph_score = graph_score;
+    entry.graph_sources = vec![format!("graph:test:{path}:1")];
+    entry
+}
+
 fn make_witness(path: &str, score: f32) -> HybridChannelHit {
     HybridChannelHit {
         channel: EvidenceChannel::PathSurfaceWitness,
@@ -145,8 +152,107 @@ fn post_selection_policy_runtime_witness_rescue_recovers_witness_backed_runtime_
     assert!(paths.contains(&"tests/runtime_server.rs"));
     assert!(
         trace.events.iter().any(|event| {
-            event.rule_id == "post_selection.runtime_witness_rescue"
-                && event.action == PostSelectionRepairAction::Replaced
+            matches!(
+                event.rule_id,
+                "post_selection.runtime_companion_surface"
+                    | "post_selection.runtime_witness_rescue"
+            ) && event.action == PostSelectionRepairAction::Replaced
+        }),
+        "trace events: {:?}",
+        trace.events
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_witness_rescue_recovers_graph_backed_listener_from_noise() {
+    let matches = vec![
+        make_ranked(".github/workflows/build.yml", 0.98),
+        make_ranked("docs/handlers.md", 0.92),
+    ];
+    let candidate_pool = vec![make_graph_ranked(
+        "src/Listeners/OrderListener.php",
+        0.70,
+        0.86,
+    )];
+    let intent = HybridRankingIntent::from_query("OrderHandler handle listener");
+    assert!(intent.wants_jobs_listeners_witnesses);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &candidate_pool,
+        &[],
+        &intent,
+        "OrderHandler handle listener",
+        2,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"src/Listeners/OrderListener.php"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        trace.events.iter().any(|event| {
+            matches!(
+                event.rule_id,
+                "post_selection.runtime_companion_surface"
+                    | "post_selection.runtime_witness_rescue"
+            ) && event.action == PostSelectionRepairAction::Replaced
+        }),
+        "trace events: {:?}",
+        trace.events
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_witness_rescue_prefers_listener_over_generic_handler_runtime() {
+    let matches = vec![
+        make_graph_ranked("src/Handlers/OrderHandler.php", 0.98, 1.0),
+        make_ranked("docs/handlers.md", 0.92),
+    ];
+    let candidate_pool = vec![make_graph_ranked(
+        "src/Listeners/OrderListener.php",
+        0.70,
+        0.86,
+    )];
+    let intent = HybridRankingIntent::from_query("OrderHandler handle listener");
+    assert!(intent.wants_jobs_listeners_witnesses);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &candidate_pool,
+        &[],
+        &intent,
+        "OrderHandler handle listener",
+        2,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&"src/Handlers/OrderHandler.php"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        paths.contains(&"src/Listeners/OrderListener.php"),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        !paths.contains(&"docs/handlers.md"),
+        "listener rescue should replace generic docs noise once a handler runtime already exists: {paths:?}"
+    );
+    assert!(
+        trace.events.iter().any(|event| {
+            matches!(
+                event.rule_id,
+                "post_selection.runtime_companion_surface"
+                    | "post_selection.runtime_witness_rescue"
+            ) && event.action == PostSelectionRepairAction::Replaced
         }),
         "trace events: {:?}",
         trace.events
@@ -474,6 +580,90 @@ fn post_selection_policy_entrypoint_queries_prefer_repo_root_config_over_nested_
 }
 
 #[test]
+fn post_selection_policy_runtime_config_ordering_prefers_rust_workspace_configs_over_nested_pyprojects()
+ {
+    let matches = vec![
+        make_ranked("crates/noise_00/pyproject.toml", 0.99),
+        make_ranked(".cargo/config.toml", 0.95),
+        make_ranked("Cargo.toml", 0.94),
+    ];
+    let intent = HybridRankingIntent::from_query("workspace cargo toolchain config cargo lock");
+    assert!(intent.wants_runtime_config_artifacts);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "workspace cargo toolchain config cargo lock",
+        matches.len(),
+        &[],
+        &[],
+    );
+    let final_matches = apply_runtime_config_surface_ordering(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_config_ordering"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+    let first_rust_config = paths
+        .iter()
+        .position(|path| *path == ".cargo/config.toml" || *path == "Cargo.toml")
+        .expect("a rust workspace config should be ranked");
+    let first_pyproject = paths
+        .iter()
+        .position(|path| path.ends_with("pyproject.toml"))
+        .expect("pyproject noise should remain ranked");
+
+    assert!(
+        first_rust_config < first_pyproject,
+        "rust workspace configs should outrank nested pyproject noise: {paths:?}",
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_config_ordering_prefers_workspace_local_config_over_sibling_package_noise()
+ {
+    let matches = vec![
+        make_ranked("apps/platform/package.json", 0.98),
+        make_ranked("apps/other/package.json", 0.99),
+        make_ranked("apps/platform/tsconfig.json", 0.96),
+    ];
+    let intent = HybridRankingIntent::from_query("platform package workspace config build runtime");
+    assert!(intent.wants_runtime_config_artifacts);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "platform package workspace config build runtime",
+        matches.len(),
+        &[],
+        &[],
+    );
+    let final_matches = apply_runtime_config_surface_ordering(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_config_ordering"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+    let localized_workspace_config = paths
+        .iter()
+        .position(|path| *path == "apps/platform/tsconfig.json")
+        .expect("workspace config should remain ranked");
+    let sibling_package = paths
+        .iter()
+        .position(|path| *path == "apps/other/package.json")
+        .expect("sibling package noise should remain ranked");
+
+    assert!(
+        localized_workspace_config < sibling_package,
+        "workspace-local config should outrank sibling package noise: {paths:?}",
+    );
+}
+
+#[test]
 fn post_selection_policy_runtime_config_trace_records_root_manifest_replacement() {
     let matches = vec![
         make_ranked("backend/app.py", 0.96),
@@ -510,6 +700,42 @@ fn post_selection_policy_runtime_config_trace_records_root_manifest_replacement(
             candidate_path: "backend/pyproject.toml".to_owned(),
             replaced_path: Some("README.md".to_owned()),
         }]
+    );
+}
+
+#[test]
+fn post_selection_policy_runtime_config_does_not_evict_selected_workflow_for_entrypoint_queries() {
+    let matches = vec![
+        make_ranked("src-tauri/src/main.rs", 0.99),
+        make_ranked(".github/workflows/release.yml", 0.96),
+        make_ranked("src-tauri/src/proxy/proxy_pool.rs", 0.95),
+    ];
+    let witness_hits = vec![make_witness("src-tauri/src/modules/config.rs", 0.94)];
+    let intent = HybridRankingIntent::from_query(
+        "entry point bootstrap build flow command runner main config",
+    );
+    assert!(intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "entry point bootstrap build flow command runner main config",
+        matches.len(),
+        &[],
+        &witness_hits,
+    );
+    let final_matches = apply_runtime_config_surface_selection(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_config"),
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths.contains(&".github/workflows/release.yml"),
+        "entrypoint runtime-config repair should preserve an already-selected build workflow witness: {paths:?}"
     );
 }
 
@@ -1521,6 +1747,63 @@ fn post_selection_policy_explicit_test_queries_can_promote_specific_test_tree_wi
 }
 
 #[test]
+fn post_selection_policy_mixed_runtime_test_queries_prefer_package_local_tests_over_sibling_integration_noise()
+ {
+    let matches = vec![
+        make_ranked(
+            "src/backend/tests/integration/test_openai_responses_extended.py",
+            0.99,
+        ),
+        make_ranked(
+            "src/backend/base/langflow/tests/services/database/models/test_normalize_string_or_none.py",
+            0.95,
+        ),
+        make_ranked("src/backend/base/langflow/main.py", 0.96),
+        make_ranked("src/backend/base/pyproject.toml", 0.94),
+    ];
+    let intent = HybridRankingIntent::from_query(
+        "tests fixtures integration entry point bootstrap app startup cli main openai responses normalize string config setup",
+    );
+    assert!(intent.wants_test_witness_recall);
+    assert!(intent.wants_entrypoint_build_flow);
+
+    let ctx = PostSelectionContext::new(
+        &intent,
+        "tests fixtures integration entry point bootstrap app startup cli main openai responses normalize string config setup",
+        matches.len(),
+        &[],
+        &[],
+    );
+    let state = selection_guardrail_state(&matches, &ctx);
+    let sibling_integration = matches[0].clone();
+    let package_local = matches[1].clone();
+
+    assert!(
+        selection_guardrail_cmp(&package_local, &sibling_integration, &state, &ctx).is_gt(),
+        "package-local runtime-family tests should outrank sibling integration noise",
+    );
+
+    let reordered = apply_runtime_companion_test_ordering(
+        matches,
+        &ctx,
+        test_rule_meta("post_selection.runtime_companion_test_ordering"),
+    );
+    let test_paths: Vec<_> = reordered
+        .iter()
+        .filter(|entry| is_plain_test_support_path(&entry.document.path))
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert_eq!(
+        test_paths.first().copied(),
+        Some(
+            "src/backend/base/langflow/tests/services/database/models/test_normalize_string_or_none.py"
+        ),
+        "reordered tests: {test_paths:?}",
+    );
+}
+
+#[test]
 fn post_selection_policy_explicit_test_queries_do_not_prefer_repo_root_test_trees() {
     let matches = vec![
         make_ranked("autogpt_platform/backend/pyproject.toml", 0.99),
@@ -1667,5 +1950,103 @@ fn post_selection_policy_laravel_harness_trace_records_replacement() {
             candidate_path: "tests/TestCase.php".to_owned(),
             replaced_path: Some("app/Livewire/ButtonPanel.php".to_owned()),
         }]
+    );
+}
+
+#[test]
+fn post_selection_policy_laravel_livewire_guardrail_restores_livewire_view_under_component_pressure()
+ {
+    let matches = vec![
+        make_ranked("resources/views/Staff/announce/index.blade.php", 0.99),
+        make_ranked("resources/views/Staff/apikey/index.blade.php", 0.98),
+        make_ranked("resources/views/components/forum/post.blade.php", 0.97),
+        make_ranked("resources/views/components/user-tag.blade.php", 0.96),
+    ];
+    let candidate_pool = vec![
+        make_ranked("resources/views/livewire/announce-search.blade.php", 0.93),
+        make_ranked("resources/views/livewire/apikey-search.blade.php", 0.92),
+    ];
+    let intent = HybridRankingIntent::from_query("blade livewire flux component view slot section");
+    assert!(intent.wants_laravel_ui_witnesses);
+
+    let (final_matches, trace) = apply_context_with_trace(
+        matches,
+        &candidate_pool,
+        &[],
+        &intent,
+        "blade livewire flux component view slot section",
+        4,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(paths.contains(&"resources/views/Staff/announce/index.blade.php"));
+    assert!(paths.contains(&"resources/views/Staff/apikey/index.blade.php"));
+    assert!(
+        paths.iter().any(|path| {
+            matches!(
+                *path,
+                "resources/views/livewire/announce-search.blade.php"
+                    | "resources/views/livewire/apikey-search.blade.php"
+            )
+        }),
+        "final paths: {paths:?}"
+    );
+    assert!(
+        trace.events.iter().any(|event| {
+            event.rule_id == "post_selection.laravel_livewire_surface"
+                && event.action == PostSelectionRepairAction::Replaced
+        }),
+        "trace events: {:?}",
+        trace.events
+    );
+}
+
+#[test]
+fn post_selection_policy_laravel_blade_page_companion_recovers_concrete_page_under_component_pressure()
+ {
+    let matches = vec![
+        make_ranked("resources/views/layouts/app.blade.php", 0.99),
+        make_ranked("resources/views/components/alert.blade.php", 0.98),
+        make_ranked("resources/views/components/auth-card.blade.php", 0.97),
+        make_ranked("TECH_STACK.md", 0.96),
+    ];
+    let candidate_pool = vec![
+        make_ranked("resources/views/auth/login.blade.php", 0.95),
+        make_ranked("resources/views/admin/linktype/index.blade.php", 0.94),
+    ];
+    let intent = HybridRankingIntent::from_query("blade component layout slot section view render");
+    assert!(intent.wants_laravel_ui_witnesses);
+    assert!(intent.wants_blade_component_witnesses);
+
+    let final_matches = apply_context(
+        matches,
+        &candidate_pool,
+        &[],
+        &intent,
+        "blade component layout slot section view render",
+        4,
+    );
+    let paths: Vec<_> = final_matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect();
+
+    assert!(
+        paths
+            .iter()
+            .any(|path| *path == "resources/views/auth/login.blade.php"
+                || *path == "resources/views/admin/linktype/index.blade.php"),
+        "blade page companion repair should recover a concrete non-layout Blade page view: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| matches!(
+            *path,
+            "resources/views/components/alert.blade.php"
+                | "resources/views/components/auth-card.blade.php"
+        )),
+        "blade page companion repair should still preserve a Blade component witness: {paths:?}"
     );
 }

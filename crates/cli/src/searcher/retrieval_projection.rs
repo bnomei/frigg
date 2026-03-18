@@ -3,8 +3,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::FriggResult;
-use crate::graph::{PreciseRelationshipKind, ScipResourceBudgets, SymbolGraph};
-use crate::indexer::{SymbolDefinition, extract_symbols_for_paths};
+use crate::graph::{PreciseRelationshipKind, RelationKind, ScipResourceBudgets, SymbolGraph};
+use crate::indexer::{
+    SymbolDefinition, extract_php_source_evidence_from_source, extract_symbols_for_paths,
+};
+use crate::languages::{
+    SymbolLanguage, extract_blade_source_evidence_from_source, php_symbol_indices_by_lower_name,
+    php_symbol_indices_by_name, resolve_blade_relation_evidence_edges,
+    resolve_php_target_evidence_edges,
+};
 use crate::storage::{
     PathAnchorSketchProjection, PathRelationProjection, PathSurfaceTermProjection,
     RetrievalProjectionBundle, RetrievalProjectionHeadRecord, SubtreeCoverageProjection,
@@ -120,6 +127,19 @@ pub(crate) fn build_retrieval_projection_bundle(
     let mut path_relations = path_relations;
     let mut path_surface_terms = path_surface_terms;
     let mut path_anchor_sketches = path_anchor_sketches;
+
+    let ast_relation_count_before = path_relations.len();
+    augment_path_relation_projection_records_with_ast_relation_evidence(
+        workspace_root,
+        &absolute_manifest_paths,
+        &stored_path_witness,
+        &mut path_relations,
+    );
+    if path_relations.len() > ast_relation_count_before {
+        input_modes
+            .path_relation
+            .insert(RETRIEVAL_PROJECTION_INPUT_MODE_AST.to_owned());
+    }
 
     apply_ast_projection_contributions(
         workspace_root,
@@ -386,6 +406,218 @@ pub(crate) fn build_path_relation_projection_records(
             && left.relation_kind == right.relation_kind
     });
     rows
+}
+
+pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidence(
+    workspace_root: &Path,
+    absolute_manifest_paths: &[PathBuf],
+    path_witness: &[StoredPathWitnessProjection],
+    path_relations: &mut Vec<PathRelationProjection>,
+) {
+    let extracted = extract_symbols_for_paths(absolute_manifest_paths);
+    if extracted.symbols.is_empty() {
+        return;
+    }
+
+    let witness_by_path = path_witness
+        .iter()
+        .map(|projection| (projection.path.clone(), projection))
+        .collect::<BTreeMap<_, _>>();
+    let relative_symbols = extracted
+        .symbols
+        .into_iter()
+        .filter_map(|symbol| {
+            let relative_path = normalize_repository_relative_path(workspace_root, &symbol.path);
+            witness_by_path
+                .contains_key(&relative_path)
+                .then_some((relative_path, symbol))
+        })
+        .collect::<Vec<_>>();
+    if relative_symbols.is_empty() {
+        return;
+    }
+
+    let mut symbols = Vec::with_capacity(relative_symbols.len());
+    let mut symbol_index_by_stable_id = BTreeMap::<String, usize>::new();
+    let mut relative_path_by_stable_id = BTreeMap::<String, String>::new();
+    let mut file_symbols_by_path = BTreeMap::<String, Vec<SymbolDefinition>>::new();
+    for (index, (relative_path, symbol)) in relative_symbols.iter().enumerate() {
+        symbol_index_by_stable_id.insert(symbol.stable_id.clone(), index);
+        relative_path_by_stable_id.insert(symbol.stable_id.clone(), relative_path.clone());
+        file_symbols_by_path
+            .entry(relative_path.clone())
+            .or_default()
+            .push(symbol.clone());
+        symbols.push(symbol.clone());
+    }
+
+    let symbol_indices_by_name = php_symbol_indices_by_name(&symbols);
+    let symbol_indices_by_lower_name = php_symbol_indices_by_lower_name(&symbols);
+    let mut php_canonical_names_by_stable_id = BTreeMap::<String, String>::new();
+    let mut php_evidence = Vec::new();
+    let mut blade_evidence = Vec::new();
+
+    for absolute_path in absolute_manifest_paths {
+        let relative_path = normalize_repository_relative_path(workspace_root, absolute_path);
+        if !witness_by_path.contains_key(&relative_path) {
+            continue;
+        }
+
+        match SymbolLanguage::from_path(absolute_path) {
+            Some(SymbolLanguage::Php) => {
+                let Ok(source) = fs::read_to_string(absolute_path) else {
+                    continue;
+                };
+                let file_symbols = file_symbols_by_path
+                    .get(&relative_path)
+                    .cloned()
+                    .unwrap_or_default();
+                let Ok(evidence) =
+                    extract_php_source_evidence_from_source(absolute_path, &source, &file_symbols)
+                else {
+                    continue;
+                };
+                php_canonical_names_by_stable_id
+                    .extend(evidence.canonical_names_by_stable_id.clone().into_iter());
+                php_evidence.push(evidence);
+            }
+            Some(SymbolLanguage::Blade) => {
+                let Ok(source) = fs::read_to_string(absolute_path) else {
+                    continue;
+                };
+                let file_symbols = file_symbols_by_path
+                    .get(&relative_path)
+                    .cloned()
+                    .unwrap_or_default();
+                blade_evidence.push(extract_blade_source_evidence_from_source(
+                    &source,
+                    &file_symbols,
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let mut symbol_indices_by_canonical_name = BTreeMap::<String, Vec<usize>>::new();
+    let mut symbol_indices_by_lower_canonical_name = BTreeMap::<String, Vec<usize>>::new();
+    for (stable_id, canonical_name) in &php_canonical_names_by_stable_id {
+        let Some(symbol_index) = symbol_index_by_stable_id.get(stable_id).copied() else {
+            continue;
+        };
+        symbol_indices_by_canonical_name
+            .entry(canonical_name.clone())
+            .or_default()
+            .push(symbol_index);
+        symbol_indices_by_lower_canonical_name
+            .entry(canonical_name.to_ascii_lowercase())
+            .or_default()
+            .push(symbol_index);
+    }
+
+    for evidence in &php_evidence {
+        for (source_symbol_index, target_symbol_index, relation) in
+            resolve_php_target_evidence_edges(
+                &symbols,
+                &symbol_index_by_stable_id,
+                &symbol_indices_by_canonical_name,
+                &symbol_indices_by_lower_canonical_name,
+                evidence,
+            )
+        {
+            push_ast_relation_projection(
+                path_relations,
+                &symbols,
+                &witness_by_path,
+                &relative_path_by_stable_id,
+                source_symbol_index,
+                target_symbol_index,
+                relation,
+            );
+        }
+    }
+
+    for evidence in &blade_evidence {
+        for (source_symbol_index, target_symbol_index, relation) in
+            resolve_blade_relation_evidence_edges(
+                &symbols,
+                &symbol_index_by_stable_id,
+                &symbol_indices_by_name,
+                &symbol_indices_by_lower_name,
+                evidence,
+            )
+        {
+            push_ast_relation_projection(
+                path_relations,
+                &symbols,
+                &witness_by_path,
+                &relative_path_by_stable_id,
+                source_symbol_index,
+                target_symbol_index,
+                relation,
+            );
+        }
+    }
+}
+
+fn push_ast_relation_projection(
+    path_relations: &mut Vec<PathRelationProjection>,
+    symbols: &[SymbolDefinition],
+    witness_by_path: &BTreeMap<String, &StoredPathWitnessProjection>,
+    relative_path_by_stable_id: &BTreeMap<String, String>,
+    source_symbol_index: usize,
+    target_symbol_index: usize,
+    relation: RelationKind,
+) {
+    let Some(source_symbol) = symbols.get(source_symbol_index) else {
+        return;
+    };
+    let Some(target_symbol) = symbols.get(target_symbol_index) else {
+        return;
+    };
+    let Some(src_path) = relative_path_by_stable_id
+        .get(&source_symbol.stable_id)
+        .cloned()
+    else {
+        return;
+    };
+    let Some(dst_path) = relative_path_by_stable_id
+        .get(&target_symbol.stable_id)
+        .cloned()
+    else {
+        return;
+    };
+    if src_path == dst_path {
+        return;
+    }
+    let Some(src_projection) = witness_by_path.get(&src_path) else {
+        return;
+    };
+    let Some(dst_projection) = witness_by_path.get(&dst_path) else {
+        return;
+    };
+
+    path_relations.push(PathRelationProjection {
+        src_path,
+        dst_path,
+        relation_kind: relation.as_str().to_owned(),
+        evidence_source: RETRIEVAL_PROJECTION_INPUT_MODE_AST.to_owned(),
+        src_symbol_id: Some(source_symbol.stable_id.clone()),
+        dst_symbol_id: Some(target_symbol.stable_id.clone()),
+        src_family_bits: family_bits_for_projection(src_projection),
+        dst_family_bits: family_bits_for_projection(dst_projection),
+        shared_terms: symbol_projection_terms(&target_symbol.name),
+        score_hint: ast_relation_score_hint(relation),
+    });
+}
+
+fn ast_relation_score_hint(relation: RelationKind) -> usize {
+    match relation {
+        RelationKind::Calls => 116,
+        RelationKind::RefersTo => 112,
+        RelationKind::Implements | RelationKind::Extends => 108,
+        RelationKind::Contains => 104,
+        RelationKind::DefinedIn => 100,
+    }
 }
 
 pub(crate) fn build_subtree_coverage_projection_records(
@@ -1018,7 +1250,7 @@ fn apply_scip_projection_contributions(
     *path_anchor_sketches = anchor_candidates.into_values().flatten().collect();
 }
 
-fn normalize_path_relation_projection_records(rows: &mut Vec<PathRelationProjection>) {
+pub(crate) fn normalize_path_relation_projection_records(rows: &mut Vec<PathRelationProjection>) {
     rows.sort_by(|left, right| {
         left.src_path
             .cmp(&right.src_path)

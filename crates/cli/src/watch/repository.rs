@@ -99,6 +99,32 @@ pub(super) fn startup_refresh_status(
         semantic_runtime,
         |path| should_ignore_watch_path(repository, path),
     )?;
+    let missing_retrieval_projection_families = if matches!(
+        freshness.manifest,
+        crate::manifest_validation::RepositoryManifestFreshness::Ready
+    ) {
+        freshness
+            .snapshot_id
+            .as_deref()
+            .map(|snapshot_id| {
+                storage.missing_retrieval_projection_families_for_repository_snapshot(
+                    &repository.repository_id,
+                    snapshot_id,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if !missing_retrieval_projection_families.is_empty() {
+        return Ok(StartupRefreshStatus {
+            should_refresh: true,
+            reason: "manifest_snapshot_missing_retrieval_projections",
+            snapshot_id: freshness.snapshot_id,
+            refresh_class: Some(WatchRefreshClass::ManifestFast),
+        });
+    }
     Ok(StartupRefreshStatus {
         should_refresh: freshness.should_refresh_watch(),
         reason: freshness.watch_reason(),

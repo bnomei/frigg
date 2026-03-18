@@ -16,6 +16,17 @@ fn selected_match_for_path<'a>(
         .expect("selected evidence path should exist in matches")
 }
 
+fn preserve_selected_build_workflow(
+    matches: &[HybridRankedEvidence],
+    ctx: &PostSelectionContext<'_>,
+) -> bool {
+    ctx.intent.wants_entrypoint_build_flow
+        && matches.iter().any(|entry| {
+            surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                || surfaces::is_ci_workflow_path(&entry.document.path)
+        })
+}
+
 fn runtime_config_artifact_guardrail_cmp(
     left: &str,
     right: &str,
@@ -147,6 +158,76 @@ fn runtime_companion_surface_guardrail_cmp(
                 .cmp(&right_facts.runtime_subtree_affinity)
         })
         .then_with(|| selection_guardrail_cmp(left, right, state, ctx))
+}
+
+fn is_runtime_config_ordering_candidate_path(path: &str) -> bool {
+    surfaces::is_package_surface_path(path)
+        || surfaces::is_workspace_config_surface_path(path)
+        || surfaces::is_build_config_surface_path(path)
+        || is_specific_runtime_config_surface_path(path)
+}
+
+fn runtime_config_ordering_cmp(
+    left: &HybridRankedEvidence,
+    right: &HybridRankedEvidence,
+    state: &SelectionState,
+    ctx: &PostSelectionContext<'_>,
+) -> Ordering {
+    let left_facts = selection_guardrail_facts(left, state, ctx);
+    let right_facts = selection_guardrail_facts(right, state, ctx);
+    let prefer_python_workspace_config =
+        left_facts.wants_python_workspace_config && !left_facts.wants_rust_workspace_config;
+    let prefer_rust_workspace_config =
+        left_facts.wants_rust_workspace_config && !left_facts.wants_python_workspace_config;
+
+    prefer_rust_workspace_config
+        .then(|| {
+            left_facts
+                .is_rust_workspace_config
+                .cmp(&right_facts.is_rust_workspace_config)
+        })
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| {
+            prefer_python_workspace_config
+                .then(|| {
+                    left_facts
+                        .is_python_runtime_config
+                        .cmp(&right_facts.is_python_runtime_config)
+                })
+                .unwrap_or(Ordering::Equal)
+        })
+        .then_with(|| {
+            right_facts
+                .is_frontend_runtime_noise
+                .cmp(&left_facts.is_frontend_runtime_noise)
+        })
+        .then_with(|| {
+            left_facts
+                .specific_witness_path_overlap
+                .cmp(&right_facts.specific_witness_path_overlap)
+        })
+        .then_with(|| {
+            left_facts
+                .runtime_subtree_affinity
+                .cmp(&right_facts.runtime_subtree_affinity)
+        })
+        .then_with(|| {
+            runtime_config_surface_guardrail_priority_for_path(&left.document.path).cmp(
+                &runtime_config_surface_guardrail_priority_for_path(&right.document.path),
+            )
+        })
+        .then_with(|| {
+            left_facts
+                .is_repo_root_runtime_config_artifact
+                .cmp(&right_facts.is_repo_root_runtime_config_artifact)
+        })
+        .then_with(|| selection_guardrail_cmp(left, right, state, ctx))
+        .then_with(|| left_facts.path_overlap.cmp(&right_facts.path_overlap))
+        .then_with(|| {
+            left_facts
+                .has_exact_query_term_match
+                .cmp(&right_facts.has_exact_query_term_match)
+        })
 }
 
 pub(super) fn apply_cli_specific_test_visibility(
@@ -313,12 +394,50 @@ pub(super) fn apply_runtime_config_surface_selection(
         return matches;
     }
 
-    let root_config_filter: fn(&str) -> bool = if ctx.intent.wants_runtime_config_artifacts {
-        is_root_scoped_runtime_config_path
-    } else {
-        surfaces::is_runtime_config_artifact_path
-    };
+    let root_config_filter: fn(&str) -> bool = is_root_scoped_runtime_config_path;
     let specific_surface_filter: fn(&str) -> bool = is_specific_runtime_config_surface_path;
+    let local_config_filter: fn(&str) -> bool = is_local_runtime_config_surface_path;
+    let preserve_selected_build_workflow = preserve_selected_build_workflow(&matches, ctx);
+
+    if !matches
+        .iter()
+        .any(|entry| local_config_filter(&entry.document.path))
+    {
+        let state = selection_guardrail_state(&matches, ctx);
+        let grouped_candidate = ctx
+            .candidate_pool
+            .iter()
+            .filter(|entry| {
+                !matches
+                    .iter()
+                    .any(|selected| selected.document == entry.document)
+            })
+            .filter(|entry| local_config_filter(&entry.document.path))
+            .max_by(|left, right| selection_guardrail_cmp(left, right, &state, ctx))
+            .cloned();
+        let witness_candidate = ctx
+            .witness_hits
+            .iter()
+            .filter(|hit| {
+                !matches
+                    .iter()
+                    .any(|selected| selected.document == hit.document)
+            })
+            .filter(|hit| local_config_filter(&hit.document.path))
+            .max_by(|left, right| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
+            .map(hybrid_ranked_evidence_from_witness_hit);
+        let candidate =
+            choose_best_candidate(grouped_candidate, witness_candidate, |left, right| {
+                selection_guardrail_cmp(left, right, &state, ctx)
+            });
+
+        matches = insert_guardrail_candidate(matches, candidate, ctx, meta, |entry| {
+            is_runtime_config_guardrail_replacement(entry)
+                && (!preserve_selected_build_workflow
+                    || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                        && !surfaces::is_ci_workflow_path(&entry.document.path)))
+        });
+    }
 
     if !matches
         .iter()
@@ -369,19 +488,19 @@ pub(super) fn apply_runtime_config_surface_selection(
                     .then_with(|| left.blended_score.total_cmp(&right.blended_score))
             });
 
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx,
-            meta,
-            is_runtime_config_guardrail_replacement,
-        );
+        matches = insert_guardrail_candidate(matches, candidate, ctx, meta, |entry| {
+            is_runtime_config_guardrail_replacement(entry)
+                && (!preserve_selected_build_workflow
+                    || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                        && !surfaces::is_ci_workflow_path(&entry.document.path)))
+        });
     }
 
     if !matches
         .iter()
         .any(|entry| root_config_filter(&entry.document.path))
     {
+        let state = selection_guardrail_state(&matches, ctx);
         let prefer_repo_root = ctx.intent.wants_entrypoint_build_flow;
         let grouped_candidate = ctx
             .candidate_pool
@@ -398,6 +517,7 @@ pub(super) fn apply_runtime_config_surface_selection(
                     &right.document.path,
                     prefer_repo_root,
                 )
+                .then_with(|| selection_guardrail_cmp(left, right, &state, ctx))
                 .then_with(|| left.blended_score.total_cmp(&right.blended_score))
                 .then_with(|| left.document.cmp(&right.document).reverse())
             })
@@ -417,6 +537,7 @@ pub(super) fn apply_runtime_config_surface_selection(
                     &right.document.path,
                     prefer_repo_root,
                 )
+                .then_with(|| selection_guardrail_cmp_from_hit(left, right, &state, ctx))
                 .then_with(|| left.raw_score.total_cmp(&right.raw_score))
                 .then_with(|| left.document.cmp(&right.document).reverse())
             })
@@ -428,16 +549,16 @@ pub(super) fn apply_runtime_config_surface_selection(
                     &right.document.path,
                     prefer_repo_root,
                 )
+                .then_with(|| selection_guardrail_cmp(left, right, &state, ctx))
                 .then_with(|| left.blended_score.total_cmp(&right.blended_score))
             });
 
-        matches = insert_guardrail_candidate(
-            matches,
-            candidate,
-            ctx,
-            meta,
-            is_runtime_config_guardrail_replacement,
-        );
+        matches = insert_guardrail_candidate(matches, candidate, ctx, meta, |entry| {
+            is_runtime_config_guardrail_replacement(entry)
+                && (!preserve_selected_build_workflow
+                    || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                        && !surfaces::is_ci_workflow_path(&entry.document.path)))
+        });
     }
 
     matches
@@ -647,6 +768,19 @@ pub(super) fn apply_runtime_companion_surface_visibility(
         return matches;
     }
 
+    if ctx.intent.wants_runtime_config_artifacts {
+        let has_root_runtime_config = matches
+            .iter()
+            .any(|entry| is_root_scoped_runtime_config_path(&entry.document.path));
+        let has_specific_runtime_surface = matches.iter().any(|entry| {
+            is_specific_runtime_config_surface_path(&entry.document.path)
+                || surfaces::is_entrypoint_runtime_path(&entry.document.path)
+        });
+        if has_root_runtime_config && has_specific_runtime_surface {
+            return matches;
+        }
+    }
+
     let state = selection_guardrail_state(&matches, ctx);
     let query_wants_android_ui_surface = hybrid_query_has_kotlin_android_ui_terms(ctx.query_text);
     let surface_matches_query = |entry: &HybridRankedEvidence| {
@@ -770,6 +904,22 @@ pub(super) fn apply_runtime_companion_surface_visibility(
     let Some(candidate) = candidate else {
         return matches;
     };
+    let preserve_selected_build_workflow = preserve_selected_build_workflow(&matches, ctx);
+    if (ctx.intent.wants_jobs_listeners_witnesses || ctx.intent.wants_commands_middleware_witnesses)
+        && !ctx.intent.wants_entrypoint_build_flow
+        && !ctx.intent.wants_runtime_config_artifacts
+        && selected_best.is_some()
+        && matches
+            .iter()
+            .any(is_runtime_companion_surface_guardrail_replacement)
+    {
+        return insert_guardrail_candidate(matches, Some(candidate), ctx, meta, |entry| {
+            is_runtime_companion_surface_guardrail_replacement(entry)
+                && (!preserve_selected_build_workflow
+                    || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                        && !surfaces::is_ci_workflow_path(&entry.document.path)))
+        });
+    }
     if let Some(selected_path) = selected_best {
         if let Some(index) = matches
             .iter()
@@ -787,13 +937,12 @@ pub(super) fn apply_runtime_companion_surface_visibility(
         }
     }
 
-    insert_guardrail_candidate(
-        matches,
-        Some(candidate),
-        ctx,
-        meta,
-        is_runtime_companion_surface_guardrail_replacement,
-    )
+    insert_guardrail_candidate(matches, Some(candidate), ctx, meta, |entry| {
+        is_runtime_companion_surface_guardrail_replacement(entry)
+            && (!preserve_selected_build_workflow
+                || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                    && !surfaces::is_ci_workflow_path(&entry.document.path)))
+    })
 }
 
 pub(super) fn apply_runtime_witness_rescue_visibility(
@@ -810,6 +959,25 @@ pub(super) fn apply_runtime_witness_rescue_visibility(
     }
 
     let state = selection_guardrail_state(&matches, ctx);
+    let wants_specific_runtime_family =
+        ctx.intent.wants_jobs_listeners_witnesses || ctx.intent.wants_commands_middleware_witnesses;
+    let satisfies_requested_runtime_family = |entry: &HybridRankedEvidence| {
+        let facts = selection_guardrail_facts(entry, &state, ctx);
+        let witness_backed = facts.has_path_witness_source
+            || facts.specific_witness_path_overlap > 0
+            || facts.runtime_subtree_affinity > 0;
+        let graph_backed = entry.graph_score > 0.0 || !entry.graph_sources.is_empty();
+        let path_family_match = (ctx.intent.wants_jobs_listeners_witnesses
+            && facts.is_laravel_job_or_listener)
+            || (ctx.intent.wants_commands_middleware_witnesses
+                && facts.is_laravel_command_or_middleware);
+        path_family_match
+            && (witness_backed || graph_backed)
+            && !facts.is_ci_workflow
+            && !facts.is_repo_metadata
+            && !facts.is_generic_runtime_witness_doc
+            && !facts.is_frontend_runtime_noise
+    };
     let is_rescue_candidate = |entry: &HybridRankedEvidence| {
         let facts = selection_guardrail_facts(entry, &state, ctx);
         let candidate_surface = matches!(
@@ -821,8 +989,15 @@ pub(super) fn apply_runtime_witness_rescue_visibility(
         let witness_backed = facts.has_path_witness_source
             || facts.specific_witness_path_overlap > 0
             || facts.runtime_subtree_affinity > 0;
+        let graph_backed_runtime = (ctx.intent.wants_jobs_listeners_witnesses
+            || ctx.intent.wants_commands_middleware_witnesses)
+            && (entry.graph_score > 0.0 || !entry.graph_sources.is_empty())
+            && (facts.has_exact_query_term_match
+                || facts.path_overlap > 0
+                || facts.is_laravel_job_or_listener
+                || facts.is_laravel_command_or_middleware);
         candidate_surface
-            && witness_backed
+            && (witness_backed || graph_backed_runtime)
             && !facts.is_ci_workflow
             && !facts.is_repo_metadata
             && !facts.is_generic_runtime_witness_doc
@@ -835,7 +1010,12 @@ pub(super) fn apply_runtime_witness_rescue_visibility(
             || facts.is_generic_runtime_witness_doc
             || facts.is_frontend_runtime_noise
     });
-    if !has_noise_slot || matches.iter().any(is_rescue_candidate) {
+    let has_satisfied_runtime_rescue = if wants_specific_runtime_family {
+        matches.iter().any(satisfies_requested_runtime_family)
+    } else {
+        matches.iter().any(is_rescue_candidate)
+    };
+    if !has_noise_slot || has_satisfied_runtime_rescue {
         return matches;
     }
 
@@ -865,13 +1045,13 @@ pub(super) fn apply_runtime_witness_rescue_visibility(
         selection_guardrail_cmp(left, right, &state, ctx)
     });
 
-    insert_guardrail_candidate(
-        matches,
-        candidate,
-        ctx,
-        meta,
-        is_runtime_companion_surface_guardrail_replacement,
-    )
+    let preserve_selected_build_workflow = preserve_selected_build_workflow(&matches, ctx);
+    insert_guardrail_candidate(matches, candidate, ctx, meta, |entry| {
+        is_runtime_companion_surface_guardrail_replacement(entry)
+            && (!preserve_selected_build_workflow
+                || (!surfaces::is_entrypoint_build_workflow_path(&entry.document.path)
+                    && !surfaces::is_ci_workflow_path(&entry.document.path)))
+    })
 }
 
 pub(super) fn apply_ci_scripts_ops_visibility(
@@ -1350,4 +1530,82 @@ pub(super) fn apply_runtime_companion_test_visibility(
     } else {
         matches
     }
+}
+
+pub(super) fn apply_runtime_companion_test_ordering(
+    mut matches: Vec<HybridRankedEvidence>,
+    ctx: &PostSelectionContext<'_>,
+    _meta: PostSelectionRuleMeta,
+) -> Vec<HybridRankedEvidence> {
+    let wants_runtime_companion_tests = ctx.intent.wants_test_witness_recall
+        || ctx.intent.wants_entrypoint_build_flow
+        || ctx.intent.wants_runtime_config_artifacts;
+    if !wants_runtime_companion_tests {
+        return matches;
+    }
+
+    let test_indices = matches
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| is_plain_test_support_path(&entry.document.path))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if test_indices.len() < 2 {
+        return matches;
+    }
+
+    let state = selection_guardrail_state(&matches, ctx);
+    let mut ordered_tests = test_indices
+        .iter()
+        .map(|index| matches[*index].clone())
+        .collect::<Vec<_>>();
+    ordered_tests.sort_by(|left, right| {
+        selection_guardrail_cmp(right, left, &state, ctx)
+            .then_with(|| left.document.path.cmp(&right.document.path))
+    });
+
+    for (slot_index, ordered_entry) in test_indices.into_iter().zip(ordered_tests.into_iter()) {
+        matches[slot_index] = ordered_entry;
+    }
+
+    matches
+}
+
+pub(super) fn apply_runtime_config_surface_ordering(
+    mut matches: Vec<HybridRankedEvidence>,
+    ctx: &PostSelectionContext<'_>,
+    _meta: PostSelectionRuleMeta,
+) -> Vec<HybridRankedEvidence> {
+    if !(ctx.intent.wants_runtime_config_artifacts || ctx.intent.wants_entrypoint_build_flow) {
+        return matches;
+    }
+
+    let surface_indices = matches
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| is_runtime_config_ordering_candidate_path(&entry.document.path))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if surface_indices.len() < 2 {
+        return matches;
+    }
+
+    let state = selection_guardrail_state(&matches, ctx);
+    let mut ordered_surfaces = surface_indices
+        .iter()
+        .map(|index| matches[*index].clone())
+        .collect::<Vec<_>>();
+    ordered_surfaces.sort_by(|left, right| {
+        runtime_config_ordering_cmp(right, left, &state, ctx)
+            .then_with(|| left.document.path.cmp(&right.document.path))
+    });
+
+    for (slot_index, ordered_entry) in surface_indices
+        .into_iter()
+        .zip(ordered_surfaces.into_iter())
+    {
+        matches[slot_index] = ordered_entry;
+    }
+
+    matches
 }

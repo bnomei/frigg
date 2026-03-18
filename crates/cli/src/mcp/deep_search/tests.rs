@@ -370,6 +370,123 @@ fn playbook_suite_normalizes_list_repositories_to_stable_identity_fields() {
     );
 }
 
+#[test]
+fn playbook_suite_normalizes_deep_search_tool_responses_to_stable_replay_fields() {
+    let read_file = normalize_trace_response_for_tool(
+        "read_file",
+        json!({
+            "repository_id": "repo-001",
+            "path": "src/lib.rs",
+            "content": "pub fn greeting() -> &'static str { \"hello\" }\n",
+            "bytes": 47,
+            "note": "Structured details are available under metadata.",
+            "metadata": {
+                "freshness": "runtime"
+            }
+        }),
+    );
+    assert_eq!(
+        read_file,
+        json!({
+            "repository_id": "repo-001",
+            "path": "src/lib.rs",
+            "content": "pub fn greeting() -> &'static str { \"hello\" }\n"
+        })
+    );
+
+    let search_text = normalize_trace_response_for_tool(
+        "search_text",
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 1,
+                "column": 8,
+                "excerpt": "pub fn greeting() -> &'static str { \"hello\" }",
+                "score": 0.99,
+                "anchor": {
+                    "start_line": 1,
+                    "start_column": 1,
+                    "end_line": 1,
+                    "end_column": 10
+                }
+            }],
+            "note": "Structured details are available under metadata.",
+            "metadata": {
+                "resource_usage": {
+                    "elapsed_ms": 7
+                }
+            }
+        }),
+    );
+    assert_eq!(
+        search_text,
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 1,
+                "column": 8,
+                "excerpt": "pub fn greeting() -> &'static str { \"hello\" }"
+            }]
+        })
+    );
+
+    let search_symbol = normalize_trace_response_for_tool(
+        "search_symbol",
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 1,
+                "symbol": "greeting",
+                "kind": "function"
+            }],
+            "metadata": {
+                "freshness": "runtime"
+            }
+        }),
+    );
+    assert_eq!(
+        search_symbol,
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 1,
+                "symbol": "greeting"
+            }]
+        })
+    );
+
+    let find_references = normalize_trace_response_for_tool(
+        "find_references",
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 2,
+                "column": 25,
+                "symbol": "greeting",
+                "kind": "reference"
+            }],
+            "note": "Structured details are available under metadata."
+        }),
+    );
+    assert_eq!(
+        find_references,
+        json!({
+            "matches": [{
+                "repository_id": "repo-001",
+                "path": "src/lib.rs",
+                "line": 2,
+                "column": 25,
+                "symbol": "greeting"
+            }]
+        })
+    );
+}
+
 #[tokio::test]
 async fn playbook_suite_run_step_rejects_unsupported_tool_with_invalid_params() {
     let harness = test_harness();

@@ -114,6 +114,9 @@ pub(crate) fn generic_surface_families_for_projection(
     if projection.flags.is_package_surface {
         families.push(GenericWitnessSurfaceFamily::PackageSurface);
     }
+    if projection.flags.is_runtime_config_artifact {
+        families.push(GenericWitnessSurfaceFamily::BuildConfig);
+    }
     if projection.flags.is_build_config_surface || projection.flags.is_entrypoint_build_workflow {
         families.push(GenericWitnessSurfaceFamily::BuildConfig);
     }
@@ -414,7 +417,19 @@ mod tests {
         assert!(workspace_config.flags.is_workspace_config_surface);
         assert_eq!(
             generic_surface_families_for_projection(&package_surface),
-            vec![GenericWitnessSurfaceFamily::PackageSurface]
+            vec![
+                GenericWitnessSurfaceFamily::PackageSurface,
+                GenericWitnessSurfaceFamily::BuildConfig,
+            ]
         );
+    }
+
+    #[test]
+    fn path_witness_projection_keeps_top_level_runtime_and_tests_in_same_workspace_root() {
+        let runtime = StoredPathWitnessProjection::from_path("desktop/src/messages/layout.rs");
+        let tests = StoredPathWitnessProjection::from_path("desktop/tests/layout.rs");
+
+        assert_eq!(runtime.subtree_root.as_deref(), Some("desktop"));
+        assert_eq!(tests.subtree_root.as_deref(), Some("desktop"));
     }
 }

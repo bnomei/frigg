@@ -89,9 +89,10 @@ pub(in crate::searcher) fn coverage_subtree_root(path: &str) -> Option<String> {
         return None;
     }
 
+    let first = segments[0];
     let mut prefix = Vec::new();
-    if CONTAINER_SEGMENTS.contains(&segments[0]) && segments.len() >= 2 {
-        prefix.push(segments[0]);
+    if CONTAINER_SEGMENTS.contains(&first) && segments.len() >= 2 {
+        prefix.push(first);
         prefix.push(segments[1]);
         if segments
             .get(2)
@@ -99,14 +100,15 @@ pub(in crate::searcher) fn coverage_subtree_root(path: &str) -> Option<String> {
         {
             prefix.push(segments[2]);
         }
+    } else if ROLE_SEGMENTS.contains(&first) && segments.len() >= 2 {
+        prefix.push(first);
+        prefix.push(segments[1]);
     } else {
         prefix.push(segments[0]);
-        if segments
-            .get(1)
-            .is_some_and(|segment| ROLE_SEGMENTS.contains(segment))
-        {
-            prefix.push(segments[1]);
-        }
+    }
+
+    if prefix.is_empty() {
+        return None;
     }
 
     Some(prefix.join("/"))

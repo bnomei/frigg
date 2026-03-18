@@ -446,6 +446,90 @@ fn hybrid_ranking_query_aware_diversification_avoids_single_class_collapse() -> 
 }
 
 #[test]
+fn hybrid_ranking_query_aware_diversification_reports_a_witness_heavy_second_round()
+-> FriggResult<()> {
+    let root = temp_workspace_root("tool-surface-diversification-round");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "src/runtime_helper.rs",
+                "pub fn runtime_helper() { let _ = \"invalid_params\"; }\n",
+            ),
+            (
+                "contracts/errors.md",
+                "# invalid_params -32602\nruntime helper docs\n",
+            ),
+            (
+                "tests/unit/runtime_helper_tests.rs",
+                "#[test]\nfn runtime_helper_tests() {}\n",
+            ),
+            ("README.md", "general docs\n"),
+        ],
+    )?;
+    seed_manifest_snapshot(
+        &root,
+        "repo-001",
+        "snapshot-001",
+        &[
+            "src/runtime_helper.rs",
+            "contracts/errors.md",
+            "tests/unit/runtime_helper_tests.rs",
+            "README.md",
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid(SearchHybridQuery {
+        query: "trace invalid_params typed error from public docs to runtime helper and tests"
+            .to_owned(),
+        limit: 3,
+        weights: HybridChannelWeights::default(),
+        semantic: Some(false),
+    })?;
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        ranked_paths.contains(&"src/runtime_helper.rs"),
+        "diversification should keep the runtime witness visible: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"contracts/errors.md"),
+        "diversification should promote the docs witness into the final round: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"tests/unit/runtime_helper_tests.rs"),
+        "diversification should promote the test witness into the final round: {ranked_paths:?}"
+    );
+
+    let stage_attribution = output
+        .stage_attribution
+        .as_ref()
+        .expect("hybrid diversification workload should expose stage attribution");
+    assert!(
+        stage_attribution.document_aggregation.output_count
+            >= stage_attribution.final_diversification.input_count,
+        "document aggregation should feed a larger witness pool into the final diversification round: {stage_attribution:?}"
+    );
+    assert!(
+        stage_attribution.final_diversification.input_count
+            > stage_attribution.final_diversification.output_count,
+        "final diversification should narrow a witness-heavy frontier: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.final_diversification.output_count, 3,
+        "final diversification should respect the requested top-k bound: {stage_attribution:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_error_taxonomy_queries_prefer_exact_anchored_runtime_and_tests_over_auxiliary_noise()
 -> FriggResult<()> {
     let query = "invalid_params -32602 public error taxonomy docs contract runtime helper tests";

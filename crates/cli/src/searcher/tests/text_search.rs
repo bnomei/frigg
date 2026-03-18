@@ -722,6 +722,111 @@ fn hybrid_path_witness_recall_keeps_hidden_ci_workflows_for_entrypoint_build_con
 }
 
 #[test]
+fn hybrid_lexical_expansion_repeated_runs_retain_runtime_docs_and_tests_under_crowding()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-lexical-rescan-bounded-retention");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "src/runtime_helper.rs",
+                "pub fn invalid_params_runtime_helper() {\n\
+                 let code = \"invalid_params\";\n\
+                 let category = \"typed error\";\n\
+                 }\n",
+            ),
+            (
+                "tests/runtime_helper_tests.rs",
+                "#[test]\n\
+                 fn invalid_params_runtime_helper_tests() {\n\
+                 // invalid_params typed error runtime helper tests\n\
+                 }\n",
+            ),
+            (
+                "contracts/errors.md",
+                "# Public error taxonomy\n\
+                 invalid_params typed error public docs runtime helper tests\n",
+            ),
+        ],
+    )?;
+
+    fs::create_dir_all(root.join("docs/noise")).map_err(FriggError::Io)?;
+    for index in 0..10 {
+        let rel_path = format!("docs/noise/error-guide-{index:02}.md");
+        let content = format!(
+            "# Error guide {index:02}\n\
+             public docs invalid_params helper typed error reference\n"
+        );
+        fs::write(root.join(rel_path), content).map_err(FriggError::Io)?;
+    }
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let query = SearchHybridQuery {
+        query: "trace invalid_params typed error from public docs to runtime helper and tests"
+            .to_owned(),
+        limit: 3,
+        weights: HybridChannelWeights::default(),
+        semantic: Some(false),
+    };
+
+    let first = searcher.search_hybrid_with_filters_using_executor(
+        query.clone(),
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+    let second = searcher.search_hybrid_with_filters_using_executor(
+        query,
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = first
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(first.note.semantic_status, HybridSemanticStatus::Disabled);
+    assert_eq!(
+        first.matches, second.matches,
+        "repeated lexical expansion runs should preserve deterministic hybrid ordering"
+    );
+    assert_eq!(
+        first.diagnostics.entries, second.diagnostics.entries,
+        "repeated lexical expansion runs should preserve deterministic diagnostics"
+    );
+    assert!(
+        ranked_paths.contains(&"src/runtime_helper.rs"),
+        "runtime helper witness should remain in top-k under lexical crowding: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"tests/runtime_helper_tests.rs"),
+        "test witness should remain in top-k under lexical crowding: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"contracts/errors.md"),
+        "public docs witness should remain in top-k under lexical crowding: {ranked_paths:?}"
+    );
+    let stage_attribution = first
+        .stage_attribution
+        .as_ref()
+        .expect("lexical crowding regression should expose stage attribution");
+    assert!(
+        stage_attribution.scan.output_count > first.matches.len(),
+        "lexical crowding regression should scan a broader lexical pool than the retained top-k: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.final_diversification.output_count,
+        first.matches.len(),
+        "final diversification should respect the requested top-k bound"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_manifest_backed_lua_entrypoint_queries_recover_repo_root_runtime_config()
 -> FriggResult<()> {
     let root = temp_workspace_root("candidate-discovery-lua-root-config-supplement");

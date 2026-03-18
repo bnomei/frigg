@@ -148,6 +148,14 @@ fn config_workflow_queries_activate_runtime_config_bias_without_manifest_terms()
 }
 
 #[test]
+fn package_workspace_config_queries_activate_runtime_config_bias_without_manifest_terms() {
+    let intent = SearchIntent::from_query("platform package workspace config build runtime");
+
+    assert!(intent.has_artifact_bias(ArtifactBias::RuntimeConfigArtifact));
+    assert_eq!(intent.strictness(), PlannerStrictness::WitnessFocused);
+}
+
+#[test]
 fn runtime_config_queries_with_mixed_support_test_terms_keep_test_witness_recall() {
     let intent =
         SearchIntent::from_query("config examples benches benchmark pyproject requirements tests");
@@ -310,6 +318,14 @@ fn ui_runtime_surface_queries_activate_runtime_witnesses() {
     let intent = SearchIntent::from_query(
         "graphite editor panels canvas layout messages desktop wrapper svelte",
     );
+
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}
+
+#[test]
+fn ui_runtime_surface_queries_with_runtime_token_activate_runtime_witnesses() {
+    let intent = SearchIntent::from_query("graphite editor panels runtime messages");
 
     assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
     assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));

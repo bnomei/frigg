@@ -68,18 +68,6 @@ fn hybrid_ranking_cli_entrypoint_queries_prefer_cli_test_witnesses_over_runtime_
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
-    let _witness_paths = output
-        .channel_results
-        .iter()
-        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
-        .map(|result| {
-            result
-                .hits
-                .iter()
-                .map(|hit| hit.document.path.as_str())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     assert!(
         ranked_paths
             .iter()
@@ -649,7 +637,7 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs() -> FriggRe
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
-    let output = searcher.search_hybrid_with_filters_using_executor(
+    let output = searcher.search_hybrid_with_filters_using_executor_with_trace(
         SearchHybridQuery {
             query: "entry point bootstrap build flow command runner main config".to_owned(),
             limit: 8,
@@ -663,6 +651,28 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs() -> FriggRe
 
     let ranked_paths = output
         .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let anchor_paths = output
+        .ranked_anchors
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let grouped_paths = output
+        .coverage_grouped_pool
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
@@ -680,7 +690,8 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs() -> FriggRe
                 ".github/workflows/deploy-pages.yml" | ".github/workflows/release.yml"
             )
         }),
-        "entrypoint/build-flow queries should surface at least one GitHub workflow config witness in top-k: {ranked_paths:?}"
+        "entrypoint/build-flow queries should surface at least one GitHub workflow config witness in top-k: ranked={ranked_paths:?} witness={witness_paths:?} anchors={anchor_paths:?} grouped={grouped_paths:?} trace={:?}",
+        output.post_selection_trace
     );
 
     cleanup_workspace(&root);
@@ -799,6 +810,150 @@ fn hybrid_ranking_entrypoint_build_flow_queries_keep_runtime_entrypoints_visible
             .take(11)
             .any(|path| path.starts_with(".github/workflows/")),
         "workflow witnesses should remain visible for entrypoint build-flow queries: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_companion_surface_pairs_are_retained_for_typescript_editor_subtrees()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-typescript-editor-companion-retention");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "apps/editor/src/runtime/session_manager.ts",
+                "export function sessionManager() { return 'session runtime'; }\n",
+            ),
+            (
+                "apps/editor/tests/session_manager.test.ts",
+                "describe('session manager', () => {});\n",
+            ),
+            (
+                "apps/editor/mocks/session_manager.mock.ts",
+                "export const sessionManagerMock = {};\n",
+            ),
+            (
+                "apps/other/src/runtime/worker.ts",
+                "export function workerRuntime() { return 'worker'; }\n",
+            ),
+            (
+                "apps/other/tests/worker.test.ts",
+                "describe('worker', () => {});\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "session manager runtime tests mock".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        ranked_paths
+            .iter()
+            .take(4)
+            .any(|path| *path == "apps/editor/src/runtime/session_manager.ts"),
+        "editor runtime witness should be retained in top-4: {ranked_paths:?}",
+    );
+    assert!(
+        ranked_paths
+            .iter()
+            .take(4)
+            .any(|path| *path == "apps/editor/tests/session_manager.test.ts"),
+        "editor companion tests should be retained in top-4: {ranked_paths:?}",
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_type_package_and_workspace_surfaces_keep_localized_coverage() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-typescript-package-workspace-locality");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "apps/platform/package.json",
+                "{\"name\":\"platform\",\"workspaces\":[\"./packages/*\"]}\n",
+            ),
+            (
+                "apps/platform/src/config/build.rs",
+                "export const buildConfig = { mode: 'platform' };\n",
+            ),
+            ("apps/platform/tsconfig.json", "{\"compilerOptions\":{}}\n"),
+            ("apps/other/package.json", "{\"name\":\"other\"}\n"),
+            (
+                "apps/other/src/runtime.ts",
+                "export const otherRuntime = true;\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "platform package workspace config build runtime".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let package_position = ranked_paths
+        .iter()
+        .position(|path| *path == "apps/platform/package.json")
+        .expect("platform package manifest should be ranked");
+    let workspace_position = ranked_paths
+        .iter()
+        .position(|path| *path == "apps/platform/tsconfig.json")
+        .unwrap_or_else(|| panic!("workspace config surface should be ranked: ranked={ranked_paths:?} witness={witness_paths:?}"));
+    let sibling_package_position = ranked_paths
+        .iter()
+        .position(|path| *path == "apps/other/package.json")
+        .expect("sibling package manifest should still be ranked");
+
+    assert!(
+        package_position < sibling_package_position
+            && workspace_position < sibling_package_position,
+        "platform-localized package/config surfaces should beat sibling package noise: {ranked_paths:?}",
     );
 
     cleanup_workspace(&root);
@@ -2515,7 +2670,7 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
     config.semantic_runtime = semantic_runtime_enabled(false);
     config.max_search_results = 8;
     let searcher = TextSearcher::new(config);
-    let output = searcher.search_hybrid_with_filters_using_executor(
+    let output = searcher.search_hybrid_with_filters_using_executor_with_trace(
         SearchHybridQuery {
             query: "entry point bootstrap build flow command runner main config".to_owned(),
             limit: 8,
@@ -2537,6 +2692,28 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
+    let witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let anchor_paths = output
+        .ranked_anchors
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let grouped_paths = output
+        .coverage_grouped_pool
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
     assert!(
         ranked_paths.iter().take(8).any(|path| {
             matches!(
@@ -2544,7 +2721,8 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
                 ".github/workflows/deploy-pages.yml" | ".github/workflows/release.yml"
             )
         }),
-        "entrypoint/build-flow queries should keep a workflow config witness visible even under semantic runtime pressure: {ranked_paths:?}"
+        "entrypoint/build-flow queries should keep a workflow config witness visible even under semantic runtime pressure: ranked={ranked_paths:?} witness={witness_paths:?} anchors={anchor_paths:?} grouped={grouped_paths:?} trace={:?}",
+        output.post_selection_trace
     );
 
     cleanup_workspace(&root);

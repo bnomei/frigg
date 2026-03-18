@@ -35,8 +35,9 @@ use guardrails::{
     selection_guardrail_score_for_path, selection_guardrail_state,
 };
 use laravel::{
-    apply_laravel_blade_surface_visibility, apply_laravel_entrypoint_visibility,
-    apply_laravel_layout_companion_visibility, apply_laravel_ui_test_harness_visibility,
+    apply_laravel_blade_page_companion_visibility, apply_laravel_blade_surface_visibility,
+    apply_laravel_entrypoint_visibility, apply_laravel_layout_companion_visibility,
+    apply_laravel_livewire_surface_visibility, apply_laravel_ui_test_harness_visibility,
 };
 use pipeline::{
     HAS_SPECIFIC_WITNESS_TERMS, PostSelectionPipelineFacts, QUERY_MENTIONS_CLI, TransformFn,
@@ -48,7 +49,8 @@ use runtime::{
     apply_ci_scripts_ops_visibility, apply_cli_entrypoint_visibility,
     apply_cli_specific_test_visibility, apply_entrypoint_build_workflow_visibility,
     apply_mixed_support_visibility, apply_runtime_companion_surface_visibility,
-    apply_runtime_companion_test_visibility, apply_runtime_config_surface_selection,
+    apply_runtime_companion_test_ordering, apply_runtime_companion_test_visibility,
+    apply_runtime_config_surface_ordering, apply_runtime_config_surface_selection,
     apply_runtime_entrypoint_visibility, apply_runtime_witness_rescue_visibility,
 };
 
@@ -172,6 +174,28 @@ const RULES: &[PostSelectionRule] = &[
         apply_runtime_companion_test_visibility,
     ),
     PostSelectionRule::new(
+        "post_selection.runtime_companion_test_ordering",
+        PolicyStage::PostSelectionRuntime,
+        Predicate::any(&[
+            WANTS_TEST_WITNESS_RECALL,
+            WANTS_ENTRYPOINT_BUILD_FLOW,
+            WANTS_RUNTIME_CONFIG_ARTIFACTS,
+        ]),
+        apply_runtime_companion_test_ordering,
+    ),
+    PostSelectionRule::new(
+        "post_selection.runtime_config_final",
+        PolicyStage::PostSelectionRuntime,
+        Predicate::any(&[WANTS_RUNTIME_CONFIG_ARTIFACTS, WANTS_ENTRYPOINT_BUILD_FLOW]),
+        apply_runtime_config_surface_selection,
+    ),
+    PostSelectionRule::new(
+        "post_selection.runtime_config_ordering",
+        PolicyStage::PostSelectionRuntime,
+        Predicate::any(&[WANTS_RUNTIME_CONFIG_ARTIFACTS, WANTS_ENTRYPOINT_BUILD_FLOW]),
+        apply_runtime_config_surface_ordering,
+    ),
+    PostSelectionRule::new(
         "post_selection.laravel_entrypoint",
         PolicyStage::PostSelectionLaravel,
         Predicate::all(&[WANTS_ENTRYPOINT_BUILD_FLOW]),
@@ -184,6 +208,12 @@ const RULES: &[PostSelectionRule] = &[
         apply_laravel_blade_surface_visibility,
     ),
     PostSelectionRule::new(
+        "post_selection.laravel_livewire_surface",
+        PolicyStage::PostSelectionLaravel,
+        Predicate::all(&[WANTS_LARAVEL_UI_WITNESSES]),
+        apply_laravel_livewire_surface_visibility,
+    ),
+    PostSelectionRule::new(
         "post_selection.laravel_ui_test_harness",
         PolicyStage::PostSelectionLaravel,
         Predicate::all(&[WANTS_LARAVEL_UI_WITNESSES]),
@@ -194,6 +224,12 @@ const RULES: &[PostSelectionRule] = &[
         PolicyStage::PostSelectionLaravel,
         Predicate::all(&[WANTS_LARAVEL_UI_WITNESSES]),
         apply_laravel_layout_companion_visibility,
+    ),
+    PostSelectionRule::new(
+        "post_selection.laravel_blade_page_companion",
+        PolicyStage::PostSelectionLaravel,
+        Predicate::all(&[WANTS_LARAVEL_UI_WITNESSES]),
+        apply_laravel_blade_page_companion_visibility,
     ),
 ];
 
@@ -231,6 +267,12 @@ fn is_specific_runtime_config_surface_path(path: &str) -> bool {
     if surfaces::is_typescript_runtime_module_index_path(path) {
         return true;
     }
+    if surfaces::is_runtime_config_artifact_path(path)
+        && !surfaces::is_root_scoped_runtime_config_path(path)
+        && !surfaces::is_frontend_runtime_noise_path(path)
+    {
+        return true;
+    }
     if !surfaces::is_entrypoint_runtime_path(path) {
         return false;
     }
@@ -239,6 +281,12 @@ fn is_specific_runtime_config_surface_path(path: &str) -> bool {
         .and_then(|stem| stem.to_str())
         .map(|stem| !stem.eq_ignore_ascii_case("main"))
         .unwrap_or(false)
+}
+
+fn is_local_runtime_config_surface_path(path: &str) -> bool {
+    surfaces::is_runtime_config_artifact_path(path)
+        && !surfaces::is_root_scoped_runtime_config_path(path)
+        && !surfaces::is_frontend_runtime_noise_path(path)
 }
 
 fn is_runtime_companion_surface_candidate_path(path: &str) -> bool {
@@ -355,9 +403,17 @@ fn runtime_config_surface_guardrail_priority_for_path(path: &str) -> usize {
         .and_then(|stem| stem.to_str())
         .map(|stem| stem.to_ascii_lowercase())
         .unwrap_or_default();
-    if matches!(path_stem.as_str(), "server" | "cli") {
+    if surfaces::is_workspace_config_surface_path(path)
+        && !surfaces::is_root_scoped_runtime_config_path(path)
+    {
+        4
+    } else if matches!(path_stem.as_str(), "server" | "cli") {
         3
     } else if surfaces::is_typescript_runtime_module_index_path(path) {
+        2
+    } else if surfaces::is_runtime_config_artifact_path(path)
+        && !surfaces::is_root_scoped_runtime_config_path(path)
+    {
         2
     } else {
         1

@@ -16,14 +16,17 @@ use super::{
     HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridPathWitnessQueryContext, HybridRankedEvidence,
     HybridRankingIntent, SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters,
     SearchHybridExecutionOutput, SearchHybridQuery, SearchStageAttribution, SearchStageSample,
-    SearchTextQuery, TextSearcher, build_hybrid_lexical_hits_with_intent,
-    build_hybrid_lexical_recall_regex, build_hybrid_path_witness_hits_with_intent,
-    empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
-    hybrid_path_has_exact_stem_match, hybrid_query_exact_terms, match_count_for_hits,
-    merge_hybrid_lexical_search_output, normalize_search_filters,
-    rank_hybrid_anchor_evidence_for_query_with_witness, retain_semantic_hits_for_query,
+    SearchTextQuery, TextSearcher, build_hybrid_lexical_recall_regex,
+    build_hybrid_path_witness_hits_with_intent, empty_channel_result,
+    hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
+    hybrid_path_has_exact_stem_match, match_count_for_hits, merge_hybrid_lexical_search_output,
+    normalize_search_filters, rank_hybrid_anchor_evidence_for_query_with_witness,
     search_diagnostics_to_channel_diagnostics, search_graph_channel_hits,
     search_semantic_channel_hits, sort_search_diagnostics_deterministically,
+};
+
+use super::lexical_channel::{
+    HybridLexicalQueryFeatures, build_hybrid_lexical_hits_with_features, candidate_universe_delta,
 };
 
 struct HybridFusionOutput {
@@ -45,9 +48,10 @@ pub(super) fn search_hybrid_with_filters_using_executor(
 ) -> FriggResult<SearchHybridExecutionOutput> {
     let query_text = query.query.trim().to_owned();
     let ranking_intent = HybridRankingIntent::from_query(&query_text);
+    let lexical_query_features = HybridLexicalQueryFeatures::from_query_text(&query_text);
     let prefer_graph_over_path_witness = prefers_graph_over_path_witness(&ranking_intent);
     let wants_path_witness_recall = ranking_intent.wants_path_witness_recall();
-    let exact_terms = hybrid_query_exact_terms(&query_text);
+    let exact_terms = lexical_query_features.exact_terms();
     if query_text.is_empty() {
         return Err(FriggError::InvalidInput(
             "hybrid search query must not be empty".to_owned(),
@@ -174,13 +178,22 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         && (lexical_document_count < query.limit
             || (wants_path_witness_recall && lexical_document_count < path_witness_working_limit));
     if should_widen_seeded_lexical_universe {
-        lexical_output = search_case_insensitive_recall_terms_with_universe(
-            searcher,
-            &lexical_seed_terms,
-            lexical_working_limit,
-            &candidate_universe,
-            false,
-        )?;
+        if let Some(delta_candidate_universe) =
+            candidate_universe_delta(&candidate_universe, lexical_candidate_universe)
+        {
+            let supplemental = search_case_insensitive_recall_terms_with_universe(
+                searcher,
+                &lexical_seed_terms,
+                lexical_working_limit,
+                &delta_candidate_universe,
+                false,
+            )?;
+            merge_hybrid_lexical_search_output(
+                &mut lexical_output,
+                supplemental,
+                lexical_working_limit,
+            );
+        }
         lexical_document_count = distinct_match_document_count(&lexical_output.matches);
     }
 
@@ -224,24 +237,21 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             &query_text,
             &filters,
             semantic_limit,
+            query.limit,
             credentials,
             semantic_executor,
         ) {
-            Ok(outcome) => {
-                let (semantic_hits, semantic_hit_count) =
-                    retain_semantic_hits_for_query(outcome.hits, &query_text, query.limit);
-                ChannelResult::new(
-                    EvidenceChannel::Semantic,
-                    semantic_hits,
-                    outcome.health,
-                    outcome.diagnostics,
-                    ChannelStats {
-                        candidate_count: outcome.candidate_count,
-                        hit_count: semantic_hit_count,
-                        match_count: 0,
-                    },
-                )
-            }
+            Ok(outcome) => ChannelResult::new(
+                EvidenceChannel::Semantic,
+                outcome.hits,
+                outcome.health,
+                outcome.diagnostics,
+                ChannelStats {
+                    candidate_count: outcome.candidate_count,
+                    hit_count: outcome.hit_count,
+                    match_count: 0,
+                },
+            ),
             Err(err) => {
                 if strict_semantic {
                     return Err(FriggError::StrictSemanticFailure {
@@ -376,10 +386,10 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         .as_micros()
         .try_into()
         .unwrap_or(u64::MAX);
-    let lexical_hits = build_hybrid_lexical_hits_with_intent(
+    let lexical_hits = build_hybrid_lexical_hits_with_features(
         &lexical_output.matches,
         &ranking_intent,
-        &query_text,
+        &lexical_query_features,
     );
     let witness_hits = build_hybrid_path_witness_hits_with_intent(
         &witness_output.matches,
@@ -394,7 +404,11 @@ pub(super) fn search_hybrid_with_filters_using_executor(
     let ranking_lexical_hits = if witness_output.matches.is_empty() {
         lexical_hits.clone()
     } else {
-        build_hybrid_lexical_hits_with_intent(&merged_ranking_matches, &ranking_intent, &query_text)
+        build_hybrid_lexical_hits_with_features(
+            &merged_ranking_matches,
+            &ranking_intent,
+            &lexical_query_features,
+        )
     };
     let graph_seed_matches = if prefer_graph_over_path_witness {
         merged_ranking_matches

@@ -10,39 +10,62 @@ use crate::mcp::types::{
 
 impl FriggMcpServer {
     pub(super) fn invalidate_repository_search_response_caches(&self, repository_id: &str) {
-        self.cache_state
+        let mut search_text_cache = self
+            .cache_state
             .search_text_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|key, _| {
-                !response_cache_scopes_include_repository(
-                    repository_id,
-                    &key.scoped_repository_ids,
-                    &key.freshness_scopes,
-                )
-            });
-        self.cache_state
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = search_text_cache.len();
+        search_text_cache.retain(|key, _| {
+            !response_cache_scopes_include_repository(
+                repository_id,
+                &key.scoped_repository_ids,
+                &key.freshness_scopes,
+            )
+        });
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchTextResponse,
+            RuntimeCacheEvent::Invalidation,
+            before.saturating_sub(search_text_cache.len()),
+        );
+
+        let mut search_hybrid_cache = self
+            .cache_state
             .search_hybrid_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|key, _| {
-                !response_cache_scopes_include_repository(
-                    repository_id,
-                    &key.scoped_repository_ids,
-                    &key.freshness_scopes,
-                )
-            });
-        self.cache_state
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = search_hybrid_cache.len();
+        search_hybrid_cache.retain(|key, _| {
+            !response_cache_scopes_include_repository(
+                repository_id,
+                &key.scoped_repository_ids,
+                &key.freshness_scopes,
+            )
+        });
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchHybridResponse,
+            RuntimeCacheEvent::Invalidation,
+            before.saturating_sub(search_hybrid_cache.len()),
+        );
+
+        let mut search_symbol_cache = self
+            .cache_state
             .search_symbol_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|key, _| {
-                !response_cache_scopes_include_repository(
-                    repository_id,
-                    &key.scoped_repository_ids,
-                    &key.freshness_scopes,
-                )
-            });
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = search_symbol_cache.len();
+        search_symbol_cache.retain(|key, _| {
+            !response_cache_scopes_include_repository(
+                repository_id,
+                &key.scoped_repository_ids,
+                &key.freshness_scopes,
+            )
+        });
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchSymbolResponse,
+            RuntimeCacheEvent::Invalidation,
+            before.saturating_sub(search_symbol_cache.len()),
+        );
     }
 
     pub(super) async fn search_text_impl(
@@ -114,6 +137,13 @@ impl FriggMcpServer {
                             limit,
                         }
                     });
+                    if cache_key.is_none() {
+                        server.record_runtime_cache_event(
+                            RuntimeCacheFamily::SearchTextResponse,
+                            RuntimeCacheEvent::Bypass,
+                            1,
+                        );
+                    }
                     if let Some(cache_key) = cache_key.as_ref()
                         && let Some(cached) = server.cached_search_text_response(cache_key)
                     {
@@ -140,10 +170,7 @@ impl FriggMcpServer {
                     let (scoped_config, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
 
-                    let searcher = TextSearcher::with_validated_manifest_candidate_cache(
-                        scoped_config,
-                        Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
-                    );
+                    let searcher = server.runtime_text_searcher(scoped_config);
                     let search_output = match pattern_type {
                         SearchPatternType::Literal => searcher
                             .search_literal_with_filters_diagnostics(
@@ -338,6 +365,13 @@ impl FriggMcpServer {
                             semantic_weight_bits: weights.semantic.to_bits(),
                         }
                     });
+                    if cache_key.is_none() {
+                        server.record_runtime_cache_event(
+                            RuntimeCacheFamily::SearchHybridResponse,
+                            RuntimeCacheEvent::Bypass,
+                            1,
+                        );
+                    }
                     if let Some(cache_key) = cache_key.as_ref()
                         && let Some(cached) = server.cached_search_hybrid_response(cache_key)
                     {
@@ -345,10 +379,7 @@ impl FriggMcpServer {
                         return Ok(Json(cached.response));
                     }
 
-                    let searcher = TextSearcher::with_validated_manifest_candidate_cache(
-                        scoped_config,
-                        Arc::clone(&server.runtime_state.validated_manifest_candidate_cache),
-                    );
+                    let searcher = server.runtime_text_searcher(scoped_config);
                     let search_output = searcher
                         .search_hybrid_with_filters(
                             SearchHybridQuery {
@@ -645,6 +676,13 @@ impl FriggMcpServer {
                             limit,
                         }
                     });
+                    if cache_key.is_none() {
+                        server.record_runtime_cache_event(
+                            RuntimeCacheFamily::SearchSymbolResponse,
+                            RuntimeCacheEvent::Bypass,
+                            1,
+                        );
+                    }
                     if let Some(cache_key) = cache_key.as_ref()
                         && let Some(cached) = server.cached_search_symbol_response(cache_key)
                     {
@@ -1592,8 +1630,18 @@ impl FriggMcpServer {
             .get(raw)
             .cloned()
         {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::CompiledSafeRegex,
+                RuntimeCacheEvent::Hit,
+                1,
+            );
             return Ok(cached);
         }
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::CompiledSafeRegex,
+            RuntimeCacheEvent::Miss,
+            1,
+        );
 
         let compiled = compile_safe_regex(raw)?;
         let mut cache = self
@@ -1602,12 +1650,22 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(cached) = cache.get(raw).cloned() {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::CompiledSafeRegex,
+                RuntimeCacheEvent::Hit,
+                1,
+            );
             return Ok(cached);
         }
-        while cache.len() >= Self::SAFE_REGEX_CACHE_LIMIT {
-            let _ = cache.pop_first();
+        let inserted = cache.insert(raw.to_owned(), compiled.clone()).is_none();
+        if inserted {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::CompiledSafeRegex,
+                RuntimeCacheEvent::Insert,
+                1,
+            );
         }
-        cache.insert(raw.to_owned(), compiled.clone());
+        self.trim_runtime_cache_to_entry_limit(RuntimeCacheFamily::CompiledSafeRegex, &mut cache);
         Ok(compiled)
     }
 
@@ -1641,12 +1699,23 @@ impl FriggMcpServer {
         &self,
         cache_key: &SearchTextResponseCacheKey,
     ) -> Option<CachedSearchTextResponse> {
-        self.cache_state
+        let cached = self
+            .cache_state
             .search_text_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
-            .cloned()
+            .cloned();
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchTextResponse,
+            if cached.is_some() {
+                RuntimeCacheEvent::Hit
+            } else {
+                RuntimeCacheEvent::Miss
+            },
+            1,
+        );
+        cached
     }
 
     pub(super) fn cache_search_text_response(
@@ -1655,29 +1724,51 @@ impl FriggMcpServer {
         response: &SearchTextResponse,
         source_refs: &Value,
     ) {
-        self.cache_state
+        let mut cache = self
+            .cache_state
             .search_text_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inserted = cache
             .insert(
                 cache_key,
                 CachedSearchTextResponse {
                     response: response.clone(),
                     source_refs: source_refs.clone(),
                 },
+            )
+            .is_none();
+        if inserted {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::SearchTextResponse,
+                RuntimeCacheEvent::Insert,
+                1,
             );
+        }
+        self.trim_runtime_cache_to_entry_limit(RuntimeCacheFamily::SearchTextResponse, &mut cache);
     }
 
     pub(super) fn cached_search_hybrid_response(
         &self,
         cache_key: &SearchHybridResponseCacheKey,
     ) -> Option<CachedSearchHybridResponse> {
-        self.cache_state
+        let cached = self
+            .cache_state
             .search_hybrid_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
-            .cloned()
+            .cloned();
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchHybridResponse,
+            if cached.is_some() {
+                RuntimeCacheEvent::Hit
+            } else {
+                RuntimeCacheEvent::Miss
+            },
+            1,
+        );
+        cached
     }
 
     pub(super) fn cache_search_hybrid_response(
@@ -1686,29 +1777,54 @@ impl FriggMcpServer {
         response: &SearchHybridResponse,
         source_refs: &Value,
     ) {
-        self.cache_state
+        let mut cache = self
+            .cache_state
             .search_hybrid_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inserted = cache
             .insert(
                 cache_key,
                 CachedSearchHybridResponse {
                     response: response.clone(),
                     source_refs: source_refs.clone(),
                 },
+            )
+            .is_none();
+        if inserted {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::SearchHybridResponse,
+                RuntimeCacheEvent::Insert,
+                1,
             );
+        }
+        self.trim_runtime_cache_to_entry_limit(
+            RuntimeCacheFamily::SearchHybridResponse,
+            &mut cache,
+        );
     }
 
     pub(super) fn cached_search_symbol_response(
         &self,
         cache_key: &SearchSymbolResponseCacheKey,
     ) -> Option<CachedSearchSymbolResponse> {
-        self.cache_state
+        let cached = self
+            .cache_state
             .search_symbol_response_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(cache_key)
-            .cloned()
+            .cloned();
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::SearchSymbolResponse,
+            if cached.is_some() {
+                RuntimeCacheEvent::Hit
+            } else {
+                RuntimeCacheEvent::Miss
+            },
+            1,
+        );
+        cached
     }
 
     pub(super) fn cache_search_symbol_response(
@@ -1722,10 +1838,12 @@ impl FriggMcpServer {
         symbol_extraction_diagnostics_count: usize,
         effective_limit: usize,
     ) {
-        self.cache_state
+        let mut cache = self
+            .cache_state
             .search_symbol_response_cache
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inserted = cache
             .insert(
                 cache_key,
                 CachedSearchSymbolResponse {
@@ -1737,6 +1855,18 @@ impl FriggMcpServer {
                     symbol_extraction_diagnostics_count,
                     effective_limit,
                 },
+            )
+            .is_none();
+        if inserted {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::SearchSymbolResponse,
+                RuntimeCacheEvent::Insert,
+                1,
             );
+        }
+        self.trim_runtime_cache_to_entry_limit(
+            RuntimeCacheFamily::SearchSymbolResponse,
+            &mut cache,
+        );
     }
 }

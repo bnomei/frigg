@@ -167,6 +167,11 @@ impl WatchRuntime {
             lease_count,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn inject_test_event(&self, event: Event) {
+        let _ = self.command_tx.send(SupervisorCommand::Event(event));
+    }
 }
 
 impl Drop for WatchRuntime {

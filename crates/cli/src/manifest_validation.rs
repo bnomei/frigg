@@ -67,7 +67,7 @@ enum ValidatedManifestCandidateCacheEntry {
     Dirty,
     Ready {
         snapshot_id: String,
-        digests: Vec<FileMetadataDigest>,
+        digests: Arc<Vec<FileMetadataDigest>>,
     },
 }
 
@@ -85,7 +85,7 @@ pub(crate) struct ValidatedManifestCandidateCacheStats {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValidatedManifestCandidateCacheLookup {
-    Hit(Vec<FileMetadataDigest>),
+    Hit(Arc<Vec<FileMetadataDigest>>),
     Miss,
     Dirty,
 }
@@ -127,17 +127,27 @@ impl ValidatedManifestCandidateCache {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn store_validated(
         &mut self,
         root: &Path,
         snapshot_id: &str,
         digests: &[FileMetadataDigest],
     ) {
+        self.store_validated_shared(root, snapshot_id, Arc::new(digests.to_vec()));
+    }
+
+    pub(crate) fn store_validated_shared(
+        &mut self,
+        root: &Path,
+        snapshot_id: &str,
+        digests: Arc<Vec<FileMetadataDigest>>,
+    ) {
         self.entries.insert(
             Self::cache_key(root),
             ValidatedManifestCandidateCacheEntry::Ready {
                 snapshot_id: snapshot_id.to_owned(),
-                digests: digests.to_vec(),
+                digests,
             },
         );
     }
@@ -183,12 +193,31 @@ pub(crate) struct ValidatedManifestSnapshot {
     pub digests: Vec<FileMetadataDigest>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SharedValidatedManifestSnapshot {
+    pub snapshot_id: String,
+    pub digests: Arc<Vec<FileMetadataDigest>>,
+}
+
 pub(crate) fn latest_validated_manifest_snapshot(
     storage: &Storage,
     repository_id: &str,
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
 ) -> Option<ValidatedManifestSnapshot> {
+    let shared = latest_validated_manifest_snapshot_shared(storage, repository_id, root, cache)?;
+    Some(ValidatedManifestSnapshot {
+        snapshot_id: shared.snapshot_id,
+        digests: shared.digests.as_ref().clone(),
+    })
+}
+
+pub(crate) fn latest_validated_manifest_snapshot_shared(
+    storage: &Storage,
+    repository_id: &str,
+    root: &Path,
+    cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
+) -> Option<SharedValidatedManifestSnapshot> {
     let latest = storage
         .load_latest_manifest_metadata_for_repository(repository_id)
         .ok()??;
@@ -201,15 +230,10 @@ pub(crate) fn latest_validated_manifest_snapshot(
             .lookup(root, &snapshot_id);
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-                if let Some(validated_digests) = validate_manifest_digests_for_root(root, &digests)
-                {
-                    cache
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .store_validated(root, &snapshot_id, &validated_digests);
-                    return Some(ValidatedManifestSnapshot {
+                if validate_manifest_digests_for_root(root, digests.as_ref()).is_some() {
+                    return Some(SharedValidatedManifestSnapshot {
                         snapshot_id,
-                        digests: validated_digests,
+                        digests,
                     });
                 }
 
@@ -225,16 +249,16 @@ pub(crate) fn latest_validated_manifest_snapshot(
     }
 
     let snapshot_digests = manifest_digests_from_metadata_entries(&latest.entries);
-    let validated_digests = validate_manifest_digests_for_root(root, &snapshot_digests)?;
+    let validated_digests = Arc::new(validate_manifest_digests_for_root(root, &snapshot_digests)?);
 
     if let Some(cache) = cache {
         cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .store_validated(root, &snapshot_id, &validated_digests);
+            .store_validated_shared(root, &snapshot_id, Arc::clone(&validated_digests));
     }
 
-    Some(ValidatedManifestSnapshot {
+    Some(SharedValidatedManifestSnapshot {
         snapshot_id,
         digests: validated_digests,
     })
@@ -440,4 +464,152 @@ where
         validated_manifest_digests: Some(validated_manifest_digests),
         semantic_target: Some(semantic_target),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_workspace_root(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("frigg-manifest-validation-{test_name}-{unique}"))
+    }
+
+    fn cleanup_workspace(path: &Path) {
+        if path.exists() {
+            fs::remove_dir_all(path).expect("temp manifest-validation workspace should remove");
+        }
+    }
+
+    fn seed_manifest_snapshot(
+        storage: &Storage,
+        repository_id: &str,
+        snapshot_id: &str,
+        file_path: &Path,
+    ) -> FriggResult<()> {
+        let metadata = fs::metadata(file_path).map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to stat manifest-validation fixture '{}': {err}",
+                file_path.display()
+            ))
+        })?;
+        storage.upsert_manifest(
+            repository_id,
+            snapshot_id,
+            &[ManifestEntry {
+                path: file_path.display().to_string(),
+                sha256: "fixture-sha".to_owned(),
+                size_bytes: metadata.len(),
+                mtime_ns: metadata.modified().ok().and_then(system_time_to_unix_nanos),
+            }],
+        )
+    }
+
+    #[test]
+    fn latest_validated_manifest_snapshot_shared_reuses_cached_digest_arc() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("shared-cache-hit");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn alpha() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        seed_manifest_snapshot(&storage, "repo-001", "snapshot-001", &file_path)?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        let first = latest_validated_manifest_snapshot_shared(
+            &storage,
+            "repo-001",
+            &workspace_root,
+            Some(&cache),
+        )
+        .expect("first shared manifest validation should succeed");
+        let second = latest_validated_manifest_snapshot_shared(
+            &storage,
+            "repo-001",
+            &workspace_root,
+            Some(&cache),
+        )
+        .expect("second shared manifest validation should hit cache");
+
+        assert!(Arc::ptr_eq(&first.digests, &second.digests));
+        let stats = cache
+            .read()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 1);
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
+    fn latest_validated_manifest_snapshot_shared_respects_dirty_root_bypass() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("shared-dirty-bypass");
+        fs::create_dir_all(&workspace_root)
+            .expect("manifest-validation workspace root should be creatable");
+        let file_path = workspace_root.join("src.rs");
+        fs::write(&file_path, "fn beta() {}\n")
+            .expect("manifest-validation fixture file should be writable");
+
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        fs::create_dir_all(
+            db_path
+                .parent()
+                .expect("manifest-validation db path should have a parent"),
+        )
+        .expect("manifest-validation db parent should be creatable");
+        let storage = Storage::new(&db_path);
+        storage.initialize()?;
+        seed_manifest_snapshot(&storage, "repo-001", "snapshot-001", &file_path)?;
+
+        let cache = Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
+        assert!(
+            latest_validated_manifest_snapshot_shared(
+                &storage,
+                "repo-001",
+                &workspace_root,
+                Some(&cache),
+            )
+            .is_some(),
+            "initial shared manifest validation should populate cache"
+        );
+        cache
+            .write()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .mark_dirty_root(&workspace_root);
+
+        assert!(
+            latest_validated_manifest_snapshot_shared(
+                &storage,
+                "repo-001",
+                &workspace_root,
+                Some(&cache),
+            )
+            .is_none(),
+            "dirty roots should bypass shared manifest snapshot reuse"
+        );
+        let stats = cache
+            .read()
+            .expect("validated manifest candidate cache should not be poisoned")
+            .stats();
+        assert_eq!(stats.dirty_bypasses, 1);
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
 }

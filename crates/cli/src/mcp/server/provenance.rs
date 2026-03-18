@@ -221,7 +221,29 @@ impl FriggMcpServer {
         self.attached_workspaces()
             .into_iter()
             .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
+            .or_else(|| {
+                self.known_workspaces()
+                    .into_iter()
+                    .filter(|workspace| self.known_workspace_can_bootstrap_provenance(workspace))
+                    .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
+            })
             .map(|workspace| (workspace.repository_id, workspace.root))
+    }
+
+    fn known_workspace_can_bootstrap_provenance(&self, workspace: &AttachedWorkspace) -> bool {
+        if !workspace.db_path.exists() {
+            return true;
+        }
+
+        let cache_key = ProvenanceStorageCacheKey {
+            repository_id: workspace.repository_id.clone(),
+            db_path: workspace.db_path.clone(),
+        };
+        self.cache_state
+            .provenance_storage_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(&cache_key)
     }
 
     fn provenance_target_for_repository(
@@ -233,6 +255,12 @@ impl FriggMcpServer {
                 .attached_workspaces()
                 .into_iter()
                 .find(|workspace| workspace.repository_id == repository_id)
+                .or_else(|| {
+                    self.known_workspaces().into_iter().find(|workspace| {
+                        workspace.repository_id == repository_id
+                            && self.known_workspace_can_bootstrap_provenance(workspace)
+                    })
+                })
                 .map(|workspace| (workspace.repository_id, workspace.root)),
             None => self.default_provenance_target(),
         }

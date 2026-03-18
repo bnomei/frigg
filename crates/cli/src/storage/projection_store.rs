@@ -1,6 +1,16 @@
 use super::*;
 use rusqlite::OptionalExtension;
 
+const REQUIRED_RETRIEVAL_PROJECTION_FAMILIES: &[&str] = &[
+    "path_witness",
+    "test_subject",
+    "entrypoint_surface",
+    "path_relation",
+    "subtree_coverage",
+    "path_surface_term",
+    "path_anchor_sketch",
+];
+
 impl Storage {
     pub fn replace_path_witness_projections_for_repository_snapshot(
         &self,
@@ -1099,6 +1109,54 @@ impl Storage {
                 "failed to load retrieval projection head for repository '{repository_id}' snapshot '{snapshot_id}' family '{family}': {err}"
             ))
         })
+    }
+
+    pub fn missing_retrieval_projection_families_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+    ) -> FriggResult<Vec<String>> {
+        let repository_id = repository_id.trim();
+        let snapshot_id = snapshot_id.trim();
+        if repository_id.is_empty() || snapshot_id.is_empty() {
+            return Err(FriggError::InvalidInput(
+                "repository_id and snapshot_id must not be empty".to_owned(),
+            ));
+        }
+
+        let conn = open_connection(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT family
+                FROM retrieval_projection_head
+                WHERE repository_id = ?1 AND snapshot_id = ?2
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare retrieval projection family presence query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+        let present_families = stmt
+            .query_map((repository_id, snapshot_id), |row| row.get::<_, String>(0))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query retrieval projection family presence for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode retrieval projection family presence for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        Ok(REQUIRED_RETRIEVAL_PROJECTION_FAMILIES
+            .iter()
+            .filter(|family| !present_families.contains(**family))
+            .map(|family| (*family).to_owned())
+            .collect())
     }
 
     pub fn load_path_relation_projections_for_repository_snapshot(

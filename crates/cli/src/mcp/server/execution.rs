@@ -60,13 +60,17 @@ mod tests {
     use super::*;
 
     use crate::settings::FriggConfig;
+    use std::path::PathBuf;
 
     fn fixture_server() -> (FriggMcpServer, AttachedWorkspace) {
         let workspace_root = std::env::current_dir()
             .expect("current working directory should exist for MCP execution tests");
-        let config = FriggConfig::from_workspace_roots(vec![workspace_root])
+        let config = FriggConfig::from_optional_workspace_roots(Vec::<PathBuf>::new())
             .expect("fixture config should build");
         let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let _ = server
+            .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::GitRoot)
+            .expect("fixture workspace should attach");
         let workspace = server
             .attached_workspaces()
             .into_iter()

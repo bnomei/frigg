@@ -1,4 +1,5 @@
 use super::*;
+use crate::searcher::PATH_WITNESS_PROJECTION_HEURISTIC_VERSION;
 use crate::searcher::path_witness_projection::family_bits_for_projection;
 
 #[test]
@@ -696,8 +697,9 @@ fn hybrid_ranking_semantic_laravel_linkstack_queries_recover_layouts_and_blade_v
 }
 
 #[test]
-fn hybrid_path_witness_recall_materializes_manifest_projection_rows() -> FriggResult<()> {
-    let root = temp_workspace_root("path-witness-projection-materialization");
+fn hybrid_path_witness_recall_uses_live_fallback_without_persisting_projection_rows()
+-> FriggResult<()> {
+    let root = temp_workspace_root("path-witness-live-fallback-no-persist");
     prepare_workspace(
         &root,
         &[
@@ -728,6 +730,7 @@ fn hybrid_path_witness_recall_materializes_manifest_projection_rows() -> FriggRe
     );
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
     let query = "tests fixtures integration tests createsapplication dusktestcase";
     let intent = HybridRankingIntent::from_query(query);
     let output = searcher.search_path_witness_recall_with_filters(
@@ -738,20 +741,31 @@ fn hybrid_path_witness_recall_materializes_manifest_projection_rows() -> FriggRe
     )?;
 
     assert_eq!(output.matches.len(), 2);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
+    let second_output = searcher.search_path_witness_recall_with_filters(
+        query,
+        &SearchFilters::default(),
+        8,
+        &intent,
+    )?;
+    assert_eq!(output.matches, second_output.matches);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
 
     let rows = storage
         .load_path_witness_projections_for_repository_snapshot("repo-001", "snapshot-001")?;
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].path, "tests/CreatesApplication.php");
-    assert_eq!(rows[1].path, "tests/DuskTestCase.php");
+    assert!(
+        rows.is_empty(),
+        "query-time live fallback should not materialize path witness rows into storage"
+    );
 
     cleanup_workspace(&root);
     Ok(())
 }
 
 #[test]
-fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> FriggResult<()> {
-    let root = temp_workspace_root("path-witness-projection-cache-reuse");
+fn hybrid_path_witness_recall_treats_partial_snapshot_rows_as_read_only_fallback() -> FriggResult<()>
+{
+    let root = temp_workspace_root("path-witness-partial-projection-readonly-fallback");
     prepare_workspace(
         &root,
         &[
@@ -772,6 +786,41 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
         &["tests/CreatesApplication.php", "tests/DuskTestCase.php"],
     )?;
 
+    let db_path = resolve_provenance_db_path(&root)?;
+    let storage = Storage::new(db_path);
+    let authoritative_projection =
+        StoredPathWitnessProjection::from_path("tests/CreatesApplication.php");
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-001",
+        "snapshot-001",
+        &crate::storage::RetrievalProjectionBundle {
+            heads: vec![crate::storage::RetrievalProjectionHeadRecord {
+                family: "path_witness".to_owned(),
+                heuristic_version: PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
+                input_modes: vec!["path".to_owned()],
+                row_count: 2,
+            }],
+            path_witness: vec![crate::storage::PathWitnessProjection {
+                path: "tests/CreatesApplication.php".to_owned(),
+                path_class: authoritative_projection.path_class.clone(),
+                source_class: authoritative_projection.source_class.clone(),
+                file_stem: authoritative_projection.file_stem.clone(),
+                path_terms: authoritative_projection.path_terms.clone(),
+                subtree_root: authoritative_projection.subtree_root.clone(),
+                family_bits: family_bits_for_projection(&authoritative_projection),
+                flags_json: serde_json::to_string(&authoritative_projection.flags)
+                    .expect("valid authoritative flags json"),
+                heuristic_version: PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
+            }],
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: Vec::new(),
+            subtree_coverage: Vec::new(),
+            path_surface_terms: Vec::new(),
+            path_anchor_sketches: Vec::new(),
+        },
+    )?;
+
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
     assert_eq!(searcher.path_witness_projection_cache_len(), 0);
 
@@ -783,7 +832,7 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
         8,
         &intent,
     )?;
-    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
 
     let second = searcher.search_path_witness_recall_with_filters(
         query,
@@ -792,7 +841,11 @@ fn hybrid_path_witness_recall_reuses_snapshot_scoped_projection_cache() -> Frigg
         &intent,
     )?;
     assert_eq!(first.matches, second.matches);
-    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
+    let rows = storage
+        .load_path_witness_projections_for_repository_snapshot("repo-001", "snapshot-001")?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].path, "tests/CreatesApplication.php");
 
     cleanup_workspace(&root);
     Ok(())
@@ -840,6 +893,7 @@ fn hybrid_path_witness_recall_uses_authoritative_current_snapshot_projection_row
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    assert_eq!(searcher.path_witness_projection_cache_len(), 0);
     let universe = searcher
         .build_candidate_universe_with_attribution(
             &SearchTextQuery {
@@ -857,6 +911,12 @@ fn hybrid_path_witness_recall_uses_authoritative_current_snapshot_projection_row
     let projections = searcher
         .load_or_build_path_witness_projections_for_repository(repository, "snapshot-001")
         .expect("expected authoritative path witness projections");
+    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
+    let cached_projections = searcher
+        .load_or_build_path_witness_projections_for_repository(repository, "snapshot-001")
+        .expect("expected cached authoritative path witness projections");
+    assert!(std::sync::Arc::ptr_eq(&projections, &cached_projections));
+    assert_eq!(searcher.path_witness_projection_cache_len(), 1);
 
     assert!(
         projections.iter().any(|projection| {

@@ -705,3 +705,179 @@ fn hybrid_ranking_rust_mixed_examples_queries_keep_test_witnesses_visible_under_
     cleanup_workspace(&root);
     Ok(())
 }
+
+#[test]
+fn hybrid_ranking_graphite_editor_subtree_companion_retrieval_preserves_editor_runtime_tests()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-graphite-editor-subtree-companion");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "editor/src/messages/panels.rs",
+                "pub fn render_panels() { let _ = \"editor panels runtime\"; }\n",
+            ),
+            (
+                "editor/tests/panels.rs",
+                "#[cfg(test)] mod panels_tests {}\n",
+            ),
+            (
+                "desktop/src/messages/layout.rs",
+                "pub fn desktop_messages() { let _ = \"desktop layout runtime\"; }\n",
+            ),
+            (
+                "desktop/tests/layout.rs",
+                "#[cfg(test)] mod layout_tests {}\n",
+            ),
+            (
+                "website/content/editor.md",
+                "# Graphite editor\neditor panels runtime\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "graphite editor panels runtime messages".to_owned(),
+            limit: 6,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let witness_paths = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| {
+            result
+                .hits
+                .iter()
+                .map(|hit| hit.document.path.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let witness_health = output
+        .channel_results
+        .iter()
+        .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
+        .map(|result| (&result.health.status, result.health.reason.as_deref()));
+    let trace = output.post_selection_trace.clone();
+
+    let editor_runtime_position = ranked_paths
+        .iter()
+        .position(|path| *path == "editor/src/messages/panels.rs")
+        .unwrap_or_else(|| {
+            panic!(
+                "editor runtime witness should be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
+            )
+        });
+    let editor_test_position = ranked_paths
+        .iter()
+        .position(|path| *path == "editor/tests/panels.rs")
+        .unwrap_or_else(|| {
+            panic!(
+                "editor test witness should be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
+            )
+        });
+    let desktop_noise_position = ranked_paths
+        .iter()
+        .position(|path| *path == "desktop/tests/layout.rs")
+        .unwrap_or_else(|| {
+            panic!(
+                "desktop noise witness should still be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
+            )
+        });
+
+    assert!(
+        editor_runtime_position < desktop_noise_position
+            && editor_test_position < desktop_noise_position,
+        "editor subtree companions should outrank sibling desktop noise: {ranked_paths:?}",
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_rust_editor_and_wasm_companion_surfaces_stay_localized() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-rust-editor-wasm-companion");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "crates/editor/src/lib.rs",
+                "pub fn editor_runtime() { let _ = \"editor wasm runtime\"; }\n",
+            ),
+            (
+                "crates/editor/tests/runtime.rs",
+                "#[cfg(test)] mod runtime_tests {}\n",
+            ),
+            (
+                "crates/desktop/src/engine.rs",
+                "pub fn desktop_runtime() { let _ = \"desktop runtime\"; }\n",
+            ),
+            (
+                "crates/desktop/tests/engine.rs",
+                "#[cfg(test)] mod engine_tests {}\n",
+            ),
+            (
+                "crates/wasm/src/lib.rs",
+                "pub fn wasm_runtime() { let _ = \"wasm runtime\"; }\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "editor desktop runtime wasm tests".to_owned(),
+            limit: 6,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+
+    let workspace_position = ranked_paths
+        .iter()
+        .position(|path| path.ends_with("Cargo.toml"))
+        .unwrap_or(usize::MAX);
+    let editor_position = ranked_paths
+        .iter()
+        .position(|path| *path == "crates/editor/src/lib.rs")
+        .expect("editor runtime should be ranked");
+    let desktop_position = ranked_paths
+        .iter()
+        .position(|path| *path == "crates/desktop/src/engine.rs")
+        .expect("desktop noise should be ranked");
+
+    assert!(
+        editor_position < desktop_position,
+        "editor companion should outrank unrelated desktop runtime: {ranked_paths:?}",
+    );
+    assert!(
+        workspace_position == usize::MAX || workspace_position <= 6,
+        "searcher should keep workspace/config surfaces reachable in top-k: {ranked_paths:?}",
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}

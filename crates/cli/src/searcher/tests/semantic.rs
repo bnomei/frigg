@@ -267,6 +267,124 @@ fn hybrid_ranking_semantic_hit_count_tracks_retained_documents_not_raw_chunks() 
 }
 
 #[test]
+fn hybrid_ranking_semantic_request_reuses_request_scoped_storage_context_but_still_eagerly_hydrates_chunks()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-semantic-storage-churn-hydration");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "src/relevant.rs",
+                "pub fn relevant() { let _ = \"needle\"; }\n",
+            ),
+            (
+                "src/secondary.rs",
+                "pub fn secondary() { let _ = \"needle\"; }\n",
+            ),
+            ("src/noisy.rs", "pub fn noisy() { let _ = \"needle\"; }\n"),
+        ],
+    )?;
+    let mut records = vec![
+        semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/relevant.rs",
+            0,
+            vec![1.0, 0.0],
+        ),
+        semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/relevant.rs",
+            1,
+            vec![0.82, 0.02],
+        ),
+        semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/secondary.rs",
+            0,
+            vec![0.69, 0.72],
+        ),
+        semantic_record(
+            "repo-001",
+            "snapshot-001",
+            "src/noisy.rs",
+            0,
+            vec![0.41, 0.91],
+        ),
+    ];
+    records[0].content_text = "relevant semantic chunk alpha ".repeat(24);
+    records[1].content_text = "relevant semantic chunk beta ".repeat(20);
+    records[2].content_text = "secondary semantic chunk gamma ".repeat(18);
+    records[3].content_text = "noisy semantic chunk delta ".repeat(16);
+    let expected_payload_bytes = records
+        .iter()
+        .map(|record| record.content_text.len())
+        .sum::<usize>();
+    seed_semantic_embeddings(&root, "repo-001", "snapshot-001", &records)?;
+
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.semantic_runtime = semantic_runtime_enabled(false);
+    let searcher = TextSearcher::new(config);
+    reset_semantic_read_trace();
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "needle".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(true),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        },
+        &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+    )?;
+    let trace = snapshot_semantic_read_trace();
+
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+    assert_eq!(output.note.semantic_candidate_count, 4);
+    assert_eq!(output.note.semantic_hit_count, 1);
+    assert_eq!(
+        trace.read_context_opens, 1,
+        "one semantic request should open exactly one semantic read context for readiness, top-k, and hydration stages: {trace:?}"
+    );
+    assert!(
+        trace.open_connection_calls >= trace.read_context_opens,
+        "semantic read-context opens should be a subset of the total storage opens seen across the broader hybrid query: {trace:?}"
+    );
+    assert_eq!(
+        trace.readiness_checks, 1,
+        "semantic request should perform exactly one hot-path readiness parity check per repository"
+    );
+    assert_eq!(
+        trace.membership_probes, 0,
+        "semantic request should no longer perform one membership probe per scanned vector candidate"
+    );
+    assert_eq!(
+        trace.payload_load_calls, 1,
+        "semantic request should still batch one retained-payload hydration call"
+    );
+    assert_eq!(
+        trace.payload_rows_loaded, 2,
+        "semantic request should now hydrate only the retained semantic chunk payloads"
+    );
+    assert!(
+        trace.payload_text_bytes_loaded < expected_payload_bytes,
+        "semantic request should no longer load full chunk text for the entire semantic candidate pool"
+    );
+    assert!(
+        trace.payload_rows_loaded > output.note.semantic_hit_count,
+        "semantic request may still hydrate more than one chunk per retained semantic document"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_semantic_unavailable_without_corpus_still_expands_lexical_recall()
 -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-semantic-unavailable-lexical-recall");
@@ -820,13 +938,18 @@ fn graph_channel_falls_back_to_exact_stem_candidates_when_lexical_paths_have_no_
             .any(|hit| hit.document.path == "src/Handlers/OrderHandler.php"),
         "graph fallback should recover the handler anchor from exact-stem candidates: {hits:?}"
     );
+    assert!(
+        hits.iter()
+            .any(|hit| hit.document.path == "src/Listeners/OrderListener.php"),
+        "graph fallback should emit listener neighbors from php target-evidence edges: {hits:?}"
+    );
 
     cleanup_workspace(&root);
     Ok(())
 }
 
 #[test]
-fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<()> {
+fn graph_channel_reuses_snapshot_scoped_projected_graph_adjacency() -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-graph-artifact-cache-reuse");
     prepare_workspace(
         &root,
@@ -856,15 +979,15 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             ),
         ],
     )?;
-    seed_manifest_snapshot(
-        &root,
+    let db_path = ensure_provenance_db_parent_dir(&root)?;
+    Storage::new(&db_path).initialize()?;
+    crate::indexer::reindex_repository_with_runtime_config(
         "repo-001",
-        "snapshot-001",
-        &[
-            "src/Handlers/OrderHandler.php",
-            "src/Listeners/OrderListener.php",
-            "docs/handlers.md",
-        ],
+        &root,
+        &db_path,
+        crate::indexer::ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
@@ -876,6 +999,7 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             .len(),
         0
     );
+    assert_eq!(searcher.projected_graph_adjacency_cache_len(), 0);
 
     let first = searcher.search_hybrid(SearchHybridQuery {
         query: "OrderHandler handle listener".to_owned(),
@@ -884,11 +1008,10 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
         semantic: Some(false),
     })?;
     assert!(
-        first
-            .matches
-            .iter()
-            .any(|entry| entry.document.path == "src/Listeners/OrderListener.php"),
-        "initial graph query should surface listener evidence: {:?}",
+        first.matches.iter().any(|entry| {
+            entry.document.path == "src/Handlers/OrderHandler.php" && entry.graph_score > 0.0
+        }),
+        "initial graph query should surface projected graph evidence: {:?}",
         first.matches
     );
     assert_eq!(
@@ -899,6 +1022,7 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             .len(),
         0
     );
+    assert_eq!(searcher.projected_graph_adjacency_cache_len(), 1);
 
     let second = searcher.search_hybrid(SearchHybridQuery {
         query: "OrderHandler handle listener".to_owned(),
@@ -915,13 +1039,14 @@ fn hybrid_graph_queries_reuse_snapshot_scoped_graph_artifacts() -> FriggResult<(
             .len(),
         0
     );
+    assert_eq!(searcher.projected_graph_adjacency_cache_len(), 1);
 
     cleanup_workspace(&root);
     Ok(())
 }
 
 #[test]
-fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<()> {
+fn graph_channel_rebuilds_projected_graph_adjacency_after_snapshot_change() -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-graph-artifact-cache-snapshot-change");
     prepare_workspace(
         &root,
@@ -951,15 +1076,15 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             ),
         ],
     )?;
-    seed_manifest_snapshot(
-        &root,
+    let db_path = ensure_provenance_db_parent_dir(&root)?;
+    Storage::new(&db_path).initialize()?;
+    crate::indexer::reindex_repository_with_runtime_config(
         "repo-001",
-        "snapshot-001",
-        &[
-            "src/Handlers/OrderHandler.php",
-            "src/Listeners/OrderListener.php",
-            "docs/handlers.md",
-        ],
+        &root,
+        &db_path,
+        crate::indexer::ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
     )?;
 
     let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
@@ -970,11 +1095,10 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
         semantic: Some(false),
     })?;
     assert!(
-        first
-            .matches
-            .iter()
-            .any(|entry| entry.document.path == "src/Listeners/OrderListener.php"),
-        "baseline graph query should surface listener evidence: {:?}",
+        first.matches.iter().any(|entry| {
+            entry.document.path == "src/Handlers/OrderHandler.php" && entry.graph_score > 0.0
+        }),
+        "baseline graph query should surface projected graph evidence: {:?}",
         first.matches
     );
     assert_eq!(
@@ -985,6 +1109,7 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             .len(),
         0
     );
+    assert_eq!(searcher.projected_graph_adjacency_cache_len(), 1);
 
     prepare_workspace(
         &root,
@@ -1010,17 +1135,13 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             ),
         ],
     )?;
-    seed_manifest_snapshot(
-        &root,
+    crate::indexer::reindex_repository_with_runtime_config(
         "repo-001",
-        "snapshot-002",
-        &[
-            "src/Handlers/OrderHandler.php",
-            "src/Listeners/OrderListener.php",
-            "src/Handlers/PaymentHandler.php",
-            "src/Listeners/PaymentListener.php",
-            "docs/handlers.md",
-        ],
+        &root,
+        &db_path,
+        crate::indexer::ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
     )?;
 
     let second = searcher.search_hybrid(SearchHybridQuery {
@@ -1029,13 +1150,15 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
         weights: HybridChannelWeights::default(),
         semantic: Some(false),
     })?;
-    let payment_listener = second
+    let payment_graph_hit = second
         .matches
         .iter()
-        .find(|entry| entry.document.path == "src/Listeners/PaymentListener.php")
-        .expect("snapshot change should rebuild graph artifact for the new payment listener");
+        .find(|entry| entry.document.path.contains("Payment") && entry.graph_score > 0.0)
+        .expect(
+            "snapshot change should rebuild projected graph adjacency for the new payment paths",
+        );
     assert!(
-        payment_listener.graph_score > 0.0,
+        payment_graph_hit.graph_score > 0.0,
         "rebuilt graph artifact should contribute graph evidence for new snapshot content: {:?}",
         second.matches
     );
@@ -1047,6 +1170,7 @@ fn hybrid_graph_artifact_cache_rebuilds_after_snapshot_change() -> FriggResult<(
             .len(),
         0
     );
+    assert_eq!(searcher.projected_graph_adjacency_cache_len(), 2);
 
     cleanup_workspace(&root);
     Ok(())
@@ -1101,6 +1225,94 @@ fn hybrid_graph_channel_seeds_from_canonical_runtime_paths_without_exact_symbol_
     assert!(
         handler.graph_score > 0.0,
         "graph channel should activate from canonical runtime path seeds even without exact symbol terms: {:?}",
+        output.matches
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_graph_target_evidence_listener_survives_fusion_and_post_selection() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-graph-target-evidence-listener");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "src/Handlers/OrderHandler.php",
+                "<?php\n\
+                     namespace App\\Handlers;\n\
+                     class OrderHandler {\n\
+                         public function handle(): void {}\n\
+                     }\n",
+            ),
+            (
+                "src/Listeners/OrderListener.php",
+                "<?php\n\
+                     namespace App\\Listeners;\n\
+                     use App\\Handlers\\OrderHandler;\n\
+                     class OrderListener {\n\
+                         public function handlers(): array {\n\
+                             return [[OrderHandler::class, 'handle']];\n\
+                         }\n\
+                     }\n",
+            ),
+            (
+                "docs/handlers.md",
+                "# Handlers\nOrder handler listener overview.\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid(SearchHybridQuery {
+        query: "OrderHandler handle listener".to_owned(),
+        limit: 5,
+        weights: HybridChannelWeights::default(),
+        semantic: Some(false),
+    })?;
+
+    let ranked_anchor = output
+        .ranked_anchors
+        .iter()
+        .find(|entry| entry.document.path == "src/Listeners/OrderListener.php");
+    assert!(
+        ranked_anchor.is_some(),
+        "listener should survive anchor blending before document grouping: {:?}",
+        output.ranked_anchors
+    );
+
+    let grouped_pool = output
+        .coverage_grouped_pool
+        .iter()
+        .find(|entry| entry.document.path == "src/Listeners/OrderListener.php");
+    assert!(
+        grouped_pool.is_some(),
+        "listener should survive document grouping before diversification/post-selection: {:?}",
+        output.coverage_grouped_pool
+    );
+
+    let diversified = super::super::diversify_hybrid_ranked_evidence(
+        output.coverage_grouped_pool.clone(),
+        5,
+        "OrderHandler handle listener",
+    );
+    let diversified_listener = diversified
+        .iter()
+        .find(|entry| entry.document.path == "src/Listeners/OrderListener.php");
+    assert!(
+        diversified_listener.is_some(),
+        "listener should survive diversification before post-selection: {:?}",
+        diversified
+    );
+
+    let listener = output
+        .matches
+        .iter()
+        .find(|entry| entry.document.path == "src/Listeners/OrderListener.php");
+    assert!(
+        listener.is_some(),
+        "listener should survive final diversification and post-selection: {:?}",
         output.matches
     );
 

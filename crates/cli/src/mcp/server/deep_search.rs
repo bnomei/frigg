@@ -153,27 +153,42 @@ impl FriggMcpServer {
             let DeepSearchTraceOutcome::Ok { response_json } = &step.outcome else {
                 continue;
             };
-            let Ok(response) = serde_json::from_str::<Value>(response_json) else {
-                continue;
-            };
-            let Some(metadata) = response.get("metadata").and_then(Value::as_object) else {
-                continue;
-            };
+            let (step_budgets, step_usage) = serde_json::from_str::<Value>(response_json)
+                .ok()
+                .and_then(|response| {
+                    response
+                        .get("metadata")
+                        .and_then(Value::as_object)
+                        .map(|metadata| {
+                            (
+                                metadata
+                                    .get("resource_budgets")
+                                    .cloned()
+                                    .unwrap_or_else(|| Value::Array(Vec::new())),
+                                metadata
+                                    .get("resource_usage")
+                                    .cloned()
+                                    .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
+                            )
+                        })
+                })
+                .unwrap_or_else(|| {
+                    (
+                        Value::Array(Vec::new()),
+                        Value::Object(serde_json::Map::new()),
+                    )
+                });
 
-            if let Some(step_budgets) = metadata.get("resource_budgets").cloned() {
-                resource_budgets.push(json!({
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                    "resource_budgets": step_budgets,
-                }));
-            }
-            if let Some(step_usage) = metadata.get("resource_usage").cloned() {
-                resource_usage.push(json!({
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                    "resource_usage": step_usage,
-                }));
-            }
+            resource_budgets.push(json!({
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "resource_budgets": step_budgets,
+            }));
+            resource_usage.push(json!({
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "resource_usage": step_usage,
+            }));
         }
 
         json!({

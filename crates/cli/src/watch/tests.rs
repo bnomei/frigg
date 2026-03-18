@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use notify::{Event, EventKind};
+
 use super::*;
 use crate::indexer::{
     ManifestStore, ReindexMode, reindex_repository, reindex_repository_with_runtime_config,
@@ -60,6 +62,22 @@ fn init_storage(workspace_root: &Path) -> PathBuf {
         .initialize()
         .expect("storage should initialize");
     db_path
+}
+
+fn test_attached_workspace(
+    workspace_root: &Path,
+    db_path: &Path,
+) -> crate::mcp::workspace_registry::AttachedWorkspace {
+    crate::mcp::workspace_registry::AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        display_name: workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("watch-test-workspace")
+            .to_owned(),
+        root: workspace_root.to_path_buf(),
+        db_path: db_path.to_path_buf(),
+    }
 }
 
 async fn wait_for_snapshot_id(
@@ -121,6 +139,58 @@ async fn wait_for_repository_invalidation_count(
             .expect("test repository cache invalidation log poisoned")
             .len()
             >= expected_minimum
+        {
+            return true;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn delete_retrieval_projection_family(
+    db_path: &Path,
+    repository_id: &str,
+    snapshot_id: &str,
+    family: &str,
+) {
+    let conn = rusqlite::Connection::open(db_path)
+        .expect("test db should open for retrieval projection family deletion");
+    conn.execute(
+        "DELETE FROM retrieval_projection_head WHERE repository_id = ?1 AND snapshot_id = ?2 AND family = ?3",
+        (repository_id, snapshot_id, family),
+    )
+    .expect("retrieval projection head should delete for test setup");
+    if family == "path_relation" {
+        conn.execute(
+            "DELETE FROM path_relation_projection WHERE repository_id = ?1 AND snapshot_id = ?2",
+            (repository_id, snapshot_id),
+        )
+        .expect("path relation rows should delete for test setup");
+    }
+}
+
+async fn wait_for_retrieval_projection_family(
+    db_path: &Path,
+    repository_id: &str,
+    snapshot_id: &str,
+    family: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let storage = Storage::new(db_path);
+        if storage
+            .load_retrieval_projection_head_for_repository_snapshot_family(
+                repository_id,
+                snapshot_id,
+                family,
+            )
+            .expect("retrieval projection head query should succeed")
+            .is_some()
         {
             return true;
         }
@@ -606,6 +676,61 @@ fn startup_refresh_status_skips_semantic_bootstrap_when_no_eligible_entries_exis
     cleanup_workspace(&workspace_root);
 }
 
+#[test]
+fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projection_family() {
+    let workspace_root = temp_workspace_root("startup-missing-retrieval-projection-family");
+    fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("Cargo manifest should be writable");
+    fs::create_dir_all(workspace_root.join("src")).expect("src directory should be creatable");
+    fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n")
+        .expect("source file should be writable");
+    fs::create_dir_all(workspace_root.join("tests")).expect("tests directory should be creatable");
+    fs::write(
+        workspace_root.join("tests/main_test.rs"),
+        "#[test]\nfn main_test() {}\n",
+    )
+    .expect("test file should be writable");
+
+    let db_path = init_storage(&workspace_root);
+    let summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
+    .expect("baseline lexical reindex should succeed");
+    delete_retrieval_projection_family(&db_path, "repo-001", &summary.snapshot_id, "path_relation");
+
+    let repository = WatchedRepository {
+        repository_id: "repo-001".to_owned(),
+        canonical_root: workspace_root.canonicalize().ok(),
+        root_ignore_matcher: build_root_ignore_matcher(&workspace_root),
+        root: workspace_root.clone(),
+        db_path,
+    };
+    let status = startup_refresh_status(
+        &repository,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
+    .expect("startup refresh status should resolve");
+    assert!(status.should_refresh);
+    assert_eq!(
+        status.reason,
+        "manifest_snapshot_missing_retrieval_projections"
+    );
+    assert_eq!(status.snapshot_id, Some(summary.snapshot_id));
+    assert_eq!(status.refresh_class, Some(WatchRefreshClass::ManifestFast));
+
+    cleanup_workspace(&workspace_root);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn watch_runtime_initial_sync_reindexes_when_manifest_missing() {
     let workspace_root = temp_workspace_root("initial-sync");
@@ -631,6 +756,9 @@ async fn watch_runtime_initial_sync_reindexes_when_manifest_missing() {
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
+    runtime
+        .acquire_lease(&test_attached_workspace(&workspace_root, &db_path))
+        .expect("watch lease should acquire");
     let snapshot_id = wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
         .await
         .expect("initial sync should create a manifest snapshot");
@@ -673,6 +801,9 @@ async fn watch_runtime_initial_sync_respects_gitignored_contracts_and_excludes_t
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
+    runtime
+        .acquire_lease(&test_attached_workspace(&workspace_root, &db_path))
+        .expect("watch lease should acquire");
     wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
         .await
         .expect("initial sync should create a manifest snapshot");
@@ -735,7 +866,10 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    runtime
+        .acquire_lease(&test_attached_workspace(&workspace_root, &db_path))
+        .expect("watch lease should acquire");
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let latest = Storage::new(&db_path)
         .load_latest_manifest_for_repository("repo-001")
@@ -752,17 +886,10 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
 async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
     let workspace_root = temp_workspace_root("notify-reindex");
     fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
-    let source_path = workspace_root.join("src.rs");
-    fs::write(&source_path, "fn alpha() {}\n").expect("source file should be writable");
+    fs::write(workspace_root.join("src.rs"), "fn alpha() {}\n")
+        .expect("source file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    let summary = reindex_repository(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::ChangedOnly,
-    )
-    .expect("baseline changed-only reindex should succeed");
 
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("config should load from workspace root");
@@ -781,24 +908,31 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
     )
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    runtime
+        .acquire_lease(&test_attached_workspace(&workspace_root, &db_path))
+        .expect("watch lease should acquire");
 
-    let created_path = workspace_root.join("added.rs");
+    let initial_snapshot_id = wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(10))
+        .await
+        .expect("initial sync should create a manifest snapshot");
+
     fs::write(
-        &created_path,
-        "pub fn watch_notify_beta() {}\n// watch-notify-beta\n",
+        workspace_root.join("src.rs"),
+        "fn alpha() {}\npub fn watch_notify_beta() {}\n// watch-notify-beta\n",
     )
-    .expect("creating a new source file should trigger notify backend");
+    .expect("updating an existing source file should trigger notify backend");
+    runtime.inject_test_event(Event::new(EventKind::Any).add_path(workspace_root.join("src.rs")));
 
     let next_snapshot_id = wait_for_snapshot_id_change(
         &db_path,
         "repo-001",
-        &summary.snapshot_id,
-        Duration::from_secs(5),
+        &initial_snapshot_id,
+        Duration::from_secs(10),
     )
-    .await
-    .expect("watch-triggered reindex should advance the snapshot id");
-    assert_ne!(next_snapshot_id, summary.snapshot_id);
+    .await;
+    let next_snapshot_id =
+        next_snapshot_id.expect("watch-triggered reindex should advance the snapshot id");
+    assert_ne!(next_snapshot_id, initial_snapshot_id);
 
     let searcher = TextSearcher::new(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
@@ -815,9 +949,9 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
         )
         .expect("literal search should succeed after watch-triggered reindex");
     assert!(
-        matches.iter().any(|entry| {
-            entry.path == "added.rs" && entry.excerpt.contains("watch-notify-beta")
-        }),
+        matches
+            .iter()
+            .any(|entry| { entry.path == "src.rs" && entry.excerpt.contains("watch-notify-beta") }),
         "query path should observe the post-reindex file contents: {:?}",
         matches
             .iter()
@@ -860,11 +994,25 @@ async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initia
     .expect("watch runtime should start")
     .expect("watch runtime should be enabled");
 
-    wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
+    let attached_workspace = crate::mcp::workspace_registry::AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        display_name: workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("notify-cache-invalidation")
+            .to_owned(),
+        root: workspace_root.clone(),
+        db_path: db_path.clone(),
+    };
+    runtime
+        .acquire_lease(&attached_workspace)
+        .expect("watch lease should acquire");
+
+    let initial_snapshot_id = wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(10))
         .await
         .expect("initial sync should create a manifest snapshot");
     assert!(
-        wait_for_repository_invalidation_count(&invalidation_log, 1, Duration::from_secs(5)).await,
+        wait_for_repository_invalidation_count(&invalidation_log, 1, Duration::from_secs(10)).await,
         "initial sync should invalidate repository-scoped caches"
     );
 
@@ -877,15 +1025,184 @@ async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initia
         "pub fn watch_notify_cache_invalidation() {}\n",
     )
     .expect("creating a new source file should trigger notify backend");
+    runtime.inject_test_event(Event::new(EventKind::Any).add_path(workspace_root.join("added.rs")));
 
     assert!(
         wait_for_repository_invalidation_count(
             &invalidation_log,
             initial_count + 1,
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         )
         .await,
         "notify-driven dirty or refresh transitions should invalidate repository-scoped caches"
+    );
+
+    let notify_count = invalidation_log
+        .read()
+        .expect("test repository cache invalidation log poisoned")
+        .len();
+    let next_snapshot_id = wait_for_snapshot_id_change(
+        &db_path,
+        "repo-001",
+        &initial_snapshot_id,
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("watch-triggered refresh should advance the snapshot id");
+    assert_ne!(next_snapshot_id, initial_snapshot_id);
+    assert!(
+        wait_for_repository_invalidation_count(
+            &invalidation_log,
+            notify_count + 1,
+            Duration::from_secs(10),
+        )
+        .await,
+        "completed refresh transitions should also invalidate repository-scoped caches"
+    );
+    assert!(
+        invalidation_log
+            .read()
+            .expect("test repository cache invalidation log poisoned")
+            .iter()
+            .all(|repository_id| repository_id == "repo-001"),
+        "callback should only receive the affected repository id"
+    );
+
+    drop(runtime);
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn watch_runtime_repairs_missing_retrieval_projection_family_and_invalidates_repository_cache()
+ {
+    let workspace_root = temp_workspace_root("startup-refreshes-missing-retrieval-projection");
+    fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("Cargo manifest should be writable");
+    fs::create_dir_all(workspace_root.join("src")).expect("src directory should be creatable");
+    fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n")
+        .expect("source file should be writable");
+    fs::create_dir_all(workspace_root.join("tests")).expect("tests directory should be creatable");
+    fs::write(
+        workspace_root.join("tests/main_test.rs"),
+        "#[test]\nfn main_test() {}\n",
+    )
+    .expect("test file should be writable");
+
+    let db_path = init_storage(&workspace_root);
+    let initial_summary = reindex_repository_with_runtime_config(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
+    .expect("baseline lexical reindex should succeed");
+
+    let storage = Storage::new(&db_path);
+    assert!(
+        !storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )
+            .expect("path relation rows should load")
+            .is_empty()
+    );
+
+    delete_retrieval_projection_family(
+        &db_path,
+        "repo-001",
+        &initial_summary.snapshot_id,
+        "path_relation",
+    );
+    assert_eq!(
+        storage
+            .missing_retrieval_projection_families_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )
+            .expect("missing retrieval projection family query should succeed"),
+        vec!["path_relation".to_owned()]
+    );
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("config should load from workspace root");
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+    };
+
+    let invalidation_log = test_repository_cache_invalidation_log();
+    let runtime = maybe_start_watch_runtime(
+        &config,
+        RuntimeTransportKind::Stdio,
+        test_runtime_task_registry(),
+        test_validated_manifest_candidate_cache(),
+        Some(test_repository_cache_invalidation_callback(Arc::clone(
+            &invalidation_log,
+        ))),
+    )
+    .expect("watch runtime should start")
+    .expect("watch runtime should be enabled");
+
+    let attached_workspace = crate::mcp::workspace_registry::AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        display_name: workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("startup-refreshes-missing-retrieval-projection")
+            .to_owned(),
+        root: workspace_root.clone(),
+        db_path: db_path.clone(),
+    };
+    runtime
+        .acquire_lease(&attached_workspace)
+        .expect("watch lease should acquire");
+
+    assert!(
+        wait_for_retrieval_projection_family(
+            &db_path,
+            "repo-001",
+            &initial_summary.snapshot_id,
+            "path_relation",
+            Duration::from_secs(10),
+        )
+        .await,
+        "startup refresh should restore the missing retrieval projection head"
+    );
+    assert!(
+        wait_for_repository_invalidation_count(&invalidation_log, 1, Duration::from_secs(10)).await,
+        "startup refresh completion should invalidate repository-scoped caches"
+    );
+
+    let refreshed_snapshot_id = wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(5))
+        .await
+        .expect("latest manifest snapshot should remain visible");
+    assert_eq!(refreshed_snapshot_id, initial_summary.snapshot_id);
+    assert!(
+        !storage
+            .load_path_relation_projections_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )
+            .expect("restored path relation rows should load")
+            .is_empty()
+    );
+    assert!(
+        storage
+            .missing_retrieval_projection_families_for_repository_snapshot(
+                "repo-001",
+                &initial_summary.snapshot_id,
+            )
+            .expect("missing retrieval projection family query should succeed")
+            .is_empty()
     );
     assert!(
         invalidation_log

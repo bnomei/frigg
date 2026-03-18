@@ -1,3 +1,5 @@
+use crate::languages::resolve_php_target_evidence_edges;
+
 use super::support::*;
 
 #[test]
@@ -702,6 +704,124 @@ fn php_source_evidence_extracts_canonical_names_types_targets_and_literals() -> 
             .iter()
             .any(|entry| { entry.named_arguments == vec!["handler".to_owned()] }),
         "expected named-argument evidence"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn php_source_evidence_extracts_callable_literal_targets_from_nested_listener_arrays()
+-> FriggResult<()> {
+    let path = Path::new("src/OrderListener.php");
+    let source = "<?php\n\
+         namespace App\\Listeners;\n\
+         use App\\Handlers\\OrderHandler;\n\
+         class OrderListener {\n\
+             public function handlers(): array {\n\
+                 return [[OrderHandler::class, 'handle']];\n\
+             }\n\
+         }\n";
+    let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+    let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+    assert!(
+        evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::CallableLiteral
+                && entry.target_canonical_name == "App\\Handlers\\OrderHandler"
+                && entry.target_member_name.as_deref() == Some("handle")
+        }),
+        "expected callable-literal target evidence for nested listener arrays"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn php_source_evidence_resolves_nested_callable_literal_edges() -> FriggResult<()> {
+    let handler_path = Path::new("src/Handlers/OrderHandler.php");
+    let handler_source = "<?php\n\
+         namespace App\\Handlers;\n\
+         class OrderHandler {\n\
+             public function handle(): void {}\n\
+         }\n";
+    let listener_path = Path::new("src/Listeners/OrderListener.php");
+    let listener_source = "<?php\n\
+         namespace App\\Listeners;\n\
+         use App\\Handlers\\OrderHandler;\n\
+         class OrderListener {\n\
+             public function handlers(): array {\n\
+                 return [[OrderHandler::class, 'handle']];\n\
+             }\n\
+         }\n";
+
+    let mut symbols =
+        extract_symbols_from_source(SymbolLanguage::Php, handler_path, handler_source)?;
+    symbols.extend(extract_symbols_from_source(
+        SymbolLanguage::Php,
+        listener_path,
+        listener_source,
+    )?);
+    let handler_evidence =
+        extract_php_source_evidence_from_source(handler_path, handler_source, &symbols)?;
+    let listener_evidence =
+        extract_php_source_evidence_from_source(listener_path, listener_source, &symbols)?;
+
+    let symbol_index_by_stable_id = symbols
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| (symbol.stable_id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut canonical_names_by_stable_id = handler_evidence.canonical_names_by_stable_id.clone();
+    canonical_names_by_stable_id.extend(listener_evidence.canonical_names_by_stable_id.clone());
+    let mut symbol_indices_by_canonical_name = BTreeMap::<String, Vec<usize>>::new();
+    let mut symbol_indices_by_lower_canonical_name = BTreeMap::<String, Vec<usize>>::new();
+    for (stable_id, canonical_name) in &canonical_names_by_stable_id {
+        let Some(symbol_index) = symbol_index_by_stable_id.get(stable_id).copied() else {
+            continue;
+        };
+        symbol_indices_by_canonical_name
+            .entry(canonical_name.clone())
+            .or_default()
+            .push(symbol_index);
+        symbol_indices_by_lower_canonical_name
+            .entry(canonical_name.to_ascii_lowercase())
+            .or_default()
+            .push(symbol_index);
+    }
+
+    let edges = resolve_php_target_evidence_edges(
+        &symbols,
+        &symbol_index_by_stable_id,
+        &symbol_indices_by_canonical_name,
+        &symbol_indices_by_lower_canonical_name,
+        &listener_evidence,
+    );
+    let handler_method = symbols
+        .iter()
+        .find(|symbol| {
+            symbol.kind == SymbolKind::Method
+                && symbol.name == "handle"
+                && symbol.path == handler_path
+        })
+        .expect("expected handler method symbol");
+    let listener_method = symbols
+        .iter()
+        .find(|symbol| {
+            symbol.kind == SymbolKind::Method
+                && symbol.name == "handlers"
+                && symbol.path == listener_path
+        })
+        .expect("expected listener method symbol");
+
+    assert!(
+        edges
+            .iter()
+            .any(|(source_symbol_index, target_symbol_index, relation)| {
+                *relation == RelationKind::RefersTo
+                    && symbols[*source_symbol_index].stable_id == listener_method.stable_id
+                    && symbols[*target_symbol_index].stable_id == handler_method.stable_id
+            }),
+        "expected nested callable-literal evidence to resolve listener->handler method edge"
     );
 
     Ok(())

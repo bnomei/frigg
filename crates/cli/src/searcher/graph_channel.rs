@@ -145,10 +145,19 @@ pub(super) fn search_graph_channel_hits(
         if anchors.is_empty() {
             continue;
         }
+        let emittable_paths = expand_artifact_graph_emittable_paths(
+            repository.root.as_path(),
+            artifact.graph.as_ref(),
+            &anchors,
+            &artifact.candidate_files,
+            &artifact.symbols,
+            &artifact.symbol_index,
+            &allowed_paths,
+        );
         let selected_candidate_files = artifact
             .candidate_files
             .iter()
-            .filter(|(relative_path, _)| allowed_paths.contains(relative_path))
+            .filter(|(relative_path, _)| emittable_paths.contains(relative_path))
             .cloned()
             .collect::<Vec<_>>();
         if selected_candidate_files.is_empty() {
@@ -164,11 +173,82 @@ pub(super) fn search_graph_channel_hits(
             &artifact.symbols,
             &artifact.symbol_index,
             graph_candidate_limit,
-            Some(&allowed_paths),
+            Some(&emittable_paths),
         ));
     }
 
     Ok(graph_hits)
+}
+
+fn expand_artifact_graph_emittable_paths(
+    root: &Path,
+    graph: &SymbolGraph,
+    anchors: &[HybridGraphAnchor],
+    candidate_files: &[(String, PathBuf)],
+    symbols: &[SymbolDefinition],
+    symbol_index: &HybridGraphSymbolIndex,
+    seed_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut expanded = seed_paths.clone();
+    let candidate_paths = candidate_files
+        .iter()
+        .map(|(relative_path, _)| relative_path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
+        let mut adjacency = graph
+            .incoming_adjacency(&anchor.symbol_id)
+            .into_iter()
+            .map(|adjacent| (0_u8, adjacent))
+            .chain(
+                graph
+                    .outgoing_adjacency(&anchor.symbol_id)
+                    .into_iter()
+                    .map(|adjacent| (1_u8, adjacent)),
+            )
+            .collect::<Vec<_>>();
+        adjacency.sort_by(|(left_direction, left), (right_direction, right)| {
+            hybrid_graph_neighbor_order((*left_direction, left), (*right_direction, right))
+        });
+        adjacency.truncate(HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR);
+        for (_, adjacent) in adjacency {
+            let relative_path =
+                normalize_repository_relative_path(root, Path::new(&adjacent.symbol.path));
+            if candidate_paths.contains(relative_path.as_str()) {
+                expanded.insert(relative_path);
+            }
+        }
+
+        if anchor.kind != HybridGraphAnchorKind::SymbolNameExact {
+            continue;
+        }
+        let Some(target_symbol_index) = symbol_index
+            .symbol_index_by_stable_id
+            .get(&anchor.symbol_id)
+            .copied()
+        else {
+            continue;
+        };
+        let target_symbol = &symbols[target_symbol_index];
+        for (source_symbol_index, _) in php_heuristic_implementation_candidates_for_target(
+            target_symbol,
+            candidate_files,
+            symbols,
+            &symbol_index.symbols_by_relative_path,
+            None,
+            None,
+        ) {
+            let Some(symbol) = symbols.get(source_symbol_index) else {
+                continue;
+            };
+            let relative_path = normalize_repository_relative_path(root, &symbol.path);
+            if candidate_paths.contains(relative_path.as_str()) {
+                expanded.insert(relative_path);
+            }
+        }
+    }
+
+    expanded
 }
 
 fn search_projected_graph_channel_hits(
@@ -191,8 +271,11 @@ fn search_projected_graph_channel_hits(
     if anchors.is_empty() {
         return Some(Vec::new());
     }
+    let emittable_paths =
+        expand_projected_graph_emittable_paths(repository, &projected, allowed_paths, &anchors);
 
     let mut hits = Vec::new();
+    let mut emitted_neighbor = false;
     for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
         hits.push(HybridChannelHit {
             channel: EvidenceChannel::GraphPrecise,
@@ -212,30 +295,16 @@ fn search_projected_graph_channel_hits(
             )],
         });
 
-        let mut adjacency = projected
-            .relations
-            .iter()
-            .filter_map(|relation| {
-                if relation.src_path == anchor.path {
-                    Some((0_u8, &relation.dst_path, relation))
-                } else if relation.dst_path == anchor.path {
-                    Some((1_u8, &relation.src_path, relation))
-                } else {
-                    None
-                }
-            })
-            .filter(|(_, path, _)| allowed_paths.contains(*path))
-            .collect::<Vec<_>>();
-        adjacency.sort_by(|left, right| {
-            projected_graph_relation_order(left.2)
-                .cmp(&projected_graph_relation_order(right.2))
-                .reverse()
-                .then(left.0.cmp(&right.0))
-                .then(left.1.cmp(right.1))
-        });
-        adjacency.truncate(HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR);
-
-        for (direction_rank, target_path, relation) in adjacency {
+        let Some(adjacency) = projected.adjacency_by_path.get(&anchor.path) else {
+            continue;
+        };
+        let mut emitted_neighbors = 0usize;
+        for adjacent in adjacency {
+            if !emittable_paths.contains(&adjacent.target_path) {
+                continue;
+            }
+            let relation = &projected.relations[adjacent.relation_index];
+            let target_path = &adjacent.target_path;
             let (line, excerpt) = projected_anchor_excerpt_for_path(&projected, target_path);
             hits.push(HybridChannelHit {
                 channel: EvidenceChannel::GraphPrecise,
@@ -249,14 +318,27 @@ fn search_projected_graph_channel_hits(
                     .with_detail(excerpt.clone()),
                 raw_score: hybrid_graph_anchor_kind_score(anchor.kind)
                     * projected_graph_relation_score(relation)
-                    * if direction_rank == 0 { 1.0 } else { 0.95 },
+                    * if adjacent.direction_rank == 0 {
+                        1.0
+                    } else {
+                        0.95
+                    },
                 excerpt,
                 provenance_ids: vec![format!(
                     "graph_projection:{}:{}:{}:{}",
                     anchor.term, relation.relation_kind, target_path, line
                 )],
             });
+            emitted_neighbor = true;
+            emitted_neighbors = emitted_neighbors.saturating_add(1);
+            if emitted_neighbors >= HYBRID_GRAPH_MAX_NEIGHBORS_PER_ANCHOR {
+                break;
+            }
         }
+    }
+
+    if !emitted_neighbor {
+        return None;
     }
 
     hits.sort_by(|left, right| {
@@ -269,6 +351,33 @@ fn search_projected_graph_channel_hits(
     });
     hits.truncate(limit);
     Some(hits)
+}
+
+fn expand_projected_graph_emittable_paths(
+    repository: &super::RepositoryCandidateUniverse,
+    projected: &ProjectedGraphContext,
+    seed_paths: &BTreeSet<String>,
+    anchors: &[ProjectedGraphAnchor],
+) -> BTreeSet<String> {
+    let mut expanded = seed_paths.clone();
+    let candidate_paths = repository
+        .candidates
+        .iter()
+        .map(|candidate| candidate.relative_path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
+        let Some(adjacency) = projected.adjacency_by_path.get(&anchor.path) else {
+            continue;
+        };
+        for adjacent in adjacency {
+            if candidate_paths.contains(adjacent.target_path.as_str()) {
+                expanded.insert(adjacent.target_path.clone());
+            }
+        }
+    }
+
+    expanded
 }
 
 fn select_projected_graph_anchors(
@@ -398,14 +507,6 @@ fn projected_graph_relation_score(relation: &PathRelationProjection) -> f32 {
             "entrypoint_package" | "entrypoint_workspace" | "companion_surface" => 0.84,
             _ => 0.8,
         }
-}
-
-fn projected_graph_relation_order(relation: &PathRelationProjection) -> (usize, &str, &str) {
-    (
-        relation.score_hint,
-        relation.relation_kind.as_str(),
-        relation.evidence_source.as_str(),
-    )
 }
 
 fn language_supports_relation_evidence(language: SymbolLanguage) -> bool {
@@ -583,6 +684,8 @@ fn build_hybrid_graph_channel_hits(
     allowed_paths: Option<&BTreeSet<String>>,
 ) -> Vec<HybridChannelHit> {
     let mut hits = Vec::new();
+    let emittable_paths =
+        allowed_paths.map(|paths| expand_graph_emittable_paths(root, graph, anchors, paths));
 
     for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
         let anchor_relative_path =
@@ -630,7 +733,10 @@ fn build_hybrid_graph_channel_hits(
         for (direction_rank, adjacent) in adjacency {
             let adjacent_path = Path::new(&adjacent.symbol.path);
             let relative_path = normalize_repository_relative_path(root, adjacent_path);
-            if allowed_paths.is_some_and(|paths| !paths.contains(&relative_path)) {
+            if emittable_paths
+                .as_ref()
+                .is_some_and(|paths| !paths.contains(&relative_path))
+            {
                 continue;
             }
             let raw_score = hybrid_graph_anchor_kind_score(anchor.kind)
@@ -685,6 +791,29 @@ fn build_hybrid_graph_channel_hits(
     });
     hits.truncate(limit);
     hits
+}
+
+fn expand_graph_emittable_paths(
+    root: &Path,
+    graph: &SymbolGraph,
+    anchors: &[HybridGraphAnchor],
+    seed_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut expanded = seed_paths.clone();
+
+    for anchor in anchors.iter().take(HYBRID_GRAPH_MAX_ANCHORS) {
+        for adjacent in graph
+            .incoming_adjacency(&anchor.symbol_id)
+            .into_iter()
+            .chain(graph.outgoing_adjacency(&anchor.symbol_id).into_iter())
+        {
+            let relative_path =
+                normalize_repository_relative_path(root, Path::new(&adjacent.symbol.path));
+            expanded.insert(relative_path);
+        }
+    }
+
+    expanded
 }
 
 fn build_hybrid_graph_heuristic_implementation_hits(

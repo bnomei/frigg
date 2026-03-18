@@ -221,6 +221,9 @@ fn apply_runtime_config_artifact_terms(
 ) -> bool {
     if !(context.is_runtime_config_shorthand()
         || (context.has_any(&["config", "configuration"])
+            && (context.has_any_token(&["package"])
+                || context.has_any(&["workspace", "workspaces", "build", "builds"])))
+        || (context.has_any(&["config", "configuration"])
             && context.has_any(&[
                 "workflow",
                 "workflows",
@@ -447,7 +450,7 @@ fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchInten
         ]) || (context.has_any_token(&["function", "functions"])
             && context.has_any(&["edge", "self hosted", "self-hosted", "api", "runtime"])));
     let ui_runtime_signal = context.has_ui_runtime_surface_terms()
-        && context.has_any(&[
+        && (context.has_any(&[
             "android",
             "compose",
             "playwright",
@@ -456,7 +459,7 @@ fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchInten
             "tsx",
             "viewmodel",
             "vue",
-        ]);
+        ]) || context.has_any_token(&["runtime"]));
     if !(explicit_runtime_signal
         || generic_runtime_signal
         || ui_runtime_signal

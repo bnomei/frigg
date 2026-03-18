@@ -1,14 +1,14 @@
 use crate::domain::model::TextMatch;
 use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceHit};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use super::{
-    HybridChannelHit, HybridDocumentRef, HybridRankingIntent, SearchExecutionOutput,
-    StoredPathWitnessProjection, hybrid_excerpt_has_build_flow_anchor,
-    hybrid_excerpt_has_exact_identifier_anchor, hybrid_excerpt_has_test_double_anchor,
+    HybridChannelHit, HybridDocumentRef, HybridRankingIntent, RepositoryCandidateUniverse,
+    SearchCandidateUniverse, SearchExecutionOutput, StoredPathWitnessProjection,
+    hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_test_double_anchor,
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_tokens,
     hybrid_query_overlap_terms,
     policy::{
@@ -33,15 +33,48 @@ pub(super) fn build_hybrid_lexical_hits_for_query(
     build_hybrid_lexical_hits_with_intent(matches, &intent, query_text)
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct HybridLexicalQueryFeatures {
+    exact_terms: Vec<String>,
+    overlap_terms: Vec<String>,
+}
+
+impl HybridLexicalQueryFeatures {
+    pub(super) fn from_query_text(query_text: &str) -> Self {
+        Self {
+            exact_terms: super::hybrid_query_exact_terms(query_text),
+            overlap_terms: hybrid_query_overlap_terms(query_text),
+        }
+    }
+
+    pub(super) fn exact_terms(&self) -> &[String] {
+        &self.exact_terms
+    }
+
+    pub(super) fn overlap_terms(&self) -> &[String] {
+        &self.overlap_terms
+    }
+}
+
+#[cfg(test)]
 pub(super) fn build_hybrid_lexical_hits_with_intent(
     matches: &[TextMatch],
     intent: &HybridRankingIntent,
     query_text: &str,
 ) -> Vec<HybridChannelHit> {
+    let query_features = HybridLexicalQueryFeatures::from_query_text(query_text);
+    build_hybrid_lexical_hits_with_features(matches, intent, &query_features)
+}
+
+pub(super) fn build_hybrid_lexical_hits_with_features(
+    matches: &[TextMatch],
+    intent: &HybridRankingIntent,
+    query_features: &HybridLexicalQueryFeatures,
+) -> Vec<HybridChannelHit> {
     build_hybrid_hits_from_matches_with_intent(
         matches,
         intent,
-        query_text,
+        query_features,
         EvidenceChannel::LexicalManifest,
         EvidenceAnchorKind::TextSpan,
     )
@@ -52,10 +85,11 @@ pub(super) fn build_hybrid_path_witness_hits_with_intent(
     intent: &HybridRankingIntent,
     query_text: &str,
 ) -> Vec<HybridChannelHit> {
+    let query_features = HybridLexicalQueryFeatures::from_query_text(query_text);
     let mut hits = build_hybrid_hits_from_matches_with_intent(
         matches,
         intent,
-        query_text,
+        &query_features,
         EvidenceChannel::PathSurfaceWitness,
         EvidenceAnchorKind::PathWitness,
     );
@@ -80,7 +114,7 @@ pub(super) fn build_hybrid_path_witness_hits_with_intent(
 fn build_hybrid_hits_from_matches_with_intent(
     matches: &[TextMatch],
     intent: &HybridRankingIntent,
-    query_text: &str,
+    query_features: &HybridLexicalQueryFeatures,
     channel: EvidenceChannel,
     anchor_kind: EvidenceAnchorKind,
 ) -> Vec<EvidenceHit> {
@@ -97,7 +131,7 @@ fn build_hybrid_hits_from_matches_with_intent(
             let frequency = *frequency_by_document.get(&key).unwrap_or(&1.0);
             let computed_raw_score = frequency.sqrt()
                 * hybrid_path_quality_multiplier_with_intent(&found.path, intent)
-                * hybrid_excerpt_alignment_multiplier(&found.excerpt, intent, query_text);
+                * hybrid_excerpt_alignment_multiplier(&found.excerpt, intent, query_features);
             let raw_score = if matches!(channel, EvidenceChannel::PathSurfaceWitness) {
                 found
                     .witness_score_hint_millis
@@ -140,9 +174,9 @@ fn build_hybrid_hits_from_matches_with_intent(
 fn hybrid_excerpt_alignment_multiplier(
     excerpt: &str,
     intent: &HybridRankingIntent,
-    query_text: &str,
+    query_features: &HybridLexicalQueryFeatures,
 ) -> f32 {
-    let query_terms = hybrid_query_overlap_terms(query_text);
+    let query_terms = query_features.overlap_terms();
     if query_terms.is_empty() {
         return 1.0;
     }
@@ -155,7 +189,8 @@ fn hybrid_excerpt_alignment_multiplier(
         2 => 1.14,
         _ => 1.24,
     };
-    if hybrid_excerpt_has_exact_identifier_anchor(excerpt, query_text) {
+    if hybrid_excerpt_has_exact_identifier_anchor_with_terms(excerpt, query_features.exact_terms())
+    {
         multiplier *= 1.18;
     }
 
@@ -169,6 +204,17 @@ fn hybrid_excerpt_alignment_multiplier(
     }
 
     multiplier
+}
+
+fn hybrid_excerpt_has_exact_identifier_anchor_with_terms(
+    excerpt: &str,
+    exact_terms: &[String],
+) -> bool {
+    let normalized = excerpt.trim().to_ascii_lowercase();
+    exact_terms
+        .iter()
+        .filter(|term| term.contains('_') || term.len() >= 16)
+        .any(|term| normalized.contains(term))
 }
 
 pub(super) fn hybrid_path_quality_multiplier_with_intent(
@@ -295,7 +341,7 @@ pub(super) fn merge_hybrid_lexical_search_output(
 ) {
     let mut merged_by_key: BTreeMap<(String, String, usize, usize, String), TextMatch> =
         BTreeMap::new();
-    for found in &base.matches {
+    for found in std::mem::take(&mut base.matches) {
         merged_by_key.insert(
             (
                 found.repository_id.clone(),
@@ -304,7 +350,7 @@ pub(super) fn merge_hybrid_lexical_search_output(
                 found.column,
                 found.excerpt.clone(),
             ),
-            found.clone(),
+            found,
         );
     }
     for found in supplement.matches {
@@ -328,6 +374,54 @@ pub(super) fn merge_hybrid_lexical_search_output(
         .extend(supplement.diagnostics.entries);
     sort_search_diagnostics_deterministically(&mut base.diagnostics.entries);
     base.diagnostics.entries.dedup();
+}
+
+pub(super) fn candidate_universe_delta(
+    full: &SearchCandidateUniverse,
+    already_scanned: &SearchCandidateUniverse,
+) -> Option<SearchCandidateUniverse> {
+    let mut repositories = Vec::with_capacity(full.repositories.len());
+    for repository in &full.repositories {
+        let Some(scanned_repository) = already_scanned
+            .repositories
+            .iter()
+            .find(|candidate| candidate.repository_id == repository.repository_id)
+        else {
+            repositories.push(repository.clone());
+            continue;
+        };
+
+        let scanned_paths = scanned_repository
+            .candidates
+            .iter()
+            .map(|candidate| candidate.relative_path.as_str())
+            .collect::<BTreeSet<_>>();
+        let candidates = repository
+            .candidates
+            .iter()
+            .filter(|candidate| !scanned_paths.contains(candidate.relative_path.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+
+        repositories.push(RepositoryCandidateUniverse {
+            repository_id: repository.repository_id.clone(),
+            root: repository.root.clone(),
+            snapshot_id: repository.snapshot_id.clone(),
+            candidates,
+        });
+    }
+
+    if repositories.is_empty() {
+        return None;
+    }
+
+    Some(SearchCandidateUniverse {
+        repositories,
+        diagnostics: full.diagnostics.clone(),
+    })
 }
 
 pub(super) fn semantic_excerpt(content_text: &str, fallback_path: &str) -> String {
@@ -403,5 +497,26 @@ mod tests {
         assert!(hits[0].provenance_ids.iter().any(|id| {
             id == "overlay:test_subject:tests/unit/user_service_test.rs->src/user_service.rs"
         }));
+    }
+
+    #[test]
+    fn hybrid_lexical_query_features_share_exact_and_overlap_terms() {
+        let features = HybridLexicalQueryFeatures::from_query_text("runtime_helper runtime");
+
+        assert_eq!(
+            features.exact_terms(),
+            &["runtime_helper".to_owned(), "runtime".to_owned(),]
+        );
+        assert!(
+            features.overlap_terms().iter().any(|term| term == "helper"),
+            "overlap terms should retain identifier splits for reuse"
+        );
+        assert!(
+            features
+                .overlap_terms()
+                .iter()
+                .any(|term| term == "runtime_helper"),
+            "overlap terms should retain the original query token"
+        );
     }
 }

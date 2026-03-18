@@ -198,6 +198,7 @@ pub struct ReindexPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReindexExecutionPhase {
     PersistManifestSnapshot,
+    RefreshRetrievalProjections,
     SemanticRefresh,
     RollbackManifestSnapshot,
     PruneManifestSnapshots,
@@ -207,6 +208,7 @@ impl ReindexExecutionPhase {
     fn as_str(self) -> &'static str {
         match self {
             Self::PersistManifestSnapshot => "persist_manifest_snapshot",
+            Self::RefreshRetrievalProjections => "refresh_retrieval_projections",
             Self::SemanticRefresh => "semantic_refresh",
             Self::RollbackManifestSnapshot => "rollback_manifest_snapshot",
             Self::PruneManifestSnapshots => "prune_manifest_snapshots",
@@ -458,9 +460,28 @@ fn execute_retrieval_projection_phase(
     plan: &ReindexPlan,
     storage: &Storage,
 ) -> FriggResult<()> {
-    let ManifestSnapshotPlan::PersistNew { snapshot_id, .. } = &plan.snapshot_plan else {
-        return Ok(());
+    let snapshot_id = plan.snapshot_plan.snapshot_id();
+    let should_refresh = match &plan.snapshot_plan {
+        ManifestSnapshotPlan::PersistNew { .. } => true,
+        ManifestSnapshotPlan::ReuseExisting { .. } => {
+            storage
+                .missing_retrieval_projection_families_for_repository_snapshot(
+                    repository_id,
+                    snapshot_id,
+                )
+                .map_err(|err| {
+                    wrap_reindex_phase_error(
+                        ReindexExecutionPhase::RefreshRetrievalProjections,
+                        err,
+                    )
+                })?
+                .is_empty()
+                == false
+        }
     };
+    if !should_refresh {
+        return Ok(());
+    }
 
     let manifest_paths = plan
         .current_manifest
@@ -471,7 +492,7 @@ fn execute_retrieval_projection_phase(
     let projection_bundle =
         build_retrieval_projection_bundle(repository_id, workspace_root, &manifest_paths)
             .map_err(|err| {
-                wrap_reindex_phase_error(ReindexExecutionPhase::PersistManifestSnapshot, err)
+                wrap_reindex_phase_error(ReindexExecutionPhase::RefreshRetrievalProjections, err)
             })
             .and_then(|bundle| {
                 storage
@@ -482,21 +503,24 @@ fn execute_retrieval_projection_phase(
                     )
                     .map_err(|err| {
                         wrap_reindex_phase_error(
-                            ReindexExecutionPhase::PersistManifestSnapshot,
+                            ReindexExecutionPhase::RefreshRetrievalProjections,
                             err,
                         )
                     })
             });
 
     if let Err(err) = projection_bundle {
-        if let Err(rollback_err) = execute_snapshot_rollback_phase(manifest_store, snapshot_id) {
-            return Err(FriggError::Internal(format!(
-                "{err}; {}",
-                wrap_reindex_phase_error(
-                    ReindexExecutionPhase::RollbackManifestSnapshot,
-                    rollback_err,
-                )
-            )));
+        if matches!(plan.snapshot_plan, ManifestSnapshotPlan::PersistNew { .. }) {
+            if let Err(rollback_err) = execute_snapshot_rollback_phase(manifest_store, snapshot_id)
+            {
+                return Err(FriggError::Internal(format!(
+                    "{err}; {}",
+                    wrap_reindex_phase_error(
+                        ReindexExecutionPhase::RollbackManifestSnapshot,
+                        rollback_err,
+                    )
+                )));
+            }
         }
         return Err(err);
     }

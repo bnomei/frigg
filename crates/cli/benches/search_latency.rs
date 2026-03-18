@@ -28,7 +28,10 @@ const BENCH_PATH_WITNESS_QUERY: &str =
     "entry point bootstrap build flow command runner main config";
 const BENCH_BENCHMARK_WITNESS_QUERY: &str = "benchmark latest report budget metrics";
 const BENCH_TEST_SUBJECT_QUERY: &str = "auth controller test coverage";
+const BENCH_LEXICAL_RESCAN_QUERY: &str =
+    "trace invalid_params typed error from public docs to runtime helper and tests";
 const BENCH_TEST_SUBJECT_LIMIT: usize = 5;
+const BENCH_LEXICAL_RESCAN_LIMIT: usize = 3;
 
 static BENCH_ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 static BENCH_INDEXED_ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -105,6 +108,7 @@ fn search_latency_benchmarks(c: &mut Criterion) {
     assert_hybrid_benchmark_witness_workload(&witness_searcher);
     assert_hybrid_path_witness_build_flow_workload(&witness_searcher);
     assert_hybrid_test_subject_recall_workload(&witness_searcher);
+    assert_hybrid_lexical_rescan_bounded_retention_workload(&witness_searcher);
     assert_hybrid_semantic_toggle_off_workload(&searcher);
     assert_hybrid_semantic_degraded_workload(&semantic_searcher);
     write_search_stage_attribution_snapshot(vec![
@@ -164,6 +168,16 @@ fn search_latency_benchmarks(c: &mut Criterion) {
             SearchHybridQuery {
                 query: BENCH_TEST_SUBJECT_QUERY.to_owned(),
                 limit: BENCH_TEST_SUBJECT_LIMIT,
+                weights: Default::default(),
+                semantic: Some(false),
+            },
+        ),
+        hybrid_stage_snapshot(
+            &witness_searcher,
+            "search_latency/hybrid/lexical-rescan-bounded-retention",
+            SearchHybridQuery {
+                query: BENCH_LEXICAL_RESCAN_QUERY.to_owned(),
+                limit: BENCH_LEXICAL_RESCAN_LIMIT,
                 weights: Default::default(),
                 semantic: Some(false),
             },
@@ -410,6 +424,24 @@ fn search_latency_benchmarks(c: &mut Criterion) {
         });
     });
 
+    group.bench_function(
+        BenchmarkId::new("hybrid", "lexical-rescan-bounded-retention"),
+        |b| {
+            let query = SearchHybridQuery {
+                query: BENCH_LEXICAL_RESCAN_QUERY.to_owned(),
+                limit: BENCH_LEXICAL_RESCAN_LIMIT,
+                weights: Default::default(),
+                semantic: Some(false),
+            };
+            b.iter(|| {
+                let output = witness_searcher
+                    .search_hybrid_with_filters(query.clone(), SearchFilters::default())
+                    .expect("hybrid lexical-rescan benchmark should not fail");
+                criterion::black_box(output);
+            });
+        },
+    );
+
     group.finish();
 }
 
@@ -550,6 +582,8 @@ fn populate_repo_fixture(root: &Path, repo_idx: usize, include_witness_fixtures:
             "src-tauri/src/models",
             "src-tauri/src/commands",
             "tests/unit",
+            "tests/regressions",
+            "contracts",
         ] {
             fs::create_dir_all(root.join(rel_path))
                 .expect("path-witness benchmark fixture directory should be creatable");
@@ -620,6 +654,25 @@ fn populate_repo_fixture(root: &Path, repo_idx: usize, include_witness_fixtures:
                  }\n",
             ),
             (
+                "src/runtime_helper.rs",
+                "pub fn invalid_params_runtime_helper() {\n\
+                 let code = \"invalid_params\";\n\
+                 let category = \"typed error\";\n\
+                 }\n",
+            ),
+            (
+                "tests/regressions/runtime_helper_tests.rs",
+                "#[test]\n\
+                 fn invalid_params_runtime_helper_tests() {\n\
+                 // invalid_params typed error runtime helper tests\n\
+                 }\n",
+            ),
+            (
+                "contracts/errors.md",
+                "# Public error taxonomy\n\
+                 invalid_params typed error public docs runtime helper tests\n",
+            ),
+            (
                 "tests/unit/auth_controller_test.rs",
                 "#[test]\n\
                  fn auth_controller_test() {\n\
@@ -641,6 +694,18 @@ fn populate_repo_fixture(root: &Path, repo_idx: usize, include_witness_fixtures:
             );
             fs::write(root.join(rel_path), content)
                 .expect("test-subject benchmark fixture file should be writable");
+        }
+
+        fs::create_dir_all(root.join("docs/noise"))
+            .expect("lexical-rescan noise fixture directory should be creatable");
+        for index in 0..10 {
+            let rel_path = format!("docs/noise/error-guide-{index:02}.md");
+            let content = format!(
+                "# Error guide {index:02}\n\
+                 public docs invalid_params helper typed error reference\n"
+            );
+            fs::write(root.join(rel_path), content)
+                .expect("lexical-rescan noise fixture file should be writable");
         }
     }
 }
@@ -755,14 +820,24 @@ fn assert_hybrid_graph_target_evidence_workload(searcher: &TextSearcher) {
         .search_hybrid_with_filters(query, SearchFilters::default())
         .expect("hybrid graph-target-evidence benchmark fixture should be deterministic");
 
-    let listener_match = first
+    let ranked_paths = first
         .matches
         .iter()
-        .find(|entry| entry.document.path == "src/Listeners/OrderListener.php")
-        .expect("graph-target-evidence benchmark should surface listener witness");
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let handler_match = first.matches.iter().find(|entry| {
+        entry.document.path == "src/Handlers/OrderHandler.php" && entry.graph_score > 0.0
+    });
     assert!(
-        listener_match.graph_score > 0.0,
-        "graph-target-evidence benchmark should capture graph score for listener witness: {:?}",
+        handler_match.is_some(),
+        "graph-target-evidence benchmark should surface graph-backed handler evidence near the top: paths={ranked_paths:?} matches={:?}",
+        first.matches
+    );
+    let handler_match =
+        handler_match.expect("graph-backed handler evidence presence should be checked");
+    assert!(
+        handler_match.graph_score > 0.0,
+        "graph-target-evidence benchmark should capture graph score for handler witness: {:?}",
         first.matches
     );
     assert_eq!(first.note.semantic_status, HybridSemanticStatus::Disabled);
@@ -833,8 +908,25 @@ fn assert_hybrid_benchmark_witness_workload(searcher: &TextSearcher) {
         .as_ref()
         .expect("hybrid benchmark-witness workload should expose stage attribution");
     assert!(
+        stage_attribution.candidate_intake.output_count > 0,
+        "benchmark-witness workload should report candidate intake output: {stage_attribution:?}"
+    );
+    assert!(
+        stage_attribution.freshness_validation.output_count > 0,
+        "benchmark-witness workload should report freshness validation output: {stage_attribution:?}"
+    );
+    assert!(
         stage_attribution.witness_scoring.output_count > 0,
         "benchmark-witness workload should report witness scoring output: {stage_attribution:?}"
+    );
+    assert!(
+        stage_attribution.document_aggregation.output_count
+            >= stage_attribution.final_diversification.input_count,
+        "benchmark-witness workload should feed a wider grouped frontier into final diversification: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.final_diversification.output_count, BENCH_BENCHMARK_WITNESS_LIMIT,
+        "benchmark-witness workload should respect the requested top-k bound: {stage_attribution:?}"
     );
 }
 
@@ -891,8 +983,25 @@ fn assert_hybrid_path_witness_build_flow_workload(searcher: &TextSearcher) {
         .as_ref()
         .expect("hybrid path-witness workload should expose stage attribution");
     assert!(
+        stage_attribution.candidate_intake.output_count > 0,
+        "path-witness benchmark should report candidate intake output: {stage_attribution:?}"
+    );
+    assert!(
+        stage_attribution.freshness_validation.output_count > 0,
+        "path-witness benchmark should report freshness validation output: {stage_attribution:?}"
+    );
+    assert!(
         stage_attribution.witness_scoring.output_count > 0,
         "path-witness benchmark should report witness scoring output: {stage_attribution:?}"
+    );
+    assert!(
+        stage_attribution.document_aggregation.output_count
+            >= stage_attribution.final_diversification.input_count,
+        "path-witness benchmark should feed a wider grouped frontier into final diversification: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.final_diversification.output_count, BENCH_PATH_WITNESS_LIMIT,
+        "path-witness benchmark should respect the requested top-k bound: {stage_attribution:?}"
     );
 }
 
@@ -946,6 +1055,65 @@ fn assert_hybrid_test_subject_recall_workload(searcher: &TextSearcher) {
     assert!(
         stage_attribution.witness_scoring.output_count > 0,
         "test-subject workload should report witness scoring output: {stage_attribution:?}"
+    );
+}
+
+fn assert_hybrid_lexical_rescan_bounded_retention_workload(searcher: &TextSearcher) {
+    let query = SearchHybridQuery {
+        query: BENCH_LEXICAL_RESCAN_QUERY.to_owned(),
+        limit: BENCH_LEXICAL_RESCAN_LIMIT,
+        weights: Default::default(),
+        semantic: Some(false),
+    };
+    let first = searcher
+        .search_hybrid_with_filters(query.clone(), SearchFilters::default())
+        .expect("hybrid lexical-rescan benchmark fixture should be searchable");
+    let second = searcher
+        .search_hybrid_with_filters(query, SearchFilters::default())
+        .expect("hybrid lexical-rescan benchmark fixture should be deterministic");
+
+    let ranked_paths = first
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ranked_paths.contains(&"src/runtime_helper.rs"),
+        "lexical-rescan workload should retain the runtime helper in top-k: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"tests/regressions/runtime_helper_tests.rs"),
+        "lexical-rescan workload should retain the test witness in top-k: {ranked_paths:?}"
+    );
+    assert!(
+        ranked_paths.contains(&"contracts/errors.md"),
+        "lexical-rescan workload should retain the public docs witness in top-k: {ranked_paths:?}"
+    );
+    assert_eq!(first.note.semantic_status, HybridSemanticStatus::Disabled);
+    assert!(!first.note.semantic_enabled);
+    assert_eq!(
+        first.matches, second.matches,
+        "hybrid lexical-rescan workload should be deterministic across repeated runs"
+    );
+    assert_eq!(
+        first.note, second.note,
+        "hybrid lexical-rescan workload should emit deterministic note metadata"
+    );
+    let stage_attribution = first
+        .stage_attribution
+        .as_ref()
+        .expect("hybrid lexical-rescan workload should expose stage attribution");
+    assert!(
+        stage_attribution.scan.output_count > BENCH_LEXICAL_RESCAN_LIMIT,
+        "lexical-rescan workload should produce a broader lexical pool than the retained top-k: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.graph_expansion.output_count, 0,
+        "lexical-rescan workload should avoid unrelated graph expansion: {stage_attribution:?}"
+    );
+    assert_eq!(
+        stage_attribution.final_diversification.output_count, BENCH_LEXICAL_RESCAN_LIMIT,
+        "lexical-rescan workload should respect the retained top-k bound: {stage_attribution:?}"
     );
 }
 

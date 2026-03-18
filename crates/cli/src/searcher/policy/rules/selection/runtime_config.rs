@@ -182,15 +182,15 @@ fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let delta = if ctx.runtime_subtree_affinity >= 2 {
         if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
-            0.34
+            0.54
         } else {
-            0.18
+            0.28
         }
     } else if ctx.runtime_subtree_affinity > 0 {
         if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
-            0.18
+            0.30
         } else {
-            0.10
+            0.16
         }
     } else {
         0.0
@@ -205,12 +205,12 @@ fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEff
     }
 
     let delta = if ctx.is_entrypoint_runtime || ctx.is_runtime_config_artifact {
-        if ctx.seen_count == 0 { 0.56 } else { 0.30 }
+        if ctx.seen_count == 0 { 0.86 } else { 0.44 }
     } else if matches!(
         ctx.class,
         HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
     ) {
-        if ctx.seen_count == 0 { 0.30 } else { 0.16 }
+        if ctx.seen_count == 0 { 0.42 } else { 0.24 }
     } else {
         0.0
     };

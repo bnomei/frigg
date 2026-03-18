@@ -136,9 +136,9 @@ fn unanchored_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 
 fn cross_family_plain_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
-        -0.72
+        -1.00
     } else {
-        -1.40
+        -1.70
     }))
 }
 
@@ -191,21 +191,39 @@ fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 fn subtree_affinity_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let delta = if ctx.runtime_subtree_affinity >= 2 {
         if ctx.prefer_runtime_anchor_tests {
-            0.74
+            1.02
         } else {
-            0.38
+            0.56
         }
     } else if ctx.runtime_subtree_affinity > 0 {
         if ctx.prefer_runtime_anchor_tests {
-            0.34
+            0.48
         } else {
-            0.18
+            0.26
         }
     } else {
         0.0
     };
 
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.has_path_witness_source || ctx.runtime_subtree_affinity < 2 {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(if ctx.prefer_runtime_anchor_tests {
+        if ctx.seen_plain_test_support == 0 {
+            0.96
+        } else {
+            0.58
+        }
+    } else if ctx.seen_plain_test_support == 0 {
+        0.52
+    } else {
+        0.30
+    }))
 }
 
 const CLI_OR_HARNESS_ANY: &[super::super::super::dsl::PredicateLeaf<SelectionFacts>] = &[
@@ -287,6 +305,17 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::runtime_subtree_affinity_positive_leaf(),
         ]),
         subtree_affinity_bonus,
+    ),
+    ScoreRule::when(
+        "selection.companion.path_witness_subtree_locality_bonus",
+        PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_runtime_companion_tests_leaf(),
+            pred::is_test_support_leaf(),
+            pred::has_path_witness_source_leaf(),
+            pred::runtime_subtree_affinity_at_least_two_leaf(),
+        ]),
+        path_witness_subtree_locality_bonus,
     ),
     ScoreRule::when(
         "selection.companion.family_affinity_bonus",

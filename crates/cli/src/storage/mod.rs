@@ -27,6 +27,8 @@ use db_runtime::{
     open_connection, option_u64_to_option_i64, prune_provenance_events_on_connection,
     read_schema_version, run_repository_roundtrip_probe, table_exists, u64_to_i64, usize_to_i64,
 };
+#[cfg(test)]
+pub(crate) use db_runtime::{reset_semantic_read_trace, snapshot_semantic_read_trace};
 
 pub(super) const SNAPSHOT_KIND_MANIFEST: &str = "manifest";
 pub use provenance_path::{ensure_provenance_db_parent_dir, resolve_provenance_db_path};
@@ -781,6 +783,16 @@ pub struct SemanticChunkPayload {
     pub start_line: usize,
     pub end_line: usize,
     pub content_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SemanticChunkPreview {
+    pub chunk_id: String,
+    pub path: String,
+    pub language: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub preview_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

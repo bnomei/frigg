@@ -168,6 +168,7 @@ fn semantic_distance_score(distance: f32) -> FriggResult<f32> {
 pub(super) struct SemanticChannelSearchOutput {
     pub(super) hits: Vec<HybridChannelHit>,
     pub(super) candidate_count: usize,
+    pub(super) hit_count: usize,
     pub(super) health: ChannelHealth,
     pub(super) diagnostics: Vec<ChannelDiagnostic>,
 }
@@ -176,7 +177,8 @@ pub(super) fn search_semantic_channel_hits(
     searcher: &TextSearcher,
     query_text: &str,
     filters: &SearchFilters,
-    limit: usize,
+    semantic_limit: usize,
+    retain_limit: usize,
     credentials: &SemanticRuntimeCredentials,
     semantic_executor: &dyn SemanticRuntimeQueryEmbeddingExecutor,
 ) -> FriggResult<SemanticChannelSearchOutput> {
@@ -232,7 +234,7 @@ pub(super) fn search_semantic_channel_hits(
 
     let normalized_filters = normalize_search_filters(filters.clone())?;
     let ranking_intent = HybridRankingIntent::from_query(query_text);
-    let semantic_candidate_limit = limit
+    let semantic_candidate_limit = semantic_limit
         .saturating_mul(HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER)
         .max(HYBRID_SEMANTIC_CANDIDATE_POOL_MIN);
     let semantic_vector_query_limit = semantic_candidate_limit
@@ -246,10 +248,11 @@ pub(super) fn search_semantic_channel_hits(
     });
 
     let mut pending_hits = Vec::new();
-    let mut db_paths_by_repository = BTreeMap::new();
+    let mut read_contexts_by_repository = BTreeMap::new();
     let mut roots_by_repository = BTreeMap::new();
     let mut latest_manifest_paths_by_repository = BTreeMap::new();
     let mut latest_snapshot_ids_by_repository = BTreeMap::new();
+    let mut snapshot_id_by_hit = BTreeMap::<(String, String), String>::new();
     let mut degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
     for repo in repositories {
@@ -274,10 +277,14 @@ pub(super) fn search_semantic_channel_hits(
             ));
             continue;
         }
-        db_paths_by_repository.insert(repository_id.clone(), db_path.clone());
         roots_by_repository.insert(repository_id.clone(), root.to_path_buf());
 
         let storage = Storage::new(db_path);
+        let read_context = storage.open_semantic_read_context().map_err(|err| {
+            FriggError::Internal(format!(
+                "semantic storage read-context setup failed for repository '{repository_id}': {err}"
+            ))
+        })?;
         let Some(validated_snapshot) = latest_validated_manifest_snapshot(
             &storage,
             &repository_id,
@@ -297,22 +304,7 @@ pub(super) fn search_semantic_channel_hits(
             .collect::<BTreeSet<_>>();
         latest_manifest_paths_by_repository.insert(repository_id.clone(), latest_manifest_paths);
         latest_snapshot_ids_by_repository.insert(repository_id.clone(), latest_snapshot_id.clone());
-        let latest_snapshot_has_embeddings = storage
-            .has_semantic_embeddings_for_repository_snapshot_model(
-                &repository_id,
-                &latest_snapshot_id,
-                provider.as_str(),
-                model,
-            )
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic storage embedding presence lookup failed for repository '{repository_id}' snapshot '{}': {err}",
-                    latest_snapshot_id
-                ))
-            })?;
-        let selected_snapshot_id = if latest_snapshot_has_embeddings {
-            latest_snapshot_id.clone()
-        } else if let Some(fallback_snapshot_id) = storage
+        let selected_snapshot_id = if let Some(ready_snapshot_id) = read_context
             .load_latest_manifest_snapshot_id_with_semantic_embeddings_for_repository_model(
                 &repository_id,
                 provider.as_str(),
@@ -326,14 +318,14 @@ pub(super) fn search_semantic_channel_hits(
                 ))
             })?
         {
-            if fallback_snapshot_id != latest_snapshot_id {
+            if ready_snapshot_id != latest_snapshot_id {
                 degraded_reasons.push(format!(
-                    "repository '{repository_id}' using semantic fallback snapshot '{fallback_snapshot_id}' because latest manifest snapshot '{latest_snapshot_id}' has no live semantic embeddings for provider '{}' model '{}'",
+                    "repository '{repository_id}' using semantic fallback snapshot '{ready_snapshot_id}' because latest manifest snapshot '{latest_snapshot_id}' has no live semantic embeddings for provider '{}' model '{}'",
                     provider.as_str(),
                     model,
                 ));
             }
-            fallback_snapshot_id
+            ready_snapshot_id
         } else {
             unavailable_reasons.push(format!(
                 "repository '{repository_id}' latest manifest snapshot '{}' has no live semantic embeddings for provider '{}' model '{}'",
@@ -343,7 +335,7 @@ pub(super) fn search_semantic_channel_hits(
             ));
             continue;
         };
-        let topk_matches = storage
+        let topk_matches = read_context
             .load_semantic_vector_topk_for_repository_snapshot_model(
                 &repository_id,
                 &selected_snapshot_id,
@@ -361,6 +353,10 @@ pub(super) fn search_semantic_channel_hits(
             })?;
 
         for vector_hit in topk_matches {
+            snapshot_id_by_hit.insert(
+                (repository_id.clone(), vector_hit.chunk_id.clone()),
+                selected_snapshot_id.clone(),
+            );
             pending_hits.push(PendingSemanticHit {
                 repository_id: repository_id.clone(),
                 snapshot_id: selected_snapshot_id.clone(),
@@ -368,6 +364,7 @@ pub(super) fn search_semantic_channel_hits(
                 raw_distance: vector_hit.distance,
             });
         }
+        read_contexts_by_repository.insert(repository_id, read_context);
     }
 
     pending_hits.sort_by(|left, right| {
@@ -382,7 +379,7 @@ pub(super) fn search_semantic_channel_hits(
         .map(|(repository_id, root)| (repository_id.clone(), build_root_ignore_matcher(root)))
         .collect::<BTreeMap<_, _>>();
 
-    let mut chunk_payloads_by_group = BTreeMap::new();
+    let mut chunk_previews_by_group = BTreeMap::new();
     for ((repository_id, snapshot_id), chunk_ids) in pending_hits.iter().fold(
         BTreeMap::<(String, String), Vec<String>>::new(),
         |mut grouped, hit| {
@@ -393,11 +390,115 @@ pub(super) fn search_semantic_channel_hits(
             grouped
         },
     ) {
-        let Some(db_path) = db_paths_by_repository.get(&repository_id) else {
+        let Some(read_context) = read_contexts_by_repository.get(&repository_id) else {
             continue;
         };
-        let storage = Storage::new(db_path.clone());
-        let payloads = storage
+        let previews = read_context
+            .load_semantic_chunk_previews_for_repository_snapshot(
+                &repository_id,
+                &snapshot_id,
+                &chunk_ids,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "semantic storage chunk preview load failed for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+        chunk_previews_by_group.insert((repository_id, snapshot_id), previews);
+    }
+
+    let mut provisional_hits = pending_hits
+        .into_iter()
+        .filter_map(|hit| {
+            let preview = chunk_previews_by_group
+                .get(&(hit.repository_id.clone(), hit.snapshot_id.clone()))
+                .and_then(|previews| previews.get(&hit.chunk_id))
+                .cloned()?;
+            let using_fallback_snapshot = latest_snapshot_ids_by_repository
+                .get(&hit.repository_id)
+                .is_some_and(|latest_snapshot_id| latest_snapshot_id != &hit.snapshot_id);
+            if using_fallback_snapshot
+                && !latest_manifest_paths_by_repository
+                    .get(&hit.repository_id)
+                    .is_some_and(|paths| paths.contains(&preview.path))
+            {
+                return None;
+            }
+            let root = roots_by_repository.get(&hit.repository_id)?;
+            if should_ignore_runtime_path(
+                root,
+                Path::new(&preview.path),
+                root_ignore_matchers.get(&hit.repository_id),
+            ) {
+                return None;
+            }
+            let score = semantic_distance_score(hit.raw_distance).ok()?
+                * hybrid_path_quality_multiplier_with_intent(&preview.path, &ranking_intent);
+            if !score.is_finite() {
+                return None;
+            }
+            let excerpt_source = semantic_excerpt(&preview.preview_text, &preview.path);
+            Some(HybridChannelHit {
+                channel: EvidenceChannel::Semantic,
+                document: HybridDocumentRef {
+                    repository_id: hit.repository_id,
+                    path: preview.path.clone(),
+                    line: preview.start_line,
+                    column: 1,
+                },
+                anchor: EvidenceAnchor::new(
+                    EvidenceAnchorKind::SemanticChunk,
+                    preview.start_line,
+                    1,
+                    preview.end_line,
+                    semantic_chunk_end_column(&preview.preview_text),
+                )
+                .with_detail(hit.chunk_id.clone()),
+                raw_score: score,
+                excerpt: excerpt_source,
+                provenance_ids: vec![hit.chunk_id],
+            })
+        })
+        .collect::<Vec<_>>();
+    provisional_hits.sort_by(|left, right| {
+        right
+            .raw_score
+            .total_cmp(&left.raw_score)
+            .then(
+                left.document
+                    .repository_id
+                    .cmp(&right.document.repository_id),
+            )
+            .then(left.document.path.cmp(&right.document.path))
+            .then(left.provenance_ids.cmp(&right.provenance_ids))
+    });
+    let semantic_candidate_count = provisional_hits.len();
+    let (mut semantic_hits, semantic_hit_count) =
+        retain_semantic_hits_for_query(provisional_hits, query_text, retain_limit);
+
+    let mut chunk_payloads_by_group = BTreeMap::new();
+    for ((repository_id, snapshot_id), chunk_ids) in semantic_hits.iter().fold(
+        BTreeMap::<(String, String), Vec<String>>::new(),
+        |mut grouped, hit| {
+            let Some(chunk_id) = hit.provenance_ids.first() else {
+                return grouped;
+            };
+            let Some(snapshot_id) =
+                snapshot_id_by_hit.get(&(hit.document.repository_id.clone(), chunk_id.clone()))
+            else {
+                return grouped;
+            };
+            grouped
+                .entry((hit.document.repository_id.clone(), snapshot_id.clone()))
+                .or_default()
+                .push(chunk_id.clone());
+            grouped
+        },
+    ) {
+        let Some(read_context) = read_contexts_by_repository.get(&repository_id) else {
+            continue;
+        };
+        let payloads = read_context
             .load_semantic_chunk_payloads_for_repository_snapshot(
                 &repository_id,
                 &snapshot_id,
@@ -411,59 +512,33 @@ pub(super) fn search_semantic_channel_hits(
         chunk_payloads_by_group.insert((repository_id, snapshot_id), payloads);
     }
 
-    let mut semantic_hits = pending_hits
-        .into_iter()
-        .filter_map(|hit| {
-            let payload = chunk_payloads_by_group
-                .get(&(hit.repository_id.clone(), hit.snapshot_id.clone()))
-                .and_then(|payloads| payloads.get(&hit.chunk_id))
-                .cloned()?;
-            let using_fallback_snapshot = latest_snapshot_ids_by_repository
-                .get(&hit.repository_id)
-                .is_some_and(|latest_snapshot_id| latest_snapshot_id != &hit.snapshot_id);
-            if using_fallback_snapshot
-                && !latest_manifest_paths_by_repository
-                    .get(&hit.repository_id)
-                    .is_some_and(|paths| paths.contains(&payload.path))
-            {
-                return None;
-            }
-            let root = roots_by_repository.get(&hit.repository_id)?;
-            if should_ignore_runtime_path(
-                root,
-                Path::new(&payload.path),
-                root_ignore_matchers.get(&hit.repository_id),
-            ) {
-                return None;
-            }
-            let score = semantic_distance_score(hit.raw_distance).ok()?
-                * hybrid_path_quality_multiplier_with_intent(&payload.path, &ranking_intent);
-            if !score.is_finite() {
-                return None;
-            }
-            let excerpt_source = semantic_excerpt(&payload.content_text, &payload.path);
-            Some(HybridChannelHit {
-                channel: EvidenceChannel::Semantic,
-                document: HybridDocumentRef {
-                    repository_id: hit.repository_id,
-                    path: payload.path.clone(),
-                    line: payload.start_line,
-                    column: 1,
-                },
-                anchor: EvidenceAnchor::new(
-                    EvidenceAnchorKind::SemanticChunk,
-                    payload.start_line,
-                    1,
-                    payload.end_line,
-                    semantic_chunk_end_column(&payload.content_text),
-                )
-                .with_detail(hit.chunk_id.clone()),
-                raw_score: score,
-                excerpt: excerpt_source,
-                provenance_ids: vec![hit.chunk_id],
-            })
-        })
-        .collect::<Vec<_>>();
+    for hit in &mut semantic_hits {
+        let Some(chunk_id) = hit.provenance_ids.first() else {
+            continue;
+        };
+        let Some(snapshot_id) =
+            snapshot_id_by_hit.get(&(hit.document.repository_id.clone(), chunk_id.clone()))
+        else {
+            continue;
+        };
+        let Some(payload) = chunk_payloads_by_group
+            .get(&(hit.document.repository_id.clone(), snapshot_id.clone()))
+            .and_then(|payloads| payloads.get(chunk_id))
+        else {
+            continue;
+        };
+        hit.document.line = payload.start_line;
+        hit.anchor = EvidenceAnchor::new(
+            EvidenceAnchorKind::SemanticChunk,
+            payload.start_line,
+            1,
+            payload.end_line,
+            semantic_chunk_end_column(&payload.content_text),
+        )
+        .with_detail(chunk_id.clone());
+        hit.excerpt = semantic_excerpt(&payload.content_text, &payload.path);
+    }
+
     semantic_hits.sort_by(|left, right| {
         right
             .raw_score
@@ -476,7 +551,6 @@ pub(super) fn search_semantic_channel_hits(
             .then(left.document.path.cmp(&right.document.path))
             .then(left.provenance_ids.cmp(&right.provenance_ids))
     });
-    let semantic_candidate_count = semantic_hits.len();
 
     let status = if semantic_hits.is_empty() {
         if !degraded_reasons.is_empty() {
@@ -520,6 +594,7 @@ pub(super) fn search_semantic_channel_hits(
     Ok(SemanticChannelSearchOutput {
         hits: semantic_hits,
         candidate_count: semantic_candidate_count,
+        hit_count: semantic_hit_count,
         health: ChannelHealth::new(health_status, reason),
         diagnostics,
     })

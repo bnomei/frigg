@@ -649,6 +649,13 @@ impl FriggMcpServer {
                             limit,
                         }
                     });
+                    if cache_key.is_none() {
+                        server.record_runtime_cache_event(
+                            RuntimeCacheFamily::GoToDefinitionResponse,
+                            RuntimeCacheEvent::Bypass,
+                            1,
+                        );
+                    }
                     if let Some(cache_key) = cache_key.as_ref()
                         && let Some(cached) = server.cached_go_to_definition_response(cache_key)
                     {
@@ -1339,6 +1346,13 @@ impl FriggMcpServer {
                             limit,
                         }
                     });
+                    if cache_key.is_none() {
+                        server.record_runtime_cache_event(
+                            RuntimeCacheFamily::FindDeclarationsResponse,
+                            RuntimeCacheEvent::Bypass,
+                            1,
+                        );
+                    }
                     if let Some(cache_key) = cache_key.as_ref()
                         && let Some(cached) = server.cached_find_declarations_response(cache_key)
                     {

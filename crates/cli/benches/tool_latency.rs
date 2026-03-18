@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use frigg::domain::ChannelHealthStatus;
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     DeepSearchComposeCitationsParams, DeepSearchPlaybookContract, DeepSearchPlaybookStepContract,
@@ -667,23 +668,17 @@ fn assert_search_hybrid_semantic_toggle_off_workload(runtime: &Runtime, server: 
         .as_ref()
         .expect("search_hybrid semantic-toggle-off benchmark probe should emit metadata");
     assert_eq!(
-        metadata
-            .get("semantic_status")
-            .and_then(|value| value.as_str()),
-        Some("disabled"),
+        metadata.semantic_status,
+        Some(ChannelHealthStatus::Disabled),
         "search_hybrid semantic-toggle-off benchmark probe must emit disabled semantic_status"
     );
     assert_eq!(
-        metadata
-            .get("semantic_enabled")
-            .and_then(|value| value.as_bool()),
+        metadata.semantic_enabled,
         Some(false),
         "search_hybrid semantic-toggle-off benchmark probe must mark semantic_enabled=false"
     );
     assert_eq!(
-        metadata
-            .get("semantic_reason")
-            .and_then(|value| value.as_str()),
+        metadata.semantic_reason.as_deref(),
         Some("semantic channel disabled by request toggle"),
         "search_hybrid semantic-toggle-off benchmark probe must emit explicit semantic_reason"
     );
@@ -720,23 +715,19 @@ fn assert_search_hybrid_semantic_degraded_workload(runtime: &Runtime, server: &F
         .as_ref()
         .expect("search_hybrid semantic-degraded benchmark probe should emit metadata");
     assert_eq!(
-        metadata
-            .get("semantic_status")
-            .and_then(|value| value.as_str()),
-        Some("degraded"),
+        metadata.semantic_status,
+        Some(ChannelHealthStatus::Degraded),
         "search_hybrid semantic-degraded benchmark probe must emit degraded semantic_status"
     );
     assert_eq!(
-        metadata
-            .get("semantic_enabled")
-            .and_then(|value| value.as_bool()),
+        metadata.semantic_enabled,
         Some(false),
         "search_hybrid semantic-degraded benchmark probe must mark semantic_enabled=false"
     );
     assert!(
         metadata
-            .get("semantic_reason")
-            .and_then(|value| value.as_str())
+            .semantic_reason
+            .as_deref()
             .is_some_and(|reason| reason.contains("semantic_runtime.model must not be blank")),
         "search_hybrid semantic-degraded benchmark probe should surface deterministic semantic startup-validation reason"
     );

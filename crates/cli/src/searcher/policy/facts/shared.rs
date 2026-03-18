@@ -21,11 +21,12 @@ use super::super::super::surfaces::{
     is_frontend_runtime_noise_path, is_generic_runtime_witness_doc_path,
     is_kotlin_android_ui_runtime_surface_path, is_loose_python_test_module_path,
     is_navigation_reference_doc_path, is_navigation_runtime_path, is_non_code_test_doc_path,
-    is_python_entrypoint_runtime_path, is_python_runtime_config_path, is_python_test_witness_path,
-    is_repo_metadata_path, is_root_scoped_runtime_config_path,
-    is_runtime_adjacent_python_test_path, is_runtime_anchor_test_support_path,
-    is_runtime_config_artifact_path, is_rust_workspace_config_path, is_scripts_ops_path,
-    is_test_harness_path, is_test_support_path, is_typescript_runtime_module_index_path,
+    is_non_prefix_python_test_module_path, is_python_entrypoint_runtime_path,
+    is_python_runtime_config_path, is_python_test_witness_path, is_repo_metadata_path,
+    is_root_scoped_runtime_config_path, is_runtime_adjacent_python_test_path,
+    is_runtime_anchor_test_support_path, is_runtime_config_artifact_path,
+    is_rust_workspace_config_path, is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_typescript_runtime_module_index_path,
 };
 use super::super::super::{
     is_laravel_blade_component_path, is_laravel_bootstrap_entrypoint_path,
@@ -355,7 +356,7 @@ impl SharedPathFacts {
             is_python_test_witness: is_python_test_witness_path(path),
             is_loose_python_test_module: is_loose_python_test_module_path(path),
             is_runtime_adjacent_python_test: is_runtime_adjacent_python_test_path(path),
-            is_non_prefix_python_test_module: is_loose_python_test_module_path(path),
+            is_non_prefix_python_test_module: is_non_prefix_python_test_module_path(path),
             is_cli_test_support: is_cli_test_support_path(path),
             is_test_harness: is_test_harness_path(path),
             is_non_code_test_doc: is_non_code_test_doc_path(path),
@@ -985,7 +986,7 @@ mod tests {
             &SelectionState::default(),
         );
 
-        assert_eq!(selection.runtime_subtree_affinity, 0);
+        assert_eq!(selection.runtime_subtree_affinity, 1);
         assert!(selection.has_path_witness_source);
     }
 

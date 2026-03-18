@@ -12,7 +12,7 @@ use crate::settings::{
 };
 use crate::storage::{
     ManifestEntry, SemanticChunkEmbeddingRecord, Storage, ensure_provenance_db_parent_dir,
-    resolve_provenance_db_path,
+    reset_semantic_read_trace, resolve_provenance_db_path, snapshot_semantic_read_trace,
 };
 use regex::Regex;
 

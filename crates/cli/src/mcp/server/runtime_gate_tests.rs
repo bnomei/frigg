@@ -10,8 +10,9 @@ use crate::indexer::{FileMetadataDigest, ReindexMode, reindex_repository};
 use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::server_cache::{
     FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey,
-    RepositoryFreshnessCacheScope, SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey,
-    SearchTextResponseCacheKey,
+    RepositoryFreshnessCacheScope, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
+    RuntimeCacheResidency, RuntimeCacheReuseClass, SearchHybridResponseCacheKey,
+    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey,
 };
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
@@ -150,6 +151,242 @@ fn read_only_tool_execution_context_scopes_session_repository_with_manifest_fres
     assert!(
         context.cache_freshness.scopes.is_some(),
         "scoped execution context should capture cache freshness inputs"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn runtime_cache_registry_classifies_snapshot_query_and_request_local_families() {
+    let server = FriggMcpServer::new(fixture_config());
+
+    let manifest = server.runtime_cache_policy(RuntimeCacheFamily::ValidatedManifestCandidate);
+    assert_eq!(manifest.residency, RuntimeCacheResidency::ProcessWide);
+    assert_eq!(
+        manifest.reuse_class,
+        RuntimeCacheReuseClass::SnapshotScopedReusable
+    );
+    assert_eq!(
+        manifest.freshness_contract,
+        RuntimeCacheFreshnessContract::RepositorySnapshot
+    );
+    assert!(manifest.dirty_root_bypass);
+    assert_eq!(manifest.budget.max_entries, Some(128));
+
+    let query_result = server.runtime_cache_policy(RuntimeCacheFamily::SearchHybridResponse);
+    assert_eq!(query_result.residency, RuntimeCacheResidency::ProcessWide);
+    assert_eq!(
+        query_result.reuse_class,
+        RuntimeCacheReuseClass::QueryResultMicroCache
+    );
+    assert_eq!(
+        query_result.freshness_contract,
+        RuntimeCacheFreshnessContract::RepositoryFreshnessScopes
+    );
+    assert!(query_result.dirty_root_bypass);
+    assert_eq!(query_result.budget.max_bytes, Some(8 * 1024 * 1024));
+
+    let request_local = server.runtime_cache_policy(RuntimeCacheFamily::SearcherProjectionStore);
+    assert_eq!(request_local.residency, RuntimeCacheResidency::RequestLocal);
+    assert_eq!(
+        request_local.reuse_class,
+        RuntimeCacheReuseClass::RequestLocalOnly
+    );
+    assert_eq!(
+        request_local.freshness_contract,
+        RuntimeCacheFreshnessContract::RequestLocal
+    );
+    assert_eq!(request_local.budget.max_entries, None);
+    assert_eq!(request_local.budget.max_bytes, None);
+}
+
+#[test]
+fn response_caches_respect_registry_entry_limits_and_track_evictions() {
+    let server = FriggMcpServer::new(fixture_config());
+    let search_text_limit = server
+        .runtime_cache_policy(RuntimeCacheFamily::SearchTextResponse)
+        .budget
+        .max_entries
+        .expect("search text cache should have an entry budget");
+    let go_to_definition_limit = server
+        .runtime_cache_policy(RuntimeCacheFamily::GoToDefinitionResponse)
+        .budget
+        .max_entries
+        .expect("go-to-definition cache should have an entry budget");
+    let scope = RepositoryFreshnessCacheScope {
+        repository_id: "repo-001".to_owned(),
+        snapshot_id: "snapshot-001".to_owned(),
+        semantic_state: None,
+        semantic_provider: None,
+        semantic_model: None,
+    };
+    let empty_text_response = SearchTextResponse {
+        total_matches: 0,
+        matches: Vec::new(),
+    };
+    let empty_navigation_response = GoToDefinitionResponse {
+        matches: Vec::new(),
+        metadata: None,
+        note: None,
+    };
+
+    for index in 0..=search_text_limit {
+        server.cache_search_text_response(
+            SearchTextResponseCacheKey {
+                scoped_repository_ids: vec!["repo-001".to_owned()],
+                freshness_scopes: vec![scope.clone()],
+                query: format!("needle-{index}"),
+                pattern_type: "literal",
+                path_regex: None,
+                limit: 10,
+            },
+            &empty_text_response,
+            &Value::Null,
+        );
+    }
+    assert_eq!(
+        server
+            .cache_state
+            .search_text_response_cache
+            .read()
+            .expect("search text cache should not be poisoned")
+            .len(),
+        search_text_limit
+    );
+    assert_eq!(
+        server.runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse),
+        crate::mcp::server_cache::RuntimeCacheTelemetry {
+            hits: 0,
+            misses: 0,
+            bypasses: 0,
+            inserts: search_text_limit + 1,
+            evictions: 1,
+            invalidations: 0,
+        }
+    );
+
+    for index in 0..=go_to_definition_limit {
+        server.cache_go_to_definition_response(
+            GoToDefinitionResponseCacheKey {
+                scoped_repository_ids: vec!["repo-001".to_owned()],
+                freshness_scopes: vec![scope.clone()],
+                repository_id: Some("repo-001".to_owned()),
+                symbol: Some(format!("User{index}")),
+                path: None,
+                line: None,
+                column: None,
+                limit: 10,
+            },
+            &empty_navigation_response,
+            &["repo-001".to_owned()],
+            None,
+            None,
+            Some("heuristic"),
+            Some("fixture"),
+            10,
+            0,
+            0,
+            0,
+        );
+    }
+    assert_eq!(
+        server
+            .cache_state
+            .go_to_definition_response_cache
+            .read()
+            .expect("go-to-definition cache should not be poisoned")
+            .len(),
+        go_to_definition_limit
+    );
+    assert_eq!(
+        server.runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse),
+        crate::mcp::server_cache::RuntimeCacheTelemetry {
+            hits: 0,
+            misses: 0,
+            bypasses: 0,
+            inserts: go_to_definition_limit + 1,
+            evictions: 1,
+            invalidations: 0,
+        }
+    );
+}
+
+#[test]
+fn runtime_text_searchers_share_projection_store_service_across_requests() {
+    let workspace_root = temp_workspace_root("runtime-shared-projection-store");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::create_dir_all(workspace_root.join(".github/workflows"))
+        .expect("failed to create workflow fixture directory");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write manifest fixture");
+    fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n")
+        .expect("failed to write source fixture");
+    fs::write(
+        workspace_root.join(".github/workflows/ci.yml"),
+        "name: ci\non: push\n",
+    )
+    .expect("failed to write workflow fixture");
+    seed_manifest_snapshot(
+        &workspace_root,
+        "repo-001",
+        "snapshot-001",
+        &["Cargo.toml", "src/main.rs", ".github/workflows/ci.yml"],
+    );
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+        false,
+    );
+    assert_eq!(
+        server
+            .runtime_state
+            .searcher_projection_store_service
+            .entrypoint_surface_cache_len(),
+        0
+    );
+
+    let first_searcher = server.runtime_text_searcher(server.config.as_ref().clone());
+    let repository = first_searcher
+        .first_repository_candidate_universe()
+        .expect("expected manifest-backed repository");
+    let first = first_searcher
+        .load_or_build_entrypoint_surface_projections_for_repository(&repository, "snapshot-001")
+        .expect("first request should load entrypoint projections");
+    assert!(
+        !first.is_empty(),
+        "projection fixture should decode surfaces"
+    );
+    assert_eq!(
+        server
+            .runtime_state
+            .searcher_projection_store_service
+            .entrypoint_surface_cache_len(),
+        1
+    );
+
+    let second_searcher = server.runtime_text_searcher(server.config.as_ref().clone());
+    let second_repository = second_searcher
+        .first_repository_candidate_universe()
+        .expect("expected manifest-backed repository");
+    let second = second_searcher
+        .load_or_build_entrypoint_surface_projections_for_repository(
+            &second_repository,
+            "snapshot-001",
+        )
+        .expect("second request should reuse entrypoint projections");
+    assert_eq!(&*first, &*second);
+    assert_eq!(
+        server
+            .runtime_state
+            .searcher_projection_store_service
+            .entrypoint_surface_cache_len(),
+        1
     );
 
     let _ = fs::remove_dir_all(workspace_root);
@@ -1063,6 +1300,42 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
             .all(|key| key.repository_id == "repo-002"),
         "heuristic reference cache should retain only unaffected repository entries"
     );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse)
+            .invalidations,
+        1
+    );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchHybridResponse)
+            .invalidations,
+        1
+    );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchSymbolResponse)
+            .invalidations,
+        1
+    );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse)
+            .invalidations,
+        1
+    );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::FindDeclarationsResponse)
+            .invalidations,
+        1
+    );
+    assert_eq!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::HeuristicReference)
+            .invalidations,
+        1
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -1355,6 +1628,42 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
         )
         .await,
         "watch notify should evict live repository-scoped answer caches"
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse)
+            .invalidations
+            >= 1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchHybridResponse)
+            .invalidations
+            >= 1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::SearchSymbolResponse)
+            .invalidations
+            >= 1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse)
+            .invalidations
+            >= 1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::FindDeclarationsResponse)
+            .invalidations
+            >= 1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::HeuristicReference)
+            .invalidations
+            >= 1
     );
 
     drop(runtime);
@@ -1739,6 +2048,22 @@ fn repository_response_cache_freshness_returns_ready_manifest_scope() {
             .and_then(Value::as_bool),
         Some(false)
     );
+    let runtime_contract = freshness
+        .basis
+        .get("runtime_cache_contract")
+        .and_then(Value::as_array)
+        .expect("runtime cache contract should be present in freshness basis");
+    assert!(runtime_contract.iter().any(|entry| {
+        entry.get("family").and_then(Value::as_str) == Some("search_text_response")
+            && entry.pointer("/budget/max_entries").and_then(Value::as_u64) == Some(32)
+    }));
+    assert!(runtime_contract.iter().any(|entry| {
+        entry.get("family").and_then(Value::as_str) == Some("go_to_definition_response")
+            && entry
+                .pointer("/telemetry/invalidations")
+                .and_then(Value::as_u64)
+                == Some(0)
+    }));
 
     let _ = fs::remove_dir_all(workspace_root);
 }
