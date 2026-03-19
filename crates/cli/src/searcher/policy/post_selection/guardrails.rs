@@ -188,6 +188,14 @@ pub(super) fn selection_guardrail_cmp(
     } else {
         Ordering::Equal
     };
+    let live_navigation_cmp = if wants_live_navigation_pivot_bias(&left_facts)
+        && wants_live_navigation_pivot_bias(&right_facts)
+    {
+        live_navigation_pivot_priority(&left_facts)
+            .cmp(&live_navigation_pivot_priority(&right_facts))
+    } else {
+        Ordering::Equal
+    };
     let companion_cmp = if left_facts.wants_runtime_companion_tests
         && right_facts.wants_runtime_companion_tests
         && left_facts.is_test_support
@@ -292,6 +300,7 @@ pub(super) fn selection_guardrail_cmp(
     };
 
     companion_cmp
+        .then(live_navigation_cmp)
         .then(language_locality_cmp)
         .then(score_cmp)
         .then_with(|| {
@@ -328,6 +337,32 @@ pub(super) fn selection_guardrail_cmp(
         .then_with(|| left_facts.path_depth.cmp(&right_facts.path_depth))
         .then_with(|| left.blended_score.total_cmp(&right.blended_score))
         .then_with(|| left.document.cmp(&right.document).reverse())
+}
+
+fn wants_live_navigation_pivot_bias(facts: &SelectionFacts) -> bool {
+    (facts.wants_runtime_witnesses
+        || facts.wants_navigation_fallbacks
+        || facts.wants_test_witness_recall)
+        && !facts.wants_runtime_config_artifacts
+}
+
+fn live_navigation_pivot_priority(
+    facts: &SelectionFacts,
+) -> (u8, bool, bool, bool, usize, usize, usize) {
+    (
+        match facts.class {
+            crate::searcher::surfaces::HybridSourceClass::Runtime => 3,
+            crate::searcher::surfaces::HybridSourceClass::Support => 2,
+            crate::searcher::surfaces::HybridSourceClass::Tests => 1,
+            _ => 0,
+        },
+        facts.candidate_language_known,
+        !facts.is_repo_metadata,
+        !facts.is_frontend_runtime_noise,
+        facts.specific_witness_path_overlap,
+        facts.path_overlap,
+        usize::from(facts.has_exact_query_term_match),
+    )
 }
 
 fn companion_test_guardrail_priority(facts: &SelectionFacts) -> usize {

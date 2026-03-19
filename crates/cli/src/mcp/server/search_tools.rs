@@ -1,11 +1,18 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::domain::ChannelHealthStatus;
+use crate::domain::{ChannelHealthStatus, SourceClass};
 use crate::mcp::types::{
     SearchHybridChannelDiagnostic, SearchHybridChannelMetadata, SearchHybridDiagnosticsSummary,
-    SearchHybridLanguageCapabilityMetadata, SearchHybridMetadata,
+    SearchHybridLanguageCapabilityMetadata, SearchHybridMetadata, SearchHybridNavigationHint,
     SearchHybridSemanticAcceleratorMetadata, SearchHybridStageAttribution,
+    SearchHybridUtilitySummary,
+};
+use crate::path_class::classify_repository_path;
+use crate::searcher::{
+    hybrid_match_definition_navigation_supported, hybrid_match_document_symbols_supported,
+    hybrid_match_is_live_navigation_pivot, hybrid_match_source_class,
+    hybrid_match_surface_families,
 };
 
 impl FriggMcpServer {
@@ -443,21 +450,7 @@ impl FriggMcpServer {
                     let mut matches = search_output
                         .matches
                         .into_iter()
-                        .map(|evidence| SearchHybridMatch {
-                            repository_id: evidence.document.repository_id,
-                            path: evidence.document.path,
-                            line: evidence.anchor.start_line,
-                            column: evidence.anchor.start_column,
-                            excerpt: evidence.excerpt,
-                            anchor: Some(evidence.anchor),
-                            blended_score: evidence.blended_score,
-                            lexical_score: evidence.lexical_score,
-                            graph_score: evidence.graph_score,
-                            semantic_score: evidence.semantic_score,
-                            lexical_sources: evidence.lexical_sources,
-                            graph_sources: evidence.graph_sources,
-                            semantic_sources: evidence.semantic_sources,
-                        })
+                        .map(Self::search_hybrid_match_from_evidence)
                         .collect::<Vec<_>>();
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
@@ -488,6 +481,7 @@ impl FriggMcpServer {
                             .as_ref()
                             .map(SearchHybridStageAttribution::from),
                         semantic_capability: semantic_language_capability.clone(),
+                        utility: Some(Self::search_hybrid_utility_summary(&matches)),
                         freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
                             .expect("search_hybrid freshness basis should deserialize"),
                     });
@@ -1688,6 +1682,140 @@ impl FriggMcpServer {
         })
     }
 
+    fn search_hybrid_match_from_evidence(
+        evidence: crate::searcher::HybridRankedEvidence,
+    ) -> SearchHybridMatch {
+        let path = evidence.document.path.clone();
+        SearchHybridMatch {
+            repository_id: evidence.document.repository_id,
+            path: path.clone(),
+            line: evidence.anchor.start_line,
+            column: evidence.anchor.start_column,
+            excerpt: evidence.excerpt,
+            anchor: Some(evidence.anchor),
+            blended_score: evidence.blended_score,
+            lexical_score: evidence.lexical_score,
+            graph_score: evidence.graph_score,
+            semantic_score: evidence.semantic_score,
+            lexical_sources: evidence.lexical_sources,
+            graph_sources: evidence.graph_sources,
+            semantic_sources: evidence.semantic_sources,
+            path_class: Some(classify_repository_path(&path)),
+            source_class: Some(hybrid_match_source_class(&path)),
+            surface_families: hybrid_match_surface_families(&path),
+            navigation_hint: Some(SearchHybridNavigationHint {
+                pivotable: hybrid_match_is_live_navigation_pivot(&path),
+                document_symbols: hybrid_match_document_symbols_supported(&path),
+                go_to_definition: hybrid_match_definition_navigation_supported(&path),
+            }),
+        }
+    }
+
+    fn search_hybrid_utility_summary(matches: &[SearchHybridMatch]) -> SearchHybridUtilitySummary {
+        let pivotable_match_count = matches
+            .iter()
+            .filter(|matched| {
+                matched
+                    .navigation_hint
+                    .as_ref()
+                    .is_some_and(|hint| hint.pivotable)
+            })
+            .count();
+        let best_pivot = matches
+            .iter()
+            .enumerate()
+            .filter(|(_, matched)| {
+                matched
+                    .navigation_hint
+                    .as_ref()
+                    .is_some_and(|hint| hint.pivotable)
+            })
+            .max_by_key(|(index, matched)| {
+                (
+                    Self::search_hybrid_live_pivot_priority(matched),
+                    usize::MAX.saturating_sub(*index),
+                )
+            });
+        let (best_pivot_rank, best_pivot_path, best_pivot_repository_id, symbol_navigation_ready) =
+            if let Some((index, matched)) = best_pivot {
+                (
+                    Some(index + 1),
+                    Some(matched.path.clone()),
+                    Some(matched.repository_id.clone()),
+                    matched
+                        .navigation_hint
+                        .as_ref()
+                        .is_some_and(|hint| hint.document_symbols || hint.go_to_definition),
+                )
+            } else {
+                (None, None, None, false)
+            };
+        SearchHybridUtilitySummary {
+            pivotable_match_count,
+            best_pivot_rank,
+            best_pivot_path,
+            best_pivot_repository_id,
+            symbol_navigation_ready,
+        }
+    }
+
+    fn search_hybrid_live_pivot_priority(matched: &SearchHybridMatch) -> (u8, u8, u8, u8, u8, u8) {
+        let source_priority = match matched.source_class {
+            Some(SourceClass::Runtime) => 5,
+            Some(SourceClass::Support) => 4,
+            Some(SourceClass::Tests) => 3,
+            Some(SourceClass::Project) => 2,
+            _ => 0,
+        };
+        let runtime_family = matched
+            .surface_families
+            .iter()
+            .any(|family| family == "runtime") as u8;
+        let entrypoint_family = matched
+            .surface_families
+            .iter()
+            .any(|family| family == "entrypoint") as u8;
+        let tests_family = matched
+            .surface_families
+            .iter()
+            .any(|family| family == "tests") as u8;
+        let looks_like_test = Self::search_hybrid_path_looks_like_test(&matched.path) as u8;
+        let navigation_hint =
+            matched
+                .navigation_hint
+                .clone()
+                .unwrap_or(SearchHybridNavigationHint {
+                    pivotable: false,
+                    document_symbols: false,
+                    go_to_definition: false,
+                });
+        (
+            source_priority,
+            runtime_family,
+            entrypoint_family,
+            navigation_hint.document_symbols as u8,
+            navigation_hint.go_to_definition as u8,
+            tests_family.saturating_sub(looks_like_test),
+        )
+    }
+
+    fn search_hybrid_path_looks_like_test(path: &str) -> bool {
+        let lower = path.to_ascii_lowercase();
+        [
+            "/test/",
+            "/tests/",
+            "/spec/",
+            "/specs/",
+            ".test.",
+            ".spec.",
+            "_test.",
+            "test_",
+            "/__tests__/",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    }
+
     fn search_pattern_type_cache_key(pattern_type: &SearchPatternType) -> &'static str {
         match pattern_type {
             SearchPatternType::Literal => "literal",
@@ -1868,5 +1996,113 @@ impl FriggMcpServer {
             RuntimeCacheFamily::SearchSymbolResponse,
             &mut cache,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn match_fixture(
+        path: &str,
+        source_class: Option<SourceClass>,
+        surface_families: &[&str],
+        pivotable: bool,
+        document_symbols: bool,
+        go_to_definition: bool,
+    ) -> SearchHybridMatch {
+        SearchHybridMatch {
+            repository_id: "repo-001".to_string(),
+            path: path.to_string(),
+            line: 1,
+            column: 1,
+            excerpt: "fixture".to_string(),
+            anchor: None,
+            blended_score: 1.0,
+            lexical_score: 1.0,
+            graph_score: 0.0,
+            semantic_score: 0.0,
+            lexical_sources: vec![],
+            graph_sources: vec![],
+            semantic_sources: vec![],
+            path_class: None,
+            source_class,
+            surface_families: surface_families
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            navigation_hint: Some(SearchHybridNavigationHint {
+                pivotable,
+                document_symbols,
+                go_to_definition,
+            }),
+        }
+    }
+
+    #[test]
+    fn search_hybrid_utility_summary_prefers_runtime_source_pivot() {
+        let matches = vec![
+            match_fixture(
+                "README.md",
+                Some(SourceClass::Project),
+                &["docs"],
+                false,
+                false,
+                false,
+            ),
+            match_fixture(
+                "tests/runtime_test.rs",
+                Some(SourceClass::Tests),
+                &["tests"],
+                true,
+                true,
+                false,
+            ),
+            match_fixture(
+                "src/runtime/server.rs",
+                Some(SourceClass::Runtime),
+                &["runtime"],
+                true,
+                true,
+                true,
+            ),
+        ];
+
+        let summary = FriggMcpServer::search_hybrid_utility_summary(&matches);
+        assert_eq!(summary.pivotable_match_count, 2);
+        assert_eq!(summary.best_pivot_rank, Some(3));
+        assert_eq!(
+            summary.best_pivot_path.as_deref(),
+            Some("src/runtime/server.rs")
+        );
+        assert!(summary.symbol_navigation_ready);
+    }
+
+    #[test]
+    fn search_hybrid_utility_summary_reports_miss_without_pivotable_matches() {
+        let matches = vec![
+            match_fixture(
+                "docs/overview.md",
+                Some(SourceClass::Project),
+                &["docs"],
+                false,
+                false,
+                false,
+            ),
+            match_fixture(
+                "package.json",
+                Some(SourceClass::Project),
+                &["package_surface"],
+                false,
+                false,
+                false,
+            ),
+        ];
+
+        let summary = FriggMcpServer::search_hybrid_utility_summary(&matches);
+        assert_eq!(summary.pivotable_match_count, 0);
+        assert_eq!(summary.best_pivot_rank, None);
+        assert_eq!(summary.best_pivot_path, None);
+        assert!(!summary.symbol_navigation_ready);
     }
 }

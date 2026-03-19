@@ -1,0 +1,5 @@
+[build]
+target-dir = ".codex-cache/target"
+
+[cache]
+auto-clean-frequency = "1 day"

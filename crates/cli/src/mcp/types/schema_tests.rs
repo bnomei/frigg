@@ -570,6 +570,24 @@ fn schema_search_hybrid_metadata_is_typed_object() {
 }
 
 #[test]
+fn schema_search_hybrid_utility_summary_is_typed_object() {
+    let utility = property_schema::<SearchHybridMetadata>("utility");
+    assert!(
+        schema_allows_type(&utility, "object"),
+        "search_hybrid.metadata.utility should expose typed object transport: {utility}"
+    );
+
+    let doc = read_doc("search_hybrid.v1.schema.json");
+    let utility_fields = nested_strings(&doc, "/metadata/utility_fields");
+    assert!(utility_fields.contains("best_pivot_rank"));
+    assert!(utility_fields.contains("symbol_navigation_ready"));
+
+    let match_fields = nested_strings(&doc, "/matches/match_fields");
+    assert!(match_fields.contains("navigation_hint"));
+    assert!(match_fields.contains("surface_families"));
+}
+
+#[test]
 fn schema_search_hybrid_note_remains_string_encoded() {
     assert_optional_string_property::<SearchHybridResponse>("note");
 }

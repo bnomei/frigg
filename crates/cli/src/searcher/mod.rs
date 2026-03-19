@@ -28,8 +28,10 @@ mod semantic;
 mod surfaces;
 mod types;
 
-use crate::domain::{FriggError, FriggResult, model::TextMatch};
-use crate::languages::{LanguageCapability, SymbolLanguage, parse_supported_language};
+use crate::domain::{FriggError, FriggResult, SourceClass, model::TextMatch};
+use crate::languages::{
+    LanguageCapability, SymbolLanguage, parse_supported_language, supported_language_for_path,
+};
 pub use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
@@ -115,8 +117,9 @@ use surfaces::{
     is_entrypoint_build_workflow_path, is_entrypoint_runtime_path, is_example_support_path,
     is_frontend_runtime_noise_path, is_kotlin_android_ui_runtime_surface_path,
     is_package_surface_path, is_python_runtime_config_path, is_python_test_witness_path,
-    is_runtime_companion_surface_path, is_runtime_config_artifact_path, is_scripts_ops_path,
-    is_test_harness_path, is_test_support_path, is_workspace_config_surface_path,
+    is_repo_metadata_path, is_runtime_companion_surface_path, is_runtime_config_artifact_path,
+    is_scripts_ops_path, is_test_harness_path, is_test_support_path,
+    is_workspace_config_surface_path,
 };
 pub use types::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridExecutionNote,
@@ -131,6 +134,51 @@ pub(crate) use types::{
     empty_channel_result, hybrid_execution_note_from_channel_results, match_count_for_hits,
     search_diagnostics_to_channel_diagnostics,
 };
+
+pub(crate) fn hybrid_match_source_class(path: &str) -> SourceClass {
+    hybrid_source_class(path)
+}
+
+pub(crate) fn hybrid_match_surface_families(path: &str) -> Vec<String> {
+    let projection = StoredPathWitnessProjection::from_path(path);
+    path_witness_projection::generic_surface_families_for_projection(&projection)
+        .into_iter()
+        .map(|family| {
+            match family {
+                path_witness_projection::GenericWitnessSurfaceFamily::Runtime => "runtime",
+                path_witness_projection::GenericWitnessSurfaceFamily::Tests => "tests",
+                path_witness_projection::GenericWitnessSurfaceFamily::PackageSurface => {
+                    "package_surface"
+                }
+                path_witness_projection::GenericWitnessSurfaceFamily::BuildConfig => "build_config",
+                path_witness_projection::GenericWitnessSurfaceFamily::Entrypoint => "entrypoint",
+                path_witness_projection::GenericWitnessSurfaceFamily::WorkspaceConfig => {
+                    "workspace_config"
+                }
+            }
+            .to_owned()
+        })
+        .collect()
+}
+
+pub(crate) fn hybrid_match_document_symbols_supported(path: &str) -> bool {
+    supported_language_for_path(Path::new(path), LanguageCapability::DocumentSymbols).is_some()
+}
+
+pub(crate) fn hybrid_match_definition_navigation_supported(path: &str) -> bool {
+    supported_language_for_path(Path::new(path), LanguageCapability::SymbolCorpus).is_some()
+}
+
+pub(crate) fn hybrid_match_is_live_navigation_pivot(path: &str) -> bool {
+    if is_repo_metadata_path(path) || is_frontend_runtime_noise_path(path) {
+        return false;
+    }
+
+    matches!(
+        hybrid_source_class(path),
+        SourceClass::Runtime | SourceClass::Support | SourceClass::Tests
+    )
+}
 
 #[cfg(test)]
 fn rank_hybrid_evidence_for_query(

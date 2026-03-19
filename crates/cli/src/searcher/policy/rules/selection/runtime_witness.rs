@@ -167,6 +167,81 @@ fn same_language_path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
 }
 
+fn live_navigation_pivot_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let config_focused = ctx.wants_runtime_config_artifacts
+        && !ctx.wants_runtime_witnesses
+        && !ctx.wants_navigation_fallbacks
+        && !ctx.wants_test_witness_recall;
+    if config_focused
+        || !ctx.candidate_language_known
+        || ctx.is_repo_metadata
+        || ctx.is_frontend_runtime_noise
+    {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.seen_count == 0 {
+                0.18
+            } else {
+                0.10
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 {
+                0.12
+            } else {
+                0.06
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn live_navigation_text_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let config_focused = ctx.wants_runtime_config_artifacts
+        && !ctx.wants_runtime_witnesses
+        && !ctx.wants_navigation_fallbacks
+        && !ctx.wants_test_witness_recall;
+    if config_focused {
+        return None;
+    }
+
+    let delta = if ctx.is_repo_metadata {
+        if ctx.seen_count == 0 { -0.20 } else { -0.10 }
+    } else {
+        match ctx.class {
+            HybridSourceClass::Documentation | HybridSourceClass::Readme => {
+                if ctx.has_exact_query_term_match || ctx.path_overlap > 0 {
+                    0.0
+                } else if ctx.seen_count == 0 {
+                    -0.12
+                } else {
+                    -0.06
+                }
+            }
+            HybridSourceClass::Project => {
+                if ctx.candidate_language_known
+                    || ctx.is_runtime_config_artifact
+                    || ctx.is_entrypoint_build_workflow
+                {
+                    0.0
+                } else if ctx.seen_count == 0 {
+                    -0.08
+                } else {
+                    -0.04
+                }
+            }
+            _ => 0.0,
+        }
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let delta = match ctx.class {
         HybridSourceClass::Runtime => {
@@ -743,6 +818,37 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::path_overlap_leaf(),
         ]),
         same_language_path_overlap_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.live_navigation_pivot_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::new(
+            &[pred::candidate_language_known_leaf()],
+            &[
+                pred::wants_runtime_witnesses_leaf(),
+                pred::wants_navigation_fallbacks_leaf(),
+                pred::wants_test_witness_recall_leaf(),
+            ],
+            &[
+                pred::is_repo_metadata_leaf(),
+                pred::is_frontend_runtime_noise_leaf(),
+            ],
+        ),
+        live_navigation_pivot_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.live_navigation_text_noise_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::new(
+            &[],
+            &[
+                pred::wants_runtime_witnesses_leaf(),
+                pred::wants_navigation_fallbacks_leaf(),
+                pred::wants_test_witness_recall_leaf(),
+            ],
+            &[],
+        ),
+        live_navigation_text_noise_penalty,
     ),
     ScoreRule::when(
         "selection.runtime.language_mismatch_penalty",

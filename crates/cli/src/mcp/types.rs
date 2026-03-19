@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    ChannelHealthStatus, EvidenceAnchor,
+    ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass,
     model::{ReferenceMatch, SymbolMatch, TextMatch},
 };
 use crate::settings::RuntimeProfile;
@@ -492,6 +492,45 @@ pub struct SearchHybridMatch {
     pub lexical_sources: Vec<String>,
     pub graph_sources: Vec<String>,
     pub semantic_sources: Vec<String>,
+    /// Additive generic path-class hint for clients choosing a first navigation pivot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_class: Option<PathClass>,
+    /// Additive generic source-class hint derived from shared runtime/support/project classification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_class: Option<SourceClass>,
+    /// Additive generic surface-family hints such as `runtime`, `tests`, or `entrypoint`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_families: Vec<String>,
+    /// Additive live-navigation hint describing whether this match is a good pivot for follow-up tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navigation_hint: Option<SearchHybridNavigationHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridNavigationHint {
+    /// True when the match is a reasonable first pivot for `read_file` or symbol follow-up.
+    pub pivotable: bool,
+    /// True when `document_symbols` is expected to be useful on this path.
+    pub document_symbols: bool,
+    /// True when symbol/anchor follow-up is likely to support `go_to_definition`.
+    pub go_to_definition: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridUtilitySummary {
+    /// Count of returned matches that look like useful live-navigation pivots.
+    pub pivotable_match_count: usize,
+    /// One-based rank of the best generic pivot inside the returned result set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_pivot_rank: Option<usize>,
+    /// Canonical path of the best generic pivot inside the returned result set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_pivot_path: Option<String>,
+    /// Repository id for the best generic pivot when cross-repository search is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_pivot_repository_id: Option<String>,
+    /// True when the returned set contains at least one pivot that likely supports symbol follow-up.
+    pub symbol_navigation_ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -634,6 +673,9 @@ pub struct SearchHybridMetadata {
     pub stage_attribution: Option<SearchHybridStageAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_capability: Option<SearchHybridLanguageCapabilityMetadata>,
+    /// Additive utility summary for discovery-to-navigation workflows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utility: Option<SearchHybridUtilitySummary>,
     pub freshness_basis: ResponseFreshnessBasisMetadata,
 }
 
