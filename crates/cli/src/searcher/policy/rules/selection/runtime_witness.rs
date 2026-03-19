@@ -137,6 +137,36 @@ fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
 }
 
+fn same_language_path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.path_overlap == 0 {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.path_overlap >= 2 {
+                if ctx.seen_count == 0 { 0.42 } else { 0.24 }
+            } else if ctx.seen_count == 0 {
+                0.22
+            } else {
+                0.12
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.path_overlap >= 2 {
+                if ctx.seen_count == 0 { 0.28 } else { 0.16 }
+            } else if ctx.seen_count == 0 {
+                0.16
+            } else {
+                0.10
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     let delta = match ctx.class {
         HybridSourceClass::Runtime => {
@@ -151,6 +181,36 @@ fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
                 -0.20
             } else {
                 -0.12
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn language_mismatch_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.path_overlap == 0 {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.path_overlap >= 2 {
+                if ctx.seen_count == 0 { -0.36 } else { -0.22 }
+            } else if ctx.seen_count == 0 {
+                -0.20
+            } else {
+                -0.12
+            }
+        }
+        HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.path_overlap >= 2 {
+                if ctx.seen_count == 0 { -0.24 } else { -0.14 }
+            } else if ctx.seen_count == 0 {
+                -0.14
+            } else {
+                -0.08
             }
         }
         _ => 0.0,
@@ -364,25 +424,33 @@ fn locality_with_path_witness_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect
 }
 
 fn specific_witness_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
-    if ctx.specific_witness_path_overlap == 0
-        || !(ctx.has_path_witness_source || ctx.runtime_subtree_affinity > 0)
-    {
+    if ctx.specific_witness_path_overlap == 0 {
+        return None;
+    }
+
+    let anchored_locality = ctx.has_path_witness_source || ctx.runtime_subtree_affinity > 0;
+    let language_locality = ctx.wants_language_locality_bias && ctx.matches_query_language;
+    if !(anchored_locality || language_locality) {
         return None;
     }
 
     let delta = match ctx.class {
         HybridSourceClass::Runtime => {
-            if ctx.seen_count == 0 {
-                0.52
+            if anchored_locality {
+                if ctx.seen_count == 0 { 0.52 } else { 0.28 }
+            } else if ctx.seen_count == 0 {
+                0.32
             } else {
-                0.28
+                0.18
             }
         }
         HybridSourceClass::Support | HybridSourceClass::Tests => {
-            if ctx.seen_count == 0 {
-                0.38
+            if anchored_locality {
+                if ctx.seen_count == 0 { 0.38 } else { 0.20 }
+            } else if ctx.seen_count == 0 {
+                0.24
             } else {
-                0.20
+                0.14
             }
         }
         _ => 0.0,
@@ -665,6 +733,18 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
         same_language_bonus,
     ),
     ScoreRule::when(
+        "selection.runtime.same_language_path_overlap_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::wants_language_locality_bias_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+            pred::path_overlap_leaf(),
+        ]),
+        same_language_path_overlap_bonus,
+    ),
+    ScoreRule::when(
         "selection.runtime.language_mismatch_penalty",
         PolicyStage::SelectionRuntimeWitness,
         Predicate::new(
@@ -677,6 +757,21 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             &[pred::matches_query_language_leaf()],
         ),
         language_mismatch_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.language_mismatch_path_overlap_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::new(
+            &[
+                pred::wants_runtime_witnesses_leaf(),
+                pred::wants_language_locality_bias_leaf(),
+                pred::candidate_language_known_leaf(),
+                pred::path_overlap_leaf(),
+            ],
+            &[],
+            &[pred::matches_query_language_leaf()],
+        ),
+        language_mismatch_path_overlap_penalty,
     ),
     ScoreRule::when(
         "selection.runtime.subtree_affinity_bonus",

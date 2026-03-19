@@ -174,6 +174,20 @@ pub(super) fn selection_guardrail_cmp(
 
     let score_cmp = hybrid_selection_score_from_context(&left_facts)
         .total_cmp(&hybrid_selection_score_from_context(&right_facts));
+    let language_locality_cmp = if left_facts.wants_language_locality_bias
+        && left_facts.candidate_language_known
+        && right_facts.candidate_language_known
+        && (left_facts.specific_witness_path_overlap > 0
+            || right_facts.specific_witness_path_overlap > 0
+            || left_facts.path_overlap > 0
+            || right_facts.path_overlap > 0)
+    {
+        left_facts
+            .matches_query_language
+            .cmp(&right_facts.matches_query_language)
+    } else {
+        Ordering::Equal
+    };
     let companion_cmp = if left_facts.wants_runtime_companion_tests
         && right_facts.wants_runtime_companion_tests
         && left_facts.is_test_support
@@ -278,6 +292,7 @@ pub(super) fn selection_guardrail_cmp(
     };
 
     companion_cmp
+        .then(language_locality_cmp)
         .then(score_cmp)
         .then_with(|| {
             left_facts

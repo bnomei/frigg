@@ -252,6 +252,80 @@ fn hybrid_ranking_firecrawl_queries_prefer_typescript_runtime_over_python_drift(
 }
 
 #[test]
+#[ignore = "open TS path-locality escalation target"]
+fn hybrid_ranking_firecrawl_js_sdk_queries_prefer_typescript_sdk_over_python_drift()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-firecrawl-js-sdk-vs-python-drift");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "apps/js-sdk/firecrawl/src/client.ts",
+                "export class FirecrawlClient {}\n",
+            ),
+            (
+                "apps/js-sdk/firecrawl/src/__tests__/unit/v2/agent.test.ts",
+                "describe('agent', () => {});\n",
+            ),
+            (
+                "apps/python-sdk/firecrawl/tests/test_batch_scrape.py",
+                "def test_batch_scrape():\n    return 'firecrawl js sdk client batch crawl search scrape extract tests'\n",
+            ),
+            (
+                "docs/python-sdk.md",
+                "# Python SDK\nfirecrawl js sdk client batch crawl search scrape extract tests\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "firecrawl js sdk client batch crawl search scrape extract tests".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    let js_sdk_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "apps/js-sdk/firecrawl/src/client.ts"
+                    | "apps/js-sdk/firecrawl/src/__tests__/unit/v2/agent.test.ts"
+            )
+        })
+        .expect("a js-sdk witness should be ranked");
+    let python_position = ranked_paths
+        .iter()
+        .position(|path| {
+            matches!(
+                *path,
+                "apps/python-sdk/firecrawl/tests/test_batch_scrape.py" | "docs/python-sdk.md"
+            )
+        })
+        .expect("python drift should still be ranked");
+
+    assert!(
+        js_sdk_position < python_position,
+        "broad js-sdk queries should keep same-language typescript witnesses ahead of python drift: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_n8n_queries_prefer_same_workspace_subtree_over_sibling_packages()
 -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-n8n-workspace-subtree");
@@ -331,6 +405,71 @@ fn hybrid_ranking_n8n_queries_prefer_same_workspace_subtree_over_sibling_package
     assert!(
         cli_position < sibling_position,
         "same-subtree cli witnesses should outrank sibling workspace noise: {ranked_paths:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_n8n_broad_execution_queries_keep_cli_runtime_sources_visible() -> FriggResult<()>
+{
+    let root = temp_workspace_root("hybrid-n8n-broad-execution-runtime");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "packages/cli/src/executions/execution.service.ts",
+                "export class ExecutionService {}\n",
+            ),
+            (
+                "packages/cli/src/executions/execution.types.ts",
+                "export interface ExecutionRecord {}\n",
+            ),
+            (
+                "packages/cli/test/integration/task-runners/task-runner-process.test.ts",
+                "describe('task runner process', () => {});\n",
+            ),
+            (
+                "packages/cli/test/integration/webhooks.test.ts",
+                "describe('webhooks', () => {});\n",
+            ),
+            (
+                "packages/core/src/execution_engine.ts",
+                "export class ExecutionEngine {}\n",
+            ),
+            (
+                ".github/workflows/test-workflow-scripts-reusable.yml",
+                "name: reusable workflow\njobs:\n  test:\n    steps:\n      - run: pnpm test\n",
+            ),
+        ],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "n8n executions execution lifecycle task runner webhook cli integration"
+                .to_owned(),
+            limit: 6,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(false),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &PanicSemanticQueryEmbeddingExecutor,
+    )?;
+
+    let ranked_paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        ranked_paths
+            .iter()
+            .take(4)
+            .any(|path| path.starts_with("packages/cli/src/executions/")),
+        "broad execution queries should keep cli execution runtime sources visible near the top: {ranked_paths:?}"
     );
 
     cleanup_workspace(&root);

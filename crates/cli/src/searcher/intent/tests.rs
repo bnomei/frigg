@@ -330,3 +330,24 @@ fn ui_runtime_surface_queries_with_runtime_token_activate_runtime_witnesses() {
     assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
     assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
 }
+
+#[test]
+fn backend_typescript_queries_activate_runtime_witnesses_without_runtime_token() {
+    let intent = SearchIntent::from_query(
+        "firecrawl api controllers routes services worker playwright scrape crawl",
+    );
+
+    assert!(intent.has_framework_hint(FrameworkHint::TypeScript));
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}
+
+#[test]
+fn backend_execution_queries_activate_runtime_witnesses_from_flow_terms() {
+    let intent = SearchIntent::from_query(
+        "n8n executions execution lifecycle task runner webhook cli integration",
+    );
+
+    assert!(intent.has_goal(SearchGoal::RuntimeWitnesses));
+    assert!(!intent.has_artifact_bias(ArtifactBias::CiWorkflow));
+}

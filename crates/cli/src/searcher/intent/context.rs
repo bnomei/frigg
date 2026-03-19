@@ -51,6 +51,10 @@ impl QueryContext {
         ])
     }
 
+    pub(super) fn has_backend_runtime_surface_terms(&self) -> bool {
+        self.backend_runtime_surface_signal_count() >= 2
+    }
+
     pub(super) fn has_blade_form_action_terms(&self) -> bool {
         self.has_any(&[
             "form", "forms", "modal", "modals", "partial", "partials", "table", "tables",
@@ -110,6 +114,18 @@ impl QueryContext {
             "turbo",
             "node-cli",
         ])
+    }
+
+    pub(super) fn mentions_supported_language_family(&self) -> bool {
+        self.mentions_rust_family()
+            || self.mentions_php_family()
+            || self.mentions_typescript_family()
+            || self.mentions_python_family()
+            || self.mentions_go_family()
+            || self.mentions_kotlin_family()
+            || self.mentions_lua_family()
+            || self.mentions_roc_family()
+            || self.mentions_nim_family()
     }
 
     pub(super) fn mentions_python_family(&self) -> bool {
@@ -173,6 +189,24 @@ impl QueryContext {
         ])
     }
 
+    pub(super) fn has_runtime_supporting_terms(&self) -> bool {
+        self.has_any(&[
+            "test",
+            "tests",
+            "playwright",
+            "cli",
+            "command",
+            "commands",
+            "bootstrap",
+            "startup",
+            "handler",
+            "handlers",
+            "transport",
+            "request",
+            "requests",
+        ])
+    }
+
     pub(super) fn mentions_model_data_surface(&self) -> bool {
         self.has_any(&[
             "model",
@@ -195,5 +229,26 @@ impl QueryContext {
 
     pub(super) fn mentions_playbooks(&self) -> bool {
         self.has_any(&["playbook", "playbooks"])
+    }
+
+    fn backend_runtime_surface_signal_count(&self) -> usize {
+        [
+            self.has_any(&["api"]),
+            self.has_any(&["controller", "controllers"]),
+            self.has_any(&["route", "routes", "router", "routers"]),
+            self.has_any(&["service", "services"]),
+            self.has_any(&["worker", "workers"]),
+            self.has_any(&["webhook", "webhooks"]),
+            self.has_any(&["execution", "executions", "executor", "executors"]),
+            self.has_any(&["task runner", "task-runner", "task runners", "task-runners"]),
+            self.has_any(&["sdk", "sdks"]),
+            self.has_any(&["client", "clients"]),
+            self.has_any(&["crawl", "crawler", "crawlers"]),
+            self.has_any(&["scrape", "scraper", "scrapers"]),
+            self.has_any(&["batch", "batches"]),
+        ]
+        .into_iter()
+        .filter(|matched| *matched)
+        .count()
     }
 }

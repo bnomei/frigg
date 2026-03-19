@@ -309,7 +309,10 @@ async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dyn Error>> {
             }
         }
         if !matches!(command, Command::Serve) {
-            startup_trace(startup_trace_enabled, "async_main: non-serve command complete");
+            startup_trace(
+                startup_trace_enabled,
+                "async_main: non-serve command complete",
+            );
             return Ok(());
         }
     }

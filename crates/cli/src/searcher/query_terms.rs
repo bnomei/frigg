@@ -93,14 +93,28 @@ pub(super) fn hybrid_specific_witness_query_terms(query_text: &str) -> Vec<Strin
         "wiring",
     ];
 
-    hybrid_query_exact_terms(query_text)
-        .into_iter()
-        .filter(|term| {
-            !GENERIC_WITNESS_TERMS
-                .iter()
-                .any(|generic| generic == &term.as_str())
-        })
-        .collect()
+    let mut seen = BTreeSet::new();
+    let mut terms = Vec::new();
+    let exact_terms = hybrid_query_exact_terms(query_text);
+    let compound_overlap_terms = hybrid_query_overlap_terms(query_text);
+
+    for term in exact_terms.into_iter().chain(
+        compound_overlap_terms
+            .into_iter()
+            .filter(|term| term.contains('-')),
+    ) {
+        if GENERIC_WITNESS_TERMS
+            .iter()
+            .any(|generic| generic == &term.as_str())
+        {
+            continue;
+        }
+        if seen.insert(term.clone()) {
+            terms.push(term);
+        }
+    }
+
+    terms
 }
 
 pub(super) fn hybrid_query_has_kotlin_android_ui_terms(query_text: &str) -> bool {
@@ -208,6 +222,7 @@ pub(super) fn hybrid_query_overlap_terms(query_text: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut tokens = Vec::new();
     let mut current = String::new();
+    let normalized_query = query_text.trim().to_ascii_lowercase();
 
     for ch in query_text.chars() {
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
@@ -217,6 +232,7 @@ pub(super) fn hybrid_query_overlap_terms(query_text: &str) -> Vec<String> {
         push_hybrid_query_overlap_terms(&mut current, &mut seen, &mut tokens);
     }
     push_hybrid_query_overlap_terms(&mut current, &mut seen, &mut tokens);
+    push_known_compound_query_terms(&normalized_query, &mut seen, &mut tokens);
 
     tokens
 }
@@ -393,6 +409,28 @@ fn normalize_hybrid_overlap_token(token: &str) -> Option<String> {
     normalize_hybrid_recall_token(&normalized)
 }
 
+fn push_known_compound_query_terms(
+    query_text: &str,
+    seen: &mut BTreeSet<String>,
+    tokens: &mut Vec<String>,
+) {
+    const COMPOUND_TERMS: &[(&str, &str)] = &[
+        ("edge functions", "edge-functions"),
+        ("js sdk", "js-sdk"),
+        ("node cli", "node-cli"),
+        ("python sdk", "python-sdk"),
+        ("self hosted", "self-hosted"),
+        ("task runner", "task-runner"),
+        ("task runners", "task-runners"),
+    ];
+
+    for (phrase, token) in COMPOUND_TERMS {
+        if query_text.contains(phrase) && seen.insert((*token).to_owned()) {
+            tokens.push((*token).to_owned());
+        }
+    }
+}
+
 fn hybrid_terms_overlap(left: &str, right: &str) -> bool {
     if left == right {
         return true;
@@ -435,7 +473,7 @@ fn hybrid_terms_overlap(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        hybrid_path_overlap_count, hybrid_query_mentions_cli_command,
+        hybrid_path_overlap_count, hybrid_query_mentions_cli_command, hybrid_query_overlap_terms,
         hybrid_specific_witness_query_terms,
     };
 
@@ -483,5 +521,29 @@ mod tests {
             hybrid_specific_witness_query_terms("ruff analyze cli command entrypoint"),
             vec!["ruff".to_owned(), "analyze".to_owned()]
         );
+    }
+
+    #[test]
+    fn hybrid_specific_witness_terms_preserve_known_compound_path_anchors() {
+        let terms = hybrid_specific_witness_query_terms(
+            "firecrawl js sdk client task runner self hosted edge functions",
+        );
+
+        assert!(terms.contains(&"js-sdk".to_owned()));
+        assert!(terms.contains(&"task-runner".to_owned()));
+        assert!(terms.contains(&"self-hosted".to_owned()));
+        assert!(terms.contains(&"edge-functions".to_owned()));
+    }
+
+    #[test]
+    fn hybrid_query_overlap_terms_preserve_known_compound_language_and_runner_terms() {
+        let terms = hybrid_query_overlap_terms(
+            "firecrawl js sdk client task runner self hosted edge functions",
+        );
+
+        assert!(terms.contains(&"js-sdk".to_owned()));
+        assert!(terms.contains(&"task-runner".to_owned()));
+        assert!(terms.contains(&"self-hosted".to_owned()));
+        assert!(terms.contains(&"edge-functions".to_owned()));
     }
 }

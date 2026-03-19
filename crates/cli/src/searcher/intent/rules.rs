@@ -460,9 +460,14 @@ fn apply_runtime_witness_terms(context: &QueryContext, builder: &mut SearchInten
             "viewmodel",
             "vue",
         ]) || context.has_any_token(&["runtime"]));
+    let backend_runtime_signal = context.has_backend_runtime_surface_terms()
+        && (context.mentions_supported_language_family()
+            || context.has_strong_test_focus_terms()
+            || context.has_runtime_supporting_terms());
     if !(explicit_runtime_signal
         || generic_runtime_signal
         || ui_runtime_signal
+        || backend_runtime_signal
         || context.mentions_model_data_surface()
         || builder.has_artifact_bias(ArtifactBias::LaravelUi)
         || builder.has_goal(SearchGoal::EntryPointBuildFlow)
