@@ -133,7 +133,7 @@ This is the default Frigg workflow:
 3. Start one persistent Frigg HTTP service with `frigg serve`.
 4. Let your agent adopt repositories session-locally with `workspace_attach`.
 5. Use `workspace_prepare` or `workspace_reindex` from MCP only when you intentionally want Frigg to initialize or refresh repository state from inside the client.
-6. Use `search_hybrid` for broad questions, then narrow with symbol or navigation tools when you need precise anchors.
+6. Use `search_hybrid` as the discovery surface for broad questions, then pivot into `read_file`, `document_symbols`, `go_to_definition`, or `search_symbol` when you need precise anchors and deeper navigation.
 
 Typical prompts:
 
