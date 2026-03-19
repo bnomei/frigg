@@ -223,16 +223,29 @@ impl WorkloadCorpusExportFormat {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
+    let startup_trace_active = startup_trace_enabled();
+    startup_trace(startup_trace_active, "main: entered");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    startup_trace(startup_trace_active, "main: tokio runtime ready");
+    runtime.block_on(async_main(startup_trace_active))
+}
+
+async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dyn Error>> {
+    startup_trace(startup_trace_enabled, "async_main: entered");
     let cli = Cli::parse();
+    startup_trace(startup_trace_enabled, "async_main: cli parsed");
     let serve_requested = matches!(cli.command, Some(Command::Serve));
     let http_runtime = resolve_http_runtime_config(&cli, serve_requested)?;
+    startup_trace(startup_trace_enabled, "async_main: http runtime resolved");
     let transport_kind = http_runtime
         .as_ref()
         .map(HttpRuntimeConfig::transport_kind)
         .unwrap_or(RuntimeTransportKind::Stdio);
     init_tracing(default_tracing_filter(&cli, transport_kind));
+    startup_trace(startup_trace_enabled, "async_main: tracing initialized");
 
     if let Some(command) = cli.command.clone() {
         match command.clone() {
@@ -296,14 +309,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         if !matches!(command, Command::Serve) {
+            startup_trace(startup_trace_enabled, "async_main: non-serve command complete");
             return Ok(());
         }
     }
 
     let config = resolve_startup_config(&cli, transport_kind)?;
+    startup_trace(startup_trace_enabled, "async_main: startup config resolved");
     run_strict_startup_vector_readiness_gate(&config)?;
+    startup_trace(startup_trace_enabled, "async_main: vector readiness passed");
     run_semantic_runtime_startup_gate(&config)?;
+    startup_trace(startup_trace_enabled, "async_main: semantic gate passed");
     let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
+    startup_trace(startup_trace_enabled, "async_main: watch config resolved");
     let runtime_watch_active = watch_runtime_config
         .watch
         .enabled_for_transport(transport_kind);
@@ -328,12 +346,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _watch_runtime = watch_runtime.map(Arc::new);
     server.set_watch_runtime(_watch_runtime.clone());
     if let Some(runtime) = http_runtime {
+        startup_trace(startup_trace_enabled, "async_main: serving http");
         serve_http(runtime, server).await?;
     } else {
+        startup_trace(startup_trace_enabled, "async_main: serving stdio");
         server.serve_stdio().await?;
     }
 
     Ok(())
+}
+
+fn startup_trace_enabled() -> bool {
+    std::env::var_os("FRIGG_STARTUP_TRACE").is_some()
+}
+
+fn startup_trace(enabled: bool, message: &str) {
+    if enabled {
+        eprintln!("[frigg-startup] {message}");
+    }
 }
 
 fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'static str {
