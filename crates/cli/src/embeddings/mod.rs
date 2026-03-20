@@ -1,3 +1,7 @@
+//! Embedding provider abstractions and readiness checks used by both indexing and runtime startup.
+//! Keeping semantic transport concerns here lets the rest of the crate treat embeddings as a
+//! capability boundary instead of vendor-specific HTTP code.
+
 use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -8,6 +12,7 @@ use thiserror::Error;
 #[allow(unused_imports)]
 use sqlite_vec as _;
 
+/// Result type shared by semantic indexing and query-time embedding calls.
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +109,7 @@ impl Default for GoogleEmbeddingProviderConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Provider-agnostic embedding request used by indexing and search code paths.
 pub struct EmbeddingRequest {
     pub model: String,
     pub input: Vec<String>,
@@ -156,6 +162,8 @@ pub struct EmbeddingUsage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Normalized embedding response so callers can consume vectors without branching on provider
+/// wire formats.
 pub struct EmbeddingResponse {
     pub provider: EmbeddingProviderKind,
     pub model: String,
@@ -165,6 +173,8 @@ pub struct EmbeddingResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Vector backend health summary used to decide whether semantic storage can participate in the
+/// broader retrieval pipeline.
 pub struct VectorStoreReadiness {
     pub backend: String,
     pub extension_version: String,
@@ -172,6 +182,8 @@ pub struct VectorStoreReadiness {
     pub expected_dimensions: usize,
 }
 
+/// Verifies that the configured SQLite/vector backend can support semantic storage before indexing
+/// or search depend on it.
 pub fn verify_vector_store_readiness(
     db_path: impl AsRef<Path>,
     expected_dimensions: Option<usize>,

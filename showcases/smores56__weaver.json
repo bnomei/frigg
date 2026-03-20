@@ -1,0 +1,116 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "smores56/weaver",
+  "repo_url": "https://github.com/smores56/weaver",
+  "language_family": "roc-runtime",
+  "source_profile": "roc-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define weaver's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "package/main.roc"
+      ],
+      "expected_paths_should": [
+        "package/Arg.roc",
+        "package/Base.roc",
+        "package/Builder.roc",
+        "package/Cli.roc",
+        "package/CliTest.roc",
+        "package/ErrorFormatter.roc"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "platform"
+      ]
+    },
+    {
+      "case_id": "examples-and-tests",
+      "question": "Which files define weaver's examples and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/basic.roc",
+        "examples/default-values.roc",
+        "examples/single-arg.roc",
+        "examples/subcommands.roc"
+      ],
+      "expected_paths_should": [
+        "package/main.roc"
+      ],
+      "expected_kinds": [
+        "examples-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "package-core-and-examples",
+      "question": "Which files define weaver's package core and examples?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "package/Arg.roc",
+        "package/Base.roc",
+        "package/Builder.roc",
+        "package/Cli.roc"
+      ],
+      "expected_paths_should": [
+        "README.md",
+        "examples/basic.roc",
+        "examples/default-values.roc",
+        "examples/single-arg.roc",
+        "examples/subcommands.roc"
+      ],
+      "expected_kinds": [
+        "package-core",
+        "example-readme"
+      ]
+    },
+    {
+      "case_id": "examples-and-workflows",
+      "question": "Which files define weaver's examples and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/basic.roc",
+        "examples/default-values.roc",
+        "examples/single-arg.roc",
+        "examples/subcommands.roc"
+      ],
+      "expected_paths_should": [
+        "package/Arg.roc",
+        "package/Base.roc",
+        "package/Builder.roc",
+        "package/Cli.roc",
+        "package/CliTest.roc",
+        "package/ErrorFormatter.roc"
+      ],
+      "expected_kinds": [
+        "example-workflow",
+        "workflow-package"
+      ]
+    },
+    {
+      "case_id": "readme-and-package-apis",
+      "question": "Which files define weaver's readme and package apis?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "README.md"
+      ],
+      "expected_paths_should": [
+        "examples/basic.roc",
+        "examples/default-values.roc",
+        "examples/single-arg.roc",
+        "examples/subcommands.roc",
+        "package/Arg.roc",
+        "package/Base.roc"
+      ],
+      "expected_kinds": [
+        "readme-doc",
+        "package-api"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "mason-org/mason.nvim",
+  "repo_url": "https://github.com/mason-org/mason.nvim",
+  "language_family": "lua-runtime",
+  "source_profile": "lua-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define mason.nvim's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "lua/mason/ui/components/main/init.lua",
+        "lua/mason-registry/init.lua",
+        "lua/mason/init.lua",
+        "lua/mason-core/async/init.lua"
+      ],
+      "expected_paths_should": [
+        "Makefile",
+        "PACKAGES.md",
+        "README.md",
+        "vim.yml",
+        "doc/mason.txt",
+        ".github/workflows/cbfmt.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "registry-sources-and-providers",
+      "question": "Which files define mason.nvim's registry sources and providers?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "lua/mason-registry/api.lua",
+        "lua/mason-registry/index/init.lua",
+        "lua/mason-registry/init.lua",
+        "lua/mason-registry/installer.lua"
+      ],
+      "expected_paths_should": [
+        "lua/mason-core/package/AbstractPackage.lua",
+        "lua/mason-core/package/init.lua",
+        "PACKAGES.md",
+        "tests/mason-registry/api_spec.lua",
+        "tests/mason-registry/registry_spec.lua",
+        "tests/mason-registry/sources/collection_spec.lua"
+      ],
+      "expected_kinds": [
+        "registry-provider",
+        "registry-test-and-package"
+      ]
+    },
+    {
+      "case_id": "core-async-api-and-commands",
+      "question": "Which files define mason.nvim's core async API and commands?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "lua/mason-core/async/control.lua",
+        "lua/mason-core/async/init.lua",
+        "lua/mason-core/async/uv.lua",
+        "lua/mason/api/command.lua"
+      ],
+      "expected_paths_should": [
+        "doc/mason.txt",
+        "tests/mason/setup_spec.lua",
+        "tests/mason-core/async/async_spec.lua",
+        "tests/mason-core/providers/provider_spec.lua",
+        "tests/mason/api/command_spec.lua"
+      ],
+      "expected_kinds": [
+        "core-command",
+        "test-doc"
+      ]
+    },
+    {
+      "case_id": "tests-helpers-and-registry-fixtures",
+      "question": "Which files define mason.nvim's tests helpers and registry fixtures?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/helpers/lua/dummy-registry/dummy.lua",
+        "tests/helpers/lua/dummy-registry/dummy2.lua",
+        "tests/helpers/lua/dummy-registry/index.lua",
+        "tests/helpers/lua/dummy-registry/registry.lua"
+      ],
+      "expected_paths_should": [
+        "tests/mason-registry/sources/collection_spec.lua",
+        "tests/mason-registry/api_spec.lua",
+        "tests/mason-registry/registry_spec.lua",
+        "tests/mason-registry/sources/lua_spec.lua"
+      ],
+      "expected_kinds": [
+        "test-helper",
+        "fixture-registry"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "mudler/LocalAI",
+  "repo_url": "https://github.com/mudler/LocalAI",
+  "language_family": "go-runtime",
+  "source_profile": "go-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "model-gallery-and-templates",
+      "question": "Which files define LocalAI's model gallery and templates?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "core/gallery/models.go",
+        "core/gallery/models_types.go",
+        "core/gallery/models_test.go",
+        "core/gallery/gallery.go"
+      ],
+      "expected_paths_should": [
+        "core/http/react-ui/src/components/ModelSelector.jsx",
+        "core/http/react-ui/src/components/SearchableModelSelect.jsx",
+        "core/http/react-ui/src/pages/ImportModel.jsx",
+        "core/http/react-ui/src/pages/ModelEditor.jsx",
+        "core/http/react-ui/src/pages/Models.jsx",
+        "prompt-templates/alpaca.tmpl"
+      ],
+      "expected_kinds": [
+        "gallery-runtime",
+        "gallery-ui-template"
+      ]
+    },
+    {
+      "case_id": "grpc-backends-and-core-runtime",
+      "question": "Which files define LocalAI's gRPC backends and core runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cmd/local-ai/main.go",
+        "cmd/launcher/main.go",
+        "core/application/application.go",
+        "core/application/startup.go"
+      ],
+      "expected_paths_should": [
+        "core/services/agent_pool.go",
+        "core/services/backend_monitor.go",
+        "core/services/backends.go",
+        "core/services/gallery.go"
+      ],
+      "expected_kinds": [
+        "backend-runtime",
+        "startup-service"
+      ]
+    },
+    {
+      "case_id": "functions-tests-and-docs",
+      "question": "Which files define LocalAI's functions tests and docs?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pkg/functions/chat_deltas.go",
+        "pkg/functions/function_structure.go",
+        "pkg/functions/functions.go",
+        "pkg/functions/functions_suite_test.go"
+      ],
+      "expected_paths_should": [
+        "examples/README.md",
+        "core/services/agent_jobs.go",
+        "core/services/agent_pool.go",
+        "core/services/backend_monitor.go",
+        "core/services/backends.go",
+        "docs/content/integrations.md"
+      ],
+      "expected_kinds": [
+        "function-test",
+        "doc-example"
+      ]
+    }
+  ]
+}

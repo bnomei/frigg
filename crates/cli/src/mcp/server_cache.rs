@@ -425,6 +425,7 @@ pub(crate) struct GoToDefinitionResponseCacheKey {
     pub(crate) path: Option<String>,
     pub(crate) line: Option<usize>,
     pub(crate) column: Option<usize>,
+    pub(crate) include_follow_up_structural: bool,
     pub(crate) limit: usize,
 }
 
@@ -451,6 +452,7 @@ pub(crate) struct FindDeclarationsResponseCacheKey {
     pub(crate) path: Option<String>,
     pub(crate) line: Option<usize>,
     pub(crate) column: Option<usize>,
+    pub(crate) include_follow_up_structural: bool,
     pub(crate) limit: usize,
 }
 

@@ -1,0 +1,126 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "roc-lang/basic-webserver",
+  "repo_url": "https://github.com/roc-lang/basic-webserver",
+  "language_family": "roc-runtime",
+  "source_profile": "roc-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define basic-webserver's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/main.roc",
+        "platform/Cmd.roc",
+        "platform/Dir.roc",
+        "platform/Env.roc"
+      ],
+      "expected_paths_should": [
+        "platform/EnvDecoding.roc",
+        "platform/File.roc",
+        "platform/Host.roc",
+        "platform/Http.roc"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "platform"
+      ]
+    },
+    {
+      "case_id": "examples-and-tests",
+      "question": "Which files define basic-webserver's examples and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/command.roc",
+        "examples/dir.roc",
+        "examples/echo.roc",
+        "examples/env.roc"
+      ],
+      "expected_paths_should": [
+        "platform/main.roc",
+        "build.roc",
+        "platform/Cmd.roc",
+        "platform/Dir.roc",
+        "platform/Env.roc",
+        "platform/EnvDecoding.roc"
+      ],
+      "expected_kinds": [
+        "examples-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "request-response-and-platform",
+      "question": "Which files define basic-webserver's request response and platform?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/Host.roc",
+        "platform/Http.roc",
+        "platform/MultipartFormData.roc",
+        "platform/InternalHttp.roc"
+      ],
+      "expected_paths_should": [
+        "examples/echo.roc",
+        "examples/form-file-upload.roc",
+        "examples/form-url-encoded.roc",
+        "examples/hello-web.roc",
+        "examples/http.roc",
+        "examples/result.roc"
+      ],
+      "expected_kinds": [
+        "platform-http",
+        "host-runtime"
+      ]
+    },
+    {
+      "case_id": "examples-tests-and-expect-scripts",
+      "question": "Which files define basic-webserver's examples tests and expect scripts?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/command.roc",
+        "examples/dir.roc",
+        "examples/echo.roc",
+        "examples/env.roc"
+      ],
+      "expected_paths_should": [
+        "ci/expect_scripts/cmd-test.exp",
+        "ci/expect_scripts/dir-test.exp",
+        "ci/expect_scripts/file-permissions.exp",
+        "ci/expect_scripts/file-read-buffered.exp",
+        "ci/expect_scripts/file.exp",
+        "ci/expect_scripts/http.exp"
+      ],
+      "expected_kinds": [
+        "example-test",
+        "expect-script"
+      ]
+    },
+    {
+      "case_id": "docs-platform-and-host-runtime",
+      "question": "Which files define basic-webserver's docs platform and host runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/Dir.roc",
+        "platform/Env.roc",
+        "platform/EnvDecoding.roc",
+        "platform/File.roc"
+      ],
+      "expected_paths_should": [
+        "examples/dir.roc",
+        "examples/env.roc",
+        "examples/file-permissions.roc",
+        "examples/file-read-buffered.roc",
+        "examples/file-read.roc",
+        "examples/sleep.roc"
+      ],
+      "expected_kinds": [
+        "platform-capability",
+        "capability-example"
+      ]
+    }
+  ]
+}

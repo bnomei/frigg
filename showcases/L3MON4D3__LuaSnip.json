@@ -1,0 +1,127 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "L3MON4D3/LuaSnip",
+  "repo_url": "https://github.com/L3MON4D3/LuaSnip",
+  "language_family": "lua-runtime",
+  "source_profile": "lua-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define LuaSnip's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "plugin/luasnip.lua",
+        "plugin/luasnip.vim",
+        "lua/luasnip/init.lua",
+        "lua/luasnip/extras/init.lua"
+      ],
+      "expected_paths_should": [
+        "DOC.md",
+        "Makefile",
+        "README.md",
+        "doc/luasnip.txt",
+        ".github/workflows/luarocks.yml",
+        ".github/workflows/push.yaml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "nodes-extras-and-loaders",
+      "question": "Which files define LuaSnip's nodes extras and loaders?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "lua/luasnip/nodes/snippet.lua",
+        "lua/luasnip/nodes/choiceNode.lua",
+        "lua/luasnip/nodes/dynamicNode.lua",
+        "lua/luasnip/nodes/functionNode.lua"
+      ],
+      "expected_paths_should": [
+        "lua/luasnip/extras/_extra_types.lua",
+        "lua/luasnip/extras/_lambda.lua",
+        "lua/luasnip/extras/_parser_combinator.lua",
+        "lua/luasnip/extras/_treesitter.lua",
+        "lua/luasnip/extras/expand_conditions.lua",
+        "lua/luasnip/extras/filetype_functions.lua"
+      ],
+      "expected_kinds": [
+        "engine-loader",
+        "integration-extra"
+      ]
+    },
+    {
+      "case_id": "plugin-ftplugin-and-syntax",
+      "question": "Which files define LuaSnip's plugin ftplugin and syntax?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "plugin/luasnip.lua",
+        "plugin/luasnip.vim",
+        "ftplugin/snippets.vim",
+        "syntax/snippets.vim"
+      ],
+      "expected_paths_should": [
+        "DOC.md",
+        "doc/luasnip.txt",
+        "lua/luasnip/config.lua",
+        "lua/luasnip/health.lua",
+        "lua/luasnip/init.lua"
+      ],
+      "expected_kinds": [
+        "plugin-ui",
+        "runtime-doc"
+      ]
+    },
+    {
+      "case_id": "tests-helpers-and-data-loaders",
+      "question": "Which files define LuaSnip's tests helpers and data loaders?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/helpers.lua",
+        "tests/unit/loader_spec.lua",
+        "tests/integration/loaders_spec.lua",
+        "tests/integration/parser_spec.lua"
+      ],
+      "expected_paths_should": [
+        "tests/data/vscode-snippets/lua.json",
+        "tests/data/vscode-snippets/package.json",
+        "tests/data/lua-snippets/luasnippets/all.lua",
+        "tests/data/snipmate-snippets/snippets/all.snippets",
+        "data/project-dictionary.txt",
+        "lua/luasnip/loaders/data.lua"
+      ],
+      "expected_kinds": [
+        "loader-test",
+        "loader-data"
+      ]
+    },
+    {
+      "case_id": "examples-data-and-parser-tests",
+      "question": "Which files define LuaSnip's examples data and parser tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "Examples/snippets.lua",
+        "tests/data/lua-snippets/luasnippets/all.lua",
+        "tests/data/lua-snippets/luasnippets/lua/anyname.lua",
+        "tests/data/lua-snippets/luasnippets/lua/test_env.lua"
+      ],
+      "expected_paths_should": [
+        "tests/integration/loaders_spec.lua",
+        "tests/integration/parser_spec.lua",
+        "data/DOC-template.md",
+        "data/project-dictionary.txt",
+        "lua/luasnip/loaders/data.lua",
+        "lua/luasnip/loaders/from_lua.lua"
+      ],
+      "expected_kinds": [
+        "example-data",
+        "loader-parser"
+      ]
+    }
+  ]
+}

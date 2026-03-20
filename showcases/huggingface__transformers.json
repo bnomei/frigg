@@ -1,0 +1,119 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "huggingface/transformers",
+  "repo_url": "https://github.com/huggingface/transformers",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "cli-config-and-entrypoints",
+      "question": "Which files define transformers' CLI config and entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/cli/conftest.py",
+        "tests/cli/test_chat.py",
+        "tests/cli/test_download.py",
+        "tests/cli/test_serve.py"
+      ],
+      "expected_paths_should": [
+        "src/transformers/cli/__init__.py",
+        "src/transformers/cli/chat.py",
+        "src/transformers/cli/download.py",
+        "src/transformers/cli/serve.py",
+        "src/transformers/cli/system.py",
+        "src/transformers/cli/transformers.py"
+      ],
+      "expected_kinds": [
+        "cli-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "examples-and-pipeline-tests",
+      "question": "Which files define transformers' examples and pipeline tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/pytorch/test_pytorch_examples.py",
+        "examples/pytorch/text-generation/run_generation.py"
+      ],
+      "expected_paths_should": [
+        "tests/pipelines/test_pipelines_mask_generation.py",
+        "tests/pipelines/test_pipelines_text_classification.py",
+        "tests/pipelines/test_pipelines_text_generation.py",
+        "tests/pipelines/test_pipelines_text_to_audio.py"
+      ],
+      "expected_kinds": [
+        "examples",
+        "pipeline-tests"
+      ]
+    },
+    {
+      "case_id": "benchmark-runners-and-trainer-stack",
+      "question": "Which files define transformers' benchmark runners and trainer stack?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "benchmark/__init__.py",
+        "benchmark/benches/llama.py",
+        "benchmark/benchmark.py",
+        "benchmark/benchmarks_entrypoint.py"
+      ],
+      "expected_paths_should": [
+        "src/transformers/trainer.py",
+        "src/transformers/trainer_callback.py",
+        "src/transformers/trainer_jit_checkpoint.py",
+        "src/transformers/trainer_optimizer.py",
+        "src/transformers/trainer_pt_utils.py",
+        "src/transformers/trainer_seq2seq.py"
+      ],
+      "expected_kinds": [
+        "benchmark-runners",
+        "trainer-stack"
+      ]
+    },
+    {
+      "case_id": "generation-tests-and-runtime",
+      "question": "Which files define transformers' generation tests and runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/generation/test_candidate_generator.py",
+        "tests/generation/test_configuration_utils.py",
+        "tests/generation/test_continuous_batching.py",
+        "tests/generation/test_paged_attention.py"
+      ],
+      "expected_paths_should": [
+        "src/transformers/generation/candidate_generator.py",
+        "src/transformers/generation/configuration_utils.py",
+        "src/transformers/generation/streamers.py",
+        "src/transformers/generation/utils.py",
+        "src/transformers/generation/continuous_batching/continuous_api.py",
+        "src/transformers/generation/continuous_batching/scheduler.py"
+      ],
+      "expected_kinds": [
+        "generation-tests",
+        "generation-runtime"
+      ]
+    },
+    {
+      "case_id": "audio-spectrogram-model-and-features",
+      "question": "Which files define transformers' audio spectrogram model and features?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/models/audio_spectrogram_transformer/test_feature_extraction_audio_spectrogram_transformer.py",
+        "tests/models/audio_spectrogram_transformer/test_modeling_audio_spectrogram_transformer.py"
+      ],
+      "expected_paths_should": [
+        "src/transformers/models/audio_spectrogram_transformer/configuration_audio_spectrogram_transformer.py",
+        "src/transformers/models/audio_spectrogram_transformer/feature_extraction_audio_spectrogram_transformer.py",
+        "src/transformers/models/audio_spectrogram_transformer/modeling_audio_spectrogram_transformer.py"
+      ],
+      "expected_kinds": [
+        "model-tests",
+        "model-implementations"
+      ]
+    }
+  ]
+}

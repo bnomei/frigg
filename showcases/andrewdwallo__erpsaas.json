@@ -1,0 +1,123 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "andrewdwallo/erpsaas",
+  "repo_url": "https://github.com/andrewdwallo/erpsaas",
+  "language_family": "blade-laravel-ui",
+  "source_profile": "blade-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "blade-layouts-and-components",
+      "question": "Which files define erpsaas' blade layouts and components?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/components/company/reports/layout.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/company/reports/account-transactions-report-pdf.blade.php",
+        "resources/views/components/company/reports/cash-flow-statement-pdf.blade.php",
+        "resources/views/components/company/reports/income-statement-summary-pdf.blade.php",
+        "resources/views/components/company/reports/report-pdf.blade.php",
+        "resources/views/components/company/reports/summary-report-pdf.blade.php",
+        "resources/views/components/company/document-template/container.blade.php"
+      ],
+      "expected_kinds": [
+        "layouts-pages",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "blade-forms-and-actions",
+      "question": "Which files define erpsaas' blade forms and actions?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/filament/forms/components/company-info.blade.php",
+        "resources/views/filament/forms/components/custom-section.blade.php",
+        "resources/views/filament/forms/components/custom-table-repeater.blade.php",
+        "resources/views/filament/forms/components/document-preview.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/avatar.blade.php",
+        "resources/views/components/actions/delete-bank-connection-modal.blade.php",
+        "resources/views/components/actions/transaction-import-modal.blade.php",
+        "resources/views/components/company/document-template/container.blade.php",
+        "resources/views/components/company/document-template/footer.blade.php",
+        "resources/views/components/company/document-template/header.blade.php"
+      ],
+      "expected_kinds": [
+        "forms-actions",
+        "form-classes"
+      ]
+    },
+    {
+      "case_id": "filament-report-and-page-views",
+      "question": "Which files define erpsaas' filament report and page views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/filament/company/pages/accounting/chart.blade.php",
+        "resources/views/filament/company/pages/create-company.blade.php",
+        "resources/views/filament/company/pages/reports.blade.php",
+        "resources/views/filament/company/pages/reports/account-transactions.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/filament/company/components/actions/journal-entry-footer.blade.php",
+        "resources/views/filament/company/components/document-templates/classic.blade.php",
+        "resources/views/filament/company/components/document-templates/default.blade.php",
+        "resources/views/filament/company/components/document-templates/modern.blade.php",
+        "resources/views/filament/company/components/page/custom-simple.blade.php",
+        "resources/views/filament/company/components/tables/actions/mark-as-reviewed.blade.php"
+      ],
+      "expected_kinds": [
+        "filament-views",
+        "filament-classes"
+      ]
+    },
+    {
+      "case_id": "document-components-and-preview-views",
+      "question": "Which files define erpsaas' document components and preview views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/components/company/document-template/container.blade.php",
+        "resources/views/components/company/document-template/footer.blade.php",
+        "resources/views/components/company/document-template/header.blade.php",
+        "resources/views/components/company/document-template/line-items.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/company/document-template/logo.blade.php",
+        "resources/views/components/company/document-template/metadata.blade.php",
+        "resources/views/components/company/reports/account-transactions-report-pdf.blade.php",
+        "resources/views/components/company/reports/cash-flow-statement-pdf.blade.php"
+      ],
+      "expected_kinds": [
+        "document-views",
+        "document-support"
+      ]
+    },
+    {
+      "case_id": "livewire-service-and-auth-views",
+      "question": "Which files define erpsaas' livewire service and auth views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/livewire/company/service/connected-account/list-institutions.blade.php",
+        "resources/views/livewire/company/service/live-currency/list-company-currencies.blade.php",
+        "resources/views/livewire/company/service/live-currency/list-currencies.blade.php",
+        "resources/views/livewire/update-password-form.blade.php"
+      ],
+      "expected_paths_should": [
+        "app/Livewire/UpdatePassword.php",
+        "app/Livewire/UpdateProfileInformation.php",
+        "app/Filament/User/Clusters/Account.php",
+        "app/Filament/Company/Pages/Service/ConnectedAccount.php",
+        "app/Filament/Company/Pages/Service/LiveCurrency.php",
+        "app/Livewire/Company/Service/ConnectedAccount/ListInstitutions.php"
+      ],
+      "expected_kinds": [
+        "livewire-views",
+        "livewire-classes"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "mpeterv/luacheck",
+  "repo_url": "https://github.com/mpeterv/luacheck",
+  "language_family": "lua-runtime",
+  "source_profile": "lua-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define luacheck's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/luacheck/main.lua",
+        "src/luacheck/init.lua",
+        "src/luacheck/builtin_standards/init.lua",
+        "src/luacheck/stages/init.lua"
+      ],
+      "expected_paths_should": [
+        ".busted",
+        ".luacheckrc",
+        "README.md",
+        "luacheck-dev-1.rockspec",
+        "docsrc/cli.rst",
+        "docsrc/conf.py"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "checker-cli-and-standards",
+      "question": "Which files define luacheck's checker CLI and standards?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/luacheck/builtin_standards/init.lua",
+        "src/luacheck/builtin_standards/love.lua",
+        "src/luacheck/builtin_standards/ngx.lua",
+        "src/luacheck/cache.lua"
+      ],
+      "expected_paths_should": [
+        "README.md",
+        "luacheck-dev-1.rockspec",
+        "bin/luacheck.bat",
+        "bin/luacheck.lua",
+        "build/bin/luacheck.lua"
+      ],
+      "expected_kinds": [
+        "checker-cli",
+        "packaging-script"
+      ]
+    },
+    {
+      "case_id": "docsrc-rock-and-build",
+      "question": "Which files define luacheck's docsrc rock and build?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "docsrc/cli.rst",
+        "docsrc/conf.py",
+        "docsrc/config.rst",
+        "docsrc/index.rst"
+      ],
+      "expected_paths_should": [
+        "luacheck-dev-1.rockspec",
+        "build/Makefile",
+        "build/bin/luacheck.lua",
+        "spec/rock/rock-dev-1.rockspec",
+        "spec/rock/test.lua",
+        "spec/rock2/mod.lua"
+      ],
+      "expected_kinds": [
+        "doc-build",
+        "rock-build"
+      ]
+    }
+  ]
+}

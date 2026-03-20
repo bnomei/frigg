@@ -1,0 +1,645 @@
+use super::*;
+
+impl FriggMcpServer {
+    pub(in crate::mcp::server) fn relative_display_path(root: &Path, path: &Path) -> String {
+        let normalized = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        normalized.trim_start_matches("./").to_owned()
+    }
+
+    pub(in crate::mcp::server) fn symbol_name_match_rank(
+        symbol_name: &str,
+        query: &str,
+        query_lower: &str,
+    ) -> Option<u8> {
+        if symbol_name == query {
+            return Some(0);
+        }
+
+        let symbol_lower = symbol_name.to_ascii_lowercase();
+        if symbol_lower == query_lower {
+            return Some(1);
+        }
+        if symbol_lower.starts_with(query_lower) {
+            return Some(2);
+        }
+        if symbol_lower.contains(query_lower) {
+            return Some(3);
+        }
+
+        None
+    }
+
+    fn push_symbol_candidate(
+        candidates: &mut Vec<SymbolCandidate>,
+        corpus: &RepositorySymbolCorpus,
+        symbol_index: usize,
+        rank: u8,
+    ) {
+        let symbol = corpus.symbols[symbol_index].clone();
+        let relative_path = Self::relative_display_path(&corpus.root, &symbol.path);
+        let path_class = Self::navigation_path_class(&relative_path);
+        candidates.push(SymbolCandidate {
+            rank,
+            path_class_rank: Self::navigation_path_class_rank(path_class),
+            path_class,
+            repository_id: corpus.repository_id.clone(),
+            root: corpus.root.clone(),
+            symbol,
+        });
+    }
+
+    pub(in crate::mcp::server) fn build_ranked_symbol_match(
+        corpus: &RepositorySymbolCorpus,
+        symbol_index: usize,
+        rank: u8,
+        path_class_filter: Option<SearchSymbolPathClass>,
+        path_regex: Option<&regex::Regex>,
+    ) -> Option<RankedSymbolMatch> {
+        let symbol = &corpus.symbols[symbol_index];
+        let path = Self::relative_display_path(&corpus.root, &symbol.path);
+        if let Some(path_class_filter) = path_class_filter {
+            if Self::navigation_path_class(&path) != path_class_filter.as_str() {
+                return None;
+            }
+        }
+        if let Some(path_regex) = path_regex {
+            if !path_regex.is_match(&path) {
+                return None;
+            }
+        }
+        let path_class = Self::navigation_path_class(&path);
+        Some(RankedSymbolMatch {
+            rank,
+            path_class_rank: Self::navigation_path_class_rank(path_class),
+            matched: SymbolMatch {
+                repository_id: corpus.repository_id.clone(),
+                symbol: symbol.name.clone(),
+                kind: symbol.kind.as_str().to_owned(),
+                path,
+                line: symbol.line,
+            },
+        })
+    }
+
+    pub(in crate::mcp::server) fn sort_ranked_symbol_matches(
+        ranked_matches: &mut [RankedSymbolMatch],
+    ) {
+        ranked_matches.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then(left.path_class_rank.cmp(&right.path_class_rank))
+                .then(left.matched.repository_id.cmp(&right.matched.repository_id))
+                .then(left.matched.path.cmp(&right.matched.path))
+                .then(left.matched.line.cmp(&right.matched.line))
+                .then(left.matched.kind.cmp(&right.matched.kind))
+                .then(left.matched.symbol.cmp(&right.matched.symbol))
+        });
+    }
+
+    pub(in crate::mcp::server) fn dedup_ranked_symbol_matches(
+        ranked_matches: &mut Vec<RankedSymbolMatch>,
+    ) {
+        ranked_matches.dedup_by(|left, right| {
+            left.matched.repository_id == right.matched.repository_id
+                && left.matched.path == right.matched.path
+                && left.matched.line == right.matched.line
+                && left.matched.kind == right.matched.kind
+                && left.matched.symbol == right.matched.symbol
+        });
+    }
+
+    pub(in crate::mcp::server) fn retain_bounded_ranked_symbol_match(
+        ranked_matches: &mut Vec<RankedSymbolMatch>,
+        limit: usize,
+        candidate: RankedSymbolMatch,
+    ) {
+        if limit == 0 {
+            return;
+        }
+
+        ranked_matches.push(candidate);
+        Self::sort_ranked_symbol_matches(ranked_matches);
+        if ranked_matches.len() > limit {
+            ranked_matches.pop();
+        }
+    }
+
+    fn resolve_navigation_symbol_target(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol_query: &str,
+        repository_id_hint: Option<&str>,
+        location_relative_path: Option<&str>,
+        rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
+    ) -> Result<ResolvedSymbolTarget, ErrorData> {
+        let mut candidates = Vec::new();
+        let query_lower = symbol_query.to_ascii_lowercase();
+        let query_looks_canonical = symbol_query.contains('\\')
+            || symbol_query.contains("::")
+            || symbol_query.contains('$');
+        for corpus in corpora {
+            if let Some(symbol_index) = corpus.symbol_index_by_stable_id.get(symbol_query) {
+                Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 0);
+            }
+            if query_looks_canonical {
+                if let Some(symbol_indices) =
+                    corpus.symbol_indices_by_canonical_name.get(symbol_query)
+                {
+                    for symbol_index in symbol_indices {
+                        Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 1);
+                    }
+                }
+                if let Some(symbol_indices) = corpus
+                    .symbol_indices_by_lower_canonical_name
+                    .get(&query_lower)
+                {
+                    for symbol_index in symbol_indices {
+                        let Some(canonical_name) = corpus
+                            .canonical_symbol_name_by_stable_id
+                            .get(corpus.symbols[*symbol_index].stable_id.as_str())
+                        else {
+                            continue;
+                        };
+                        if canonical_name != symbol_query {
+                            Self::push_symbol_candidate(&mut candidates, corpus, *symbol_index, 2);
+                        }
+                    }
+                }
+            }
+            let name_rank_offset = if query_looks_canonical { 3 } else { 1 };
+            if let Some(symbol_indices) = corpus.symbol_indices_by_name.get(symbol_query) {
+                for symbol_index in symbol_indices {
+                    let symbol = &corpus.symbols[*symbol_index];
+                    if navigation_symbol_target_rank(symbol, symbol_query) == Some(1) {
+                        Self::push_symbol_candidate(
+                            &mut candidates,
+                            corpus,
+                            *symbol_index,
+                            name_rank_offset,
+                        );
+                    }
+                }
+            }
+            if let Some(symbol_indices) = corpus.symbol_indices_by_lower_name.get(&query_lower) {
+                for symbol_index in symbol_indices {
+                    let symbol = &corpus.symbols[*symbol_index];
+                    if navigation_symbol_target_rank(symbol, symbol_query) == Some(2) {
+                        Self::push_symbol_candidate(
+                            &mut candidates,
+                            corpus,
+                            *symbol_index,
+                            name_rank_offset + 1,
+                        );
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|left, right| {
+            let left_context = Self::navigation_symbol_context_ranks(
+                corpora,
+                left,
+                location_relative_path,
+                rust_hint,
+            );
+            let right_context = Self::navigation_symbol_context_ranks(
+                corpora,
+                right,
+                location_relative_path,
+                rust_hint,
+            );
+            left.rank
+                .cmp(&right.rank)
+                .then(left_context.cmp(&right_context))
+                .then(left.path_class_rank.cmp(&right.path_class_rank))
+                .then(left.repository_id.cmp(&right.repository_id))
+                .then(left.symbol.path.cmp(&right.symbol.path))
+                .then(left.symbol.line.cmp(&right.symbol.line))
+                .then(left.symbol.stable_id.cmp(&right.symbol.stable_id))
+        });
+        let candidate_count = candidates.len();
+        let candidate = candidates.first().cloned().ok_or_else(|| {
+            Self::resource_not_found(
+                "symbol not found",
+                Some(json!({
+                    "symbol": symbol_query,
+                    "repository_id": repository_id_hint,
+                })),
+            )
+        })?;
+        let corpus = corpora
+            .iter()
+            .find(|corpus| corpus.repository_id == candidate.repository_id)
+            .cloned()
+            .ok_or_else(|| {
+                Self::internal(
+                    "target symbol repository was not present in corpus set",
+                    Some(json!({
+                        "repository_id": candidate.repository_id.clone(),
+                        "symbol_id": candidate.symbol.stable_id.clone(),
+                    })),
+                )
+            })?;
+        let selected_rank_candidate_count = candidates
+            .iter()
+            .take_while(|resolved| resolved.rank == candidate.rank)
+            .count();
+
+        Ok(ResolvedSymbolTarget {
+            candidate,
+            corpus,
+            candidate_count,
+            selected_rank_candidate_count,
+        })
+    }
+
+    pub(in crate::mcp::server) fn navigation_path_class(relative_path: &str) -> &'static str {
+        repository_path_class(relative_path)
+    }
+
+    pub(in crate::mcp::server) fn navigation_path_class_rank(path_class: &str) -> u8 {
+        repository_path_class_rank(path_class)
+    }
+
+    fn normalize_relative_input_path(raw_path: &str) -> String {
+        raw_path
+            .replace('\\', "/")
+            .trim_start_matches("./")
+            .to_owned()
+    }
+
+    fn requested_location_path_for_corpus(
+        corpus: &RepositorySymbolCorpus,
+        raw_path: &str,
+    ) -> String {
+        let requested_path = PathBuf::from(raw_path);
+        if requested_path.is_absolute() {
+            Self::relative_display_path(&corpus.root, &requested_path)
+        } else {
+            Self::normalize_relative_input_path(raw_path)
+        }
+    }
+
+    fn navigation_symbol_context_ranks(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        candidate: &SymbolCandidate,
+        location_relative_path: Option<&str>,
+        rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
+    ) -> (u8, u8, u8, u8, u8) {
+        let relative_path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
+        let same_file_rank = rust_hint.map_or(1, |hint| {
+            if hint.prefer_same_file && location_relative_path == Some(relative_path.as_str()) {
+                0
+            } else {
+                1
+            }
+        });
+        let method_rank = rust_hint.map_or(0, |hint| {
+            if hint.prefer_method && candidate.symbol.kind != crate::indexer::SymbolKind::Method {
+                1
+            } else {
+                0
+            }
+        });
+        let module_rank = rust_hint.map_or(0, |hint| {
+            Self::rust_navigation_module_affinity_rank(&hint.module_path_segments, &relative_path)
+        });
+        let impl_rank = rust_hint.map_or(0, |hint| {
+            if hint.enclosing_impl_type.is_none() {
+                return 0;
+            }
+            let Some(corpus) = corpora
+                .iter()
+                .find(|corpus| corpus.repository_id == candidate.repository_id)
+            else {
+                return 1;
+            };
+            let context = rust_enclosing_symbol_context(&candidate.symbol, &corpus.symbols);
+            if context
+                .impl_type
+                .as_deref()
+                .zip(hint.enclosing_impl_type.as_deref())
+                .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+            {
+                0
+            } else {
+                1
+            }
+        });
+        let trait_rank = rust_hint.map_or(0, |hint| {
+            if hint.enclosing_trait.is_none() {
+                return 0;
+            }
+            let Some(corpus) = corpora
+                .iter()
+                .find(|corpus| corpus.repository_id == candidate.repository_id)
+            else {
+                return 1;
+            };
+            let context = rust_enclosing_symbol_context(&candidate.symbol, &corpus.symbols);
+            let target_trait = hint.enclosing_trait.as_deref().unwrap_or_default();
+            if context
+                .trait_name
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(target_trait))
+                || context
+                    .impl_trait
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(target_trait))
+            {
+                0
+            } else {
+                1
+            }
+        });
+
+        (
+            same_file_rank,
+            method_rank,
+            module_rank,
+            impl_rank,
+            trait_rank,
+        )
+    }
+
+    fn rust_navigation_module_affinity_rank(hint_segments: &[String], relative_path: &str) -> u8 {
+        if hint_segments.is_empty() {
+            return 0;
+        }
+        let candidate_segments = rust_relative_path_module_segments(relative_path);
+        if candidate_segments.is_empty() {
+            return 3;
+        }
+        if candidate_segments == hint_segments {
+            return 0;
+        }
+        if candidate_segments.starts_with(hint_segments)
+            || candidate_segments.ends_with(hint_segments)
+        {
+            return 0;
+        }
+        if hint_segments
+            .iter()
+            .all(|segment| candidate_segments.contains(segment))
+        {
+            return 1;
+        }
+        if hint_segments
+            .iter()
+            .any(|segment| candidate_segments.contains(segment))
+        {
+            return 2;
+        }
+        3
+    }
+
+    fn resolve_navigation_symbol_query_from_location(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        line: usize,
+        column: Option<usize>,
+        repository_id_hint: Option<&str>,
+    ) -> Result<String, ErrorData> {
+        if line == 0 {
+            return Err(Self::invalid_params(
+                "line must be greater than zero",
+                Some(json!({
+                    "line": line,
+                })),
+            ));
+        }
+        if column == Some(0) {
+            return Err(Self::invalid_params(
+                "column must be greater than zero when provided",
+                Some(json!({
+                    "column": column,
+                })),
+            ));
+        }
+
+        let mut candidates: Vec<(usize, usize, String, String, usize, usize, String)> = Vec::new();
+        for corpus in corpora {
+            let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
+            let Some(symbol_indices) = corpus.symbols_by_relative_path.get(&requested_path) else {
+                continue;
+            };
+            for symbol_index in symbol_indices {
+                let symbol = &corpus.symbols[*symbol_index];
+                let symbol_path = Self::relative_display_path(&corpus.root, &symbol.path);
+                if symbol.line > line {
+                    break;
+                }
+                if let Some(column) = column {
+                    if symbol.line == line && symbol.span.start_column > column {
+                        break;
+                    }
+                }
+
+                let line_distance = line.saturating_sub(symbol.line);
+                let column_distance = if line_distance == 0 {
+                    column
+                        .map(|value| value.saturating_sub(symbol.span.start_column))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                candidates.push((
+                    line_distance,
+                    column_distance,
+                    corpus.repository_id.clone(),
+                    symbol_path,
+                    symbol.line,
+                    symbol.span.start_column,
+                    symbol.stable_id.clone(),
+                ));
+            }
+        }
+
+        candidates.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then(left.1.cmp(&right.1))
+                .then(left.2.cmp(&right.2))
+                .then(left.3.cmp(&right.3))
+                .then(right.4.cmp(&left.4))
+                .then(right.5.cmp(&left.5))
+                .then(left.6.cmp(&right.6))
+        });
+
+        candidates
+            .first()
+            .map(|candidate| candidate.6.clone())
+            .ok_or_else(|| {
+                Self::resource_not_found(
+                    "symbol not found at location",
+                    Some(json!({
+                        "path": raw_path,
+                        "line": line,
+                        "column": column,
+                        "repository_id": repository_id_hint,
+                    })),
+                )
+            })
+    }
+
+    fn navigation_symbol_query_token_from_location(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        line: usize,
+        column: usize,
+    ) -> Option<NavigationLocationTokenHint> {
+        for corpus in corpora {
+            let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
+            let absolute_path = corpus.root.join(&requested_path);
+            let Ok(source) = fs::read_to_string(&absolute_path) else {
+                continue;
+            };
+            if supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch)
+                == Some(SymbolLanguage::Rust)
+                && let Some(rust_hint) =
+                    rust_navigation_query_hint_from_source(&absolute_path, &source, line, column)
+                && !rust_hint.symbol_query.is_empty()
+            {
+                return Some(NavigationLocationTokenHint {
+                    symbol_query: rust_hint.symbol_query.clone(),
+                    relative_path: requested_path,
+                    resolution_source: "location_token_rust",
+                    rust_hint: Some(rust_hint),
+                });
+            }
+            let Some(offset) = byte_offset_for_line_column(&source, line, column) else {
+                continue;
+            };
+            let Some(token) = Self::identifier_token_around_offset(&source, offset) else {
+                continue;
+            };
+            if !token.is_empty() {
+                return Some(NavigationLocationTokenHint {
+                    symbol_query: token,
+                    relative_path: requested_path,
+                    resolution_source: "location_token",
+                    rust_hint: None,
+                });
+            }
+        }
+        None
+    }
+
+    fn identifier_token_around_offset(source: &str, offset: usize) -> Option<String> {
+        fn is_identifier_byte(byte: u8) -> bool {
+            byte.is_ascii_alphanumeric() || byte == b'_'
+        }
+
+        let bytes = source.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+        let mut index = offset.min(bytes.len().saturating_sub(1));
+        if !is_identifier_byte(bytes[index]) {
+            if index > 0 && is_identifier_byte(bytes[index - 1]) {
+                index -= 1;
+            } else {
+                let mut probe = index;
+                while probe < bytes.len()
+                    && !is_identifier_byte(bytes[probe])
+                    && bytes[probe] != b'\n'
+                {
+                    probe += 1;
+                }
+                if probe >= bytes.len() || !is_identifier_byte(bytes[probe]) {
+                    return None;
+                }
+                index = probe;
+            }
+        }
+
+        let mut start = index;
+        while start > 0 && is_identifier_byte(bytes[start - 1]) {
+            start -= 1;
+        }
+        let mut end = index + 1;
+        while end < bytes.len() && is_identifier_byte(bytes[end]) {
+            end += 1;
+        }
+        (start < end).then(|| source[start..end].to_owned())
+    }
+
+    pub(in crate::mcp::server) fn resolve_navigation_target(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol: Option<&str>,
+        path: Option<&str>,
+        line: Option<usize>,
+        column: Option<usize>,
+        repository_id_hint: Option<&str>,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        if let Some(symbol) = symbol {
+            let query = symbol.trim();
+            if query.is_empty() {
+                return Err(Self::invalid_params("symbol must not be empty", None));
+            }
+            let target = Self::resolve_navigation_symbol_target(
+                corpora,
+                query,
+                repository_id_hint,
+                None,
+                None,
+            )?;
+            return Ok(ResolvedNavigationTarget {
+                symbol_query: query.to_owned(),
+                target,
+                resolution_source: "symbol",
+            });
+        }
+
+        let raw_path = path.ok_or_else(|| {
+            Self::invalid_params("either `symbol` or (`path` + `line`) is required", None)
+        })?;
+        if raw_path.trim().is_empty() {
+            return Err(Self::invalid_params(
+                "path must not be empty when provided",
+                None,
+            ));
+        }
+        let line = line
+            .ok_or_else(|| Self::invalid_params("line is required when resolving by path", None))?;
+        if let Some(column) = column
+            && let Some(location_hint) =
+                Self::navigation_symbol_query_token_from_location(corpora, raw_path, line, column)
+            && let Ok(target) = Self::resolve_navigation_symbol_target(
+                corpora,
+                &location_hint.symbol_query,
+                repository_id_hint,
+                Some(location_hint.relative_path.as_str()),
+                location_hint.rust_hint.as_ref(),
+            )
+        {
+            return Ok(ResolvedNavigationTarget {
+                symbol_query: location_hint.symbol_query,
+                target,
+                resolution_source: location_hint.resolution_source,
+            });
+        }
+        let symbol_query = Self::resolve_navigation_symbol_query_from_location(
+            corpora,
+            raw_path,
+            line,
+            column,
+            repository_id_hint,
+        )?;
+        let target = Self::resolve_navigation_symbol_target(
+            corpora,
+            &symbol_query,
+            repository_id_hint,
+            None,
+            None,
+        )?;
+        Ok(ResolvedNavigationTarget {
+            symbol_query,
+            target,
+            resolution_source: "location_enclosing_symbol",
+        })
+    }
+}

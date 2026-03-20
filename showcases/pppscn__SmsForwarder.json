@@ -1,0 +1,127 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "pppscn/SmsForwarder",
+  "repo_url": "https://github.com/pppscn/SmsForwarder",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define SmsForwarder's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/cn/ppps/forwarder/App.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/ClientActivity.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/MainActivity.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/SplashActivity.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/AndroidManifest.xml",
+        "app/build.gradle",
+        "build.gradle",
+        "gradle.properties",
+        "settings.gradle"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "app-shell-and-activities",
+      "question": "Which files define SmsForwarder's app shell and activities?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/ClientActivity.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/MainActivity.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/SplashActivity.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/activity/TaskActivity.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/AboutFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/AppListFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/ClientFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/FrpcEditFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/FrpcFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/LogcatFragment.kt"
+      ],
+      "expected_kinds": [
+        "app-shell",
+        "layout-fragment"
+      ]
+    },
+    {
+      "case_id": "receivers-services-and-workers",
+      "question": "Which files define SmsForwarder's receivers services and workers?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/cn/ppps/forwarder/receiver/BatteryReceiver.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/receiver/BluetoothReceiver.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/receiver/BootCompletedReceiver.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/receiver/CactusReceiver.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/ActionWorker.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/BatteryWorker.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/BluetoothWorker.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/CronWorker.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/LoadAppListWorker.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/workers/LocationWorker.kt"
+      ],
+      "expected_kinds": [
+        "background-runtime",
+        "worker-support"
+      ]
+    },
+    {
+      "case_id": "provider-http-and-storage-flow",
+      "question": "Which files define SmsForwarder's provider HTTP and storage flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/senders/BarkFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/senders/DingtalkGroupRobotFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/senders/DingtalkInnerRobotFragment.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/fragment/senders/EmailFragment.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/RuleRepository.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/SenderRepository.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/TaskRepository.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/viewmodel/RuleViewModel.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/viewmodel/SenderViewModel.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/viewmodel/TaskViewModel.kt"
+      ],
+      "expected_kinds": [
+        "provider-http",
+        "storage-controller"
+      ]
+    },
+    {
+      "case_id": "database-repositories-and-room-flow",
+      "question": "Which files define SmsForwarder's database repositories and room flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/FrpcRepository.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/Listener.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/LogsRepository.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/repository/MsgRepository.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/cn/ppps/forwarder/database/AppDatabase.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/dao/FrpcDao.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/dao/LogsDao.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/dao/MsgDao.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/dao/RuleDao.kt",
+        "app/src/main/kotlin/cn/ppps/forwarder/database/dao/SenderDao.kt"
+      ],
+      "expected_kinds": [
+        "repository-viewmodel",
+        "room-storage"
+      ]
+    }
+  ]
+}

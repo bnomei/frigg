@@ -17,18 +17,20 @@ use crate::storage::{
 use regex::Regex;
 
 use super::build_hybrid_path_witness_hits_with_intent;
-use super::lexical_channel::hybrid_path_witness_recall_score_for_projection;
+use super::lexical_channel::{
+    HybridPathWitnessQueryContext, hybrid_path_witness_recall_score,
+    hybrid_path_witness_recall_score_for_projection,
+};
 use crate::searcher::{
-    HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridPathWitnessQueryContext,
-    HybridRankingIntent, HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS,
-    MAX_REGEX_GROUPS, MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError,
-    SearchDiagnosticKind, SearchFilters, SearchHybridQuery, SearchTextQuery,
-    SemanticRuntimeQueryEmbeddingExecutor, StoredPathWitnessProjection, TextSearcher,
-    ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
-    build_hybrid_lexical_hits_for_query, build_hybrid_lexical_recall_regex,
-    build_regex_prefilter_plan, compile_safe_regex, hybrid_lexical_recall_tokens,
-    hybrid_path_witness_recall_score, hybrid_source_class, normalize_search_filters,
-    rank_hybrid_evidence, rank_hybrid_evidence_for_query,
+    HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridRankingIntent,
+    HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS,
+    MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind,
+    SearchFilters, SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor,
+    StoredPathWitnessProjection, TextSearcher, ValidatedManifestCandidateCache,
+    build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
+    build_hybrid_lexical_recall_regex, build_regex_prefilter_plan, compile_safe_regex,
+    hybrid_lexical_recall_tokens, normalize_search_filters, rank_hybrid_evidence,
+    rank_hybrid_evidence_for_query,
 };
 
 use super::graph_channel;
@@ -42,7 +44,6 @@ mod python_ranking;
 mod rust_ranking;
 mod semantic;
 mod text_search;
-mod tool_surface;
 
 #[derive(Debug, Clone)]
 struct MockSemanticQueryEmbeddingExecutor {

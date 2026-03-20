@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "HDInnovations/UNIT3D",
+  "repo_url": "https://github.com/HDInnovations/UNIT3D",
+  "language_family": "php-laravel-ui",
+  "source_profile": "php-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "bootstrap-and-routes",
+      "question": "Which files define UNIT3D's bootstrap and routes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "routes/announce.php",
+        "routes/api.php",
+        "routes/channels.php",
+        "routes/console.php"
+      ],
+      "expected_paths_should": [
+        "bootstrap/app.php",
+        "bootstrap/autoload.php",
+        "config/achievements.php",
+        "config/announce.php",
+        "config/api-keys.php",
+        "config/app.php"
+      ],
+      "expected_kinds": [
+        "routes",
+        "providers"
+      ]
+    },
+    {
+      "case_id": "commands-jobs-and-middleware",
+      "question": "Which files define UNIT3D's commands jobs and middleware?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Console/Commands/AutoBanDisposableUsers.php",
+        "app/Console/Commands/AutoBonAllocation.php",
+        "app/Console/Commands/AutoCacheRandomMediaIds.php",
+        "app/Console/Commands/AutoCacheUserLeechCounts.php"
+      ],
+      "expected_paths_should": [
+        "app/Events/Chatter.php",
+        "app/Events/CommentCreated.php",
+        "app/Events/MessageDeleted.php",
+        "app/Events/MessageEdited.php",
+        "app/Events/MessageSent.php",
+        "app/Jobs/ProcessAnnounce.php"
+      ],
+      "expected_kinds": [
+        "commands-middleware",
+        "jobs-listeners"
+      ]
+    },
+    {
+      "case_id": "tracker-models-and-requests",
+      "question": "Which files define UNIT3D's tracker models and requests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Models/Announce.php",
+        "app/Models/Apikey.php",
+        "app/Models/Application.php",
+        "app/Models/ApplicationImageProof.php"
+      ],
+      "expected_paths_should": [
+        "database/migrations/2017_12_10_020753_create_articles_table.php",
+        "database/migrations/2017_12_10_020753_create_ban_table.php",
+        "database/migrations/2017_12_10_020753_create_bon_exchange_table.php",
+        "database/migrations/2017_12_10_020753_create_bon_transactions_table.php",
+        "database/migrations/2017_12_10_020753_create_bookmarks_table.php",
+        "database/migrations/2017_12_10_020753_create_categories_table.php"
+      ],
+      "expected_kinds": [
+        "model-request",
+        "persistence"
+      ]
+    },
+    {
+      "case_id": "staff-api-and-mediahub-controllers",
+      "question": "Which files define UNIT3D's staff API and mediahub controllers?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Http/Controllers/API/BaseController.php",
+        "app/Http/Controllers/API/BookmarkController.php",
+        "app/Http/Controllers/API/ChatController.php",
+        "app/Http/Controllers/API/DislikeController.php"
+      ],
+      "expected_paths_should": [
+        "app/Http/Resources/BotResource.php",
+        "app/Http/Resources/ChatMessageResource.php",
+        "app/Http/Resources/ChatRoomResource.php",
+        "app/Http/Resources/ChatUserResource.php",
+        "app/Http/Resources/TorrentRequestResource.php",
+        "app/Http/Resources/TorrentResource.php"
+      ],
+      "expected_kinds": [
+        "controller",
+        "service-resources"
+      ]
+    },
+    {
+      "case_id": "events-jobs-and-notifications",
+      "question": "Which files define UNIT3D's events jobs and notifications?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Jobs/ProcessAnnounce.php",
+        "app/Jobs/ProcessBackup.php",
+        "app/Jobs/ProcessIgdbGameJob.php",
+        "app/Jobs/ProcessMassPM.php"
+      ],
+      "expected_paths_should": [
+        "app/Achievements/UserFilled100Requests.php",
+        "app/Achievements/UserFilled25Requests.php",
+        "app/Achievements/UserFilled50Requests.php",
+        "app/Achievements/UserFilled75Requests.php",
+        "app/Achievements/UserMade100Comments.php",
+        "app/Achievements/UserMade100Posts.php"
+      ],
+      "expected_kinds": [
+        "runtime",
+        "bot-achievement"
+      ]
+    }
+  ]
+}

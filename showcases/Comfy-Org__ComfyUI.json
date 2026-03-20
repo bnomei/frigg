@@ -1,0 +1,145 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "Comfy-Org/ComfyUI",
+  "repo_url": "https://github.com/Comfy-Org/ComfyUI",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define ComfyUI's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "main.py",
+        "server.py"
+      ],
+      "expected_paths_should": [
+        "pyproject.toml",
+        "requirements.txt",
+        "tests-unit/requirements.txt"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "config-and-packages",
+      "question": "Which files define ComfyUI's config and packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pyproject.toml",
+        "requirements.txt",
+        "tests-unit/requirements.txt"
+      ],
+      "expected_paths_should": [
+        "tests-unit/utils/extra_config_test.py",
+        "tests-unit/utils/json_util_test.py",
+        "tests-unit/assets_test/services/__init__.py",
+        "tests-unit/assets_test/services/conftest.py",
+        "tests-unit/assets_test/services/test_asset_management.py",
+        "tests-unit/assets_test/services/test_bulk_ingest.py"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "package",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "assets-tests-and-services",
+      "question": "Which files define ComfyUI's assets tests and services?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests-unit/assets_test/services/test_asset_management.py",
+        "tests-unit/assets_test/services/test_bulk_ingest.py",
+        "tests-unit/assets_test/services/test_enrich.py",
+        "tests-unit/assets_test/services/test_ingest.py"
+      ],
+      "expected_paths_should": [
+        "app/assets/services/asset_management.py",
+        "app/assets/services/bulk_ingest.py",
+        "app/assets/services/file_utils.py",
+        "app/assets/services/hashing.py",
+        "app/assets/services/ingest.py",
+        "app/assets/services/metadata_extract.py"
+      ],
+      "expected_kinds": [
+        "asset-service-tests",
+        "asset-services"
+      ]
+    },
+    {
+      "case_id": "execution-tests-and-engine",
+      "question": "Which files define ComfyUI's execution tests and engine?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests-unit/execution_test/preview_method_override_test.py",
+        "tests-unit/execution_test/test_cache_provider.py",
+        "tests-unit/execution_test/validate_node_input_test.py"
+      ],
+      "expected_paths_should": [
+        "execution.py",
+        "comfy_execution/cache_provider.py",
+        "comfy_execution/caching.py",
+        "comfy_execution/graph.py",
+        "comfy_execution/graph_utils.py",
+        "comfy_execution/jobs.py"
+      ],
+      "expected_kinds": [
+        "execution-tests",
+        "execution-engine"
+      ]
+    },
+    {
+      "case_id": "blueprints-and-api-nodes",
+      "question": "Which files define ComfyUI's blueprints and API nodes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests-unit/comfy_api_test/input_impl_test.py",
+        "tests-unit/comfy_api_test/video_types_test.py",
+        "tests-unit/comfy_extras_test/__init__.py",
+        "tests-unit/comfy_extras_test/image_stitch_test.py"
+      ],
+      "expected_paths_should": [
+        "comfy_api_nodes/nodes_openai.py",
+        "comfy_api/input/basic_types.py",
+        "comfy_api/input/video_types.py",
+        "comfy_api/latest/__init__.py",
+        "comfy_api/latest/_caching.py",
+        "comfy_api/latest/_io.py"
+      ],
+      "expected_kinds": [
+        "api-and-node-tests",
+        "api-nodes"
+      ]
+    },
+    {
+      "case_id": "server-entrypoints-and-public-api",
+      "question": "Which files define ComfyUI's server entrypoints and public API?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "main.py",
+        "server.py",
+        "tests-unit/prompt_server_test/__init__.py",
+        "tests-unit/prompt_server_test/system_user_endpoint_test.py"
+      ],
+      "expected_paths_should": [
+        "execution.py",
+        "nodes.py",
+        "api_server/routes/__init__.py",
+        "api_server/services/__init__.py",
+        "api_server/services/terminal_service.py",
+        "api_server/routes/internal/__init__.py"
+      ],
+      "expected_kinds": [
+        "server-entrypoints",
+        "public-api-runtime"
+      ]
+    }
+  ]
+}

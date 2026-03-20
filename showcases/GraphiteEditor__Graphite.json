@@ -1,0 +1,82 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "GraphiteEditor/Graphite",
+  "repo_url": "https://github.com/GraphiteEditor/Graphite",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "editor-panels-and-canvas-runtime",
+      "question": "Which files define Graphite's editor panels and canvas runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "editor/src/dispatcher.rs",
+        "editor/src/application.rs",
+        "editor/src/lib.rs",
+        "editor/src/messages/animation/animation_message.rs"
+      ],
+      "expected_paths_should": [
+        "desktop/src/app.rs",
+        "desktop/src/cef.rs",
+        "desktop/src/main.rs",
+        "desktop/src/cef/context.rs",
+        "desktop/wrapper/src/intercept_frontend_message.rs",
+        "desktop/wrapper/src/lib.rs"
+      ],
+      "expected_kinds": [
+        "editor",
+        "desktop-shell"
+      ]
+    },
+    {
+      "case_id": "node-graph-and-libraries-runtime",
+      "question": "Which files define Graphite's node graph and libraries runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "node-graph/graph-craft/src/document.rs",
+        "node-graph/graph-craft/src/document/value.rs",
+        "node-graph/graph-craft/src/graphene_compiler.rs",
+        "node-graph/graph-craft/src/lib.rs"
+      ],
+      "expected_paths_should": [
+        "node-graph/libraries/application-io/src/lib.rs",
+        "node-graph/libraries/core-types/src/bounds.rs",
+        "node-graph/libraries/core-types/src/consts.rs",
+        "node-graph/libraries/core-types/src/context.rs",
+        "node-graph/libraries/core-types/src/generic.rs",
+        "node-graph/libraries/core-types/src/lib.rs"
+      ],
+      "expected_kinds": [
+        "node-graph",
+        "library-support"
+      ]
+    },
+    {
+      "case_id": "wasm-desktop-and-website-flow",
+      "question": "Which files define Graphite's WASM desktop and website flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "frontend/wasm/src/editor_api.rs",
+        "frontend/wasm/src/helpers.rs",
+        "frontend/wasm/src/lib.rs",
+        "frontend/wasm/src/native_communication.rs"
+      ],
+      "expected_paths_should": [
+        "desktop/src/app.rs",
+        "desktop/src/main.rs",
+        "desktop/src/cef/consts.rs",
+        "desktop/src/cef/context.rs",
+        "desktop/src/cef/dirs.rs",
+        "desktop/src/cef/input.rs"
+      ],
+      "expected_kinds": [
+        "wasm-api",
+        "desktop-bundle-and-wrapper"
+      ]
+    }
+  ]
+}

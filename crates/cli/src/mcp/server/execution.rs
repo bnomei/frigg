@@ -1,4 +1,5 @@
 use super::*;
+use rmcp::model::ProgressNotificationParam;
 
 use crate::domain::{NormalizedWorkloadMetadata, WorkloadPrecisionMode};
 
@@ -46,6 +47,102 @@ impl ToolExecutionFinalization {
 }
 
 impl FriggMcpServer {
+    pub(super) async fn notify_progress(
+        meta: &Meta,
+        client: &Peer<RoleServer>,
+        progress: f64,
+        total: f64,
+        message: impl Into<String>,
+    ) {
+        let Some(progress_token) = meta.get_progress_token() else {
+            return;
+        };
+        let _ = client
+            .notify_progress(ProgressNotificationParam {
+                progress_token,
+                progress,
+                total: Some(total),
+                message: Some(message.into()),
+            })
+            .await;
+    }
+
+    pub(super) fn read_only_tool_execution_context(
+        &self,
+        tool_name: &'static str,
+        repository_hint: Option<String>,
+    ) -> ReadOnlyToolExecutionContext {
+        ReadOnlyToolExecutionContext {
+            tool_name,
+            repository_hint,
+        }
+    }
+
+    pub(super) fn scoped_read_only_tool_execution_context(
+        &self,
+        tool_name: &'static str,
+        repository_hint: Option<String>,
+        freshness_mode: RepositoryResponseCacheFreshnessMode,
+    ) -> Result<ScopedReadOnlyToolExecutionContext, ErrorData> {
+        let base = self.read_only_tool_execution_context(tool_name, repository_hint);
+        let scoped_workspaces =
+            self.attached_workspaces_for_repository(base.repository_hint.as_deref())?;
+        let scoped_repository_ids = scoped_workspaces
+            .iter()
+            .map(|workspace| workspace.repository_id.clone())
+            .collect::<Vec<_>>();
+        let cache_freshness =
+            self.repository_response_cache_freshness(&scoped_workspaces, freshness_mode)?;
+
+        Ok(ScopedReadOnlyToolExecutionContext {
+            #[cfg(test)]
+            base,
+            scoped_workspaces,
+            scoped_repository_ids,
+            cache_freshness,
+        })
+    }
+
+    pub(super) async fn run_read_only_tool_blocking<T, F>(
+        &self,
+        context: &ReadOnlyToolExecutionContext,
+        task_fn: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        Self::run_blocking_task(context.tool_name, task_fn).await
+    }
+
+    pub(super) fn finalize_read_only_tool<T>(
+        &self,
+        context: &ReadOnlyToolExecutionContext,
+        result: Result<Json<T>, ErrorData>,
+        provenance_result: Result<(), ErrorData>,
+    ) -> Result<Json<T>, ErrorData> {
+        self.finalize_with_provenance(context.tool_name, result, provenance_result)
+    }
+
+    pub(super) async fn run_blocking_task<T, F>(
+        operation: &'static str,
+        task_fn: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        task::spawn_blocking(task_fn).await.map_err(|err| {
+            Self::internal(
+                format!("blocking task join failure in {operation}: {err}"),
+                Some(json!({
+                    "operation": operation,
+                    "join_error": Self::bounded_text(&err.to_string()),
+                })),
+            )
+        })
+    }
+
     pub(super) fn tool_execution_finalization(
         &self,
         source_refs: Value,

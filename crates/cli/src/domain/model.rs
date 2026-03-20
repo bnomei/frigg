@@ -28,6 +28,49 @@ pub struct TextMatch {
     pub witness_provenance_ids: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratedStructuralFollowUpStrategy {
+    FocusNamedNodeFileScoped,
+    FocusNamedNodeRepoScoped,
+    AncestorNamedNodeRepoScoped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratedStructuralFollowUpConfidence {
+    High,
+    Medium,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GeneratedStructuralSearchParams {
+    pub query: String,
+    pub language: String,
+    pub repository_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_regex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GeneratedStructuralFollowUpBasis {
+    pub focus_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_focus_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ancestor_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GeneratedStructuralFollowUp {
+    pub strategy: GeneratedStructuralFollowUpStrategy,
+    pub confidence: GeneratedStructuralFollowUpConfidence,
+    pub basis: GeneratedStructuralFollowUpBasis,
+    pub params: GeneratedStructuralSearchParams,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SymbolMatch {
     pub repository_id: String,
@@ -53,6 +96,8 @@ pub struct ReferenceMatch {
     pub line: usize,
     pub column: usize,
     pub match_kind: ReferenceMatchKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -143,6 +143,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "guidance": [
             "Use shell tools for trivial local literal scans and one-off file reads in the checked-out workspace.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
+            "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
             "Treat extended tools as advanced consumers of the stable runtime surface, not the product center."
         ]
     }))
@@ -166,6 +167,7 @@ Use Frigg when the task needs repository-aware evidence.\n\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
 - provenance-backed answers or replayable evidence\n\
 - attached multi-repo context instead of one current shell directory\n\n\
+Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\
 If semantic status is disabled, degraded, or unavailable, treat the answer as lexical/graph/witness-only.\n\n\
 {explore_guidance}\n"
@@ -255,7 +257,8 @@ pub(crate) fn read_guidance_prompt(
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
 4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
-5. Use `explore` only after discovery and only when the active profile includes it.\n\n",
+5. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
+6. Use `explore` only after discovery and only when the active profile includes it.\n\n",
     );
     text.push_str(profile_note);
 

@@ -1,0 +1,123 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "agu-z/roc-pg",
+  "repo_url": "https://github.com/agu-z/roc-pg",
+  "language_family": "roc-runtime",
+  "source_profile": "roc-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define roc-pg's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/main.roc",
+        "src/Batch.roc",
+        "src/Cmd.roc",
+        "src/State.roc"
+      ],
+      "expected_paths_should": [
+        "examples/basic-webserver.roc",
+        "examples/batch.roc",
+        "examples/prepared.roc",
+        "examples/query.roc"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "platform"
+      ]
+    },
+    {
+      "case_id": "examples-and-tests",
+      "question": "Which files define roc-pg's examples and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/basic-webserver.roc",
+        "examples/batch.roc",
+        "examples/prepared.roc",
+        "examples/query.roc"
+      ],
+      "expected_paths_should": [
+        "src/main.roc",
+        "src/Batch.roc",
+        "src/Cmd.roc",
+        "src/State.roc",
+        "src/Bytes/Decode.roc",
+        "src/Bytes/Encode.roc"
+      ],
+      "expected_kinds": [
+        "examples-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "protocol-bytes-and-pg-modules",
+      "question": "Which files define roc-pg's protocol bytes and pg modules?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/Protocol/Backend.roc",
+        "src/Protocol/Frontend.roc",
+        "src/Bytes/Decode.roc",
+        "src/Bytes/Encode.roc"
+      ],
+      "expected_paths_should": [
+        "src/main.roc",
+        "src/Pg/Batch.roc",
+        "src/Pg/Client.roc",
+        "src/Pg/Cmd.roc",
+        "src/Pg/Result.roc"
+      ],
+      "expected_kinds": [
+        "protocol-byte",
+        "database-runtime"
+      ]
+    },
+    {
+      "case_id": "examples-main-and-workflows",
+      "question": "Which files define roc-pg's examples main and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/basic-webserver.roc",
+        "examples/batch.roc",
+        "examples/prepared.roc",
+        "examples/query.roc"
+      ],
+      "expected_paths_should": [
+        "src/Pg/Batch.roc",
+        "src/Pg/Client.roc",
+        "src/Pg/Cmd.roc",
+        "src/Pg/Result.roc"
+      ],
+      "expected_kinds": [
+        "example-main",
+        "workflow-runtime"
+      ]
+    },
+    {
+      "case_id": "database-queries-and-encoding",
+      "question": "Which files define roc-pg's database queries and encoding?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/Pg/Batch.roc",
+        "src/Pg/Client.roc",
+        "src/Pg/Cmd.roc",
+        "src/Pg/Result.roc"
+      ],
+      "expected_paths_should": [
+        "src/Bytes/Decode.roc",
+        "src/Bytes/Encode.roc",
+        "src/Protocol/Backend.roc",
+        "src/Protocol/Frontend.roc",
+        "examples/basic-webserver.roc",
+        "examples/batch.roc"
+      ],
+      "expected_kinds": [
+        "database-query",
+        "encoding-protocol"
+      ]
+    }
+  ]
+}

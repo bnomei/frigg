@@ -254,7 +254,7 @@ mod tests {
             None
         );
         assert_eq!(
-            semantic_chunk_language_for_path(Path::new("docs/overview.md")),
+            semantic_chunk_language_for_path(Path::new("guides/overview.md")),
             Some("markdown")
         );
     }

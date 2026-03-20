@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "roc-lang/book-of-examples",
+  "repo_url": "https://github.com/roc-lang/book-of-examples",
+  "language_family": "roc-runtime",
+  "source_profile": "roc-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define book-of-examples' runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "diff/src/main.roc",
+        "docs/diff/src/main.roc",
+        "des/main.roc",
+        "match/main.roc"
+      ],
+      "expected_paths_should": [
+        "ci/code/main.roc",
+        "ci/code/Ci.roc",
+        "ci/code/Example.roc",
+        "ci/code/Job.roc",
+        "ci/code/Runner/GithubActions.roc",
+        "ci/code/Runner/Local.roc"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "platform"
+      ]
+    },
+    {
+      "case_id": "examples-and-tests",
+      "question": "Which files define book-of-examples' examples and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "ci/code/Ci.roc",
+        "ci/code/Example.roc",
+        "ci/code/Job.roc",
+        "ci/code/Runner/GithubActions.roc"
+      ],
+      "expected_paths_should": [
+        "diff/src/main.roc",
+        "docs/diff/src/main.roc",
+        "ci/code/main.roc",
+        "des/main.roc",
+        "match/main.roc",
+        "docs/des/main.roc"
+      ],
+      "expected_kinds": [
+        "examples-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "examples-docs-and-mirrors",
+      "question": "Which files define book-of-examples' examples docs and mirrors?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "binary/index.md",
+        "binary/binary.roc",
+        "match/index.md",
+        "match/main.roc"
+      ],
+      "expected_paths_should": [
+        "docs/binary/SimpleEncoding.roc",
+        "docs/binary/binary.roc",
+        "docs/binary/index.html",
+        "docs/match/EndOfString.roc",
+        "docs/match/Literals.roc",
+        "docs/match/Repetitions.roc"
+      ],
+      "expected_kinds": [
+        "example-mirror",
+        "doc-mirror"
+      ]
+    },
+    {
+      "case_id": "template-logger-and-diff-packages",
+      "question": "Which files define book-of-examples' template logger and diff packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "template/CodeGen.roc",
+        "template/Parser.roc",
+        "template/examples/basePage/Pages.roc",
+        "template/examples/basePage/server.roc"
+      ],
+      "expected_paths_should": [
+        "ci/code/Ci.roc",
+        "ci/code/Example.roc",
+        "ci/code/Job.roc",
+        "ci/code/main.roc",
+        "diff/examples/Hello.roc",
+        "diff/examples/HelloWorld.roc"
+      ],
+      "expected_kinds": [
+        "template-diff",
+        "ci-example"
+      ]
+    },
+    {
+      "case_id": "site-doc-indices-and-sections",
+      "question": "Which files define book-of-examples' site doc indices and sections?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "ci/code/Ci.roc",
+        "ci/code/Example.roc",
+        "ci/code/Job.roc",
+        "ci/code/Runner/GithubActions.roc"
+      ],
+      "expected_paths_should": [
+        "docs/ci/code/Ci.roc",
+        "docs/ci/code/Example.roc",
+        "docs/ci/code/Job.roc",
+        "docs/ci/code/main.roc",
+        "docs/ci/code/Runner/GithubActions.roc",
+        "docs/ci/code/Runner/Local.roc"
+      ],
+      "expected_kinds": [
+        "ci-code",
+        "doc-ci-code"
+      ]
+    }
+  ]
+}

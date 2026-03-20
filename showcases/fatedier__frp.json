@@ -1,0 +1,106 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "fatedier/frp",
+  "repo_url": "https://github.com/fatedier/frp",
+  "language_family": "go-runtime",
+  "source_profile": "go-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "build-release-and-workflows",
+      "question": "Which files define frp's build release and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "go.mod",
+        "go.sum",
+        ".goreleaser.yml",
+        "Makefile"
+      ],
+      "expected_paths_should": [
+        "cmd/frpc/main.go",
+        "cmd/frps/main.go",
+        ".github/workflows/build-and-push-image.yml",
+        ".github/workflows/golangci-lint.yml",
+        ".github/workflows/goreleaser.yml",
+        ".github/workflows/stale.yml"
+      ],
+      "expected_kinds": [
+        "build-config",
+        "entrypoints",
+        "release-assets"
+      ]
+    },
+    {
+      "case_id": "client-server-and-config",
+      "question": "Which files define frp's client server and config?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cmd/frpc/main.go",
+        "cmd/frpc/sub/root.go",
+        "cmd/frps/main.go",
+        "cmd/frps/root.go"
+      ],
+      "expected_paths_should": [
+        "pkg/config/flags.go",
+        "pkg/config/load.go",
+        "pkg/config/template.go",
+        "conf/frpc.toml",
+        "conf/frpc_full_example.toml",
+        "conf/frps.toml"
+      ],
+      "expected_kinds": [
+        "client-server",
+        "config-command"
+      ]
+    },
+    {
+      "case_id": "plugins-nathole-and-transport",
+      "question": "Which files define frp's plugins nathole and transport?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pkg/plugin/client/http2http.go",
+        "pkg/plugin/client/http2https.go",
+        "pkg/plugin/client/http_proxy.go",
+        "pkg/plugin/client/https2http.go"
+      ],
+      "expected_paths_should": [
+        "pkg/transport/message.go",
+        "pkg/transport/tls.go",
+        "pkg/vnet/controller.go",
+        "pkg/vnet/message.go",
+        "pkg/vnet/tun.go",
+        "pkg/vnet/tun_darwin.go"
+      ],
+      "expected_kinds": [
+        "plugin-nathole",
+        "transport-proto"
+      ]
+    },
+    {
+      "case_id": "dashboard-metrics-and-web",
+      "question": "Which files define frp's dashboard metrics and web?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pkg/metrics/metrics.go",
+        "pkg/metrics/aggregate/server.go",
+        "pkg/metrics/prometheus/server.go",
+        "server/metrics/metrics.go"
+      ],
+      "expected_paths_should": [
+        "README.md",
+        "doc/pic/dashboard.png",
+        "web/frpc/embed.go",
+        "web/frps/embed.go",
+        "web/frpc/src/api/frpc.ts",
+        "web/frpc/src/api/http.ts"
+      ],
+      "expected_kinds": [
+        "metrics",
+        "web-doc"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "roc-lang/basic-cli",
+  "repo_url": "https://github.com/roc-lang/basic-cli",
+  "language_family": "roc-runtime",
+  "source_profile": "roc-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define basic-cli's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/main.roc",
+        "platform/Arg.roc",
+        "platform/Cmd.roc",
+        "platform/Dir.roc"
+      ],
+      "expected_paths_should": [
+        "platform/Env.roc",
+        "platform/EnvDecoding.roc",
+        "platform/File.roc",
+        "platform/Host.roc"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "platform"
+      ]
+    },
+    {
+      "case_id": "examples-and-tests",
+      "question": "Which files define basic-cli's examples and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/bytes-stdin-stdout.roc",
+        "examples/command-line-args.roc",
+        "examples/command.roc",
+        "examples/dir.roc"
+      ],
+      "expected_paths_should": [
+        "platform/main.roc",
+        "build.roc",
+        "platform/Arg.roc",
+        "platform/Cmd.roc",
+        "platform/Dir.roc",
+        "platform/Env.roc"
+      ],
+      "expected_kinds": [
+        "examples-tests",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "platform-host-and-cli-bridge",
+      "question": "Which files define basic-cli's platform host and CLI bridge?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/Arg.roc",
+        "platform/Cmd.roc",
+        "platform/Env.roc",
+        "platform/Host.roc"
+      ],
+      "expected_paths_should": [
+        "build.roc",
+        "crates/roc_host/build.rs",
+        "crates/roc_host_bin/build.rs",
+        "crates/roc_command/src/lib.rs",
+        "crates/roc_env/src/arg.rs",
+        "crates/roc_env/src/lib.rs"
+      ],
+      "expected_kinds": [
+        "platform-cli",
+        "host-bridge"
+      ]
+    },
+    {
+      "case_id": "examples-tests-and-expect-scripts",
+      "question": "Which files define basic-cli's examples tests and expect scripts?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/bytes-stdin-stdout.roc",
+        "examples/command-line-args.roc",
+        "examples/command.roc",
+        "examples/dir.roc"
+      ],
+      "expected_paths_should": [
+        "ci/expect_scripts/bytes-stdin-stdout.exp",
+        "ci/expect_scripts/command-line-args.exp",
+        "ci/expect_scripts/command.exp",
+        "ci/expect_scripts/file-read-buffered.exp",
+        "ci/expect_scripts/file-size.exp",
+        "ci/expect_scripts/random.exp"
+      ],
+      "expected_kinds": [
+        "example-test",
+        "expect-script"
+      ]
+    },
+    {
+      "case_id": "network-sqlite-and-terminal-capabilities",
+      "question": "Which files define basic-cli's network sqlite and terminal capabilities?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "platform/Stdin.roc",
+        "platform/Stdout.roc",
+        "platform/Stderr.roc",
+        "platform/Tty.roc"
+      ],
+      "expected_paths_should": [
+        "examples/bytes-stdin-stdout.roc",
+        "examples/file-read-buffered.roc",
+        "examples/file-read-write.roc",
+        "examples/file-size.roc",
+        "examples/http.roc",
+        "examples/path.roc"
+      ],
+      "expected_kinds": [
+        "platform-capability",
+        "capability-example"
+      ]
+    }
+  ]
+}

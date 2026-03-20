@@ -1,3 +1,7 @@
+//! Indexing and artifact construction for repository snapshots. The indexer turns a workspace
+//! into manifests, symbol inventories, semantic chunks, and retrieval projections that the
+//! search, graph, and MCP layers can reuse instead of rescanning the filesystem on every request.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -51,12 +55,18 @@ pub use symbols::{
     HeuristicReferenceResolver, SourceSpan, StructuralQueryMatch, SymbolDefinition,
     SymbolExtractionDiagnostic, SymbolExtractionOutput, SymbolKind, SyntaxTreeInspection,
     SyntaxTreeInspectionNode, extract_symbols_for_paths, extract_symbols_from_file,
-    extract_symbols_from_source, inspect_syntax_tree_in_source, navigation_symbol_target_rank,
-    register_symbol_definitions, resolve_heuristic_references, search_structural_in_source,
+    extract_symbols_from_source, generated_follow_up_structural_at_location_in_source,
+    inspect_syntax_tree_in_source, inspect_syntax_tree_with_follow_up_in_source,
+    navigation_symbol_target_rank, register_symbol_definitions, resolve_heuristic_references,
+    search_structural_in_source, search_structural_with_follow_up_in_source,
 };
 pub(crate) use symbols::{
     byte_offset_for_line_column, line_column_for_offset, push_symbol_definition, source_span,
     source_span_from_offsets,
+};
+#[cfg(test)]
+pub use symbols::{
+    generated_follow_up_structural_for_focus, generated_follow_up_structural_for_location_in_source,
 };
 
 const FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_ENABLED";
@@ -68,6 +78,7 @@ const SEMANTIC_CHUNK_MAX_LINES: usize = 64;
 const SEMANTIC_CHUNK_MAX_CHARS: usize = 2_400;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Stable file identity used to decide whether repository content changed between snapshots.
 pub struct FileDigest {
     pub path: PathBuf,
     pub size_bytes: u64,
@@ -76,6 +87,8 @@ pub struct FileDigest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Lighter-weight file identity used when content hashing is unnecessary but freshness decisions
+/// still need size and mtime context.
 pub struct FileMetadataDigest {
     pub path: PathBuf,
     pub size_bytes: u64,
@@ -83,6 +96,8 @@ pub struct FileMetadataDigest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Summary used by benchmarks to compare semantic chunking behavior without exposing internal
+/// chunk record details.
 pub struct SemanticChunkBenchmarkSummary {
     pub chunk_count: usize,
     pub total_content_bytes: usize,
@@ -90,6 +105,8 @@ pub struct SemanticChunkBenchmarkSummary {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// File-level delta between two manifest snapshots, reused by reindex planning and retention
+/// logic.
 pub struct ManifestDiff {
     pub added: Vec<FileDigest>,
     pub modified: Vec<FileDigest>,
@@ -97,6 +114,8 @@ pub struct ManifestDiff {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Manifest construction options that shape how the indexer walks repository contents before any
+/// downstream search or semantic work happens.
 pub struct ManifestBuilder {
     pub follow_symlinks: bool,
 }
@@ -151,6 +170,7 @@ fn summarize_semantic_chunk_candidates(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Categories of non-fatal issues encountered while snapshotting repository contents.
 pub enum ManifestDiagnosticKind {
     Walk,
     Read,
@@ -166,6 +186,8 @@ impl ManifestDiagnosticKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One manifest-build warning carried forward into planning and reporting instead of being dropped
+/// as a transient log line.
 pub struct ManifestBuildDiagnostic {
     pub path: Option<PathBuf>,
     pub kind: ManifestDiagnosticKind,
@@ -173,18 +195,24 @@ pub struct ManifestBuildDiagnostic {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Manifest-build result that preserves both discovered entries and the warnings attached to the
+/// walk.
 pub struct ManifestBuildOutput {
     pub entries: Vec<FileDigest>,
     pub diagnostics: Vec<ManifestBuildDiagnostic>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Metadata-only variant of manifest output used when callers need freshness facts without content
+/// hashing cost.
 pub struct ManifestMetadataBuildOutput {
     pub entries: Vec<FileMetadataDigest>,
     pub diagnostics: Vec<ManifestBuildDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Repository manifest snapshot as exposed to callers that want both the logical repository id and
+/// the concrete file set behind a snapshot id.
 pub struct RepositoryManifest {
     pub repository_id: String,
     pub snapshot_id: String,

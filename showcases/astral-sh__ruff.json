@@ -1,0 +1,82 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "astral-sh/ruff",
+  "repo_url": "https://github.com/astral-sh/ruff",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "linter-parser-and-workspace-flow",
+      "question": "Which files define ruff's linter parser and workspace flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/ruff/src/main.rs",
+        "crates/ruff/src/lib.rs",
+        "crates/ruff_linter/src/lib.rs",
+        "crates/ruff_linter/src/directives.rs"
+      ],
+      "expected_paths_should": [
+        "crates/ruff_db/src/files.rs",
+        "crates/ruff_db/src/lib.rs",
+        "crates/ruff_diagnostics/src/fix.rs",
+        "crates/ruff_diagnostics/src/lib.rs",
+        "crates/ruff_python_semantic/src/binding.rs",
+        "crates/ruff_python_semantic/src/lib.rs"
+      ],
+      "expected_kinds": [
+        "lint-parser",
+        "workspace-semantic"
+      ]
+    },
+    {
+      "case_id": "formatter-server-and-wasm-flow",
+      "question": "Which files define ruff's formatter server and WASM flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/ruff_python_formatter/src/builders.rs",
+        "crates/ruff_python_formatter/src/comments/format.rs",
+        "crates/ruff_python_formatter/src/lib.rs",
+        "crates/ruff_python_formatter/src/cli.rs"
+      ],
+      "expected_paths_should": [
+        "crates/ruff_server/src/format.rs",
+        "crates/ruff_server/src/lib.rs",
+        "crates/ruff_server/src/server.rs",
+        "crates/ruff_server/src/session.rs",
+        "crates/ruff_server/src/workspace.rs",
+        "crates/ruff_server/tests/document.rs"
+      ],
+      "expected_kinds": [
+        "python-formatter",
+        "server-format"
+      ]
+    },
+    {
+      "case_id": "cli-tests-and-release-flow",
+      "question": "Which files define ruff's CLI tests and release flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/ruff/tests/cli/analyze_graph.rs",
+        "crates/ruff/tests/cli/format.rs",
+        "crates/ruff/tests/cli/lint.rs",
+        "crates/ruff/tests/cli/main.rs"
+      ],
+      "expected_paths_should": [
+        "scripts/release.sh",
+        "python/ruff/__main__.py",
+        "python/ruff/_find_ruff.py",
+        "scripts/ty_benchmark/package.json",
+        "python/ruff-ecosystem/ruff_ecosystem/cli.py",
+        "python/ruff-ecosystem/ruff_ecosystem/main.py"
+      ],
+      "expected_kinds": [
+        "cli-test",
+        "release-benchmark"
+      ]
+    }
+  ]
+}

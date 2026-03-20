@@ -1,0 +1,121 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "GyulyVGC/sniffnet",
+  "repo_url": "https://github.com/GyulyVGC/sniffnet",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "entrypoint-build-flow",
+      "question": "Which files define sniffnet's entrypoint build flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/main.rs"
+      ],
+      "expected_paths_should": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "Cross.toml",
+        "build.rs",
+        ".github/workflows/crates.yml",
+        ".github/workflows/docker.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "build-config"
+      ]
+    },
+    {
+      "case_id": "ci-release-and-ops",
+      "question": "Which files define sniffnet's ci release and ops?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/crates.yml",
+        ".github/workflows/docker.yml",
+        ".github/workflows/package.yml",
+        ".github/workflows/rust.yml"
+      ],
+      "expected_paths_should": [
+        "resources/scripts/fonts.sh",
+        "resources/scripts/services.sh"
+      ],
+      "expected_kinds": [
+        "ci-release",
+        "scripts-ops"
+      ]
+    },
+    {
+      "case_id": "networking-gui-and-reporting-flow",
+      "question": "Which files define sniffnet's networking gui and reporting flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/networking/manage_packets.rs",
+        "src/networking/parse_packets.rs",
+        "src/networking/traffic_preview.rs",
+        "src/gui/sniffer.rs"
+      ],
+      "expected_paths_should": [
+        "src/chart/mod.rs",
+        "src/report/get_report_entries.rs",
+        "src/report/mod.rs",
+        "src/chart/types/chart_series.rs",
+        "src/chart/types/donut_chart.rs",
+        "src/chart/types/preview_chart.rs"
+      ],
+      "expected_kinds": [
+        "networking-gui",
+        "reporting-chart"
+      ]
+    },
+    {
+      "case_id": "cli-geodata-and-mmdb-flow",
+      "question": "Which files define sniffnet's CLI geodata and mmdb flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/cli/mod.rs",
+        "src/countries/country_utils.rs",
+        "src/countries/flags_pictures.rs",
+        "src/countries/mod.rs"
+      ],
+      "expected_paths_should": [
+        "src/mmdb/asn.rs",
+        "src/mmdb/country.rs",
+        "src/mmdb/mod.rs",
+        "src/mmdb/types/mmdb_asn_entry.rs",
+        "src/mmdb/types/mmdb_country_entry.rs",
+        "src/mmdb/types/mmdb_reader.rs"
+      ],
+      "expected_kinds": [
+        "cli-country",
+        "geo-database"
+      ]
+    },
+    {
+      "case_id": "notifications-translations-and-themes",
+      "question": "Which files define sniffnet's notifications translations and themes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/notifications/notify_and_log.rs",
+        "src/notifications/types/logged_notification.rs",
+        "src/notifications/types/notifications.rs",
+        "src/notifications/types/sound.rs"
+      ],
+      "expected_paths_should": [
+        "resources/sounds/gulp.mp3",
+        "resources/sounds/pop.mp3",
+        "resources/sounds/swhoosh.mp3",
+        "resources/themes/README.md",
+        "resources/themes/catppuccin.toml",
+        "resources/themes/deep_cosmos.toml"
+      ],
+      "expected_kinds": [
+        "runtime-notification",
+        "theme-asset"
+      ]
+    }
+  ]
+}

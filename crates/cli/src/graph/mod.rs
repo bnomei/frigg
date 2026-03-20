@@ -1,3 +1,7 @@
+//! Symbol and relation graph facilities used to power navigation-style retrieval. The graph
+//! combines heuristic repository analysis with precise SCIP ingest so MCP tools and search flows
+//! can ask structure-aware questions through one reusable substrate.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -522,6 +526,8 @@ pub enum SymbolGraphError {
 pub type SymbolGraphResult<T> = Result<T, SymbolGraphError>;
 
 #[derive(Debug, Clone, Default)]
+/// Repository-scoped symbol relation graph that can absorb precise SCIP data while still serving
+/// as the shared navigation substrate for heuristic and fallback workflows.
 pub struct SymbolGraph {
     graph: DiGraph<SymbolNode, RelationKind>,
     node_by_symbol: BTreeMap<String, NodeIndex>,

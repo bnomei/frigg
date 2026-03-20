@@ -1,0 +1,105 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "wagoodman/dive",
+  "repo_url": "https://github.com/wagoodman/dive",
+  "language_family": "go-runtime",
+  "source_profile": "go-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "build-release-and-workflows",
+      "question": "Which files define dive's build release and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "go.mod",
+        "go.sum",
+        ".goreleaser.yaml",
+        "Makefile"
+      ],
+      "expected_paths_should": [
+        "cmd/dive/main.go",
+        ".github/workflows/release.yaml",
+        ".github/workflows/validations.yaml",
+        "Taskfile.yaml",
+        ".github/actions/bootstrap/action.yaml",
+        "Dockerfile"
+      ],
+      "expected_kinds": [
+        "build-config",
+        "entrypoints",
+        "release-assets"
+      ]
+    },
+    {
+      "case_id": "image-layers-and-filetree",
+      "question": "Which files define dive's image layers and filetree?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "dive/image/analysis.go",
+        "dive/image/image.go",
+        "dive/image/resolver.go",
+        "dive/filetree/file_tree.go"
+      ],
+      "expected_paths_should": [
+        "cmd/dive/cli/internal/options/analysis.go",
+        "cmd/dive/cli/internal/options/application.go",
+        "cmd/dive/cli/internal/options/ui_filetree.go",
+        "cmd/dive/cli/internal/command/adapter/analyzer.go",
+        "cmd/dive/cli/internal/command/adapter/evaluator.go",
+        "cmd/dive/cli/internal/command/adapter/exporter.go"
+      ],
+      "expected_kinds": [
+        "image-tree",
+        "adapter-option"
+      ]
+    },
+    {
+      "case_id": "cli-bus-and-logging",
+      "question": "Which files define dive's CLI bus and logging?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cmd/dive/cli/cli.go",
+        "cmd/dive/cli/cli_build_test.go",
+        "cmd/dive/cli/cli_ci_test.go",
+        "cmd/dive/cli/cli_config_test.go"
+      ],
+      "expected_paths_should": [
+        "cmd/dive/cli/internal/ui/no_ui.go",
+        "cmd/dive/cli/internal/ui/v1.go",
+        "cmd/dive/cli/internal/ui/v1/layout/manager.go",
+        "cmd/dive/cli/internal/ui/v1/view/filetree.go",
+        "cmd/dive/cli/internal/ui/v1/viewmodel/filetree.go",
+        "cmd/dive/cli/internal/ui/v1/viewmodel/layer_set_state.go"
+      ],
+      "expected_kinds": [
+        "cli-bus",
+        "log-ui"
+      ]
+    },
+    {
+      "case_id": "testdata-runtime-and-workflows",
+      "question": "Which files define dive's testdata runtime and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cmd/dive/cli/testdata/config/dive-ci-legacy.yaml",
+        "cmd/dive/cli/testdata/dive-enable-ci.yaml",
+        "cmd/dive/cli/testdata/image-multi-layer-containerfile/Containerfile",
+        "cmd/dive/cli/testdata/image-multi-layer-containerfile/dive-pass.yaml"
+      ],
+      "expected_paths_should": [
+        "Dockerfile",
+        "RELEASE.md",
+        "Taskfile.yaml",
+        ".github/workflows/release.yaml",
+        ".github/workflows/validations.yaml"
+      ],
+      "expected_kinds": [
+        "testdata",
+        "release-workflow"
+      ]
+    }
+  ]
+}

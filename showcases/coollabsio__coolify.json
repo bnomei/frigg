@@ -1,0 +1,127 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "coollabsio/coolify",
+  "repo_url": "https://github.com/coollabsio/coolify",
+  "language_family": "php-laravel-ui",
+  "source_profile": "php-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "bootstrap-and-routes",
+      "question": "Which files define coolify's bootstrap and routes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "routes/api.php",
+        "routes/channels.php",
+        "routes/console.php",
+        "routes/web.php"
+      ],
+      "expected_paths_should": [
+        "bootstrap/app.php",
+        "bootstrap/getHelperVersion.php",
+        "bootstrap/getRealtimeVersion.php",
+        "bootstrap/getVersion.php",
+        "app/Providers/AppServiceProvider.php",
+        "app/Providers/AuthServiceProvider.php"
+      ],
+      "expected_kinds": [
+        "routes",
+        "providers"
+      ]
+    },
+    {
+      "case_id": "blade-livewire-flux",
+      "question": "Which files define coolify's blade livewire flux?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/auth/confirm-password.blade.php",
+        "resources/views/auth/forgot-password.blade.php",
+        "resources/views/auth/login.blade.php",
+        "resources/views/auth/register.blade.php"
+      ],
+      "expected_paths_should": [
+        "app/Livewire/ActivityMonitor.php",
+        "app/Livewire/Dashboard.php",
+        "app/Livewire/DeploymentsIndicator.php",
+        "app/Livewire/ForcePasswordReset.php",
+        "app/Livewire/GlobalSearch.php",
+        "app/Livewire/Help.php"
+      ],
+      "expected_kinds": [
+        "blade-views",
+        "livewire-components",
+        "tests"
+      ]
+    },
+    {
+      "case_id": "deployment-actions-and-jobs",
+      "question": "Which files define coolify's deployment actions and jobs?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Actions/Application/CleanupPreviewDeployment.php",
+        "app/Actions/Application/GenerateConfig.php",
+        "app/Actions/Application/IsHorizonQueueEmpty.php",
+        "app/Actions/Application/LoadComposeFile.php"
+      ],
+      "expected_paths_should": [
+        "app/Jobs/ApplicationDeploymentJob.php",
+        "app/Jobs/ApplicationPullRequestUpdateJob.php",
+        "app/Jobs/CheckAndStartSentinelJob.php",
+        "app/Jobs/CheckForUpdatesJob.php",
+        "app/Jobs/CheckHelperImageJob.php",
+        "app/Jobs/CheckTraefikVersionForServerJob.php"
+      ],
+      "expected_kinds": [
+        "deployment-actions",
+        "jobs-events"
+      ]
+    },
+    {
+      "case_id": "infra-livewire-and-views",
+      "question": "Which files define coolify's infra livewire and views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Livewire/Admin/Index.php",
+        "app/Livewire/Project/AddEmpty.php",
+        "app/Livewire/Project/Application/Advanced.php",
+        "app/Livewire/Project/Application/Configuration.php"
+      ],
+      "expected_paths_should": [
+        "app/View/Components/Modal.php",
+        "app/View/Components/ResourceView.php",
+        "app/View/Components/Forms/Button.php",
+        "app/View/Components/Forms/Checkbox.php",
+        "app/View/Components/Forms/Datalist.php",
+        "app/View/Components/Forms/EnvVarInput.php"
+      ],
+      "expected_kinds": [
+        "livewire",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "models-policies-and-repositories",
+      "question": "Which files define coolify's models policies and repositories?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/Models/Application.php",
+        "app/Models/ApplicationDeploymentQueue.php",
+        "app/Models/ApplicationPreview.php",
+        "app/Models/ApplicationSetting.php"
+      ],
+      "expected_paths_should": [
+        "app/Data/CoolifyTaskArgs.php",
+        "app/Data/ServerMetadata.php",
+        "app/Repositories/CustomJobRepository.php",
+        "app/Support/ValidationPatterns.php"
+      ],
+      "expected_kinds": [
+        "model-policy",
+        "data-support"
+      ]
+    }
+  ]
+}

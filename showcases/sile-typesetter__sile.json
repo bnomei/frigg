@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "sile-typesetter/sile",
+  "repo_url": "https://github.com/sile-typesetter/sile",
+  "language_family": "lua-runtime",
+  "source_profile": "lua-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "classes-inputters-outputters-and-core",
+      "question": "Which files define sile's classes inputters outputters and core?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "classes/base.lua",
+        "classes/bible.lua",
+        "classes/book.lua",
+        "classes/diglot.lua"
+      ],
+      "expected_paths_should": [
+        "core/break.lua",
+        "core/cli.lua",
+        "core/deprecations.lua",
+        "core/font.lua",
+        "core/fontmanager.lua",
+        "core/frame.lua"
+      ],
+      "expected_kinds": [
+        "document-io",
+        "core-doc"
+      ]
+    },
+    {
+      "case_id": "packages-languages-shapers-and-specs",
+      "question": "Which files define sile's packages languages shapers and specs?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/autodoc/init.lua",
+        "packages/background/init.lua",
+        "packages/bibtex/init.lua",
+        "packages/bidi/init.lua"
+      ],
+      "expected_paths_should": [
+        "documentation/c05-packages.sil",
+        "documentation/c08-language.sil",
+        "spec/languages_spec.lua",
+        "spec/opentype_spec.lua",
+        "spec/packages_spec.lua",
+        "spec/shaper_spec.lua"
+      ],
+      "expected_kinds": [
+        "layout-language",
+        "spec-doc"
+      ]
+    },
+    {
+      "case_id": "rusile-lualibs-and-build-surfaces",
+      "question": "Which files define sile's rusile lualibs and build surfaces?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "rusile/build.rs",
+        "rusile/src/lib.rs",
+        "lua-libraries/bitshim.lua",
+        "lua-libraries/char-def.lua"
+      ],
+      "expected_paths_should": [
+        "README.md",
+        "rusile.rockspec.in",
+        "sile.rockspec.in",
+        "spec/rusile_spec.lua",
+        "src/cli.rs",
+        "src/lib.rs"
+      ],
+      "expected_kinds": [
+        "native-library",
+        "integration-build"
+      ]
+    },
+    {
+      "case_id": "cli-entrypoints-and-rockspecs",
+      "question": "Which files define sile's CLI entrypoints and rockspecs?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/cli.rs",
+        "core/cli.lua",
+        "src/bin/sile.rs",
+        "core/repl.lua"
+      ],
+      "expected_paths_should": [
+        "src/lib.rs",
+        "Cargo.toml",
+        "Makefile-luarocks",
+        "README.md",
+        "rusile.rockspec.in",
+        "sile.rockspec.in"
+      ],
+      "expected_kinds": [
+        "cli-entry",
+        "cli-build"
+      ]
+    },
+    {
+      "case_id": "specs-documentation-and-core-tests",
+      "question": "Which files define sile's specs documentation and core tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "spec/packages_spec.lua",
+        "spec/languages_spec.lua",
+        "spec/shaper_spec.lua",
+        "spec/opentype_spec.lua"
+      ],
+      "expected_paths_should": [
+        "core/loaders.lua",
+        "core/opentype-parser.lua",
+        "core/settings_spec.lua",
+        "documentation/c05-packages.sil",
+        "documentation/c08-language.sil",
+        "documentation/c11-inputoutput.sil"
+      ],
+      "expected_kinds": [
+        "spec-suite",
+        "doc-core-test"
+      ]
+    }
+  ]
+}

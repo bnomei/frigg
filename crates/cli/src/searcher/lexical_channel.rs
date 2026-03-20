@@ -462,7 +462,8 @@ mod tests {
         let query_context = HybridPathWitnessQueryContext::from_query_text("jobs listeners queue");
         let source = Cursor::new("\nheader line\nanother unrelated value\n");
 
-        let anchor = best_path_witness_anchor_in_reader("docs/overview.md", source, &query_context);
+        let anchor =
+            best_path_witness_anchor_in_reader("guides/overview.md", source, &query_context);
 
         assert_eq!(anchor, Some((2, "header line".to_owned())));
     }

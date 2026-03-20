@@ -1,227 +1,48 @@
+use frigg::settings::RuntimeTransportKind;
 use std::error::Error;
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
-
-use axum::Router;
-use axum::extract::{Request, State};
-use axum::http::{StatusCode, header};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
-use clap::{Parser, Subcommand, ValueEnum};
-use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
-use frigg::mcp::{FriggMcpServer, RuntimeTaskRegistry};
-use frigg::playbooks::run_hybrid_playbook_regressions;
-use frigg::searcher::{TextSearcher, ValidatedManifestCandidateCache};
-use frigg::settings::{
-    FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
-    SemanticRuntimeProvider, SemanticRuntimeStartupError, WatchConfig, WatchMode,
-    runtime_profile_for_transport,
-};
-use frigg::storage::{
-    DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS,
-    DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend, ensure_provenance_db_parent_dir,
-    resolve_provenance_db_path,
-};
-use frigg::watch::maybe_start_watch_runtime;
-use rmcp::transport::StreamableHttpServerConfig;
-use serde_json::to_string_pretty;
-use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
+mod cli_args;
+mod cli_dispatch;
 mod cli_runtime;
 mod http_runtime;
+#[cfg(test)]
+use axum::http::{StatusCode, header};
+pub(crate) use cli_args::{Cli, Command, WorkloadCorpusExportFormat};
+use cli_dispatch::async_main;
+#[cfg(test)]
 use cli_runtime::{
-    StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
-    resolve_startup_config, resolve_watch_runtime_config, run_hybrid_playbook_command,
-    run_reindex_command, run_semantic_runtime_startup_gate, run_storage_bootstrap_command,
+    StorageBootstrapCommand, StorageMaintenanceCommand, ensure_storage_db_path_for_write,
+    find_enclosing_git_root, resolve_command_config, resolve_semantic_runtime_config,
+    resolve_startup_config, resolve_storage_db_path, resolve_watch_config,
+    resolve_watch_runtime_config, run_reindex_command,
+    run_semantic_runtime_startup_gate_with_credentials, run_storage_bootstrap_command,
     run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
     run_workload_corpus_export_command,
 };
 #[cfg(test)]
-use cli_runtime::{
-    ensure_storage_db_path_for_write, find_enclosing_git_root, resolve_semantic_runtime_config,
-    resolve_storage_db_path, resolve_watch_config,
-    run_semantic_runtime_startup_gate_with_credentials,
+use frigg::settings::{
+    FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider,
+    WatchMode,
 };
 #[cfg(test)]
 use frigg::storage::SemanticChunkEmbeddingRecord;
-use http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
+#[cfg(test)]
+use frigg::storage::{
+    DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS, Storage,
+};
 #[cfg(test)]
 use http_runtime::{
-    allowed_authorities_for_bind, authority_allowed, constant_time_equals, host_header_allowed,
-    origin_header_allowed, parse_host_authority, parse_origin_authority,
-    typed_access_denied_response,
+    HttpRuntimeConfig, allowed_authorities_for_bind, authority_allowed, constant_time_equals,
+    host_header_allowed, origin_header_allowed, parse_host_authority, parse_origin_authority,
+    resolve_http_runtime_config, typed_access_denied_response,
 };
 #[cfg(test)]
 use serde_json::json;
-
-#[derive(Debug, Parser)]
-#[command(name = "frigg", version, about = "Frigg MCP server")]
-struct Cli {
-    #[arg(long = "workspace-root", value_name = "PATH", global = true)]
-    workspace_roots: Vec<PathBuf>,
-
-    #[arg(
-        long = "max-file-bytes",
-        value_name = "BYTES",
-        env = "FRIGG_MAX_FILE_BYTES",
-        global = true
-    )]
-    max_file_bytes: Option<usize>,
-
-    #[arg(long, value_name = "PORT", global = true)]
-    mcp_http_port: Option<u16>,
-
-    #[arg(long, value_name = "HOST", global = true)]
-    mcp_http_host: Option<IpAddr>,
-
-    #[arg(long, global = true)]
-    allow_remote_http: bool,
-
-    #[arg(
-        long,
-        value_name = "TOKEN",
-        env = "FRIGG_MCP_HTTP_AUTH_TOKEN",
-        hide_env_values = true,
-        global = true
-    )]
-    mcp_http_auth_token: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "BOOL",
-        env = "FRIGG_SEMANTIC_RUNTIME_ENABLED",
-        global = true
-    )]
-    semantic_runtime_enabled: Option<bool>,
-
-    #[arg(
-        long,
-        value_name = "PROVIDER",
-        env = "FRIGG_SEMANTIC_RUNTIME_PROVIDER",
-        global = true
-    )]
-    semantic_runtime_provider: Option<SemanticRuntimeProvider>,
-
-    #[arg(
-        long,
-        value_name = "MODEL",
-        env = "FRIGG_SEMANTIC_RUNTIME_MODEL",
-        global = true
-    )]
-    semantic_runtime_model: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "BOOL",
-        env = "FRIGG_SEMANTIC_RUNTIME_STRICT_MODE",
-        global = true
-    )]
-    semantic_runtime_strict_mode: Option<bool>,
-
-    #[arg(long, value_name = "MODE", env = "FRIGG_WATCH_MODE", global = true)]
-    watch_mode: Option<WatchMode>,
-
-    #[arg(
-        long,
-        value_name = "MILLISECONDS",
-        env = "FRIGG_WATCH_DEBOUNCE_MS",
-        global = true
-    )]
-    watch_debounce_ms: Option<u64>,
-
-    #[arg(
-        long,
-        value_name = "MILLISECONDS",
-        env = "FRIGG_WATCH_RETRY_MS",
-        global = true
-    )]
-    watch_retry_ms: Option<u64>,
-
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-enum Command {
-    /// Serve Frigg over loopback HTTP for shared local MCP sessions.
-    Serve,
-    /// Initialize storage schema for each workspace root.
-    Init,
-    /// Verify storage schema and read/write sanity for each workspace root.
-    Verify,
-    /// Reindex all files and persist an updated manifest snapshot.
-    Reindex {
-        /// Reindex changed files only using persisted manifest delta.
-        #[arg(long, default_value_t = false)]
-        changed: bool,
-    },
-    /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
-    RepairStorage,
-    /// Prune retained manifest snapshots and provenance events for each workspace root.
-    PruneStorage {
-        /// Number of latest manifest snapshots to retain per repository.
-        #[arg(
-            long = "keep-manifest-snapshots",
-            default_value_t = DEFAULT_RETAINED_MANIFEST_SNAPSHOTS
-        )]
-        keep_manifest_snapshots: usize,
-        /// Number of latest provenance events to retain per repository.
-        #[arg(
-            long = "keep-provenance-events",
-            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
-        )]
-        keep_provenance_events: usize,
-    },
-    /// Execute markdown hybrid playbooks against the selected workspace root(s).
-    PlaybookHybridRun {
-        /// Directory containing executable markdown playbooks.
-        #[arg(long = "playbooks-root", value_name = "PATH")]
-        playbooks_root: PathBuf,
-        /// Enforce target witness groups in addition to required witness groups.
-        #[arg(long, default_value_t = false)]
-        enforce_targets: bool,
-        /// Optional path for pretty JSON summary output.
-        #[arg(long, value_name = "PATH")]
-        output: Option<PathBuf>,
-        /// Optional directory for per-playbook trace packets.
-        #[arg(long = "trace-root", value_name = "PATH")]
-        trace_root: Option<PathBuf>,
-    },
-    /// Export a deterministic sanitized workload corpus from stored provenance rows.
-    ExportWorkloadCorpus {
-        /// Output file path for JSON or JSONL export.
-        #[arg(long, value_name = "PATH")]
-        output: PathBuf,
-        /// Export encoding.
-        #[arg(long, value_enum, default_value_t = WorkloadCorpusExportFormat::Jsonl)]
-        format: WorkloadCorpusExportFormat,
-        /// Number of recent provenance rows to export per repository.
-        #[arg(
-            long,
-            value_name = "COUNT",
-            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
-        )]
-        limit: usize,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum WorkloadCorpusExportFormat {
-    Json,
-    Jsonl,
-}
-
-impl WorkloadCorpusExportFormat {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Jsonl => "jsonl",
-        }
-    }
-}
+#[cfg(test)]
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(test)]
+use std::path::{Path, PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let startup_trace_active = startup_trace_enabled();
@@ -231,132 +52,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     startup_trace(startup_trace_active, "main: tokio runtime ready");
     runtime.block_on(async_main(startup_trace_active))
-}
-
-async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dyn Error>> {
-    startup_trace(startup_trace_enabled, "async_main: entered");
-    let cli = Cli::parse();
-    startup_trace(startup_trace_enabled, "async_main: cli parsed");
-    let serve_requested = matches!(cli.command, Some(Command::Serve));
-    let http_runtime = resolve_http_runtime_config(&cli, serve_requested)?;
-    startup_trace(startup_trace_enabled, "async_main: http runtime resolved");
-    let transport_kind = http_runtime
-        .as_ref()
-        .map(HttpRuntimeConfig::transport_kind)
-        .unwrap_or(RuntimeTransportKind::Stdio);
-    init_tracing(default_tracing_filter(&cli, transport_kind));
-    startup_trace(startup_trace_enabled, "async_main: tracing initialized");
-
-    if let Some(command) = cli.command.clone() {
-        match command.clone() {
-            Command::Serve => {}
-            Command::Init => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?
-            }
-            Command::Verify => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)?
-            }
-            Command::Reindex { changed } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_semantic_runtime_startup_gate(&config)?;
-                run_reindex_command(&config, changed)?
-            }
-            Command::RepairStorage => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_maintenance_command(
-                    &config,
-                    StorageMaintenanceCommand::RepairSemanticVectorStore,
-                )?
-            }
-            Command::PruneStorage {
-                keep_manifest_snapshots,
-                keep_provenance_events,
-            } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_maintenance_command(
-                    &config,
-                    StorageMaintenanceCommand::Prune {
-                        keep_manifest_snapshots,
-                        keep_provenance_events,
-                    },
-                )?
-            }
-            Command::PlaybookHybridRun {
-                playbooks_root,
-                enforce_targets,
-                output,
-                trace_root,
-            } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_semantic_runtime_startup_gate(&config)?;
-                run_hybrid_playbook_command(
-                    &config,
-                    &playbooks_root,
-                    enforce_targets,
-                    output.as_deref(),
-                    trace_root.as_deref(),
-                )?
-            }
-            Command::ExportWorkloadCorpus {
-                output,
-                format,
-                limit,
-            } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_workload_corpus_export_command(&config, &output, format, limit)?
-            }
-        }
-        if !matches!(command, Command::Serve) {
-            startup_trace(
-                startup_trace_enabled,
-                "async_main: non-serve command complete",
-            );
-            return Ok(());
-        }
-    }
-
-    let config = resolve_startup_config(&cli, transport_kind)?;
-    startup_trace(startup_trace_enabled, "async_main: startup config resolved");
-    run_strict_startup_vector_readiness_gate(&config)?;
-    startup_trace(startup_trace_enabled, "async_main: vector readiness passed");
-    run_semantic_runtime_startup_gate(&config)?;
-    startup_trace(startup_trace_enabled, "async_main: semantic gate passed");
-    let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
-    startup_trace(startup_trace_enabled, "async_main: watch config resolved");
-    let runtime_watch_active = watch_runtime_config
-        .watch
-        .enabled_for_transport(transport_kind);
-    let runtime_profile = runtime_profile_for_transport(transport_kind, runtime_watch_active);
-    let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
-    let validated_manifest_candidate_cache =
-        Arc::new(RwLock::new(ValidatedManifestCandidateCache::default()));
-    let server = FriggMcpServer::new_with_runtime(
-        config,
-        runtime_profile,
-        runtime_watch_active,
-        Arc::clone(&runtime_task_registry),
-        Arc::clone(&validated_manifest_candidate_cache),
-    );
-    let watch_runtime = maybe_start_watch_runtime(
-        &watch_runtime_config,
-        transport_kind,
-        runtime_task_registry,
-        validated_manifest_candidate_cache,
-        Some(server.repository_cache_invalidation_callback()),
-    )?;
-    let _watch_runtime = watch_runtime.map(Arc::new);
-    server.set_watch_runtime(_watch_runtime.clone());
-    if let Some(runtime) = http_runtime {
-        startup_trace(startup_trace_enabled, "async_main: serving http");
-        serve_http(runtime, server).await?;
-    } else {
-        startup_trace(startup_trace_enabled, "async_main: serving stdio");
-        server.serve_stdio().await?;
-    }
-
-    Ok(())
 }
 
 fn startup_trace_enabled() -> bool {

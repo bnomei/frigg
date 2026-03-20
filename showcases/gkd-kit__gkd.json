@@ -1,0 +1,126 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "gkd-kit/gkd",
+  "repo_url": "https://github.com/gkd-kit/gkd",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define gkd's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/kotlin/li/songe/gkd/App.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainActivity.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainViewModel.kt",
+        "app/src/main/kotlin/li/songe/gkd/OpenFileActivity.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/AndroidManifest.xml",
+        "app/src/gkd/AndroidManifest.xml",
+        "app/build.gradle.kts",
+        "build.gradle.kts",
+        "gradle.properties",
+        "settings.gradle.kts"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "tests-and-ui",
+      "question": "Which files define gkd's tests and UI?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/androidTest/kotlin/li/songe/gkd/ExampleInstrumentedTest.kt",
+        "app/src/test/kotlin/li/songe/gkd/ExampleUnitTest.kt",
+        "selector/src/jvmTest/kotlin/li/songe/selector/ParserUnitTest.kt",
+        "selector/src/jvmTest/kotlin/li/songe/selector/QueryUnitTest.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/li/songe/gkd/MainViewModel.kt",
+        "app/src/main/kotlin/li/songe/gkd/a11y/A11yState.kt",
+        "app/src/main/kotlin/li/songe/gkd/permission/PermissionDialog.kt",
+        "app/src/main/kotlin/li/songe/gkd/permission/PermissionState.kt",
+        "app/src/main/kotlin/li/songe/gkd/ui/A11yEventLogPage.kt",
+        "app/src/main/kotlin/li/songe/gkd/ui/A11yScopeAppListPage.kt"
+      ],
+      "expected_kinds": [
+        "tests",
+        "ui-modules"
+      ]
+    },
+    {
+      "case_id": "schema-rules-and-selector",
+      "question": "Which files define gkd's schema rules and selector?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/schemas/li.songe.gkd.db.AppDb/1.json",
+        "selector/src/commonMain/kotlin/li/songe/selector/Selector.kt",
+        "selector/src/commonMain/kotlin/li/songe/selector/Transform.kt",
+        "selector/src/commonMain/kotlin/li/songe/selector/QueryResult.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/li/songe/gkd/App.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainActivity.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainViewModel.kt",
+        "app/src/main/kotlin/li/songe/gkd/data/AppRule.kt",
+        "app/src/main/kotlin/li/songe/gkd/data/GlobalRule.kt",
+        "app/src/main/kotlin/li/songe/gkd/data/RawSubscription.kt"
+      ],
+      "expected_kinds": [
+        "schema-selector",
+        "app-rule"
+      ]
+    },
+    {
+      "case_id": "hidden-api-and-app-runtime",
+      "question": "Which files define gkd's hidden API and app runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "hidden_api/src/main/java/android/accessibilityservice/AccessibilityServiceInfoHidden.java",
+        "hidden_api/src/main/java/android/view/accessibility/AccessibilityNodeInfoHidden.java",
+        "app/src/main/kotlin/li/songe/gkd/App.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainActivity.kt"
+      ],
+      "expected_paths_should": [
+        "selector/src/commonMain/kotlin/li/songe/selector/QueryResult.kt",
+        "selector/src/commonMain/kotlin/li/songe/selector/Selector.kt",
+        "selector/src/commonMain/kotlin/li/songe/selector/Transform.kt",
+        "selector/src/commonMain/kotlin/li/songe/selector/connect/ConnectWrapper.kt"
+      ],
+      "expected_kinds": [
+        "hidden-runtime",
+        "selector-build"
+      ]
+    },
+    {
+      "case_id": "automation-workflows-and-rules",
+      "question": "Which files define gkd's automation workflows and rules?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/Build-Apk.yml",
+        ".github/workflows/Build-Release.yml",
+        "app/schemas/li.songe.gkd.db.AppDb/1.json",
+        "app/schemas/li.songe.gkd.db.AppDb/10.json"
+      ],
+      "expected_paths_should": [
+        "app/src/androidTest/kotlin/li/songe/gkd/ExampleInstrumentedTest.kt",
+        "app/src/main/kotlin/li/songe/gkd/App.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainActivity.kt",
+        "app/src/main/kotlin/li/songe/gkd/MainViewModel.kt",
+        "app/src/main/kotlin/li/songe/gkd/OpenFileActivity.kt",
+        "app/src/main/kotlin/li/songe/gkd/OpenSchemeActivity.kt"
+      ],
+      "expected_kinds": [
+        "workflow-rule",
+        "runtime-selector"
+      ]
+    }
+  ]
+}

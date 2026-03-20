@@ -1,0 +1,125 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "RikkaApps/Shizuku",
+  "repo_url": "https://github.com/RikkaApps/Shizuku",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define Shizuku's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "manager/src/main/java/moe/shizuku/manager/MainActivity.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuApplication.kt",
+        "server/src/main/java/rikka/shizuku/server/ShizukuService.java",
+        "manager/src/main/java/moe/shizuku/manager/adb/AdbPairingService.kt"
+      ],
+      "expected_paths_should": [
+        "manager/src/main/AndroidManifest.xml",
+        "server/src/main/AndroidManifest.xml",
+        "manager/build.gradle",
+        "server/build.gradle",
+        "build.gradle",
+        "gradle.properties"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "build-config-and-manifests",
+      "question": "Which files define Shizuku's build config and manifests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "common/src/main/AndroidManifest.xml",
+        "manager/src/main/AndroidManifest.xml",
+        "server/src/main/AndroidManifest.xml",
+        "shell/src/main/AndroidManifest.xml"
+      ],
+      "expected_paths_should": [
+        "manager/src/main/java/moe/shizuku/manager/MainActivity.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuApplication.kt",
+        "server/src/main/java/rikka/shizuku/server/ShizukuService.java",
+        "manager/src/main/java/moe/shizuku/manager/adb/AdbPairingService.kt",
+        "manager/src/main/java/moe/shizuku/manager/adb/AdbPairingTutorialActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/app/AppActivity.kt"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "entrypoints",
+        "ui-modules"
+      ]
+    },
+    {
+      "case_id": "manager-server-and-starter",
+      "question": "Which files define Shizuku's manager server and starter?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "manager/src/main/java/moe/shizuku/manager/MainActivity.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuApplication.kt",
+        "manager/src/main/java/moe/shizuku/manager/starter/StarterActivity.kt"
+      ],
+      "expected_paths_should": [
+        "manager/src/main/java/moe/shizuku/manager/adb/AdbPairingTutorialActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/legacy/ShellRequestHandlerActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/management/ApplicationManagementActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/shell/ShellTutorialActivity.kt"
+      ],
+      "expected_kinds": [
+        "manager-home",
+        "manager-shell-starter"
+      ]
+    },
+    {
+      "case_id": "api-common-and-shell",
+      "question": "Which files define Shizuku's API common and shell?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "manager/src/main/java/moe/shizuku/manager/MainActivity.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuApplication.kt",
+        "manager/src/main/java/moe/shizuku/manager/app/AppActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/home/HomeActivity.kt"
+      ],
+      "expected_paths_should": [
+        "manager/src/main/java/moe/shizuku/manager/Helps.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuManagerProvider.kt",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuSettings.java",
+        "manager/src/main/java/moe/shizuku/manager/authorization/RequestPermissionActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/legacy/ShellRequestHandlerActivity.kt",
+        "manager/src/main/java/moe/shizuku/manager/settings/SettingsActivity.kt"
+      ],
+      "expected_kinds": [
+        "manager-entry",
+        "manager-permission-shell"
+      ]
+    },
+    {
+      "case_id": "gradle-runtime-and-workflows",
+      "question": "Which files define Shizuku's gradle runtime and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "build.gradle",
+        "settings.gradle",
+        "manager/build.gradle",
+        "server/build.gradle"
+      ],
+      "expected_paths_should": [
+        "manager/src/main/java/moe/shizuku/manager/MainActivity.java",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuApplication.kt",
+        "manager/src/main/java/moe/shizuku/manager/ShizukuManagerProvider.kt",
+        "shell/src/main/java/rikka/shizuku/shell/ShizukuShellLoader.java",
+        "starter/src/main/java/moe/shizuku/starter/ServiceStarter.java"
+      ],
+      "expected_kinds": [
+        "build-workflow",
+        "runtime-module"
+      ]
+    }
+  ]
+}

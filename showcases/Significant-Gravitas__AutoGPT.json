@@ -1,0 +1,105 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "Significant-Gravitas/AutoGPT",
+  "repo_url": "https://github.com/Significant-Gravitas/AutoGPT",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define AutoGPT's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "classic/original_autogpt/autogpt/app/cli.py",
+        "classic/original_autogpt/autogpt/app/main.py",
+        "classic/cli.py",
+        "autogpt_platform/backend/backend/app.py"
+      ],
+      "expected_paths_should": [
+        "classic/original_autogpt/autogpt/app/setup.py",
+        "autogpt_platform/backend/pyproject.toml",
+        "classic/benchmark/pyproject.toml",
+        "classic/forge/pyproject.toml",
+        "classic/original_autogpt/pyproject.toml",
+        "classic/original_autogpt/setup.py"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "classic-cli-and-forge-tests",
+      "question": "Which files define AutoGPT's classic CLI and forge tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "classic/forge/forge/agent_protocol/agent_test.py",
+        "classic/forge/forge/agent_protocol/database/db_test.py",
+        "classic/forge/forge/components/code_executor/test_code_executor.py",
+        "classic/forge/forge/components/file_manager/test_file_manager.py"
+      ],
+      "expected_paths_should": [
+        "classic/forge/forge/agent_protocol/database/__init__.py",
+        "classic/forge/forge/agent_protocol/database/db.py",
+        "classic/forge/forge/agent_protocol/__init__.py",
+        "classic/forge/forge/agent_protocol/agent.py",
+        "classic/forge/forge/agent_protocol/api_router.py",
+        "classic/forge/forge/agent_protocol/middlewares.py"
+      ],
+      "expected_kinds": [
+        "classic-tests",
+        "classic-runtime"
+      ]
+    },
+    {
+      "case_id": "platform-compose-and-backend-services",
+      "question": "Which files define AutoGPT's platform compose and backend services?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "autogpt_platform/backend/docker-compose.test.yaml",
+        "autogpt_platform/docker-compose.platform.yml",
+        "autogpt_platform/docker-compose.yml",
+        "autogpt_platform/db/docker/dev/docker-compose.dev.yml"
+      ],
+      "expected_paths_should": [
+        "autogpt_platform/backend/backend/api/external/fastapi_app.py",
+        "autogpt_platform/backend/backend/api/external/middleware.py",
+        "autogpt_platform/backend/backend/api/features/__init__.py",
+        "autogpt_platform/backend/backend/api/features/analytics.py",
+        "autogpt_platform/backend/backend/api/features/analytics_test.py",
+        "autogpt_platform/backend/backend/api/external/v1/__init__.py"
+      ],
+      "expected_kinds": [
+        "compose-stack",
+        "platform-api"
+      ]
+    },
+    {
+      "case_id": "platform-frontend-and-backend-api",
+      "question": "Which files define AutoGPT's platform frontend and backend API?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "autogpt_platform/backend/backend/api/external/fastapi_app.py",
+        "autogpt_platform/backend/backend/api/external/middleware.py",
+        "autogpt_platform/backend/backend/api/external/v1/__init__.py",
+        "autogpt_platform/backend/backend/api/external/v1/integrations.py"
+      ],
+      "expected_paths_should": [
+        "autogpt_platform/backend/backend/blocks/_utils.py",
+        "autogpt_platform/backend/backend/blocks/agent.py",
+        "autogpt_platform/backend/backend/blocks/ai_condition.py",
+        "autogpt_platform/backend/backend/blocks/ai_image_generator_block.py",
+        "autogpt_platform/backend/backend/blocks/basic.py",
+        "autogpt_platform/backend/backend/blocks/block.py"
+      ],
+      "expected_kinds": [
+        "platform-api",
+        "platform-blocks"
+      ]
+    }
+  ]
+}

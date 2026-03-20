@@ -1,0 +1,105 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "LuaLS/lua-language-server",
+  "repo_url": "https://github.com/LuaLS/lua-language-server",
+  "language_family": "lua-runtime",
+  "source_profile": "lua-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define lua-language-server's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "main.lua",
+        "lua/cli/check.lua",
+        "lua/cli/check_worker.lua",
+        "lua/cli/help.lua"
+      ],
+      "expected_paths_should": [
+        ".luarc.json",
+        "README.md",
+        "lua-language-server-scm-1.rockspec",
+        ".github/workflows/build.yml",
+        ".github/workflows/changelog.yml",
+        ".github/workflows/test.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "cli-config-and-doc-locales",
+      "question": "Which files define lua-language-server's CLI config and doc locales?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "script/cli/check.lua",
+        "script/cli/check_worker.lua",
+        "script/cli/doc/export.lua",
+        "script/cli/doc/init.lua"
+      ],
+      "expected_paths_should": [
+        "README.md",
+        "lua-language-server-scm-1.rockspec",
+        "doc/en-us/config.md",
+        "doc/pt-br/config.md",
+        "doc/zh-cn/config.md",
+        "doc/zh-tw/config.md"
+      ],
+      "expected_kinds": [
+        "cli-config",
+        "doc-locale"
+      ]
+    },
+    {
+      "case_id": "parser-vm-and-meta-templates",
+      "question": "Which files define lua-language-server's parser vm and meta templates?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "script/parser/compile.lua",
+        "script/parser/guide.lua",
+        "script/parser/init.lua",
+        "script/parser/lines.lua"
+      ],
+      "expected_paths_should": [
+        "script/config/template.lua",
+        "meta/template/basic.lua",
+        "test/example/meta.json",
+        "test/example/vm.txt",
+        "test/parser_test/init.lua",
+        "test/type_inference/common.lua"
+      ],
+      "expected_kinds": [
+        "parser-vm",
+        "meta-test"
+      ]
+    },
+    {
+      "case_id": "script-build-and-runner-tests",
+      "question": "Which files define lua-language-server's script build and runner tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "script/cli/check.lua",
+        "script/cli/check_worker.lua",
+        "script/cli/doc/export.lua",
+        "script/cli/doc/init.lua"
+      ],
+      "expected_paths_should": [
+        "debugger.lua",
+        "main.lua",
+        "zig-cc-wrapper.sh",
+        "test/plugins/test.lua",
+        "test/plugins/ast/helper.lua",
+        "test/plugins/ast/test.lua"
+      ],
+      "expected_kinds": [
+        "script-build",
+        "runner-test"
+      ]
+    }
+  ]
+}

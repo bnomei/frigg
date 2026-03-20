@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "tree-sitter/tree-sitter",
+  "repo_url": "https://github.com/tree-sitter/tree-sitter",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "ci-release-and-ops",
+      "question": "Which files define tree-sitter's ci release and ops?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/backport.yml",
+        ".github/workflows/bindgen.yml",
+        ".github/workflows/build.yml",
+        ".github/workflows/ci.yml"
+      ],
+      "expected_paths_should": [
+        ".github/scripts/close_spam.js",
+        ".github/scripts/close_unresponsive.js",
+        ".github/scripts/remove_response_label.js",
+        ".github/scripts/reviewers_remove.js",
+        ".github/scripts/wasm_stdlib.js",
+        "Makefile"
+      ],
+      "expected_kinds": [
+        "ci-release",
+        "scripts-ops"
+      ]
+    },
+    {
+      "case_id": "grammar-generate-and-loader-flow",
+      "question": "Which files define tree-sitter's grammar generate and loader flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/generate/src/bitvec.rs",
+        "crates/generate/src/build_tables.rs",
+        "crates/generate/src/build_tables/build_lex_table.rs",
+        "crates/generate/src/build_tables/build_parse_table.rs"
+      ],
+      "expected_paths_should": [
+        "crates/config/src/tree_sitter_config.rs",
+        "crates/language/src/language.rs",
+        "lib/src/alloc.c",
+        "lib/src/alloc.h",
+        "lib/src/array.h",
+        "lib/src/atomic.h"
+      ],
+      "expected_kinds": [
+        "grammar-loader",
+        "library-config"
+      ]
+    },
+    {
+      "case_id": "highlight-tags-and-fixtures-flow",
+      "question": "Which files define tree-sitter's highlight tags and fixtures flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/highlight/src/c_lib.rs",
+        "crates/highlight/src/highlight.rs",
+        "crates/tags/src/c_lib.rs",
+        "crates/tags/src/tags.rs"
+      ],
+      "expected_paths_should": [
+        "crates/cli/src/tests/highlight_test.rs",
+        "crates/cli/src/tests/tags_test.rs",
+        "crates/cli/src/tests/test_highlight_test.rs",
+        "crates/cli/src/tests/test_tags_test.rs",
+        "test/fixtures/fixtures.json",
+        "test/fixtures/error_corpus/c_errors.txt"
+      ],
+      "expected_kinds": [
+        "highlight-tag",
+        "fixture-doc"
+      ]
+    },
+    {
+      "case_id": "web-binding-and-wasm-tooling-flow",
+      "question": "Which files define tree-sitter's web binding and WASM tooling flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "lib/binding_web/src/bindings.ts",
+        "lib/binding_web/src/constants.ts",
+        "lib/binding_web/src/edit.ts",
+        "lib/binding_web/src/finalization_registry.ts"
+      ],
+      "expected_paths_should": [
+        "lib/binding_web/test/edit.test.ts",
+        "lib/binding_web/test/helper.ts",
+        "lib/binding_web/test/language.test.ts",
+        "lib/binding_web/test/memory.test.ts",
+        "lib/binding_web/test/memory.ts",
+        "lib/binding_web/test/memory_unsupported.test.ts"
+      ],
+      "expected_kinds": [
+        "web-binding",
+        "wasm-cli-test"
+      ]
+    },
+    {
+      "case_id": "xtask-automation-and-workflows",
+      "question": "Which files define tree-sitter's xtask automation and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "crates/xtask/Cargo.toml",
+        "crates/xtask/src/main.rs",
+        "crates/xtask/src/build_wasm.rs",
+        "crates/xtask/src/check_wasm_exports.rs"
+      ],
+      "expected_paths_should": [
+        "Makefile",
+        ".github/scripts/close_spam.js",
+        ".github/scripts/close_unresponsive.js",
+        ".github/scripts/remove_response_label.js",
+        ".github/scripts/reviewers_remove.js",
+        ".github/scripts/wasm_stdlib.js"
+      ],
+      "expected_kinds": [
+        "xtask",
+        "automation"
+      ]
+    }
+  ]
+}

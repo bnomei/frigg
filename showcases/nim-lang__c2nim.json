@@ -1,0 +1,121 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "nim-lang/c2nim",
+  "repo_url": "https://github.com/nim-lang/c2nim",
+  "language_family": "nim-runtime",
+  "source_profile": "nim-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define c2nim's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "c2nim.nim",
+        "clexer.nim",
+        "cparser.nim",
+        "mangler.nim"
+      ],
+      "expected_paths_should": [
+        "c2nim.nimble",
+        "c2nim.nims",
+        ".github/workflows/ci.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "compiler-parser-and-preprocessor",
+      "question": "Which files define c2nim's compiler parser and preprocessor?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "compiler/ast.nim",
+        "compiler/idents.nim",
+        "compiler/lexer.nim",
+        "compiler/lineinfos.nim"
+      ],
+      "expected_paths_should": [
+        "compiler/msgs.nim",
+        "compiler/nversion.nim",
+        "compiler/options.nim",
+        "compiler/wordrecg.nim",
+        "c2nim.nim"
+      ],
+      "expected_kinds": [
+        "compiler-parser",
+        "compiler-support"
+      ]
+    },
+    {
+      "case_id": "testsuite-translation-and-results",
+      "question": "Which files define c2nim's testsuite translation and results?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "testsuite/tester.nim",
+        "testsuite/tests/bitfield.h",
+        "testsuite/tests/bitfieldwithheader.hpp",
+        "testsuite/tests/block.h"
+      ],
+      "expected_paths_should": [
+        "testsuite/results/bitfield.nim",
+        "testsuite/results/bitfieldwithheader.nim",
+        "testsuite/results/block.nim",
+        "testsuite/results/i2c_master.nim",
+        "testsuite/results/matrix.nim",
+        "testsuite/results/struct_directives.nim"
+      ],
+      "expected_kinds": [
+        "testsuite-input",
+        "testsuite-result"
+      ]
+    },
+    {
+      "case_id": "commandline-and-doc-flows",
+      "question": "Which files define c2nim's commandline and doc flows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "c2nim.nim",
+        "c2nim.nims",
+        "testsuite/cextras/message_type_support_struct.h",
+        "testsuite/cextras/rcl_allocator.h"
+      ],
+      "expected_paths_should": [
+        "mangler.nim",
+        "postprocessor.nim",
+        "preprocessor.nim"
+      ],
+      "expected_kinds": [
+        "entry-cextras",
+        "conversion-pipeline"
+      ]
+    },
+    {
+      "case_id": "testsuite-inputs-and-compiler-pipeline",
+      "question": "Which files define c2nim's testsuite inputs and compiler pipeline?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "testsuite/tester.nim",
+        "testsuite/tests/bitfield.h",
+        "testsuite/tests/cppstatic.hpp",
+        "testsuite/tests/i2c_master.h"
+      ],
+      "expected_paths_should": [
+        "mangler.nim",
+        "postprocessor.nim",
+        "preprocessor.nim",
+        "compiler/lexer.nim",
+        "compiler/options.nim",
+        "compiler/pathutils.nim"
+      ],
+      "expected_kinds": [
+        "testsuite-driver",
+        "compiler-pipeline"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,330 @@
+use super::*;
+
+impl FriggMcpServer {
+    pub(super) fn clone_for_new_session(&self) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            tool_router: self.tool_router.clone(),
+            tool_surface_profile: self.tool_surface_profile,
+            runtime_state: self.runtime_state.clone(),
+            session_state: FriggMcpSessionState::new(
+                Arc::clone(&self.runtime_state.workspace_registry),
+                self.runtime_state.watch_runtime.clone(),
+            ),
+            cache_state: self.cache_state.clone(),
+            provenance_state: self.provenance_state.clone(),
+        }
+    }
+
+    pub fn repository_cache_invalidation_callback(
+        &self,
+    ) -> crate::watch::RepositoryCacheInvalidationCallback {
+        let server = self.clone();
+        Arc::new(move |repository_id: &str| {
+            server.invalidate_repository_summary_cache(repository_id);
+            server.invalidate_repository_file_content_cache(repository_id);
+            server.scip_invalidate_repository_precise_generation_cache(repository_id);
+            server.invalidate_repository_precise_graph_caches(repository_id);
+            server.invalidate_repository_search_response_caches(repository_id);
+            server.invalidate_repository_navigation_response_caches(repository_id);
+        })
+    }
+
+    pub fn set_watch_runtime(&self, watch_runtime: Option<Arc<crate::watch::WatchRuntime>>) {
+        let mut state = self
+            .runtime_state
+            .watch_runtime
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *state = watch_runtime;
+    }
+
+    pub(super) fn resolve_workspace_target(
+        &self,
+        path: Option<&str>,
+        repository_id: Option<&str>,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<
+        (
+            AttachedWorkspace,
+            Option<String>,
+            Option<WorkspaceResolveMode>,
+        ),
+        ErrorData,
+    > {
+        match (path, repository_id) {
+            (Some(path), None) => {
+                if path.trim().is_empty() {
+                    return Err(Self::invalid_params(
+                        "workspace_attach.path must not be empty",
+                        None,
+                    ));
+                }
+                let path = Path::new(path);
+                let resolved_from = Self::effective_attach_directory(path)?;
+                let (root, resolution) = match resolve_mode {
+                    WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
+                        Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
+                        None => (resolved_from.clone(), WorkspaceResolveMode::Direct),
+                    },
+                    WorkspaceResolveMode::Direct => {
+                        (resolved_from.clone(), WorkspaceResolveMode::Direct)
+                    }
+                };
+                let workspace = {
+                    let mut registry = self
+                        .runtime_state
+                        .workspace_registry
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    registry.get_or_insert(root)
+                };
+                Ok((
+                    workspace,
+                    Some(resolved_from.display().to_string()),
+                    Some(resolution),
+                ))
+            }
+            (None, Some(repository_id)) => {
+                let workspace = self
+                    .runtime_state
+                    .workspace_registry
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .workspace_by_repository_id(repository_id)
+                    .ok_or_else(|| {
+                        Self::resource_not_found(
+                            "repository_id not found",
+                            Some(json!({ "repository_id": repository_id })),
+                        )
+                    })?;
+                Ok((workspace, None, None))
+            }
+            (Some(_), Some(_)) => Err(Self::invalid_params(
+                "workspace target must provide either `path` or `repository_id`, not both",
+                None,
+            )),
+            (None, None) => Err(Self::invalid_params(
+                "workspace target requires either `path` or `repository_id`",
+                None,
+            )),
+        }
+    }
+
+    pub(super) fn attach_workspace_target_internal(
+        &self,
+        path: Option<&str>,
+        repository_id: Option<&str>,
+        set_default: bool,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<WorkspaceAttachResponse, ErrorData> {
+        let (workspace, resolved_from, resolution) =
+            self.resolve_workspace_target(path, repository_id, resolve_mode)?;
+
+        let newly_adopted = self.adopt_workspace(&workspace, set_default)?;
+
+        self.runtime_state
+            .validated_manifest_candidate_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate_root(&workspace.root);
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
+        self.invalidate_repository_search_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+        self.maybe_refresh_workspace_semantic_snapshot(&workspace);
+
+        let mut repository = self.repository_summary(&workspace);
+        let storage = repository
+            .storage
+            .clone()
+            .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
+        repository.storage = None;
+        self.maybe_spawn_workspace_runtime_prewarm(&workspace);
+        let precise_generation_action =
+            self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
+        let precise = self
+            .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
+
+        Ok(WorkspaceAttachResponse {
+            repository,
+            resolved_from: resolved_from.unwrap_or_else(|| workspace.root.display().to_string()),
+            resolution: resolution.unwrap_or(WorkspaceResolveMode::Direct),
+            session_default: self.current_repository_id().as_deref()
+                == Some(workspace.repository_id.as_str()),
+            storage,
+            action: if newly_adopted {
+                WorkspaceAttachAction::AttachedFresh
+            } else {
+                WorkspaceAttachAction::ReusedWorkspace
+            },
+            precise,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn attach_workspace_internal(
+        &self,
+        path: &Path,
+        set_default: bool,
+        resolve_mode: WorkspaceResolveMode,
+    ) -> Result<WorkspaceAttachResponse, ErrorData> {
+        let owned_path = path.display().to_string();
+        self.attach_workspace_target_internal(Some(&owned_path), None, set_default, resolve_mode)
+    }
+
+    pub(super) fn repository_has_active_runtime_work(&self, repository_id: &str) -> bool {
+        let registry = self
+            .runtime_state
+            .runtime_task_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        [
+            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::PreciseGenerate,
+            RuntimeTaskKind::WorkspacePrepare,
+            RuntimeTaskKind::WorkspaceReindex,
+        ]
+        .into_iter()
+        .any(|kind| registry.has_active_task_for_repository(kind, repository_id))
+    }
+
+    pub(super) fn scoped_search_config(
+        &self,
+        scoped_workspaces: &[AttachedWorkspace],
+    ) -> (FriggConfig, BTreeMap<String, String>) {
+        let scoped_config = FriggConfig {
+            workspace_roots: scoped_workspaces
+                .iter()
+                .map(|workspace| workspace.root.clone())
+                .collect(),
+            ..(*self.config).clone()
+        };
+        let repository_id_map = scoped_config
+            .repositories()
+            .into_iter()
+            .zip(scoped_workspaces.iter())
+            .map(|(temporary, actual)| (temporary.repository_id.0, actual.repository_id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        (scoped_config, repository_id_map)
+    }
+
+    pub(super) fn canonicalize_existing_ancestor(
+        path: &Path,
+    ) -> Result<Option<PathBuf>, ErrorData> {
+        for ancestor in path.ancestors() {
+            match ancestor.canonicalize() {
+                Ok(canonical) => return Ok(Some(canonical)),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(Self::internal(
+                        format!(
+                            "failed to canonicalize ancestor {}: {err}",
+                            ancestor.display()
+                        ),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub(super) fn candidate_within_root(
+        candidate: &Path,
+        root_canonical: &Path,
+    ) -> Result<bool, ErrorData> {
+        let Some(ancestor) = Self::canonicalize_existing_ancestor(candidate)? else {
+            return Ok(false);
+        };
+
+        Ok(ancestor.starts_with(root_canonical))
+    }
+
+    pub(super) fn resolve_file_path(
+        &self,
+        params: &ReadFileParams,
+    ) -> Result<(String, PathBuf, String), ErrorData> {
+        let requested = PathBuf::from(&params.path);
+        let roots = if requested.is_absolute() && params.repository_id.is_none() {
+            self.known_workspaces()
+                .into_iter()
+                .map(|workspace| (workspace.repository_id, workspace.root))
+                .collect::<Vec<_>>()
+        } else {
+            self.roots_for_repository(params.repository_id.as_deref())?
+        }
+        .into_iter()
+        .map(|(repository_id, root)| {
+            let root_canonical = root.canonicalize().map_err(|err| {
+                Self::internal(
+                    format!("failed to canonicalize root {}: {err}", root.display()),
+                    None,
+                )
+            })?;
+            Ok((repository_id, root_canonical))
+        })
+        .collect::<Result<Vec<_>, ErrorData>>()?;
+
+        let mut saw_workspace_candidate = false;
+
+        for (repository_id, root_canonical) in roots {
+            let candidate = if requested.is_absolute() {
+                requested.clone()
+            } else {
+                root_canonical.join(&requested)
+            };
+
+            match candidate.canonicalize() {
+                Ok(candidate_canonical) => {
+                    if !candidate_canonical.starts_with(&root_canonical) {
+                        continue;
+                    }
+                    saw_workspace_candidate = true;
+
+                    let metadata = fs::metadata(&candidate_canonical).map_err(|err| {
+                        Self::internal(
+                            format!(
+                                "failed to stat file {}: {err}",
+                                candidate_canonical.display()
+                            ),
+                            None,
+                        )
+                    })?;
+                    if metadata.is_file() {
+                        let display_path =
+                            Self::relative_display_path(&root_canonical, &candidate_canonical);
+                        return Ok((repository_id, candidate_canonical, display_path));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    if Self::candidate_within_root(&candidate, &root_canonical)? {
+                        saw_workspace_candidate = true;
+                    }
+                }
+                Err(err) => {
+                    return Err(Self::internal(
+                        format!("failed to canonicalize file {}: {err}", candidate.display()),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        if saw_workspace_candidate {
+            return Err(Self::resource_not_found(
+                "file not found",
+                Some(serde_json::json!({ "path": params.path })),
+            ));
+        }
+
+        Err(Self::access_denied(
+            "path is outside workspace roots",
+            Some(serde_json::json!({ "path": params.path })),
+        ))
+    }
+}

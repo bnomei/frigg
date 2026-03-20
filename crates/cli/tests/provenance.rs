@@ -2,18 +2,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    DeepSearchComposeCitationsParams, DeepSearchPlaybookContract, DeepSearchPlaybookStepContract,
-    DeepSearchReplayParams, DeepSearchRunParams, ExploreOperation, ExploreParams,
-    FindReferencesParams, ListRepositoriesParams, ReadFileParams, SearchHybridParams,
-    SearchPatternType, SearchSymbolParams, SearchTextParams,
+    ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams, ReadFileParams,
+    SearchHybridParams, SearchPatternType, SearchSymbolParams, SearchTextParams,
 };
-use frigg::mcp::{DeepSearchHarness, FriggMcpServer};
 use frigg::settings::FriggConfig;
 use frigg::storage::Storage;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorCode;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn temp_workspace_root(test_name: &str) -> PathBuf {
     let nanos_since_epoch = SystemTime::now()
@@ -92,34 +90,10 @@ fn server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
     FriggMcpServer::new(config)
 }
 
-fn deep_search_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
-    let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
-        .expect("workspace fixture should produce valid config");
-    FriggMcpServer::new_with_runtime_options(config, false, true)
-}
-
 fn extended_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace fixture should produce valid config");
     FriggMcpServer::new_with_runtime_options(config, false, true)
-}
-
-fn build_deep_search_workspace_fixture(test_name: &str) -> PathBuf {
-    let root = temp_workspace_root(test_name);
-    let src_dir = root.join("src");
-    fs::create_dir_all(&src_dir).expect("failed to create deep-search workspace fixture");
-    fs::write(
-        src_dir.join("lib.rs"),
-        "pub fn greeting() -> &'static str { \"hello replay\" }\n\
-         pub fn callsite() { let _ = greeting(); }\n",
-    )
-    .expect("failed to seed deep-search workspace source file");
-    root
-}
-
-fn deep_search_playbook_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/playbooks/deep-search-replay-basic.playbook.json")
 }
 
 fn cleanup_workspace(workspace_root: &Path) {
@@ -191,6 +165,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             line: None,
             column: None,
             include_definition: Some(false),
+            include_follow_up_structural: None,
             limit: Some(5),
         }))
         .await
@@ -515,152 +490,6 @@ async fn provenance_best_effort_mode_is_opt_in() {
 
     assert_eq!(response.repositories.len(), 1);
     assert!(!storage_path_for_workspace(&workspace_root).exists());
-
-    cleanup_workspace(&workspace_root);
-}
-
-#[tokio::test]
-async fn provenance_deep_search_runtime_tool_invocations_emit_budget_metadata() {
-    let workspace_root = build_deep_search_workspace_fixture("deep-search-runtime-provenance");
-    let server = deep_search_runtime_server_for_workspace(&workspace_root);
-
-    let playbook = DeepSearchHarness::load_playbook(&deep_search_playbook_path())
-        .expect("deep-search playbook fixture must parse");
-    let run = server
-        .deep_search_run(Parameters(DeepSearchRunParams {
-            playbook: playbook.clone().into(),
-        }))
-        .await
-        .expect("deep_search_run should succeed")
-        .0;
-    let replay = server
-        .deep_search_replay(Parameters(DeepSearchReplayParams {
-            playbook: playbook.into(),
-            expected_trace_artifact: run.trace_artifact.clone(),
-        }))
-        .await
-        .expect("deep_search_replay should succeed")
-        .0;
-    let compose = server
-        .deep_search_compose_citations(Parameters(DeepSearchComposeCitationsParams {
-            trace_artifact: run.trace_artifact.clone(),
-            answer: None,
-        }))
-        .await
-        .expect("deep_search_compose_citations should succeed")
-        .0;
-
-    assert!(
-        replay.matches,
-        "expected deterministic replay match: {:?}",
-        replay.diff
-    );
-    assert!(
-        !compose.citation_payload.claims.is_empty(),
-        "expected composed citation claims"
-    );
-
-    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
-    let run_rows = storage
-        .load_provenance_events_for_tool("deep_search_run", 1)
-        .expect("expected deep_search_run provenance rows");
-    let replay_rows = storage
-        .load_provenance_events_for_tool("deep_search_replay", 1)
-        .expect("expected deep_search_replay provenance rows");
-    let compose_rows = storage
-        .load_provenance_events_for_tool("deep_search_compose_citations", 1)
-        .expect("expected deep_search_compose_citations provenance rows");
-
-    assert_eq!(run_rows.len(), 1);
-    assert_eq!(replay_rows.len(), 1);
-    assert_eq!(compose_rows.len(), 1);
-
-    let run_payload = serde_json::from_str::<Value>(&run_rows[0].payload_json)
-        .expect("failed to parse deep_search_run provenance payload");
-    let replay_payload = serde_json::from_str::<Value>(&replay_rows[0].payload_json)
-        .expect("failed to parse deep_search_replay provenance payload");
-    let compose_payload = serde_json::from_str::<Value>(&compose_rows[0].payload_json)
-        .expect("failed to parse deep_search_compose_citations provenance payload");
-
-    for payload in [&run_payload, &replay_payload, &compose_payload] {
-        assert_eq!(payload["outcome"]["status"].as_str(), Some("ok"));
-        assert!(
-            payload["source_refs"]["resource_budgets"]
-                .as_array()
-                .map(|entries| !entries.is_empty())
-                .unwrap_or(false),
-            "expected deep-search provenance to include resource_budgets entries"
-        );
-        assert!(
-            payload["source_refs"]["resource_usage"]
-                .as_array()
-                .map(|entries| !entries.is_empty())
-                .unwrap_or(false),
-            "expected deep-search provenance to include resource_usage entries"
-        );
-    }
-
-    let run_budget_tools = run_payload["source_refs"]["resource_budgets"]
-        .as_array()
-        .expect("run resource_budgets should be an array")
-        .iter()
-        .filter_map(|entry| entry.get("tool_name").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    assert!(
-        run_budget_tools.contains(&"find_references"),
-        "expected run budget metadata to include find_references step"
-    );
-
-    cleanup_workspace(&workspace_root);
-}
-
-#[tokio::test]
-async fn provenance_deep_search_runtime_invalid_params_failure_is_typed_and_persisted() {
-    let workspace_root = build_deep_search_workspace_fixture("deep-search-runtime-failure");
-    let server = deep_search_runtime_server_for_workspace(&workspace_root);
-
-    let error = match server
-        .deep_search_run(Parameters(DeepSearchRunParams {
-            playbook: DeepSearchPlaybookContract {
-                playbook_id: "unsupported-step-tool".to_owned(),
-                steps: vec![DeepSearchPlaybookStepContract {
-                    step_id: "tool-001".to_owned(),
-                    tool_name: "write_file".to_owned(),
-                    params: json!({ "path": "src/lib.rs" }),
-                }],
-            },
-        }))
-        .await
-    {
-        Ok(_) => panic!("unsupported deep-search tool step should return invalid_params"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
-    assert_eq!(error_code_tag(&error), Some("invalid_params"));
-    assert_eq!(retryable_tag(&error), Some(false));
-
-    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
-    let run_rows = storage
-        .load_provenance_events_for_tool("deep_search_run", 1)
-        .expect("expected deep_search_run provenance rows");
-    assert_eq!(run_rows.len(), 1);
-    let payload = serde_json::from_str::<Value>(&run_rows[0].payload_json)
-        .expect("failed to parse deep_search_run provenance payload");
-
-    assert_eq!(payload["outcome"]["status"].as_str(), Some("error"));
-    assert_eq!(
-        payload["outcome"]["error_code"].as_str(),
-        Some("invalid_params")
-    );
-    assert!(
-        payload["source_refs"]["resource_budgets"].is_array(),
-        "expected resource_budgets key even on deep-search invalid_params failure"
-    );
-    assert!(
-        payload["source_refs"]["resource_usage"].is_array(),
-        "expected resource_usage key even on deep-search invalid_params failure"
-    );
 
     cleanup_workspace(&workspace_root);
 }

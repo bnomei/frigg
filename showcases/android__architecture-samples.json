@@ -1,0 +1,124 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "android/architecture-samples",
+  "repo_url": "https://github.com/android/architecture-samples",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define architecture-samples' runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoActivity.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoApplication.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavGraph.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/AndroidManifest.xml",
+        "shared-test/src/main/AndroidManifest.xml",
+        "app/src/debug/AndroidManifest.xml",
+        "app/build.gradle.kts",
+        "shared-test/build.gradle.kts",
+        "build.gradle.kts"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "tests-and-ui",
+      "question": "Which files define architecture-samples' tests and UI?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/statistics/StatisticsScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/taskdetail/TaskDetailScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/tasks/TasksScreenTest.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/tasks/AppNavigationTest.kt",
+        "app/src/debug/java/com/example/android/architecture/blueprints/todoapp/HiltTestActivity.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoActivity.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoApplication.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavGraph.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt"
+      ],
+      "expected_kinds": [
+        "tests",
+        "ui-modules"
+      ]
+    },
+    {
+      "case_id": "todo-navigation-and-compose",
+      "question": "Which files define architecture-samples' todo navigation and compose?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/tasks/TasksScreen.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskScreen.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/taskdetail/TaskDetailViewModel.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/res/drawable/ic_statistics.xml",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/taskdetail/TaskDetailScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/tasks/AppNavigationTest.kt",
+        "shared-test/src/main/java/com/example/android/architecture/blueprints/todoapp/data/FakeTaskRepository.kt",
+        "shared-test/src/main/java/com/example/android/architecture/blueprints/todoapp/di/RepositoryTestModule.kt"
+      ],
+      "expected_kinds": [
+        "todo-ui",
+        "shared-resource"
+      ]
+    },
+    {
+      "case_id": "ui-and-instrumentation-tests",
+      "question": "Which files define architecture-samples' UI and instrumentation tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/tasks/AppNavigationTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/tasks/TasksScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/statistics/StatisticsScreenTest.kt",
+        "app/src/androidTest/java/com/example/android/architecture/blueprints/todoapp/taskdetail/TaskDetailScreenTest.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavGraph.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoNavigation.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskScreen.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/addedittask/AddEditTaskViewModel.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/data/DefaultTaskRepository.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/statistics/StatisticsScreen.kt"
+      ],
+      "expected_kinds": [
+        "instrumentation-test",
+        "compose-runtime"
+      ]
+    },
+    {
+      "case_id": "debug-resources-and-mock-data",
+      "question": "Which files define architecture-samples' debug resources and mock data?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app/src/test/java/com/example/android/architecture/blueprints/todoapp/data/DefaultTaskRepositoryTest.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/di/DataModules.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/data/DefaultTaskRepository.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/data/source/local/TaskDao.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/data/source/network/TaskNetworkDataSource.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/data/source/local/ToDoDatabase.kt",
+        "app/src/main/java/com/example/android/architecture/blueprints/todoapp/TodoApplication.kt"
+      ],
+      "expected_kinds": [
+        "debug-test-support",
+        "main-data-runtime"
+      ]
+    }
+  ]
+}

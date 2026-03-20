@@ -130,6 +130,8 @@ pub(crate) struct SearchHybridExecution {
 const RUNTIME_TASK_RECENT_LIMIT: usize = 16;
 
 #[derive(Debug, Default)]
+/// Tracks in-flight and recently completed runtime work so long-lived servers can coordinate
+/// background activity without duplicating the same repository task.
 pub struct RuntimeTaskRegistry {
     next_sequence: u64,
     active: BTreeMap<String, RuntimeTaskSummary>,
@@ -332,11 +334,6 @@ pub(crate) struct FindReferencesExecution {
     pub source_files_loaded: usize,
     pub source_bytes_loaded: u64,
     pub effective_limit: Option<usize>,
-}
-
-pub(crate) struct NavigationToolExecution<T> {
-    pub result: Result<Json<T>, ErrorData>,
-    pub provenance_result: Result<(), ErrorData>,
 }
 
 #[derive(Debug, Clone)]

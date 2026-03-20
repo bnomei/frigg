@@ -1,0 +1,127 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "langflow-ai/langflow",
+  "repo_url": "https://github.com/langflow-ai/langflow",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define langflow's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/backend/base/langflow/main.py",
+        "src/backend/base/langflow/__main__.py",
+        "src/lfx/src/lfx/__main__.py",
+        "src/backend/base/langflow/agentic/mcp/__main__.py"
+      ],
+      "expected_paths_should": [
+        "src/backend/base/langflow/initial_setup/setup.py",
+        "src/backend/base/langflow/logging/setup.py",
+        "src/backend/base/pyproject.toml",
+        "src/lfx/pyproject.toml",
+        "pyproject.toml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "config-and-packages",
+      "question": "Which files define langflow's config and packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pyproject.toml",
+        "src/backend/base/pyproject.toml",
+        "src/lfx/pyproject.toml",
+        "uv.lock"
+      ],
+      "expected_paths_should": [
+        "src/backend/base/langflow/services/__init__.py",
+        "src/backend/base/langflow/services/base.py",
+        "src/backend/base/langflow/agentic/services/__init__.py",
+        "src/backend/base/langflow/agentic/services/assistant_service.py",
+        "src/backend/base/langflow/agentic/services/flow_executor.py",
+        "src/backend/base/langflow/agentic/services/flow_preparation.py"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "package",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "frontend-pages-and-flow-services",
+      "question": "Which files define langflow's frontend pages and flow services?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/backend/tests/unit/agentic/__init__.py",
+        "src/backend/tests/unit/agentic/api/__init__.py",
+        "src/backend/tests/unit/agentic/api/test_code_extraction.py",
+        "src/backend/tests/unit/agentic/api/test_schemas.py"
+      ],
+      "expected_paths_should": [
+        "src/backend/base/langflow/agentic/__init__.py",
+        "src/backend/base/langflow/agentic/api/__init__.py",
+        "src/backend/base/langflow/agentic/api/router.py",
+        "src/backend/base/langflow/agentic/api/schemas.py",
+        "src/backend/base/langflow/agentic/flows/__init__.py",
+        "src/backend/base/langflow/agentic/flows/langflow_assistant.py"
+      ],
+      "expected_kinds": [
+        "backend-flow-tests",
+        "flow-services"
+      ]
+    },
+    {
+      "case_id": "lfx-cli-and-services",
+      "question": "Which files define langflow's lfx CLI and services?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/lfx/src/lfx/__main__.py",
+        "src/lfx/src/lfx/cli/__init__.py",
+        "src/lfx/src/lfx/cli/commands.py",
+        "src/lfx/src/lfx/cli/common.py"
+      ],
+      "expected_paths_should": [
+        "src/lfx/src/lfx/services/__init__.py",
+        "src/lfx/src/lfx/services/base.py",
+        "src/lfx/src/lfx/services/config_discovery.py",
+        "src/lfx/src/lfx/services/deps.py",
+        "src/lfx/src/lfx/services/factory.py",
+        "src/lfx/src/lfx/services/initialize.py"
+      ],
+      "expected_kinds": [
+        "lfx-cli",
+        "lfx-services"
+      ]
+    },
+    {
+      "case_id": "deploy-compose-and-backend-runtime",
+      "question": "Which files define langflow's deploy compose and backend runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "deploy/docker-compose.override.yml",
+        "deploy/docker-compose.yml",
+        "deploy/prometheus.yml"
+      ],
+      "expected_paths_should": [
+        "src/backend/base/langflow/agentic/__init__.py",
+        "src/backend/base/langflow/agentic/api/__init__.py",
+        "src/backend/base/langflow/agentic/api/router.py",
+        "src/backend/base/langflow/agentic/api/schemas.py",
+        "src/backend/base/langflow/agentic/flows/__init__.py",
+        "src/backend/base/langflow/agentic/flows/langflow_assistant.py"
+      ],
+      "expected_kinds": [
+        "deploy-stack",
+        "backend-runtime"
+      ]
+    }
+  ]
+}

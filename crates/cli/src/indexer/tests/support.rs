@@ -19,7 +19,9 @@ pub(super) use super::super::{
     build_file_semantic_chunks, build_reindex_plan_for_tests, build_semantic_chunk_candidates,
     diff, extract_blade_source_evidence_from_source, extract_php_declaration_relations_from_source,
     extract_php_source_evidence_from_source, extract_symbols_for_paths,
-    extract_symbols_from_source, file_digest_order, mark_local_flux_overlays,
+    extract_symbols_from_source, file_digest_order,
+    generated_follow_up_structural_at_location_in_source,
+    inspect_syntax_tree_with_follow_up_in_source, mark_local_flux_overlays,
     navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
     reindex_repository_with_runtime_config, reindex_repository_with_semantic_executor,
     resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
@@ -127,8 +129,30 @@ pub(super) fn deterministic_fixture_embedding(text: &str, index: usize) -> Vec<f
     embedding
 }
 
-pub(super) fn fixture_repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repos/manifest-determinism")
+pub(super) fn prepare_manifest_fixture_workspace(test_name: &str) -> FriggResult<PathBuf> {
+    let root = temp_workspace_root(test_name);
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "README.md",
+                "# Manifest Determinism Fixture\n\nThis fixture is used by `indexer` determinism tests.\n",
+            ),
+            (
+                "src/lib.rs",
+                "pub fn greeting() -> &'static str {\n    \"hello from fixture\"\n}\n",
+            ),
+            ("src/nested/data.txt", "alpha\nbeta\ngamma\n"),
+            ("src/ignored.tmp", "temporary artifact\n"),
+            (
+                "logs/build.log",
+                "this log file should be ignored by .gitignore\n",
+            ),
+        ],
+    )?;
+    fs::write(root.join(".gitignore"), "*.tmp\n*.log\n.DS_Store\n").map_err(FriggError::Io)?;
+    fs::create_dir_all(root.join(".git")).map_err(FriggError::Io)?;
+    Ok(root)
 }
 
 pub(super) fn manifest_relative_paths(

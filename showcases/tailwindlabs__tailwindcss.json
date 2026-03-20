@@ -1,0 +1,126 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "tailwindlabs/tailwindcss",
+  "repo_url": "https://github.com/tailwindlabs/tailwindcss",
+  "language_family": "typescript-runtime",
+  "source_profile": "typescript-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define tailwindcss' runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/@tailwindcss-cli/src/index.ts",
+        "packages/@tailwindcss-cli/src/commands/build/index.ts",
+        "packages/@tailwindcss-cli/src/commands/canonicalize/index.ts",
+        "packages/@tailwindcss-cli/src/commands/help/index.ts"
+      ],
+      "expected_paths_should": [
+        "packages/@tailwindcss-cli/package.json",
+        "packages/@tailwindcss-cli/tsconfig.json",
+        "packages/@tailwindcss-node/package.json",
+        "packages/@tailwindcss-node/tsconfig.json",
+        "packages/@tailwindcss-postcss/package.json",
+        "packages/@tailwindcss-postcss/tsconfig.json"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "package"
+      ]
+    },
+    {
+      "case_id": "config-and-workflows",
+      "question": "Which files define tailwindcss' config and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "package.json",
+        "pnpm-workspace.yaml",
+        "turbo.json",
+        ".github/workflows/ci.yml"
+      ],
+      "expected_paths_should": [
+        "packages/@tailwindcss-cli/src/index.ts",
+        "packages/@tailwindcss-node/src/index.ts",
+        "packages/@tailwindcss-postcss/src/index.ts",
+        "packages/@tailwindcss-standalone/src/index.ts",
+        "packages/@tailwindcss-upgrade/src/index.ts",
+        "packages/@tailwindcss-vite/src/index.ts"
+      ],
+      "expected_kinds": [
+        "workspace-config",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "core-engine-and-node-packages",
+      "question": "Which files define tailwindcss' core engine and node packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/tailwindcss/src/ast.test.ts",
+        "packages/tailwindcss/src/at-import.test.ts",
+        "packages/tailwindcss/src/attribute-selector-parser.test.ts",
+        "packages/tailwindcss/src/candidate.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/tailwindcss/src/compat/apply-config-to-theme.test.ts",
+        "packages/tailwindcss/src/compat/apply-keyframes-to-theme.test.ts",
+        "packages/tailwindcss/src/compat/config.test.ts",
+        "packages/tailwindcss/src/canonicalize-candidates.test.ts"
+      ],
+      "expected_kinds": [
+        "core-tests",
+        "core-runtime"
+      ]
+    },
+    {
+      "case_id": "upgrade-adapters-and-integrations",
+      "question": "Which files define tailwindcss' upgrade adapters and integrations?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "integrations/cli/config.test.ts",
+        "integrations/cli/index.test.ts",
+        "integrations/cli/plugins.test.ts",
+        "integrations/cli/standalone.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/@tailwindcss-upgrade/src/codemods/config/migrate-js-config.ts",
+        "packages/@tailwindcss-upgrade/src/codemods/config/migrate-postcss.ts",
+        "packages/@tailwindcss-upgrade/src/codemods/css/analyze.ts",
+        "packages/@tailwindcss-upgrade/src/codemods/css/format-nodes.test.ts",
+        "packages/@tailwindcss-upgrade/src/codemods/css/format-nodes.ts",
+        "packages/@tailwindcss-upgrade/src/codemods/css/link.ts"
+      ],
+      "expected_kinds": [
+        "integration-tests",
+        "integration-runtime"
+      ]
+    },
+    {
+      "case_id": "standalone-tests-and-example-plugin",
+      "question": "Which files define tailwindcss' standalone tests and example plugin?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/@tailwindcss-browser/tests/ui.spec.ts",
+        "packages/tailwindcss/tests/ui.spec.ts",
+        "packages/@tailwindcss-cli/src/commands/canonicalize/canonicalize.test.ts",
+        "packages/@tailwindcss-cli/src/utils/args.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/@tailwindcss-cli/src/utils/format-ns.test.ts",
+        "packages/@tailwindcss-cli/src/utils/renderer.test.ts",
+        "packages/@tailwindcss-cli/src/commands/canonicalize/index.ts",
+        "packages/@tailwindcss-cli/src/utils/args.ts",
+        "packages/@tailwindcss-cli/src/utils/disposables.ts",
+        "packages/@tailwindcss-cli/src/utils/format-ns.ts"
+      ],
+      "expected_kinds": [
+        "standalone-and-browser-tests",
+        "standalone-and-browser-runtime"
+      ]
+    }
+  ]
+}

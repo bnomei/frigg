@@ -1,0 +1,80 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "firecrawl/firecrawl",
+  "repo_url": "https://github.com/firecrawl/firecrawl",
+  "language_family": "typescript-runtime",
+  "source_profile": "typescript-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "api-workers-and-playwright-service",
+      "question": "Which files define firecrawl's API workers and playwright service?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "apps/api/src/controllers/v1/__tests__/urlValidation.test.ts",
+        "apps/api/src/controllers/v2/__tests__/agent-status.test.ts"
+      ],
+      "expected_paths_should": [
+        "apps/api/src/controllers/v1/batch-scrape.ts",
+        "apps/api/src/controllers/v1/concurrency-check.ts",
+        "apps/api/src/controllers/v1/crawl-cancel.ts",
+        "apps/api/src/controllers/v1/crawl-errors.ts",
+        "apps/api/src/controllers/v1/crawl-ongoing.ts",
+        "apps/api/src/controllers/v1/crawl-status-ws.ts"
+      ],
+      "expected_kinds": [
+        "api-test",
+        "playwright-service"
+      ]
+    },
+    {
+      "case_id": "scraper-engines-and-tests",
+      "question": "Which files define firecrawl's scraper engines and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "apps/api/src/__tests__/snips/v2/batch-scrape.test.ts",
+        "apps/api/src/__tests__/snips/v2/scrape-branding.test.ts",
+        "apps/api/src/__tests__/snips/v2/scrape-cache.test.ts",
+        "apps/api/src/__tests__/snips/v2/scrape-formats.test.ts"
+      ],
+      "expected_paths_should": [
+        "apps/api/src/main/runWebScraper.ts",
+        "apps/api/src/search/execute.ts",
+        "apps/api/src/search/fireEngine.ts",
+        "apps/api/src/search/index.ts",
+        "apps/api/src/search/scrape.test.ts",
+        "apps/api/src/search/scrape.ts"
+      ],
+      "expected_kinds": [
+        "scraper-tests",
+        "scraper-runtime"
+      ]
+    },
+    {
+      "case_id": "js-sdk-ui-and-test-harness",
+      "question": "Which files define firecrawl's js sdk UI and test harness?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "apps/js-sdk/firecrawl/src/__tests__/unit/v2/agent.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/unit/v2/branding.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/unit/v2/clientOptions.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/unit/v2/errorHandler.test.ts"
+      ],
+      "expected_paths_should": [
+        "apps/js-sdk/firecrawl/src/__tests__/unit/v1/monitor-job-status-retry.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/e2e/v1/index.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/e2e/v2/batch.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/e2e/v2/crawl.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/e2e/v2/extract.test.ts",
+        "apps/js-sdk/firecrawl/src/__tests__/e2e/v2/map.test.ts"
+      ],
+      "expected_kinds": [
+        "js-sdk-tests",
+        "sdk-and-ui-runtime"
+      ]
+    }
+  ]
+}

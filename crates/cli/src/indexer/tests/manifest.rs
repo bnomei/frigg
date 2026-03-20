@@ -94,7 +94,7 @@ fn manifest_diff_is_empty_for_identical_records_with_different_input_order() {
 
 #[test]
 fn determinism_manifest_builder_repeated_runs_match_exactly() -> FriggResult<()> {
-    let fixture_root = fixture_repo_root();
+    let fixture_root = prepare_manifest_fixture_workspace("manifest-builder-determinism-runs")?;
     let builder = ManifestBuilder::default();
 
     let first = builder.build(&fixture_root)?;
@@ -103,12 +103,13 @@ fn determinism_manifest_builder_repeated_runs_match_exactly() -> FriggResult<()>
 
     assert_eq!(first, second);
     assert_eq!(second, third);
+    cleanup_workspace(&fixture_root);
     Ok(())
 }
 
 #[test]
 fn determinism_manifest_builder_uses_fixture_only_expected_paths() -> FriggResult<()> {
-    let fixture_root = fixture_repo_root();
+    let fixture_root = prepare_manifest_fixture_workspace("manifest-builder-determinism-paths")?;
     let builder = ManifestBuilder::default();
 
     let manifest = builder.build(&fixture_root)?;
@@ -122,6 +123,7 @@ fn determinism_manifest_builder_uses_fixture_only_expected_paths() -> FriggResul
             PathBuf::from("src/nested/data.txt"),
         ]
     );
+    cleanup_workspace(&fixture_root);
     Ok(())
 }
 
@@ -200,7 +202,7 @@ fn manifest_builder_respects_root_ignore_file_for_auxiliary_trees() -> FriggResu
 #[test]
 fn incremental_roundtrip_persist_load_and_diff() -> FriggResult<()> {
     let db_path = temp_db_path("incremental-roundtrip");
-    let fixture_root = fixture_repo_root();
+    let fixture_root = prepare_manifest_fixture_workspace("manifest-builder-roundtrip")?;
     let manifest_store = ManifestStore::new(&db_path);
     manifest_store.initialize()?;
 
@@ -250,6 +252,7 @@ fn incremental_roundtrip_persist_load_and_diff() -> FriggResult<()> {
     );
 
     cleanup_db(&db_path);
+    cleanup_workspace(&fixture_root);
     Ok(())
 }
 

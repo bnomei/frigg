@@ -1,0 +1,129 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "thunderbird/thunderbird-android",
+  "repo_url": "https://github.com/thunderbird/thunderbird-android",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define thunderbird-android's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cli/autodiscovery-cli/src/main/kotlin/app/k9mail/cli/autodiscovery/Main.kt",
+        "cli/translation-cli/src/main/kotlin/net/thunderbird/cli/translation/Main.kt",
+        "cli/html-cleaner-cli/src/main/kotlin/app/k9mail/cli/html/cleaner/Main.kt",
+        "cli/resource-mover-cli/src/main/kotlin/net/thunderbird/cli/resource/mover/Main.kt"
+      ],
+      "expected_paths_should": [
+        "cli/autodiscovery-cli/build.gradle.kts",
+        "cli/html-cleaner-cli/build.gradle.kts",
+        "cli/resource-mover-cli/build.gradle.kts",
+        "cli/translation-cli/build.gradle.kts",
+        "app-common/build.gradle.kts",
+        "build.gradle.kts"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "build-config-and-manifests",
+      "question": "Which files define thunderbird-android's build config and manifests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app-common/src/main/AndroidManifest.xml",
+        "app-k9mail/src/debug/AndroidManifest.xml",
+        "app-k9mail/src/main/AndroidManifest.xml",
+        "app-thunderbird/src/daily/AndroidManifest.xml"
+      ],
+      "expected_paths_should": [
+        "app-common/src/main/kotlin/net/thunderbird/app/common/BaseApplication.kt",
+        "app-common/src/main/kotlin/net/thunderbird/app/common/MainActivity.kt",
+        "feature/launcher/src/main/kotlin/app/k9mail/feature/launcher/FeatureLauncherActivity.kt",
+        "legacy/core/src/main/java/com/fsck/k9/helper/RetainFragment.java",
+        "legacy/core/src/main/java/com/fsck/k9/job/MailSyncWorker.kt",
+        "legacy/core/src/main/java/com/fsck/k9/job/SyncDebugWorker.kt"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "entrypoints",
+        "ui-modules"
+      ]
+    },
+    {
+      "case_id": "mail-app-and-feature-navigation",
+      "question": "Which files define thunderbird-android's mail app and feature navigation?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app-k9mail/src/main/kotlin/app/k9mail/widget/K9MessageListWidgetConfig.kt",
+        "app-k9mail/src/main/kotlin/app/k9mail/widget/K9UnreadWidgetConfig.kt",
+        "app-k9mail/src/main/kotlin/app/k9mail/widget/WidgetModule.kt",
+        "app-k9mail/src/main/kotlin/app/k9mail/provider/K9AppNameProvider.kt"
+      ],
+      "expected_paths_should": [
+        "app-ui-catalog/src/main/kotlin/net/thunderbird/ui/catalog/CatalogActivity.kt",
+        "feature/debug-settings/src/main/kotlin/net/thunderbird/feature/debug/settings/DebugSection.kt",
+        "feature/debug-settings/src/main/kotlin/net/thunderbird/feature/debug/settings/SecretDebugSettingsScreen.kt",
+        "feature/account/oauth/src/main/kotlin/app/k9mail/feature/account/oauth/AccountOAuthModule.kt",
+        "feature/debug-settings/src/main/kotlin/net/thunderbird/feature/debug/settings/featureflag/DebugFeatureFlagSection.kt",
+        "feature/debug-settings/src/main/kotlin/net/thunderbird/feature/debug/settings/featureflag/DebugFeatureFlagSectionContract.kt"
+      ],
+      "expected_kinds": [
+        "app-feature",
+        "feature-navigation"
+      ]
+    },
+    {
+      "case_id": "backend-protocol-and-mail-core",
+      "question": "Which files define thunderbird-android's backend protocol and mail core?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "backend/imap/src/main/java/com/fsck/k9/backend/imap/BackendIdleRefreshManager.kt",
+        "backend/imap/src/main/java/com/fsck/k9/backend/imap/CommandDelete.kt",
+        "backend/imap/src/main/java/com/fsck/k9/backend/imap/CommandDeleteAll.kt",
+        "backend/imap/src/main/java/com/fsck/k9/backend/imap/CommandDownloadMessage.kt"
+      ],
+      "expected_paths_should": [
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/CreateFolderInfo.kt",
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/DefaultFolderRepository.kt",
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/FolderMapper.kt",
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/FolderRepository.kt",
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/FolderSettings.kt",
+        "legacy/mailstore/src/main/java/app/k9mail/legacy/mailstore/FolderTypeMapper.kt"
+      ],
+      "expected_kinds": [
+        "backend-mail",
+        "core-legacy"
+      ]
+    },
+    {
+      "case_id": "ui-catalog-cli-and-quality",
+      "question": "Which files define thunderbird-android's UI catalog CLI and quality?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app-ui-catalog/src/main/kotlin/net/thunderbird/ui/catalog/CatalogActivity.kt",
+        "app-ui-catalog/src/main/kotlin/net/thunderbird/ui/catalog/CatalogApplication.kt",
+        "app-ui-catalog/src/main/kotlin/net/thunderbird/ui/catalog/di/CatalogUiModule.kt",
+        "app-ui-catalog/src/main/kotlin/net/thunderbird/ui/catalog/ui/CatalogContent.kt"
+      ],
+      "expected_paths_should": [
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/Checkbox.kt",
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/CircularProgressIndicator.kt",
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/DelayedCircularProgressIndicator.kt",
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/DividerHorizontal.kt",
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/DividerVertical.kt",
+        "core/ui/compose/designsystem/src/main/kotlin/app/k9mail/core/ui/compose/designsystem/atom/DropdownMenuBox.kt"
+      ],
+      "expected_kinds": [
+        "catalog-cli",
+        "quality-doc"
+      ]
+    }
+  ]
+}

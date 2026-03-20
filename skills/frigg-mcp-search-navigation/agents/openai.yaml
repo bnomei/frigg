@@ -1,4 +1,4 @@
 interface:
   display_name: "Frigg MCP Search Navigation"
-  short_description: "Use Frigg MCP when shell search is not enough for repo-aware discovery or navigation"
-  default_prompt: "Prefer local shell tools for straightforward reads and literal scans. Use Frigg MCP for repository-aware discovery, canonical paths, symbol lookup, structural search, cross-file navigation, and source-backed evidence. Start with list_repositories, and if the session is detached call workspace_attach explicitly before repository-scoped Frigg tools."
+  short_description: "Use Frigg MCP for repository-aware discovery, cross-file navigation, and multi-repo code investigation"
+  default_prompt: "Prefer shell tools for cheap local reads and literal scans. Use Frigg MCP when repository-aware search or navigation matters: start with list_repositories, call workspace_attach explicitly when detached or when you want a stable session default, use search_hybrid for broad discovery, pivot to search_symbol or search_text for concrete anchors, use read_file for bounded repository-backed evidence, and inspect nav mode or availability before treating defs, refs, or call hierarchy as precise. Use inspect_syntax_tree before search_structural when the AST shape is unclear."

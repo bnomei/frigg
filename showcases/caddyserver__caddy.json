@@ -1,0 +1,106 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "caddyserver/caddy",
+  "repo_url": "https://github.com/caddyserver/caddy",
+  "language_family": "go-runtime",
+  "source_profile": "go-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "build-release-and-workflows",
+      "question": "Which files define caddy's build release and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "go.mod",
+        "go.sum",
+        ".goreleaser.yml",
+        ".github/workflows/ai.yml"
+      ],
+      "expected_paths_should": [
+        "cmd/main.go",
+        "cmd/caddy/main.go",
+        ".github/workflows/auto-release-pr.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/cross-build.yml",
+        ".github/workflows/lint.yml"
+      ],
+      "expected_kinds": [
+        "build-config",
+        "entrypoints",
+        "release-assets"
+      ]
+    },
+    {
+      "case_id": "caddyfile-and-http-modules",
+      "question": "Which files define caddy's caddyfile and HTTP modules?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "caddyconfig/caddyfile/adapter.go",
+        "caddyconfig/caddyfile/dispenser.go",
+        "caddyconfig/caddyfile/dispenser_test.go",
+        "caddyconfig/caddyfile/formatter.go"
+      ],
+      "expected_paths_should": [
+        "caddyconfig/httpcaddyfile/pkiapp.go",
+        "caddyconfig/httpcaddyfile/tlsapp.go",
+        "modules/caddypki/adminapi.go",
+        "modules/caddytls/acmeissuer.go",
+        "modules/caddytls/automation.go",
+        "modules/caddytls/capools.go"
+      ],
+      "expected_kinds": [
+        "caddyfile-http",
+        "tls-pki"
+      ]
+    },
+    {
+      "case_id": "admin-cli-and-integration-tests",
+      "question": "Which files define caddy's admin CLI and integration tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "admin.go",
+        "cmd/caddy/main.go",
+        "cmd/cobra.go",
+        "cmd/commandfactory.go"
+      ],
+      "expected_paths_should": [
+        "admin_test.go",
+        "caddytest/integration/acme_test.go",
+        "caddytest/integration/acmeserver_test.go",
+        "caddytest/integration/autohttps_test.go",
+        "caddytest/integration/caddyfile_adapt/acme_dns_configured.caddyfiletest",
+        "caddytest/integration/caddyfile_adapt/acme_dns_naked_use_dns_defaults.caddyfiletest"
+      ],
+      "expected_kinds": [
+        "admin-cli",
+        "integration-admin"
+      ]
+    },
+    {
+      "case_id": "storage-logging-and-metrics",
+      "question": "Which files define caddy's storage logging and metrics?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "modules/filestorage/filestorage.go",
+        "modules/logging/appendencoder.go",
+        "modules/logging/cores.go",
+        "modules/logging/encoders.go"
+      ],
+      "expected_paths_should": [
+        "modules/caddyevents/app.go",
+        "modules/metrics/adminmetrics.go",
+        "modules/metrics/metrics.go",
+        "modules/metrics/metrics_test.go",
+        "modules/caddyevents/eventsconfig/caddyfile.go",
+        "internal/metrics/metrics.go"
+      ],
+      "expected_kinds": [
+        "storage-logging",
+        "metrics-event"
+      ]
+    }
+  ]
+}

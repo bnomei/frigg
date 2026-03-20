@@ -52,6 +52,8 @@ pub struct WatchLeaseStatus {
     pub lease_count: usize,
 }
 
+/// Shared filesystem watch supervisor for long-lived runtimes. It leases repository watches to
+/// sessions so multiple clients can benefit from incremental freshness without duplicate watchers.
 pub struct WatchRuntime {
     watcher: Mutex<RecommendedWatcher>,
     repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
@@ -180,6 +182,8 @@ impl Drop for WatchRuntime {
     }
 }
 
+/// Starts the shared watch supervisor only when the resolved runtime profile makes incremental
+/// freshness worthwhile.
 pub fn maybe_start_watch_runtime(
     config: &FriggConfig,
     transport: RuntimeTransportKind,

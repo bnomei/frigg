@@ -203,6 +203,67 @@ fn structural_search_rejects_invalid_query_with_typed_error() {
 }
 
 #[test]
+fn generated_follow_up_structural_prefers_useful_ancestors_deterministically() -> FriggResult<()> {
+    let source = "pub fn greet() {\n    helper();\n}\n\nfn helper() {}\n";
+    let path = Path::new("fixtures/inspect.rs");
+    let (inspection, first) = inspect_syntax_tree_with_follow_up_in_source(
+        SymbolLanguage::Rust,
+        path,
+        "src/lib.rs",
+        source,
+        Some(2),
+        Some(6),
+        8,
+        4,
+        "repo-001",
+    )?;
+
+    let second = generated_follow_up_structural_at_location_in_source(
+        SymbolLanguage::Rust,
+        path,
+        "src/lib.rs",
+        source,
+        2,
+        6,
+        "repo-001",
+    )?;
+
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 3);
+    assert_eq!(first[0].params.query, "(call_expression) @match");
+    assert_eq!(first[1].params.query, "(call_expression) @match");
+    assert_eq!(first[2].params.query, "(function_item) @match");
+    assert_eq!(
+        first[0].params.path_regex.as_deref(),
+        Some("^src/lib\\.rs$")
+    );
+    assert_eq!(inspection.focus.kind, "identifier");
+    assert_eq!(first[0].basis.raw_focus_kind.as_deref(), Some("identifier"));
+
+    Ok(())
+}
+
+#[test]
+fn generated_follow_up_structural_omits_wrapper_only_candidates() -> FriggResult<()> {
+    let source = "pub fn greet() {}\n";
+    let path = Path::new("fixtures/wrapper_only.rs");
+    let (_inspection, follow_ups) = inspect_syntax_tree_with_follow_up_in_source(
+        SymbolLanguage::Rust,
+        path,
+        "src/lib.rs",
+        source,
+        None,
+        None,
+        8,
+        4,
+        "repo-001",
+    )?;
+
+    assert!(follow_ups.is_empty());
+    Ok(())
+}
+
+#[test]
 fn heuristic_references_combines_graph_hints_and_lexical_fallback_deterministically()
 -> FriggResult<()> {
     let source = "pub struct User;\n\

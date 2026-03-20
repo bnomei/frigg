@@ -1,3 +1,7 @@
+//! Watch runtime orchestration that keeps indexed state fresh while request handlers stay focused
+//! on serving search and navigation work. This isolates filesystem supervision from the MCP and
+//! search surfaces, while still letting them share one background freshness loop.
+
 #[path = "watch/repository.rs"]
 mod repository;
 #[path = "watch/scheduler.rs"]

@@ -1,0 +1,124 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "HapticX/happyx",
+  "repo_url": "https://github.com/HapticX/happyx",
+  "language_family": "nim-runtime",
+  "source_profile": "nim-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define happyx's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/happyx/ssr/server.nim",
+        "examples/chat_app/server/src/main.nim",
+        "examples/chat_app/client/src/main.nim",
+        "examples/hello_world/src/main.nim"
+      ],
+      "expected_paths_should": [
+        "examples/nimlang/src/main.nim.cfg",
+        "examples/todo/src/config.nims",
+        "examples/sandbox_api/src/tasks/config.nims",
+        "src/happyx/hpx.nim.cfg",
+        "src/happyx/bindings/node.nim.cfg",
+        "happyx.nimble"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "framework-core-and-bindings",
+      "question": "Which files define happyx's framework core and bindings?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/sandbox_api/src/main.nim",
+        "examples/chat_app/server/src/main.nim",
+        "tests/source.nim"
+      ],
+      "expected_paths_should": [
+        "src/happyx/routing/decorators.nim",
+        "src/happyx/routing/mounting.nim",
+        "src/happyx/routing/routing.nim",
+        "src/happyx/ssr/core.nim",
+        "src/happyx/ssr/cors.nim",
+        "src/happyx/ssr/form_data.nim"
+      ],
+      "expected_kinds": [
+        "example-server",
+        "routing-ssr"
+      ]
+    },
+    {
+      "case_id": "examples-components-and-templates",
+      "question": "Which files define happyx's examples components and templates?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/components/component_for.nim",
+        "tests/components/component_js_css.nim",
+        "tests/components/component_with_slot.nim",
+        "tests/components/hello_world.nim"
+      ],
+      "expected_paths_should": [
+        "src/happyx/hpx.nim",
+        "src/happyx/core/constants.nim",
+        "src/happyx/core/exceptions.nim",
+        "src/happyx/core/queries.nim",
+        "src/happyx/core/secure.nim",
+        "src/happyx/spa/components.nim"
+      ],
+      "expected_kinds": [
+        "component-example",
+        "spa-template"
+      ]
+    },
+    {
+      "case_id": "chat-sandbox-and-website-flows",
+      "question": "Which files define happyx's chat sandbox and website flows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/chat_app/client/src/components/chat.nim",
+        "examples/chat_app/client/src/components/message.nim",
+        "examples/chat_app/client/src/main.nim",
+        "examples/chat_app/server/src/main.nim"
+      ],
+      "expected_paths_should": [
+        "examples/sandbox_api/src/main.nim",
+        "examples/todo/src/main.nim",
+        "examples/todo/src/components/task.nim"
+      ],
+      "expected_kinds": [
+        "example-app",
+        "sandbox-todo"
+      ]
+    },
+    {
+      "case_id": "cli-project-and-config-flows",
+      "question": "Which files define happyx's CLI project and config flows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/chat_app/server/happyx.cfg",
+        "examples/chat_app/client/happyx.cfg",
+        "examples/sandbox_api/happyx.cfg",
+        "examples/website/happyx.cfg"
+      ],
+      "expected_paths_should": [
+        "src/happyx/cli/build_command.nim",
+        "src/happyx/cli/create_command.nim",
+        "src/happyx/cli/dev_command.nim",
+        "src/happyx/cli/flags_command.nim",
+        "src/happyx/cli/project_info_command.nim",
+        "src/happyx/cli/serve_command.nim"
+      ],
+      "expected_kinds": [
+        "example-config",
+        "cli-command"
+      ]
+    }
+  ]
+}

@@ -5,8 +5,9 @@ use crate::domain::{FriggResult, model::TextMatch};
 
 use super::{
     BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD, SearchCandidateUniverse, SearchDiagnostic,
-    SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery, ordering::BoundedTextMatches,
-    scrub_search_content, should_scrub_leading_markdown_comment,
+    SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery,
+    content_scrub::{scrub_search_content, should_scrub_leading_markdown_comment},
+    ordering::BoundedTextMatches,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
 };
 

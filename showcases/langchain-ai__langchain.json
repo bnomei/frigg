@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "langchain-ai/langchain",
+  "repo_url": "https://github.com/langchain-ai/langchain",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define langchain's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "libs/model-profiles/langchain_model_profiles/cli.py",
+        "libs/langchain/langchain_classic/tools/ainetwork/app.py",
+        "libs/langchain/tests/mock_servers/robot/server.py"
+      ],
+      "expected_paths_should": [
+        "libs/langchain/pyproject.toml",
+        "libs/model-profiles/pyproject.toml",
+        "libs/core/pyproject.toml",
+        "libs/langchain_v1/pyproject.toml",
+        "libs/standard-tests/pyproject.toml",
+        "libs/text-splitters/pyproject.toml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "config-and-packages",
+      "question": "Which files define langchain's config and packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "libs/core/pyproject.toml",
+        "libs/langchain/pyproject.toml",
+        "libs/langchain_v1/pyproject.toml",
+        "libs/model-profiles/pyproject.toml"
+      ],
+      "expected_paths_should": [
+        "libs/core/langchain_core/__init__.py",
+        "libs/core/langchain_core/_import_utils.py",
+        "libs/core/langchain_core/agents.py",
+        "libs/core/langchain_core/caches.py",
+        "libs/core/langchain_core/chat_history.py",
+        "libs/core/langchain_core/chat_loaders.py"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "package",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "standard-tests-and-core-runtime",
+      "question": "Which files define langchain's standard tests and core runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "libs/core/tests/unit_tests/callbacks/__init__.py",
+        "libs/core/tests/unit_tests/callbacks/test_async_callback_manager.py",
+        "libs/core/tests/unit_tests/callbacks/test_dispatch_custom_event.py",
+        "libs/core/tests/unit_tests/callbacks/test_handle_event.py"
+      ],
+      "expected_paths_should": [
+        "libs/core/langchain_core/callbacks/__init__.py",
+        "libs/core/langchain_core/callbacks/base.py",
+        "libs/core/langchain_core/callbacks/file.py",
+        "libs/core/langchain_core/callbacks/manager.py",
+        "libs/core/langchain_core/callbacks/stdout.py",
+        "libs/core/langchain_core/callbacks/streaming_stdout.py"
+      ],
+      "expected_kinds": [
+        "standard-tests",
+        "core-runtime"
+      ]
+    },
+    {
+      "case_id": "v1-agents-and-middleware",
+      "question": "Which files define langchain's v1 agents and middleware?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "libs/langchain_v1/tests/unit_tests/agents/__init__.py",
+        "libs/langchain_v1/tests/unit_tests/agents/any_str.py",
+        "libs/langchain_v1/tests/unit_tests/agents/conftest.py",
+        "libs/langchain_v1/tests/unit_tests/agents/conftest_checkpointer.py"
+      ],
+      "expected_paths_should": [
+        "libs/langchain_v1/langchain/agents/__init__.py",
+        "libs/langchain_v1/langchain/agents/factory.py",
+        "libs/langchain_v1/langchain/agents/structured_output.py",
+        "libs/langchain_v1/langchain/chat_models/__init__.py",
+        "libs/langchain_v1/langchain/chat_models/base.py",
+        "libs/langchain_v1/langchain/embeddings/__init__.py"
+      ],
+      "expected_kinds": [
+        "v1-tests",
+        "v1-runtime"
+      ]
+    },
+    {
+      "case_id": "partner-openai-and-core-interfaces",
+      "question": "Which files define langchain's partner openai and core interfaces?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "libs/partners/openai/tests/unit_tests/chat_models/__init__.py",
+        "libs/partners/openai/tests/unit_tests/chat_models/test_azure.py",
+        "libs/partners/openai/tests/unit_tests/chat_models/test_azure_standard.py",
+        "libs/partners/openai/tests/unit_tests/chat_models/test_base.py"
+      ],
+      "expected_paths_should": [
+        "libs/partners/openai/langchain_openai/chat_models/__init__.py",
+        "libs/partners/openai/langchain_openai/chat_models/_client_utils.py",
+        "libs/partners/openai/langchain_openai/chat_models/_compat.py",
+        "libs/partners/openai/langchain_openai/chat_models/azure.py",
+        "libs/partners/openai/langchain_openai/chat_models/base.py",
+        "libs/partners/openai/langchain_openai/embeddings/__init__.py"
+      ],
+      "expected_kinds": [
+        "openai-partner-tests",
+        "openai-runtime"
+      ]
+    }
+  ]
+}

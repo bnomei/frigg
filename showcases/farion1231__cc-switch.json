@@ -1,0 +1,118 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "farion1231/cc-switch",
+  "repo_url": "https://github.com/farion1231/cc-switch",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "entrypoint-build-flow",
+      "question": "Which files define cc-switch's entrypoint build flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src-tauri/src/main.rs"
+      ],
+      "expected_paths_should": [
+        "src-tauri/build.rs",
+        "scripts/extract-icons.js",
+        "scripts/filter-icons.js",
+        "scripts/generate-icon-index.js",
+        ".github/workflows/release.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "build-config"
+      ]
+    },
+    {
+      "case_id": "ci-release-and-ops",
+      "question": "Which files define cc-switch's ci release and ops?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/release.yml"
+      ],
+      "expected_paths_should": [
+        "scripts/extract-icons.js",
+        "scripts/filter-icons.js",
+        "scripts/generate-icon-index.js"
+      ],
+      "expected_kinds": [
+        "ci-release",
+        "scripts-ops"
+      ]
+    },
+    {
+      "case_id": "tauri-provider-and-capabilities-flow",
+      "question": "Which files define cc-switch's tauri provider and capabilities flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src-tauri/src/commands/config.rs",
+        "src-tauri/src/commands/mcp.rs",
+        "src-tauri/src/commands/provider.rs",
+        "src-tauri/src/commands/global_proxy.rs"
+      ],
+      "expected_paths_should": [
+        "src-tauri/capabilities/default.json",
+        "src/config/codexProviderPresets.ts",
+        "src/config/mcpPresets.ts",
+        "src/config/openclawProviderPresets.ts",
+        "src/lib/api/config.ts",
+        "src/lib/api/mcp.ts"
+      ],
+      "expected_kinds": [
+        "tauri-provider",
+        "capability-config"
+      ]
+    },
+    {
+      "case_id": "ui-hooks-and-components-flow",
+      "question": "Which files define cc-switch's UI hooks and components flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/components/AppSwitcher.tsx",
+        "src/components/BrandIcons.tsx",
+        "src/components/ColorPicker.tsx",
+        "src/components/ConfirmDialog.tsx"
+      ],
+      "expected_paths_should": [
+        "src/config/claudeProviderPresets.ts",
+        "src/config/codexProviderPresets.ts",
+        "src/config/codexTemplates.ts",
+        "src/config/geminiProviderPresets.ts",
+        "src/config/mcpPresets.ts",
+        "src/config/openclawProviderPresets.ts"
+      ],
+      "expected_kinds": [
+        "ui-component",
+        "context-library"
+      ]
+    },
+    {
+      "case_id": "docs-flatpak-and-tests-flow",
+      "question": "Which files define cc-switch's docs flatpak and tests flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "flatpak/README.md",
+        "flatpak/com.ccswitch.desktop.desktop",
+        "flatpak/com.ccswitch.desktop.metainfo.xml",
+        "flatpak/com.ccswitch.desktop.yml"
+      ],
+      "expected_paths_should": [
+        "tests/setupGlobals.ts",
+        "tests/setupTests.ts",
+        "assets/screenshots/add-en.png",
+        "assets/screenshots/add-ja.png",
+        "assets/screenshots/main-en.png",
+        "tests/components/GlobalProxySettings.test.tsx"
+      ],
+      "expected_kinds": [
+        "docs-packaging",
+        "test-release"
+      ]
+    }
+  ]
+}

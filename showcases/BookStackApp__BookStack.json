@@ -1,0 +1,122 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "BookStackApp/BookStack",
+  "repo_url": "https://github.com/BookStackApp/BookStack",
+  "language_family": "blade-laravel-ui",
+  "source_profile": "blade-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "blade-bootstrap-and-routes",
+      "question": "Which files define BookStack's blade bootstrap and routes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "routes/api.php",
+        "routes/web.php"
+      ],
+      "expected_paths_should": [
+        "bootstrap/app.php",
+        "bootstrap/phpstan.php"
+      ],
+      "expected_kinds": [
+        "routes",
+        "providers"
+      ]
+    },
+    {
+      "case_id": "blade-layouts-and-components",
+      "question": "Which files define BookStack's blade layouts and components?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/layouts/base.blade.php",
+        "resources/views/layouts/export.blade.php",
+        "resources/views/layouts/parts/base-body-end.blade.php",
+        "resources/views/layouts/parts/base-body-start.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/common/activity-item.blade.php",
+        "resources/views/common/activity-list.blade.php",
+        "resources/views/common/confirm-dialog.blade.php",
+        "resources/views/common/dark-mode-toggle.blade.php",
+        "resources/views/common/detailed-listing-paginated.blade.php",
+        "resources/views/common/detailed-listing-with-more.blade.php"
+      ],
+      "expected_kinds": [
+        "layouts-pages",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "entity-pages-and-reading-views",
+      "question": "Which files define BookStack's entity pages and reading views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/books/copy.blade.php",
+        "resources/views/books/create.blade.php",
+        "resources/views/books/delete.blade.php",
+        "resources/views/books/edit.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/entities/body-tag-classes.blade.php",
+        "resources/views/entities/book-tree.blade.php",
+        "resources/views/entities/breadcrumb-listing.blade.php",
+        "resources/views/entities/breadcrumbs.blade.php",
+        "resources/views/entities/copy-considerations.blade.php",
+        "resources/views/entities/export-menu.blade.php"
+      ],
+      "expected_kinds": [
+        "entity-views",
+        "adjacent-entity-views"
+      ]
+    },
+    {
+      "case_id": "layouts-auth-and-settings",
+      "question": "Which files define BookStack's layouts auth and settings?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/layouts/base.blade.php",
+        "resources/views/layouts/export.blade.php",
+        "resources/views/layouts/parts/base-body-end.blade.php",
+        "resources/views/layouts/parts/base-body-start.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/layouts/parts/custom-head.blade.php",
+        "resources/views/layouts/parts/custom-styles.blade.php",
+        "resources/views/layouts/parts/export-body-end.blade.php",
+        "resources/views/layouts/parts/export-body-start.blade.php",
+        "resources/views/layouts/parts/footer.blade.php",
+        "resources/views/layouts/parts/header-links-start.blade.php"
+      ],
+      "expected_kinds": [
+        "layout-views",
+        "navigation-views"
+      ]
+    },
+    {
+      "case_id": "api-docs-help-and-vendor-views",
+      "question": "Which files define BookStack's API docs help and vendor views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/api-docs/index.blade.php",
+        "resources/views/api-docs/parts/endpoint.blade.php",
+        "resources/views/api-docs/parts/getting-started.blade.php",
+        "resources/views/help/licenses.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/errors/404.blade.php",
+        "resources/views/errors/500.blade.php",
+        "resources/views/errors/503.blade.php",
+        "resources/views/errors/debug.blade.php",
+        "resources/views/mfa/backup-codes-generate.blade.php",
+        "resources/views/mfa/setup.blade.php"
+      ],
+      "expected_kinds": [
+        "docs-help-views",
+        "edge-ui-views"
+      ]
+    }
+  ]
+}

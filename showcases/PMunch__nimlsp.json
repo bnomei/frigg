@@ -1,0 +1,114 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "PMunch/nimlsp",
+  "repo_url": "https://github.com/PMunch/nimlsp",
+  "language_family": "nim-runtime",
+  "source_profile": "nim-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define nimlsp's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/nimlsp.nim",
+        "src/nimlsp_debug.nim",
+        "src/nimlsppkg/baseprotocol.nim",
+        "src/nimlsppkg/logger.nim"
+      ],
+      "expected_paths_should": [
+        "src/config.nims",
+        "src/nimlsp.nim.cfg",
+        "src/nimlsp_debug.nim.cfg",
+        "nimlsp.nimble",
+        ".github/workflows/action.yml",
+        "tests/rename_test_project/rename_test.nimble"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "package-config-and-modules",
+      "question": "Which files define nimlsp's package config and modules?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "nimlsp.nimble",
+        "tests/rename_test_project/rename_test.nimble",
+        "src/config.nims",
+        "src/nimlsp.nim.cfg"
+      ],
+      "expected_paths_should": [
+        "src/nimlsp.nim",
+        "src/nimlsp_debug.nim",
+        "src/nimlsppkg/baseprotocol.nim",
+        "src/nimlsppkg/logger.nim",
+        "src/nimlsppkg/messageenums.nim",
+        "src/nimlsppkg/messages.nim"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "module",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "protocol-messages-and-enums",
+      "question": "Which files define nimlsp's protocol messages and enums?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/nimlsppkg/baseprotocol.nim",
+        "src/nimlsppkg/messages.nim",
+        "src/nimlsppkg/messageenums.nim"
+      ],
+      "expected_paths_should": [
+        "src/nimlsppkg/logger.nim",
+        "src/nimlsppkg/utfmapping.nim"
+      ],
+      "expected_kinds": [
+        "protocol-message",
+        "support-message"
+      ]
+    },
+    {
+      "case_id": "debug-entrypoints-and-config",
+      "question": "Which files define nimlsp's debug entrypoints and config?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/nimlsp.nim",
+        "src/nimlsp_debug.nim"
+      ],
+      "expected_paths_should": [
+        "src/config.nims",
+        "src/nimlsp.nim.cfg",
+        "src/nimlsp_debug.nim.cfg"
+      ],
+      "expected_kinds": [
+        "entry-debug",
+        "config"
+      ]
+    },
+    {
+      "case_id": "rename-tests-and-suggestlib",
+      "question": "Which files define nimlsp's rename tests and suggestlib?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/rename_test_project/other_file.nim",
+        "tests/rename_test_project/rename_test.nim",
+        "tests/rename_test_project/rename_test.nimble"
+      ],
+      "expected_paths_should": [
+        "src/nimlsppkg/messages.nim",
+        "src/nimlsppkg/suggestlib.nim"
+      ],
+      "expected_kinds": [
+        "rename-test",
+        "suggest-support"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "n8n-io/n8n",
+  "repo_url": "https://github.com/n8n-io/n8n",
+  "language_family": "typescript-runtime",
+  "source_profile": "typescript-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "workflow-runtime-and-executions",
+      "question": "Which files define n8n's workflow runtime and executions?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/cli/test/integration/executions/pre-execution-checks/credentials-permission-checker.test.ts",
+        "packages/cli/test/integration/task-runners/js-task-runner-execution.integration.test.ts",
+        "packages/cli/test/integration/task-runners/task-broker-server.test.ts",
+        "packages/cli/test/integration/task-runners/task-runner-module.external.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/cli/src/executions/execution-persistence.ts",
+        "packages/cli/src/executions/execution-recovery.service.ts",
+        "packages/cli/src/executions/execution-redaction-proxy.service.ts",
+        "packages/cli/src/executions/execution-redaction.ts",
+        "packages/cli/src/executions/execution.service.ee.ts",
+        "packages/cli/src/executions/execution.service.ts"
+      ],
+      "expected_kinds": [
+        "workflow-integration-tests",
+        "workflow-runtime"
+      ]
+    },
+    {
+      "case_id": "nodes-credentials-and-ai-packages",
+      "question": "Which files define n8n's nodes credentials and ai packages?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/cli/src/credentials/__tests__/credentials.controller.test.ts",
+        "packages/cli/src/credentials/__tests__/credentials.service.ee.test.ts",
+        "packages/cli/src/credentials/__tests__/credentials.service.test.ts",
+        "packages/cli/src/credentials/__tests__/dynamic-credentials-proxy.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/nodes-base/nodes/ActionNetwork/ActionNetwork.node.ts",
+        "packages/nodes-base/nodes/ActionNetwork/GenericFunctions.ts",
+        "packages/nodes-base/nodes/ActionNetwork/types.ts",
+        "packages/nodes-base/nodes/ActiveCampaign/AccountContactDescription.ts",
+        "packages/nodes-base/nodes/ActiveCampaign/AccountDescription.ts",
+        "packages/nodes-base/nodes/ActiveCampaign/ActiveCampaign.node.ts"
+      ],
+      "expected_kinds": [
+        "node-and-credential-tests",
+        "node-and-ai-runtime"
+      ]
+    },
+    {
+      "case_id": "editor-ui-and-playwright",
+      "question": "Which files define n8n's editor UI and playwright?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/testing/playwright/tests/e2e/ai/assistant-basic.spec.ts",
+        "packages/testing/playwright/tests/e2e/ai/assistant-code-help.spec.ts",
+        "packages/testing/playwright/tests/e2e/ai/assistant-credential-help.spec.ts",
+        "packages/testing/playwright/tests/e2e/ai/assistant-support-chat.spec.ts"
+      ],
+      "expected_paths_should": [
+        "packages/frontend/editor-ui/src/app/api/workflow-webhooks.ts",
+        "packages/frontend/editor-ui/src/app/api/workflows.ee.ts",
+        "packages/frontend/editor-ui/src/app/api/workflows.test.ts",
+        "packages/frontend/editor-ui/src/app/api/workflows.ts",
+        "packages/frontend/editor-ui/src/app/components/ChatEmbedModal.test.ts",
+        "packages/frontend/editor-ui/src/app/components/ConnectionTracker.test.ts"
+      ],
+      "expected_kinds": [
+        "ui-e2e-and-mocks",
+        "editor-runtime"
+      ]
+    }
+  ]
+}

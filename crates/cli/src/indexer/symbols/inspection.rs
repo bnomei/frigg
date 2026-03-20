@@ -1,0 +1,610 @@
+use super::*;
+use crate::domain::model::{
+    GeneratedStructuralFollowUp, GeneratedStructuralFollowUpBasis,
+    GeneratedStructuralFollowUpConfidence, GeneratedStructuralFollowUpStrategy,
+    GeneratedStructuralSearchParams,
+};
+
+const GENERATED_STRUCTURAL_CAPTURE_NAME: &str = "match";
+const GENERATED_STRUCTURAL_MAX_SUGGESTIONS: usize = 3;
+const LOW_SIGNAL_STRUCTURAL_NODE_KINDS: &[&str] = &[
+    "source_file",
+    "program",
+    "chunk",
+    "block",
+    "expression_statement",
+    "statement_block",
+    "declaration_list",
+    "body",
+    "arguments",
+    "argument_list",
+    "parameter_list",
+    "parameters",
+    "formal_parameters",
+    "visibility_modifier",
+    "identifier",
+    "property_identifier",
+    "field_identifier",
+    "type_identifier",
+    "name",
+    "comment",
+    "string",
+    "string_literal",
+    "integer",
+    "float",
+    "number",
+    "ERROR",
+];
+
+struct StructuralFollowUpContext<'a> {
+    display_path: &'a str,
+    repository_id: &'a str,
+}
+
+pub fn search_structural_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    query: &str,
+) -> FriggResult<Vec<StructuralQueryMatch>> {
+    search_structural_matches_in_source(language, path, source, query, None)
+}
+
+pub fn search_structural_with_follow_up_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    display_path: &str,
+    source: &str,
+    query: &str,
+    repository_id: &str,
+) -> FriggResult<Vec<StructuralQueryMatch>> {
+    search_structural_matches_in_source(
+        language,
+        path,
+        source,
+        query,
+        Some(StructuralFollowUpContext {
+            display_path,
+            repository_id,
+        }),
+    )
+}
+
+pub fn inspect_syntax_tree_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    max_ancestors: usize,
+    max_children: usize,
+) -> FriggResult<SyntaxTreeInspection> {
+    inspect_syntax_tree_internal(
+        language,
+        path,
+        source,
+        line,
+        column,
+        max_ancestors,
+        max_children,
+        None,
+    )
+    .map(|(inspection, _)| inspection)
+}
+
+pub fn inspect_syntax_tree_with_follow_up_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    display_path: &str,
+    source: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    max_ancestors: usize,
+    max_children: usize,
+    repository_id: &str,
+) -> FriggResult<(SyntaxTreeInspection, Vec<GeneratedStructuralFollowUp>)> {
+    inspect_syntax_tree_internal(
+        language,
+        path,
+        source,
+        line,
+        column,
+        max_ancestors,
+        max_children,
+        Some(StructuralFollowUpContext {
+            display_path,
+            repository_id,
+        }),
+    )
+}
+
+#[cfg(test)]
+pub fn generated_follow_up_structural_for_focus(
+    language: SymbolLanguage,
+    repository_id: &str,
+    display_path: &str,
+    focus: &SyntaxTreeInspectionNode,
+    ancestors: &[SyntaxTreeInspectionNode],
+) -> Vec<GeneratedStructuralFollowUp> {
+    let raw_focus_kind = focus.kind.as_str();
+    let focus_kind = if is_useful_named_kind(raw_focus_kind) {
+        Some(raw_focus_kind)
+    } else {
+        ancestors
+            .iter()
+            .map(|node| node.kind.as_str())
+            .find(|kind| is_useful_named_kind(kind))
+    };
+    let Some(focus_kind) = focus_kind else {
+        return Vec::new();
+    };
+    let ancestor_kind = ancestors
+        .iter()
+        .map(|node| node.kind.as_str())
+        .filter(|kind| is_useful_named_kind(kind))
+        .find(|kind| *kind != focus_kind);
+    structural_follow_up_queries_for_kinds(
+        language,
+        display_path,
+        repository_id,
+        raw_focus_kind,
+        focus_kind,
+        ancestor_kind,
+    )
+}
+
+#[cfg(test)]
+pub fn generated_follow_up_structural_for_location_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    line: usize,
+    column: usize,
+    repository_id: &str,
+    display_path: &str,
+) -> FriggResult<Vec<GeneratedStructuralFollowUp>> {
+    generated_follow_up_structural_at_location_in_source(
+        language,
+        path,
+        display_path,
+        source,
+        line,
+        column,
+        repository_id,
+    )
+}
+
+pub fn generated_follow_up_structural_at_location_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    display_path: &str,
+    source: &str,
+    line: usize,
+    column: usize,
+    repository_id: &str,
+) -> FriggResult<Vec<GeneratedStructuralFollowUp>> {
+    let tree = parse_tree_for_source(language, path, source, "structural follow-up synthesis")?;
+    let root = tree.root_node();
+    let offset = byte_offset_for_line_column(source, line, column).ok_or_else(|| {
+        FriggError::InvalidInput(format!(
+            "location {line}:{column} is outside file {}",
+            path.display()
+        ))
+    })?;
+    let focus_node = focus_node_for_offset(root, offset);
+    Ok(structural_follow_up_queries_for_node(
+        language,
+        display_path,
+        repository_id,
+        focus_node,
+    ))
+}
+
+fn search_structural_matches_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    query: &str,
+    follow_up_context: Option<StructuralFollowUpContext<'_>>,
+) -> FriggResult<Vec<StructuralQueryMatch>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "structural query must not be empty".to_owned(),
+        ));
+    }
+
+    let compiled_query = compile_structural_query(language, path, query)?;
+    let tree = parse_tree_for_source(language, path, source, "structural search")?;
+    let mut cursor = QueryCursor::new();
+    let mut matches = Vec::new();
+    let mut captures = cursor.captures(&compiled_query, tree.root_node(), source.as_bytes());
+    while let Some((query_match, capture_index)) = captures.next() {
+        let capture = query_match.captures[*capture_index];
+        let follow_up_structural = follow_up_context
+            .as_ref()
+            .map(|context| {
+                structural_follow_up_queries_for_node(
+                    language,
+                    context.display_path,
+                    context.repository_id,
+                    capture.node,
+                )
+            })
+            .unwrap_or_default();
+        let Some(matched) =
+            structural_query_match(source, path, capture.node, follow_up_structural)
+        else {
+            continue;
+        };
+        matches.push(matched);
+    }
+    matches.sort_by(structural_query_match_order);
+    matches.dedup();
+    Ok(matches)
+}
+
+fn inspect_syntax_tree_internal(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    max_ancestors: usize,
+    max_children: usize,
+    follow_up_context: Option<StructuralFollowUpContext<'_>>,
+) -> FriggResult<(SyntaxTreeInspection, Vec<GeneratedStructuralFollowUp>)> {
+    validate_syntax_tree_inspection_request(line, column)?;
+
+    let tree = parse_tree_for_source(language, path, source, "syntax inspection")?;
+    let root = tree.root_node();
+    let focus_node = match (line, column) {
+        (Some(line), Some(column)) => {
+            let offset = byte_offset_for_line_column(source, line, column).ok_or_else(|| {
+                FriggError::InvalidInput(format!(
+                    "location {line}:{column} is outside file {}",
+                    path.display()
+                ))
+            })?;
+            focus_node_for_offset(root, offset)
+        }
+        _ => root,
+    };
+
+    let inspection =
+        build_syntax_tree_inspection(language, source, focus_node, max_ancestors, max_children);
+    let follow_up_structural = follow_up_context
+        .map(|context| {
+            structural_follow_up_queries_for_node(
+                language,
+                context.display_path,
+                context.repository_id,
+                focus_node,
+            )
+        })
+        .unwrap_or_default();
+    Ok((inspection, follow_up_structural))
+}
+
+fn validate_syntax_tree_inspection_request(
+    line: Option<usize>,
+    column: Option<usize>,
+) -> FriggResult<()> {
+    if line == Some(0) {
+        return Err(FriggError::InvalidInput(
+            "line must be greater than zero when provided".to_owned(),
+        ));
+    }
+    if column == Some(0) {
+        return Err(FriggError::InvalidInput(
+            "column must be greater than zero when provided".to_owned(),
+        ));
+    }
+    if line.is_none() != column.is_none() {
+        return Err(FriggError::InvalidInput(
+            "line and column must be provided together".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn compile_structural_query(
+    language: SymbolLanguage,
+    path: &Path,
+    query: &str,
+) -> FriggResult<Query> {
+    let ts_language = tree_sitter_language_for_path(language, path);
+    Query::new(&ts_language, query).map_err(|error| {
+        FriggError::InvalidInput(format!(
+            "invalid structural query for {}: {error}",
+            language.as_str()
+        ))
+    })
+}
+
+fn parse_tree_for_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    operation: &str,
+) -> FriggResult<Tree> {
+    let mut parser = parser_for_path(language, path)?;
+    parser.parse(source, None).ok_or_else(|| {
+        FriggError::Internal(format!(
+            "failed to parse source for {operation}: {}",
+            path.display()
+        ))
+    })
+}
+
+fn build_syntax_tree_inspection(
+    language: SymbolLanguage,
+    source: &str,
+    focus_node: Node<'_>,
+    max_ancestors: usize,
+    max_children: usize,
+) -> SyntaxTreeInspection {
+    let mut ancestors = Vec::new();
+    let mut cursor = focus_node;
+    while let Some(parent) = cursor.parent() {
+        ancestors.push(syntax_tree_inspection_node(source, parent));
+        cursor = parent;
+        if ancestors.len() >= max_ancestors {
+            break;
+        }
+    }
+
+    let mut children = Vec::new();
+    let mut child_cursor = focus_node.walk();
+    for child in focus_node.children(&mut child_cursor) {
+        children.push(syntax_tree_inspection_node(source, child));
+        if children.len() >= max_children {
+            break;
+        }
+    }
+
+    SyntaxTreeInspection {
+        language,
+        focus: syntax_tree_inspection_node(source, focus_node),
+        ancestors,
+        children,
+    }
+}
+
+fn structural_query_match(
+    source: &str,
+    path: &Path,
+    node: Node<'_>,
+    follow_up_structural: Vec<GeneratedStructuralFollowUp>,
+) -> Option<StructuralQueryMatch> {
+    let span = source_span(node);
+    let start_byte = node.start_byte();
+    let end_byte = node.end_byte();
+    let excerpt = if start_byte <= end_byte && end_byte <= source.len() {
+        String::from_utf8_lossy(&source.as_bytes()[start_byte..end_byte])
+            .trim()
+            .to_owned()
+    } else {
+        String::new()
+    };
+    if excerpt.is_empty() {
+        return None;
+    }
+    Some(StructuralQueryMatch {
+        path: path.to_path_buf(),
+        span,
+        excerpt,
+        follow_up_structural,
+    })
+}
+
+fn structural_follow_up_queries_for_node(
+    language: SymbolLanguage,
+    display_path: &str,
+    repository_id: &str,
+    raw_focus_node: Node<'_>,
+) -> Vec<GeneratedStructuralFollowUp> {
+    let Some(focus_node) = first_useful_named_node(raw_focus_node) else {
+        return Vec::new();
+    };
+    let ancestor_node = next_useful_named_ancestor(focus_node);
+    structural_follow_up_queries_for_kinds(
+        language,
+        display_path,
+        repository_id,
+        raw_focus_node.kind(),
+        focus_node.kind(),
+        ancestor_node.map(|node| node.kind()),
+    )
+}
+
+fn structural_follow_up_queries_for_kinds(
+    language: SymbolLanguage,
+    display_path: &str,
+    repository_id: &str,
+    raw_focus_kind: &str,
+    focus_kind: &str,
+    ancestor_kind: Option<&str>,
+) -> Vec<GeneratedStructuralFollowUp> {
+    let basis = GeneratedStructuralFollowUpBasis {
+        focus_kind: focus_kind.to_owned(),
+        raw_focus_kind: (raw_focus_kind != focus_kind).then(|| raw_focus_kind.to_owned()),
+        ancestor_kind: ancestor_kind.map(str::to_owned),
+    };
+    let mut suggestions = Vec::with_capacity(GENERATED_STRUCTURAL_MAX_SUGGESTIONS);
+    push_structural_follow_up(
+        &mut suggestions,
+        GeneratedStructuralFollowUpStrategy::FocusNamedNodeFileScoped,
+        GeneratedStructuralFollowUpConfidence::High,
+        basis.clone(),
+        structural_follow_up_query(focus_kind),
+        Some(structural_follow_up_path_regex(display_path)),
+        language,
+        repository_id,
+    );
+    push_structural_follow_up(
+        &mut suggestions,
+        GeneratedStructuralFollowUpStrategy::FocusNamedNodeRepoScoped,
+        GeneratedStructuralFollowUpConfidence::Medium,
+        basis.clone(),
+        structural_follow_up_query(focus_kind),
+        None,
+        language,
+        repository_id,
+    );
+    if let Some(ancestor_kind) = ancestor_kind {
+        push_structural_follow_up(
+            &mut suggestions,
+            GeneratedStructuralFollowUpStrategy::AncestorNamedNodeRepoScoped,
+            GeneratedStructuralFollowUpConfidence::Medium,
+            basis,
+            structural_follow_up_query(ancestor_kind),
+            None,
+            language,
+            repository_id,
+        );
+    }
+    suggestions.truncate(GENERATED_STRUCTURAL_MAX_SUGGESTIONS);
+    suggestions
+}
+
+fn push_structural_follow_up(
+    suggestions: &mut Vec<GeneratedStructuralFollowUp>,
+    strategy: GeneratedStructuralFollowUpStrategy,
+    confidence: GeneratedStructuralFollowUpConfidence,
+    basis: GeneratedStructuralFollowUpBasis,
+    query: String,
+    path_regex: Option<String>,
+    language: SymbolLanguage,
+    repository_id: &str,
+) {
+    if suggestions.iter().any(|candidate| {
+        candidate.params.query == query && candidate.params.path_regex == path_regex
+    }) {
+        return;
+    }
+    suggestions.push(GeneratedStructuralFollowUp {
+        strategy,
+        confidence,
+        basis,
+        params: GeneratedStructuralSearchParams {
+            query,
+            language: language.as_str().to_owned(),
+            repository_id: repository_id.to_owned(),
+            path_regex,
+            limit: None,
+        },
+    });
+}
+
+fn first_useful_named_node(start: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = Some(start);
+    while let Some(node) = cursor {
+        if is_useful_named_node(node) {
+            return Some(node);
+        }
+        cursor = node.parent();
+    }
+    None
+}
+
+fn next_useful_named_ancestor(start: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = start.parent();
+    while let Some(node) = cursor {
+        if is_useful_named_node(node) && node.kind() != start.kind() {
+            return Some(node);
+        }
+        cursor = node.parent();
+    }
+    None
+}
+
+fn is_useful_named_node(node: Node<'_>) -> bool {
+    node.is_named() && is_useful_named_kind(node.kind())
+}
+
+fn is_useful_named_kind(kind: &str) -> bool {
+    is_query_safe_named_kind(kind) && !LOW_SIGNAL_STRUCTURAL_NODE_KINDS.contains(&kind)
+}
+
+fn is_query_safe_named_kind(kind: &str) -> bool {
+    !kind.is_empty()
+        && kind
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn structural_follow_up_query(kind: &str) -> String {
+    format!("({kind}) @{GENERATED_STRUCTURAL_CAPTURE_NAME}")
+}
+
+fn structural_follow_up_path_regex(display_path: &str) -> String {
+    format!("^{}$", regex::escape(display_path))
+}
+
+fn focus_node_for_offset(root: Node<'_>, offset: usize) -> Node<'_> {
+    let mut current = root;
+    loop {
+        let mut next_named = None;
+        let mut next_any = None;
+        let mut cursor = current.walk();
+        for child in current.children(&mut cursor) {
+            if child.start_byte() > offset || child.end_byte() < offset {
+                continue;
+            }
+            if next_any.is_none() {
+                next_any = Some(child);
+            }
+            if child.is_named() {
+                next_named = Some(child);
+                break;
+            }
+        }
+        let Some(next) = next_named.or(next_any) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn syntax_tree_inspection_node(source: &str, node: Node<'_>) -> SyntaxTreeInspectionNode {
+    SyntaxTreeInspectionNode {
+        kind: node.kind().to_owned(),
+        named: node.is_named(),
+        span: source_span(node),
+        excerpt: trim_syntax_excerpt(source, node.start_byte(), node.end_byte()),
+    }
+}
+
+fn trim_syntax_excerpt(source: &str, start_byte: usize, end_byte: usize) -> String {
+    const MAX_EXCERPT_CHARS: usize = 120;
+    if start_byte >= end_byte || start_byte >= source.len() {
+        return String::new();
+    }
+    let clamped_end = end_byte.min(source.len());
+    let raw = String::from_utf8_lossy(&source.as_bytes()[start_byte..clamped_end]);
+    let trimmed = raw.trim();
+    if trimmed.chars().count() <= MAX_EXCERPT_CHARS {
+        return trimmed.to_owned();
+    }
+    let mut excerpt = trimmed.chars().take(MAX_EXCERPT_CHARS).collect::<String>();
+    excerpt.push_str("...");
+    excerpt
+}
+
+fn structural_query_match_order(
+    left: &StructuralQueryMatch,
+    right: &StructuralQueryMatch,
+) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then(left.span.start_byte.cmp(&right.span.start_byte))
+        .then(left.span.end_byte.cmp(&right.span.end_byte))
+        .then(left.span.start_line.cmp(&right.span.start_line))
+        .then(left.span.start_column.cmp(&right.span.start_column))
+        .then(left.excerpt.cmp(&right.excerpt))
+}

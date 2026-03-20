@@ -1,0 +1,128 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "android/nowinandroid",
+  "repo_url": "https://github.com/android/nowinandroid",
+  "language_family": "kotlin-runtime",
+  "source_profile": "kotlin-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define nowinandroid's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "app-nia-catalog/src/main/kotlin/com/google/samples/apps/niacatalog/NiaCatalogActivity.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/MainActivity.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/MainActivityViewModel.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/NiaApplication.kt"
+      ],
+      "expected_paths_should": [
+        "app-nia-catalog/build.gradle.kts",
+        "app/build.gradle.kts",
+        "build.gradle.kts",
+        "benchmarks/build.gradle.kts",
+        "build-logic/convention/build.gradle.kts",
+        "core/analytics/build.gradle.kts"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "tests-and-ui",
+      "question": "Which files define nowinandroid's tests and UI?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "feature/bookmarks/impl/src/androidTest/kotlin/com/google/samples/apps/nowinandroid/feature/bookmarks/impl/BookmarksScreenTest.kt",
+        "feature/foryou/impl/src/androidTest/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouScreenTest.kt",
+        "feature/interests/impl/src/androidTest/kotlin/com/google/samples/apps/nowinandroid/feature/interests/impl/InterestsScreenTest.kt",
+        "feature/interests/impl/src/test/kotlin/com/google/samples/apps/nowinandroid/interests/impl/InterestsListDetailScreenTest.kt"
+      ],
+      "expected_paths_should": [
+        "feature/bookmarks/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/bookmarks/impl/BookmarksScreen.kt",
+        "feature/bookmarks/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/bookmarks/impl/BookmarksViewModel.kt",
+        "feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouScreen.kt",
+        "feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouViewModel.kt",
+        "feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/OnboardingUiState.kt",
+        "feature/interests/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/interests/impl/InterestsScreen.kt"
+      ],
+      "expected_kinds": [
+        "tests",
+        "ui-modules"
+      ]
+    },
+    {
+      "case_id": "core-data-and-sync",
+      "question": "Which files define nowinandroid's core data and sync?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "core/data/src/main/kotlin/com/google/samples/apps/nowinandroid/core/data/di/UserNewsResourceRepositoryModule.kt",
+        "core/data/src/main/kotlin/com/google/samples/apps/nowinandroid/core/data/repository/CompositeUserNewsResourceRepository.kt",
+        "core/data/src/main/kotlin/com/google/samples/apps/nowinandroid/core/data/repository/DefaultRecentSearchRepository.kt",
+        "core/data/src/main/kotlin/com/google/samples/apps/nowinandroid/core/data/repository/DefaultSearchContentsRepository.kt"
+      ],
+      "expected_paths_should": [
+        "core/network/src/main/kotlin/JvmUnitTestDemoAssetManager.kt",
+        "core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/DatabaseMigrations.kt",
+        "core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/NiaDatabase.kt",
+        "core/network/src/main/kotlin/com/google/samples/apps/nowinandroid/core/network/NiaNetworkDataSource.kt",
+        "core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/dao/NewsResourceDao.kt",
+        "core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/dao/NewsResourceFtsDao.kt"
+      ],
+      "expected_kinds": [
+        "core-data",
+        "sync-network"
+      ]
+    },
+    {
+      "case_id": "feature-compose-and-navigation",
+      "question": "Which files define nowinandroid's feature compose and navigation?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "feature/bookmarks/api/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/bookmarks/api/navigation/BookmarksNavKey.kt",
+        "feature/foryou/api/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/api/navigation/ForYouNavKey.kt",
+        "feature/interests/api/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/interests/api/navigation/InterestsNavKey.kt",
+        "feature/search/api/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/search/api/navigation/SearchNavKey.kt"
+      ],
+      "expected_paths_should": [
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/MainActivity.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/MainActivityViewModel.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/NiaApplication.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/ui/NiaApp.kt",
+        "app/src/main/kotlin/com/google/samples/apps/nowinandroid/ui/NiaAppState.kt",
+        "core/navigation/src/main/kotlin/com/google/samples/apps/nowinandroid/core/navigation/NavigationState.kt"
+      ],
+      "expected_kinds": [
+        "feature-compose",
+        "app-navigation"
+      ]
+    },
+    {
+      "case_id": "benchmarks-notifications-and-designsystem",
+      "question": "Which files define nowinandroid's benchmarks notifications and designsystem?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "benchmarks/src/main/kotlin/com/google/samples/apps/nowinandroid/BaselineProfileMetrics.kt",
+        "benchmarks/src/main/kotlin/com/google/samples/apps/nowinandroid/baselineprofile/BookmarksBaselineProfile.kt",
+        "benchmarks/src/main/kotlin/com/google/samples/apps/nowinandroid/baselineprofile/ForYouBaselineProfile.kt",
+        "benchmarks/src/main/kotlin/com/google/samples/apps/nowinandroid/baselineprofile/InterestsBaselineProfile.kt"
+      ],
+      "expected_paths_should": [
+        "ui-test-hilt-manifest/src/main/kotlin/com/google/samples/apps/nowinandroid/uitesthiltmanifest/HiltComponentActivity.kt",
+        "core/designsystem/src/main/kotlin/com/google/samples/apps/nowinandroid/core/designsystem/component/Button.kt",
+        "core/designsystem/src/main/kotlin/com/google/samples/apps/nowinandroid/core/designsystem/component/Chip.kt",
+        "core/designsystem/src/main/kotlin/com/google/samples/apps/nowinandroid/core/designsystem/component/IconButton.kt",
+        "core/designsystem/src/main/kotlin/com/google/samples/apps/nowinandroid/core/designsystem/component/LoadingWheel.kt",
+        "core/designsystem/src/main/kotlin/com/google/samples/apps/nowinandroid/core/designsystem/component/Navigation.kt"
+      ],
+      "expected_kinds": [
+        "benchmark-notification",
+        "ui-system"
+      ]
+    }
+  ]
+}

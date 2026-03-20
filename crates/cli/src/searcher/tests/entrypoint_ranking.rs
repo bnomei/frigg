@@ -31,11 +31,11 @@ fn hybrid_lexical_recall_tokens_support_snake_case_terms() {
 }
 
 #[test]
-fn hybrid_ranking_lexical_hits_prefer_source_paths_over_playbooks() -> FriggResult<()> {
+fn hybrid_ranking_lexical_hits_prefer_source_paths_over_docs() -> FriggResult<()> {
     let lexical = build_hybrid_lexical_hits(&[
         text_match(
             "repo-001",
-            "playbooks/hybrid.md",
+            "guides/overview.md",
             1,
             1,
             "semantic runtime metadata",
@@ -56,7 +56,7 @@ fn hybrid_ranking_lexical_hits_prefer_source_paths_over_playbooks() -> FriggResu
 
     assert_eq!(ranked.len(), 2);
     assert_eq!(ranked[0].document.path, "src/lib.rs");
-    assert_eq!(ranked[1].document.path, "playbooks/hybrid.md");
+    assert_eq!(ranked[1].document.path, "guides/overview.md");
     Ok(())
 }
 
@@ -68,7 +68,7 @@ fn hybrid_ranking_query_aware_lexical_hits_keep_public_docs_visible_with_runtime
         &[
             text_match(
                 "repo-001",
-                "contracts/errors.md",
+                "guides/security.md",
                 1,
                 1,
                 "invalid_params maps to -32602",
@@ -107,7 +107,7 @@ fn hybrid_ranking_query_aware_lexical_hits_keep_public_docs_visible_with_runtime
     assert!(
         ranked
             .iter()
-            .any(|entry| entry.document.path == "contracts/errors.md"),
+            .any(|entry| entry.document.path == "guides/security.md"),
         "public docs witness should remain in the ranked set"
     );
     assert!(
@@ -192,14 +192,14 @@ fn hybrid_ranking_semantic_auth_queries_keep_runtime_and_readme_witnesses() -> F
                      serve_http\n",
             ),
             (
-                "contracts/errors.md",
+                "guides/security.md",
                 "## MCP payload guidance\n\
                      invalid_params payload guidance\n",
             ),
             (
-                "benchmarks/mcp-tools.md",
-                "# MCP Tool Benchmark Methodology\n\
-                     benchmark notes for MCP tools\n",
+                "guides/overview.md",
+                "# Overview\n\
+                     local code search and navigation rationale\n",
             ),
             (
                 "crates/cli/tests/security.rs",
@@ -224,14 +224,14 @@ fn hybrid_ranking_semantic_auth_queries_keep_runtime_and_readme_witnesses() -> F
             semantic_record(
                 "repo-001",
                 "snapshot-001",
-                "contracts/errors.md",
+                "guides/security.md",
                 0,
                 vec![0.76, 0.0],
             ),
             semantic_record(
                 "repo-001",
                 "snapshot-001",
-                "benchmarks/mcp-tools.md",
+                "guides/overview.md",
                 0,
                 vec![0.71, 0.0],
             ),
@@ -299,10 +299,10 @@ fn hybrid_ranking_semantic_auth_queries_keep_runtime_and_readme_witnesses() -> F
     let benchmark_position = output
         .matches
         .iter()
-        .position(|entry| entry.document.path == "benchmarks/mcp-tools.md");
+        .position(|entry| entry.document.path == "guides/overview.md");
     assert!(
         benchmark_position.is_none() || Some(readme_position) < benchmark_position,
-        "README auth docs should outrank benchmark docs for auth-entrypoint queries: {ranked_paths:?}"
+        "README auth docs should outrank overview docs for auth-entrypoint queries: {ranked_paths:?}"
     );
 
     cleanup_workspace(&root);

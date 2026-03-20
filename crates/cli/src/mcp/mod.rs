@@ -1,4 +1,6 @@
-//! MCP delivery layer for Frigg's stable default tool surface and optional advanced-consumer extensions.
+//! MCP delivery layer that packages Frigg's retrieval and indexing capabilities as a stable tool
+//! surface for agents. This is where runtime state, schemas, and transport-facing orchestration
+//! meet the lower-level search and storage subsystems.
 
 pub mod advanced;
 mod explorer;

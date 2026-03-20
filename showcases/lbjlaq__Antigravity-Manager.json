@@ -1,0 +1,124 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "lbjlaq/Antigravity-Manager",
+  "repo_url": "https://github.com/lbjlaq/Antigravity-Manager",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "entrypoint-build-flow",
+      "question": "Which files define Antigravity-Manager's entrypoint build flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src-tauri/src/main.rs"
+      ],
+      "expected_paths_should": [
+        "src-tauri/build.rs",
+        "scripts/Fix_Damaged.command",
+        "scripts/MANUAL_PR_CLOSE_GUIDE.md",
+        "scripts/close_integrated_prs.sh",
+        "scripts/fix_app.sh",
+        "scripts/package_dmg.sh"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "build-config"
+      ]
+    },
+    {
+      "case_id": "ci-release-and-ops",
+      "question": "Which files define Antigravity-Manager's ci release and ops?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy-pages.yml",
+        ".github/workflows/release.yml"
+      ],
+      "expected_paths_should": [
+        "docker/Dockerfile",
+        "docker/Dockerfile.backend",
+        "docker/Dockerfile.backend.localdist",
+        "docker/README.md",
+        "docker/docker-compose.backend.yml",
+        "docker/docker-compose.localdist.yml"
+      ],
+      "expected_kinds": [
+        "ci-release",
+        "scripts-ops"
+      ]
+    },
+    {
+      "case_id": "tauri-proxy-and-services-flow",
+      "question": "Which files define Antigravity-Manager's tauri proxy and services flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src-tauri/src/proxy/cli_sync.rs",
+        "src-tauri/src/proxy/common/client_adapter.rs",
+        "src-tauri/src/proxy/common/client_adapters/opencode.rs",
+        "src-tauri/src/proxy/common/json_schema.rs"
+      ],
+      "expected_paths_should": [
+        "src/pages/Accounts.tsx",
+        "src/pages/ApiProxy.tsx",
+        "src/pages/Monitor.tsx",
+        "src/services/accountService.ts",
+        "src/services/configService.ts",
+        "src/stores/networkMonitorStore.ts"
+      ],
+      "expected_kinds": [
+        "tauri-runtime",
+        "service-ui"
+      ]
+    },
+    {
+      "case_id": "deploy-docker-and-operations-flow",
+      "question": "Which files define Antigravity-Manager's deploy docker and operations flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "deploy/arch/PKGBUILD.template",
+        "deploy/arch/install.sh",
+        "scripts/Fix_Damaged.command",
+        "scripts/fix_app.sh"
+      ],
+      "expected_paths_should": [
+        "docs/proxy-monitor-technical.md",
+        "docs/test_503_issue.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy-pages.yml",
+        ".github/workflows/release.yml",
+        "docs/testing/context_compression_test_plan.md"
+      ],
+      "expected_kinds": [
+        "deploy-runtime",
+        "ops-doc"
+      ]
+    },
+    {
+      "case_id": "ui-locales-and-asset-flow",
+      "question": "Which files define Antigravity-Manager's UI locales and asset flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/i18n.ts",
+        "src/locales/ar.json",
+        "src/locales/en.json",
+        "src/locales/es.json"
+      ],
+      "expected_paths_should": [
+        "src/components/UpdateNotification.tsx",
+        "src/pages/Accounts.tsx",
+        "src/pages/ApiProxy.tsx",
+        "src/pages/Dashboard.tsx",
+        "src/pages/Monitor.tsx",
+        "src/pages/Security.tsx"
+      ],
+      "expected_kinds": [
+        "asset-locale",
+        "ui-runtime"
+      ]
+    }
+  ]
+}

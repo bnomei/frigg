@@ -1,4 +1,4 @@
-use super::super::{PathWitnessCandidate, path_witness_candidate_order};
+use super::super::path_witness_search::{PathWitnessCandidate, path_witness_candidate_order};
 use super::*;
 use crate::searcher::RepositoryCandidateUniverse;
 use crate::searcher::TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION;

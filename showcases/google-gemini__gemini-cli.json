@@ -1,0 +1,123 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "google-gemini/gemini-cli",
+  "repo_url": "https://github.com/google-gemini/gemini-cli",
+  "language_family": "typescript-runtime",
+  "source_profile": "typescript-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define gemini-cli's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/a2a-server/src/index.ts",
+        "packages/cli/src/config/mcp/index.ts",
+        "packages/a2a-server/index.ts",
+        "packages/cli/index.ts"
+      ],
+      "expected_paths_should": [
+        "packages/cli/src/commands/extensions/examples/mcp-server/package.json",
+        "packages/a2a-server/package.json",
+        "packages/a2a-server/tsconfig.json",
+        "packages/a2a-server/vitest.config.ts",
+        "packages/cli/package.json",
+        "packages/cli/tsconfig.json"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "package"
+      ]
+    },
+    {
+      "case_id": "config-and-workflows",
+      "question": "Which files define gemini-cli's config and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "package.json",
+        "tsconfig.json",
+        ".github/workflows/chained_e2e.yml",
+        ".github/workflows/ci.yml"
+      ],
+      "expected_paths_should": [
+        "packages/a2a-server/src/index.ts",
+        "packages/core/src/index.ts",
+        "packages/devtools/src/index.ts",
+        "packages/sdk/src/index.ts",
+        "packages/test-utils/src/index.ts",
+        "packages/core/src/billing/index.ts"
+      ],
+      "expected_kinds": [
+        "workspace-config",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "cli-core-and-sdk",
+      "question": "Which files define gemini-cli's CLI core and sdk?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/cli/src/acp/acpClient.test.ts",
+        "packages/cli/src/acp/acpErrors.test.ts",
+        "packages/cli/src/acp/acpResume.test.ts",
+        "packages/cli/src/acp/commandHandler.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/cli/src/commands/extensions/configure.test.ts",
+        "packages/cli/src/commands/extensions/disable.test.ts",
+        "packages/cli/src/commands/extensions/enable.test.ts",
+        "packages/cli/src/acp/fileSystemService.test.ts"
+      ],
+      "expected_kinds": [
+        "cli-tests",
+        "cli-runtime"
+      ]
+    },
+    {
+      "case_id": "evals-integration-and-schemas",
+      "question": "Which files define gemini-cli's evals integration and schemas?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "evals/answer-vs-act.eval.ts",
+        "evals/ask_user.eval.ts",
+        "evals/automated-tool-use.eval.ts",
+        "evals/concurrency-safety.eval.ts"
+      ],
+      "expected_paths_should": [
+        "schemas/settings.schema.json",
+        "packages/test-utils/src/file-system-test-helpers.ts",
+        "packages/test-utils/src/index.ts",
+        "packages/test-utils/src/mock-utils.ts",
+        "packages/test-utils/src/test-rig.ts"
+      ],
+      "expected_kinds": [
+        "evals-and-integration-tests",
+        "schema-and-test-utils"
+      ]
+    },
+    {
+      "case_id": "vscode-companion-and-a2a-server",
+      "question": "Which files define gemini-cli's vscode companion and a2a server?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/vscode-ide-companion/src/extension.test.ts",
+        "packages/vscode-ide-companion/src/ide-server.test.ts",
+        "packages/vscode-ide-companion/src/open-files-manager.test.ts",
+        "packages/a2a-server/src/agent/executor.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/a2a-server/src/agent/task-event-driven.test.ts",
+        "packages/a2a-server/src/agent/task.test.ts",
+        "packages/a2a-server/src/commands/command-registry.test.ts",
+        "packages/a2a-server/src/commands/extensions.test.ts"
+      ],
+      "expected_kinds": [
+        "ide-and-a2a-tests",
+        "ide-and-a2a-runtime"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "dom96/choosenim",
+  "repo_url": "https://github.com/dom96/choosenim",
+  "language_family": "nim-runtime",
+  "source_profile": "nim-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define choosenim's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/choosenim.nim",
+        "src/choosenimpkg/builder.nim",
+        "src/choosenimpkg/channel.nim",
+        "src/choosenimpkg/cliparams.nim"
+      ],
+      "expected_paths_should": [
+        "src/choosenimpkg/proxyexe.nim.cfg",
+        "src/choosenimpkg/proxyexe.nims",
+        "src/choosenim.nims",
+        "choosenim.nimble",
+        ".github/workflows/release_build.yml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "package-config-and-modules",
+      "question": "Which files define choosenim's package config and modules?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "choosenim.nimble",
+        "src/choosenim.nims",
+        "src/choosenimpkg/proxyexe.nims",
+        "src/choosenimpkg/proxyexe.nim.cfg"
+      ],
+      "expected_paths_should": [
+        "src/choosenimpkg/builder.nim",
+        "src/choosenimpkg/channel.nim",
+        "src/choosenimpkg/cliparams.nim",
+        "src/choosenimpkg/common.nim",
+        "src/choosenimpkg/download.nim",
+        "src/choosenimpkg/env.nim"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "module",
+        "entrypoints"
+      ]
+    },
+    {
+      "case_id": "installer-core-and-scripts",
+      "question": "Which files define choosenim's installer core and scripts?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/choosenimpkg/builder.nim",
+        "src/choosenimpkg/channel.nim",
+        "src/choosenimpkg/cliparams.nim",
+        "src/choosenimpkg/common.nim"
+      ],
+      "expected_paths_should": [
+        "scripts/build.sh",
+        "scripts/choosenim-unix-init.sh",
+        "scripts/runme.bat"
+      ],
+      "expected_kinds": [
+        "installer-script",
+        "script-bin"
+      ]
+    },
+    {
+      "case_id": "tests-release-and-workflows",
+      "question": "Which files define choosenim's tests release and workflows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/tester.nim",
+        ".github/workflows/release_build.yml"
+      ],
+      "expected_paths_should": [
+        "scripts/build.sh",
+        "scripts/choosenim-unix-init.sh",
+        "scripts/runme.bat",
+        "src/choosenimpkg/builder.nim",
+        "src/choosenimpkg/channel.nim",
+        "src/choosenimpkg/cliparams.nim"
+      ],
+      "expected_kinds": [
+        "test-workflow",
+        "runtime-script"
+      ]
+    },
+    {
+      "case_id": "cli-version-and-package-flows",
+      "question": "Which files define choosenim's CLI version and package flows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "tests/tester.nim",
+        "src/choosenim.nim",
+        "src/choosenim.nims"
+      ],
+      "expected_paths_should": [
+        "src/choosenimpkg/channel.nim",
+        "src/choosenimpkg/cliparams.nim",
+        "src/choosenimpkg/env.nim",
+        "src/choosenimpkg/switcher.nim",
+        "src/choosenimpkg/versions.nim"
+      ],
+      "expected_kinds": [
+        "cli-tester",
+        "channel-version"
+      ]
+    }
+  ]
+}

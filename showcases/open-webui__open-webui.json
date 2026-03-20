@@ -1,0 +1,124 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "open-webui/open-webui",
+  "repo_url": "https://github.com/open-webui/open-webui",
+  "language_family": "python-runtime",
+  "source_profile": "python-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "runtime-entrypoints",
+      "question": "Which files define open-webui's runtime entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "backend/open_webui/main.py",
+        "backend/open_webui/socket/main.py",
+        "backend/open_webui/retrieval/loaders/main.py",
+        "backend/open_webui/retrieval/vector/main.py"
+      ],
+      "expected_paths_should": [
+        "backend/open_webui/utils/telemetry/setup.py",
+        "backend/requirements-min.txt",
+        "backend/requirements.txt",
+        "pyproject.toml"
+      ],
+      "expected_kinds": [
+        "entrypoints",
+        "runtime-config"
+      ]
+    },
+    {
+      "case_id": "backend-routers-and-models",
+      "question": "Which files define open-webui's backend routers and models?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "backend/open_webui/main.py",
+        "backend/open_webui/routers/auths.py",
+        "backend/open_webui/routers/chats.py",
+        "backend/open_webui/routers/analytics.py"
+      ],
+      "expected_paths_should": [
+        "backend/open_webui/models/access_grants.py",
+        "backend/open_webui/models/auths.py",
+        "backend/open_webui/models/channels.py",
+        "backend/open_webui/models/chat_messages.py",
+        "backend/open_webui/models/chats.py",
+        "backend/open_webui/models/feedbacks.py"
+      ],
+      "expected_kinds": [
+        "backend-routers",
+        "backend-runtime"
+      ]
+    },
+    {
+      "case_id": "backend-entrypoint-socket-and-config",
+      "question": "Which files define open-webui's backend entrypoint socket and config?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "backend/open_webui/main.py",
+        "pyproject.toml"
+      ],
+      "expected_paths_should": [
+        "backend/open_webui/models/access_grants.py",
+        "backend/open_webui/models/auths.py",
+        "backend/open_webui/socket/main.py",
+        "backend/open_webui/socket/utils.py",
+        "backend/open_webui/retrieval/web/azure.py",
+        "backend/open_webui/retrieval/web/bing.py"
+      ],
+      "expected_kinds": [
+        "backend-entrypoint-config",
+        "socket-retrieval-runtime"
+      ]
+    },
+    {
+      "case_id": "backend-config-and-tasks",
+      "question": "Which files define open-webui's backend config and tasks?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "backend/open_webui/main.py",
+        "backend/open_webui/config.py",
+        "backend/open_webui/env.py"
+      ],
+      "expected_paths_should": [
+        "backend/open_webui/internal/db.py",
+        "backend/open_webui/retrieval/utils.py",
+        "backend/open_webui/routers/tasks.py",
+        "backend/open_webui/utils/actions.py",
+        "backend/open_webui/utils/auth.py",
+        "backend/open_webui/utils/channels.py"
+      ],
+      "expected_kinds": [
+        "backend-config",
+        "backend-tasks-and-utils"
+      ]
+    },
+    {
+      "case_id": "backend-config-packages-and-entrypoints",
+      "question": "Which files define open-webui's backend config packages and entrypoints?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "pyproject.toml",
+        "uv.lock",
+        "backend/requirements-min.txt",
+        "backend/requirements.txt"
+      ],
+      "expected_paths_should": [
+        "backend/open_webui/models/access_grants.py",
+        "backend/open_webui/models/auths.py",
+        "backend/open_webui/models/chats.py",
+        "backend/open_webui/models/functions.py",
+        "backend/open_webui/models/models.py",
+        "backend/open_webui/models/tools.py"
+      ],
+      "expected_kinds": [
+        "runtime-config",
+        "package",
+        "retrieval-runtime"
+      ]
+    }
+  ]
+}

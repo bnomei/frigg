@@ -1,0 +1,124 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "krayin/laravel-crm",
+  "repo_url": "https://github.com/krayin/laravel-crm",
+  "language_family": "blade-laravel-ui",
+  "source_profile": "blade-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "blade-bootstrap-and-routes",
+      "question": "Which files define laravel-crm's blade bootstrap and routes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "routes/api.php",
+        "routes/breadcrumbs.php",
+        "routes/channels.php",
+        "routes/console.php"
+      ],
+      "expected_paths_should": [
+        "bootstrap/app.php",
+        "config/app.php",
+        "config/auth.php",
+        "config/breadcrumbs.php",
+        "config/broadcasting.php",
+        "config/cache.php"
+      ],
+      "expected_kinds": [
+        "routes",
+        "providers"
+      ]
+    },
+    {
+      "case_id": "blade-layouts-and-components",
+      "question": "Which files define laravel-crm's blade layouts and components?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/anonymous.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/header/desktop/mega-search.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/header/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/header/mobile/mega-search.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Admin/src/Resources/views/components/accordion/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/activities/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/attachments/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/attributes/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/attributes/view.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/activities/actions/activity.blade.php"
+      ],
+      "expected_kinds": [
+        "layouts-pages",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "crm-admin-contact-and-lead-views",
+      "question": "Which files define laravel-crm's crm admin contact and lead views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Admin/src/Resources/views/leads/common/contact.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/leads/common/products.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/leads/create.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/leads/edit.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Admin/src/Resources/views/components/activities/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/attributes/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/attributes/view.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/activities/actions/activity.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/activities/actions/file.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/activities/actions/mail.blade.php"
+      ],
+      "expected_kinds": [
+        "crm-views",
+        "crm-components"
+      ]
+    },
+    {
+      "case_id": "webform-email-template-views",
+      "question": "Which files define laravel-crm's webform email template views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/WebForm/src/Resources/views/components/button/index.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/flash-group/index.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/flash-group/item.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/form/control-group/control.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/WebForm/src/Resources/views/components/form/control-group/error.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/form/control-group/index.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/form/control-group/label.blade.php",
+        "packages/Webkul/WebForm/src/Resources/views/components/form/index.blade.php"
+      ],
+      "expected_kinds": [
+        "workflow-views",
+        "workflow-components"
+      ]
+    },
+    {
+      "case_id": "datagrid-installer-and-platform-views",
+      "question": "Which files define laravel-crm's datagrid installer and platform views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Installer/src/Resources/views/components/button/index.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/control.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/error.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/index.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/label.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/index.blade.php",
+        "tests/CreatesApplication.php",
+        "tests/Pest.php"
+      ],
+      "expected_kinds": [
+        "platform-views",
+        "platform-components"
+      ]
+    }
+  ]
+}

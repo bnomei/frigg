@@ -26,6 +26,7 @@ pub(crate) struct PostSelectionContext<'a> {
 }
 
 impl<'a> PostSelectionContext<'a> {
+    #[cfg(test)]
     pub(crate) fn new(
         intent: &'a HybridRankingIntent,
         query_text: &'a str,
@@ -62,6 +63,7 @@ impl<'a> PostSelectionContext<'a> {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_trace(
         intent: &'a HybridRankingIntent,
         query_text: &'a str,

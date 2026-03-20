@@ -16,6 +16,7 @@ use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, resolve_provenance_db_path};
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 
+use super::candidates::normalize_repository_relative_path;
 use super::{
     HYBRID_SEMANTIC_CANDIDATE_POOL_MIN, HYBRID_SEMANTIC_CANDIDATE_POOL_MULTIPLIER,
     HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR, HYBRID_SEMANTIC_RETAINED_DOCUMENT_MIN,
@@ -23,8 +24,7 @@ use super::{
     HybridRankingIntent, HybridSemanticStatus, SearchFilters, TextSearcher,
     hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_count,
     hybrid_path_quality_multiplier_with_intent, hybrid_query_exact_terms,
-    hybrid_query_overlap_terms, normalize_repository_relative_path, normalize_search_filters,
-    semantic_excerpt,
+    hybrid_query_overlap_terms, normalize_search_filters, semantic_excerpt,
     surfaces::{HybridSourceClass, hybrid_source_class},
 };
 

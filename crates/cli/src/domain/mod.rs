@@ -1,3 +1,7 @@
+//! Shared domain vocabulary used across indexing, search, storage, provenance, and MCP delivery.
+//! These types stay intentionally neutral so higher layers can change behavior without redefining
+//! the core concepts they exchange.
+
 pub mod error;
 pub mod evidence;
 pub mod model;

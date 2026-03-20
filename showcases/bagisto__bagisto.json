@@ -1,0 +1,123 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "bagisto/bagisto",
+  "repo_url": "https://github.com/bagisto/bagisto",
+  "language_family": "blade-laravel-ui",
+  "source_profile": "blade-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "blade-bootstrap-and-routes",
+      "question": "Which files define bagisto's blade bootstrap and routes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "routes/breadcrumbs.php",
+        "routes/console.php",
+        "routes/web.php"
+      ],
+      "expected_paths_should": [
+        "bootstrap/app.php",
+        "bootstrap/providers.php",
+        "config/app.php",
+        "config/auth.php",
+        "config/bagisto-vite.php",
+        "config/breadcrumbs.php"
+      ],
+      "expected_kinds": [
+        "routes",
+        "providers"
+      ]
+    },
+    {
+      "case_id": "blade-layouts-and-components",
+      "question": "Which files define bagisto's blade layouts and components?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/anonymous.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/header/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/sidebar/index.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Admin/src/Resources/views/components/layouts/tabs.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/example.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/accordion/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/button/index.blade.php"
+      ],
+      "expected_kinds": [
+        "layouts-pages",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "shop-theme-and-storefront-views",
+      "question": "Which files define bagisto's shop theme and storefront views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Shop/src/Resources/views/categories/filters.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/categories/toolbar.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/categories/view.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/checkout/cart/index.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Shop/src/Resources/views/components/example.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/components/accordion/index.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/components/breadcrumbs/index.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/components/button/index.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/components/carousel/index.blade.php",
+        "packages/Webkul/Shop/src/Resources/views/components/categories/carousel.blade.php"
+      ],
+      "expected_kinds": [
+        "storefront-views",
+        "storefront-components"
+      ]
+    },
+    {
+      "case_id": "admin-catalog-and-sales-views",
+      "question": "Which files define bagisto's admin catalog and sales views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Admin/src/Resources/views/catalog/attributes/create.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/catalog/attributes/edit.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/catalog/attributes/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/catalog/categories/create.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Admin/src/Resources/views/components/datagrid/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/datagrid/table.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/datagrid/toolbar.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/form/index.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/modal/confirm.blade.php",
+        "packages/Webkul/Admin/src/Resources/views/components/modal/index.blade.php"
+      ],
+      "expected_kinds": [
+        "admin-views",
+        "admin-components"
+      ]
+    },
+    {
+      "case_id": "installer-cms-and-marketing-views",
+      "question": "Which files define bagisto's installer cms and marketing views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/Webkul/Installer/src/Resources/views/components/button/index.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/control.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/error.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/index.blade.php"
+      ],
+      "expected_paths_should": [
+        "packages/Webkul/Installer/src/Resources/views/components/form/control-group/label.blade.php",
+        "packages/Webkul/Installer/src/Resources/views/components/form/index.blade.php",
+        "packages/Webkul/SocialShare/src/Resources/views/icons/email.blade.php",
+        "packages/Webkul/SocialShare/src/Resources/views/icons/facebook.blade.php"
+      ],
+      "expected_kinds": [
+        "setup-marketing-views",
+        "setup-components"
+      ]
+    }
+  ]
+}

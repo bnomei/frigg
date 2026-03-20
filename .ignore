@@ -1,7 +1,5 @@
 # Workspace-local auxiliary trees that should not shape FRIGG indexing or ranking.
 var/
-var/self-improvement/
 .codex-cache/
 skills/frigg-mcp-search-navigation/
-skills/frigg-self-improvement-loop/
 vendor/

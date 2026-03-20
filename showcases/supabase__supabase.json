@@ -1,0 +1,82 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "supabase/supabase",
+  "repo_url": "https://github.com/supabase/supabase",
+  "language_family": "typescript-runtime",
+  "source_profile": "typescript-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "studio-ui-and-tests",
+      "question": "Which files define supabase's studio UI and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "apps/studio/tests/components/Auth/Auth.constants.test.ts",
+        "apps/studio/tests/components/Billing/TaxID.utils.test.ts",
+        "apps/studio/tests/components/Editor/RemoveJSONTrailingComma.utils.test.ts",
+        "apps/studio/tests/components/Editor/SpreadsheetImport.utils.test.ts"
+      ],
+      "expected_paths_should": [
+        "apps/studio/pages/project/[ref]/advisors/performance.tsx",
+        "apps/studio/pages/project/[ref]/advisors/security.tsx",
+        "apps/studio/pages/project/[ref]/api/index.tsx",
+        "apps/studio/pages/project/[ref]/auth/audit-logs.tsx",
+        "apps/studio/pages/project/[ref]/auth/hooks.tsx",
+        "apps/studio/pages/project/[ref]/auth/mfa.tsx"
+      ],
+      "expected_kinds": [
+        "studio-tests",
+        "studio-runtime"
+      ]
+    },
+    {
+      "case_id": "edge-functions-and-self-hosted-api",
+      "question": "Which files define supabase's edge functions and self hosted API?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "supabase/functions/common/errors.ts",
+        "supabase/functions/common/helpers.ts",
+        "supabase/functions/common/tokenizer.ts",
+        "supabase/functions/og-images/index.ts"
+      ],
+      "expected_paths_should": [
+        "apps/studio/data/edge-functions/edge-function-body-query.ts",
+        "apps/studio/data/edge-functions/edge-function-query.ts",
+        "apps/studio/data/edge-functions/edge-function-test-mutation.ts",
+        "apps/studio/data/edge-functions/edge-functions-delete-mutation.ts",
+        "apps/studio/data/edge-functions/edge-functions-deploy-mutation.ts",
+        "apps/studio/data/edge-functions/edge-functions-query.ts"
+      ],
+      "expected_kinds": [
+        "edge-function-sources",
+        "edge-function-runtime"
+      ]
+    },
+    {
+      "case_id": "pg-meta-sql-and-query-engine",
+      "question": "Which files define supabase's pg meta sql and query engine?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "packages/pg-meta/test/sql/studio/get-users-common.test.ts",
+        "packages/pg-meta/test/sql/studio/get-users-count.test.ts",
+        "packages/pg-meta/test/sql/studio/get-users-paginated.test.ts",
+        "packages/pg-meta/test/query/advanced-query.test.ts"
+      ],
+      "expected_paths_should": [
+        "packages/pg-meta/src/helpers.ts",
+        "packages/pg-meta/src/index.ts",
+        "packages/pg-meta/src/query/Query.ts",
+        "packages/pg-meta/src/query/Query.utils.ts",
+        "packages/pg-meta/src/query/QueryAction.ts",
+        "packages/pg-meta/src/query/QueryFilter.ts"
+      ],
+      "expected_kinds": [
+        "pg-meta-tests",
+        "pg-meta-runtime"
+      ]
+    }
+  ]
+}

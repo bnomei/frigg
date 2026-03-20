@@ -1,0 +1,82 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "usememos/memos",
+  "repo_url": "https://github.com/usememos/memos",
+  "language_family": "go-runtime",
+  "source_profile": "go-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "proto-api-store-and-web",
+      "question": "Which files define memos' proto API store and web?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "proto/api/v1/memo_service.proto",
+        "proto/api/v1/activity_service.proto",
+        "proto/api/v1/attachment_service.proto",
+        "server/router/api/v1/memo_service.go"
+      ],
+      "expected_paths_should": [
+        "store/activity.go",
+        "store/attachment.go",
+        "store/cache.go",
+        "store/common.go",
+        "store/db/db.go",
+        "store/db/mysql/activity.go"
+      ],
+      "expected_kinds": [
+        "proto-router",
+        "store-ui"
+      ]
+    },
+    {
+      "case_id": "auth-idp-and-plugins",
+      "question": "Which files define memos' auth IDP and plugins?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "server/auth/authenticator.go",
+        "server/auth/context.go",
+        "server/auth/extract.go",
+        "server/auth/token.go"
+      ],
+      "expected_paths_should": [
+        "server/router/api/v1/auth_service.go",
+        "server/router/api/v1/auth_service_client_info_test.go",
+        "server/router/api/v1/idp_service.go",
+        "server/router/api/v1/test/auth_test.go",
+        "server/router/api/v1/test/idp_service_test.go",
+        "proto/api/v1/auth_service.proto"
+      ],
+      "expected_kinds": [
+        "auth-plugin",
+        "auth-api"
+      ]
+    },
+    {
+      "case_id": "docs-webhook-and-seed-flows",
+      "question": "Which files define memos' docs webhook and seed flows?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "plugin/webhook/validate.go",
+        "plugin/webhook/webhook.go",
+        "plugin/webhook/webhook_test.go",
+        "plugin/cron/chain.go"
+      ],
+      "expected_paths_should": [
+        "web/src/components/CreateWebhookDialog.tsx",
+        "store/migration/mysql/0.18/01__webhook.sql",
+        "store/migration/mysql/0.25/00__remove_webhook.sql",
+        "store/migration/postgres/0.25/00__remove_webhook.sql",
+        "store/migration/sqlite/0.18/00__webhook.sql",
+        "store/migration/sqlite/0.25/00__remove_webhook.sql"
+      ],
+      "expected_kinds": [
+        "workflow-plugin",
+        "migration-ui"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "LinkStackOrg/LinkStack",
+  "repo_url": "https://github.com/LinkStackOrg/LinkStack",
+  "language_family": "blade-laravel-ui",
+  "source_profile": "blade-laravel-ui",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "blade-view-surface",
+      "question": "Which files define LinkStack's blade view surface?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/admin/linktype/create.blade.php",
+        "resources/views/admin/linktype/edit.blade.php",
+        "resources/views/admin/linktype/index.blade.php",
+        "resources/views/auth/blocked.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/alert.blade.php",
+        "resources/views/components/application-logo.blade.php",
+        "resources/views/components/auth-card.blade.php",
+        "resources/views/components/auth-session-status.blade.php",
+        "resources/views/components/auth-validation-errors.blade.php",
+        "resources/views/components/button.blade.php"
+      ],
+      "expected_kinds": [
+        "blade-views",
+        "view-components",
+        "view-classes"
+      ]
+    },
+    {
+      "case_id": "blade-layouts-and-components",
+      "question": "Which files define LinkStack's blade layouts and components?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/layouts/analytics.blade.php",
+        "resources/views/layouts/app.blade.php",
+        "resources/views/layouts/fonts.blade.php",
+        "resources/views/layouts/guest.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/alert.blade.php",
+        "resources/views/components/application-logo.blade.php",
+        "resources/views/components/auth-card.blade.php",
+        "resources/views/components/auth-session-status.blade.php",
+        "resources/views/components/auth-validation-errors.blade.php",
+        "resources/views/components/button.blade.php"
+      ],
+      "expected_kinds": [
+        "layouts-pages",
+        "view-components"
+      ]
+    },
+    {
+      "case_id": "public-linkstack-and-theme-views",
+      "question": "Which files define LinkStack's public linkstack and theme views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/home.blade.php",
+        "resources/views/linkstack/elements/avatar.blade.php",
+        "resources/views/linkstack/elements/bio.blade.php",
+        "resources/views/linkstack/elements/buttons.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/alert.blade.php",
+        "resources/views/components/application-logo.blade.php",
+        "resources/views/components/auth-card.blade.php",
+        "resources/views/components/auth-session-status.blade.php",
+        "resources/views/components/auth-validation-errors.blade.php",
+        "resources/views/components/button.blade.php"
+      ],
+      "expected_kinds": [
+        "public-views",
+        "pageitem-components"
+      ]
+    },
+    {
+      "case_id": "layouts-components-and-view-classes",
+      "question": "Which files define LinkStack's layouts components and view classes?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/layouts/analytics.blade.php",
+        "resources/views/layouts/app.blade.php",
+        "resources/views/layouts/fonts.blade.php",
+        "resources/views/layouts/guest.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/panel/backups.blade.php",
+        "resources/views/panel/config-editor.blade.php",
+        "resources/views/panel/edit-user.blade.php",
+        "resources/views/panel/index.blade.php",
+        "resources/views/panel/links.blade.php",
+        "resources/views/panel/pages.blade.php"
+      ],
+      "expected_kinds": [
+        "layout-components",
+        "view-classes"
+      ]
+    },
+    {
+      "case_id": "admin-config-and-installer-views",
+      "question": "Which files define LinkStack's admin config and installer views?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "resources/views/admin/linktype/create.blade.php",
+        "resources/views/admin/linktype/edit.blade.php",
+        "resources/views/admin/linktype/index.blade.php",
+        "resources/views/panel/backups.blade.php"
+      ],
+      "expected_paths_should": [
+        "resources/views/components/config/advanced-config.blade.php",
+        "resources/views/components/config/alternative-config.blade.php",
+        "resources/views/components/config/back-button.blade.php",
+        "resources/views/components/config/backup.blade.php",
+        "resources/views/components/config/backups.blade.php",
+        "resources/views/components/config/config.blade.php"
+      ],
+      "expected_kinds": [
+        "admin-views",
+        "ops-components"
+      ]
+    }
+  ]
+}

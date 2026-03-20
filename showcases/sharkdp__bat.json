@@ -1,0 +1,126 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "sharkdp/bat",
+  "repo_url": "https://github.com/sharkdp/bat",
+  "language_family": "rust-tooling",
+  "source_profile": "rust-tooling",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "ci-release-and-ops",
+      "question": "Which files define bat's ci release and ops?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        ".github/workflows/CICD.yml",
+        ".github/workflows/require-changelog-for-PRs.yml"
+      ],
+      "expected_paths_should": [
+        "flake.nix",
+        "build/application.rs",
+        "build/main.rs",
+        "build/syntax_mapping.rs",
+        "build/util.rs",
+        "tests/scripts/find-slow-to-highlight-files.py"
+      ],
+      "expected_kinds": [
+        "ci-release",
+        "scripts-ops"
+      ]
+    },
+    {
+      "case_id": "binary-entrypoint-and-build-flow",
+      "question": "Which files define bat's binary entrypoint and build flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/bin/bat/main.rs",
+        "src/bin/bat/app.rs",
+        "src/bin/bat/clap_app.rs",
+        "src/bin/bat/assets.rs"
+      ],
+      "expected_paths_should": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "rustfmt.toml",
+        "build/application.rs",
+        "build/main.rs",
+        "build/syntax_mapping.rs"
+      ],
+      "expected_kinds": [
+        "binary-entrypoint",
+        "build-runtime"
+      ]
+    },
+    {
+      "case_id": "syntax-assets-and-mapping-flow",
+      "question": "Which files define bat's syntax assets and mapping flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/syntax_mapping.rs",
+        "src/syntax_mapping/builtin.rs",
+        "src/syntax_mapping/ignored_suffixes.rs",
+        "src/assets/build_assets/acknowledgements.rs"
+      ],
+      "expected_paths_should": [
+        "assets/create.sh",
+        "assets/theme_preview.rs",
+        "assets/patches/1337.tmTheme.patch",
+        "assets/patches/C#.sublime-syntax.patch",
+        "assets/patches/Groff.sublime-syntax.patch",
+        "assets/patches/JavaDoc.sublime-syntax.patch"
+      ],
+      "expected_kinds": [
+        "syntax-mapping",
+        "theme-asset"
+      ]
+    },
+    {
+      "case_id": "cli-pager-and-diagnostics-flow",
+      "question": "Which files define bat's CLI pager and diagnostics flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/bin/bat/main.rs",
+        "src/bin/bat/app.rs",
+        "src/bin/bat/input.rs",
+        "src/pager.rs"
+      ],
+      "expected_paths_should": [
+        "diagnostics/info.sh",
+        "tests/integration_tests.rs",
+        "tests/mocked-pagers/echo.bat",
+        "tests/mocked-pagers/more",
+        "tests/mocked-pagers/more.bat",
+        "tests/mocked-pagers/most"
+      ],
+      "expected_kinds": [
+        "cli-runtime",
+        "pager-diagnostic"
+      ]
+    },
+    {
+      "case_id": "config-completions-and-manual-flow",
+      "question": "Which files define bat's config completions and manual flow?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "src/bin/bat/config.rs",
+        "src/bin/bat/completions.rs",
+        "src/bin/bat/clap_app.rs",
+        "src/bin/bat/directories.rs"
+      ],
+      "expected_paths_should": [
+        "doc/long-help.txt",
+        "doc/short-help.txt",
+        "tests/github-actions.rs",
+        "tests/system_wide_config.rs",
+        "assets/completions/_bat.ps1.in",
+        "assets/completions/bat.bash.in"
+      ],
+      "expected_kinds": [
+        "config-cli",
+        "config-doc-and-test"
+      ]
+    }
+  ]
+}

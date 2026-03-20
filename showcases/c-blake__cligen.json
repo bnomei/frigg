@@ -1,0 +1,118 @@
+{
+  "schema": "frigg.repo_showcase.v1",
+  "repo_slug": "c-blake/cligen",
+  "repo_url": "https://github.com/c-blake/cligen",
+  "language_family": "nim-runtime",
+  "source_profile": "nim-runtime",
+  "notes": [
+    "This file is a public showcase catalog, not a full replay packet.",
+    "A good answer can be a ranked file list or a source-backed summary that cites matching paths."
+  ],
+  "cases": [
+    {
+      "case_id": "binary-entrypoint-and-config",
+      "question": "Which files define cligen's binary entrypoint and config?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cligen.nim",
+        "cligen.nim.cfg",
+        "cligen.nimble"
+      ],
+      "expected_paths_should": [
+        "cligen/abbrev.nims",
+        "cligen/argcvt.nim",
+        "cligen/parseopt3.nim"
+      ],
+      "expected_kinds": [
+        "entry-config",
+        "entry-runtime"
+      ]
+    },
+    {
+      "case_id": "dispatch-argparse-and-conversion",
+      "question": "Which files define cligen's dispatch argparse and conversion?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "test/AllTypes.nim",
+        "test/AllSeqTypes.nim",
+        "test/AllSetTypes.nim",
+        "test/CustomType.nim"
+      ],
+      "expected_paths_should": [
+        "cligen.nim",
+        "cligen/argcvt.nim",
+        "cligen/clCfgInit.nim",
+        "cligen/parseopt3.nim"
+      ],
+      "expected_kinds": [
+        "dispatch-test",
+        "dispatch-runtime"
+      ]
+    },
+    {
+      "case_id": "examples-subcommands-and-tests",
+      "question": "Which files define cligen's examples subcommands and tests?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "examples/chom.nim",
+        "examples/cols.nim",
+        "examples/crp.nim",
+        "examples/dirq.nim"
+      ],
+      "expected_paths_should": [
+        "cligen/abbrev.nim",
+        "cligen/helpTmpl.nim",
+        "cligen/syntaxHelp.nim",
+        "cligen/tab.nim"
+      ],
+      "expected_kinds": [
+        "help-example-test",
+        "help-runtime"
+      ]
+    },
+    {
+      "case_id": "config-env-and-help",
+      "question": "Which files define cligen's config env and help?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "cligen.nim.cfg",
+        "configs/README.md",
+        "configs/config",
+        "configs/config.toml"
+      ],
+      "expected_paths_should": [
+        "cligen/clCfgInit.nim",
+        "cligen/clCfgToml.nim",
+        "cligen/mergeCfgEnv.nim",
+        "cligen/mergeCfgEnvMulMul.nim",
+        "cligen/mergeCfgEnvMulti.nim"
+      ],
+      "expected_kinds": [
+        "config-test",
+        "config-runtime"
+      ]
+    },
+    {
+      "case_id": "result-print-and-parse-runtime",
+      "question": "Which files define cligen's result print and parse runtime?",
+      "expected_answer_shape": "ranked_paths_or_source_backed_summary",
+      "expected_paths_any": [
+        "test/ReturnString.nim",
+        "test/ReturnInt.nim",
+        "test/External.nim",
+        "test/QualifiedSym.nim"
+      ],
+      "expected_paths_should": [
+        "cligen/argcvt.nim",
+        "cligen/parseopt3.nim",
+        "cligen/print.nim",
+        "cligen/strUt.nim",
+        "cligen/textUt.nim"
+      ],
+      "expected_kinds": [
+        "result-parse-test",
+        "result-parse-runtime"
+      ]
+    }
+  ]
+}

@@ -1,3 +1,7 @@
+//! Public query and result types for Frigg's retrieval layer. These records keep the searcher
+//! boundary explicit so MCP handlers, playbooks, and tests can all talk about the same execution
+//! semantics.
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -13,6 +17,8 @@ use super::attribution::SearchStageAttribution;
 use super::policy::PostSelectionTrace;
 
 #[derive(Debug, Clone)]
+/// Input for direct lexical search when callers want raw text recall without the hybrid ranking
+/// stack.
 pub struct SearchTextQuery {
     pub query: String,
     pub path_regex: Option<regex::Regex>,
@@ -20,6 +26,7 @@ pub struct SearchTextQuery {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Shared repository-level filters used to scope both lexical and hybrid retrieval paths.
 pub struct SearchFilters {
     pub repository_id: Option<String>,
     pub language: Option<String>,
@@ -58,6 +65,8 @@ impl SearchExecutionDiagnostics {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Output of a lexical-only search pass, including diagnostics that explain degraded or partial
+/// coverage.
 pub struct SearchExecutionOutput {
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
@@ -106,6 +115,7 @@ pub type HybridDocumentRef = EvidenceDocumentRef;
 pub type HybridChannelHit = EvidenceHit;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// Relative influence assigned to each hybrid retrieval channel before result diversification.
 pub struct HybridChannelWeights {
     pub lexical: f32,
     pub graph: f32,
@@ -140,6 +150,8 @@ impl HybridChannelWeights {
 }
 
 #[derive(Debug, Clone)]
+/// Input for Frigg's multi-signal retrieval path that can combine lexical, graph, and semantic
+/// evidence behind one call.
 pub struct SearchHybridQuery {
     pub query: String,
     pub limit: usize,
@@ -150,6 +162,8 @@ pub struct SearchHybridQuery {
 pub type HybridSemanticStatus = ChannelHealthStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Execution-side explanation of how the hybrid search actually ran, including whether semantic
+/// recall participated or the query fell back to a narrower mode.
 pub struct HybridExecutionNote {
     pub semantic_requested: bool,
     pub semantic_enabled: bool,
@@ -177,6 +191,8 @@ impl Default for HybridExecutionNote {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Top-level result of a hybrid retrieval run, pairing final matches with diagnostics, channel
+/// health, and execution attribution.
 pub struct SearchHybridExecutionOutput {
     pub matches: Vec<HybridRankedEvidence>,
     pub ranked_anchors: Vec<HybridRankedEvidence>,
@@ -189,6 +205,8 @@ pub struct SearchHybridExecutionOutput {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// A ranked anchor after Frigg has merged evidence from multiple retrieval channels around one
+/// repository location.
 pub struct HybridRankedEvidence {
     pub document: HybridDocumentRef,
     pub anchor: EvidenceAnchor,
