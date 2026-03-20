@@ -69,6 +69,7 @@ fn response_caches_respect_registry_entry_limits_and_track_evictions() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::new(),
+        metadata: None,
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
@@ -523,6 +524,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::<TextMatch>::new(),
+        metadata: None,
     };
     let empty_hybrid_response = SearchHybridResponse {
         matches: Vec::new(),
@@ -1035,6 +1037,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::<TextMatch>::new(),
+        metadata: None,
     };
     let empty_hybrid_response = SearchHybridResponse {
         matches: Vec::new(),

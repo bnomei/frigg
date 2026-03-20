@@ -484,6 +484,8 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
     let mut diagnostics = lexical_output.diagnostics.clone();
     merge_execution_diagnostics(&mut diagnostics, witness_output.diagnostics.clone());
     let lexical_match_count = lexical_output.matches.len();
+    let lexical_backend = lexical_output.lexical_backend;
+    let lexical_backend_note = lexical_output.lexical_backend_note.clone();
     let witness_match_count = witness_output.matches.len();
     let graph_hit_count = graph_hits.len();
     let semantic_hit_count = semantic_channel_result.stats.hit_count;
@@ -501,11 +503,13 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
         skip_graph_for_simple_literal_query,
         query.limit,
     );
-    let note = hybrid_execution_note_from_channel_results(
+    let mut note = hybrid_execution_note_from_channel_results(
         query.semantic,
         searcher.config.semantic_runtime.enabled,
         &channel_results,
     );
+    note.lexical_backend = lexical_backend;
+    note.lexical_backend_note = lexical_backend_note;
 
     Ok(SearchHybridExecutionOutput {
         matches,

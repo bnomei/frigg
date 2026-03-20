@@ -71,6 +71,25 @@ pub struct SearchExecutionOutput {
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
     pub diagnostics: SearchExecutionDiagnostics,
+    pub lexical_backend: Option<SearchLexicalBackend>,
+    pub lexical_backend_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchLexicalBackend {
+    Native,
+    Ripgrep,
+    Mixed,
+}
+
+impl SearchLexicalBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Ripgrep => "ripgrep",
+            Self::Mixed => "mixed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +192,8 @@ pub struct HybridExecutionNote {
     pub semantic_hit_count: usize,
     pub semantic_match_count: usize,
     pub lexical_only_mode: bool,
+    pub lexical_backend: Option<SearchLexicalBackend>,
+    pub lexical_backend_note: Option<String>,
 }
 
 impl Default for HybridExecutionNote {
@@ -186,6 +207,8 @@ impl Default for HybridExecutionNote {
             semantic_hit_count: 0,
             semantic_match_count: 0,
             lexical_only_mode: true,
+            lexical_backend: None,
+            lexical_backend_note: None,
         }
     }
 }
@@ -322,6 +345,8 @@ pub(crate) fn hybrid_execution_note_from_channel_results(
         semantic_hit_count,
         semantic_match_count,
         lexical_only_mode,
+        lexical_backend: None,
+        lexical_backend_note: None,
     }
 }
 

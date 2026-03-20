@@ -178,6 +178,10 @@ impl FriggMcpServer {
 
                     let metadata = Some(SearchHybridMetadata {
                         channels: channel_metadata.clone().unwrap_or_default(),
+                        lexical_backend: Self::search_lexical_backend_metadata(
+                            search_output.note.lexical_backend,
+                        ),
+                        lexical_backend_note: search_output.note.lexical_backend_note.clone(),
                         semantic_requested,
                         semantic_enabled,
                         semantic_status: semantic_status.clone(),

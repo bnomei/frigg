@@ -1,6 +1,6 @@
 # Frigg Workflows
 
-Use shell tools first for cheap local reads and literal scans. The Frigg loops below start once repository-aware search or navigation is justified.
+Use the lightest tool that preserves the right semantics. Shell tools are still good for quick local inspection, but Frigg is now also a reasonable exact-search surface when you want repository scoping, canonical paths, or direct MCP follow-up.
 
 ## Bug Trace
 
@@ -9,7 +9,7 @@ Use shell tools first for cheap local reads and literal scans. The Frigg loops b
 3. `search_hybrid` for the failure symptom
 4. `search_symbol` for the central API or type
 5. `find_references` or call hierarchy for impact
-6. `read_file` on the strongest witnesses only when you need repository-backed evidence; otherwise confirm with a shell slice
+6. `read_file` on the strongest witnesses only when you need repository-backed evidence; otherwise a shell slice is still fine
 7. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace_current.precise` before assuming the code path is absent
 
 ## Refactor Impact
@@ -18,7 +18,7 @@ Use shell tools first for cheap local reads and literal scans. The Frigg loops b
 2. `find_references` for call sites
 3. `find_implementations` when the change hits an interface or trait boundary
 4. Use a shell slice or `read_file` for the high-risk sites depending on whether repository-aware evidence matters
-5. Prefer shell `rg` or `git grep` for nearby patterns or config strings; use `search_text` with `path_regex` when you need canonical paths or scoped MCP results
+5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; shell `rg` or `git grep` is still fine for nearby throwaway pattern checks
 
 ## Onboarding And Architecture
 
@@ -44,7 +44,7 @@ Use shell tools first for cheap local reads and literal scans. The Frigg loops b
 
 ## Security Or Pattern Sweep
 
-1. Prefer shell `rg` or `git grep` with a narrow literal first
+1. Start with either a narrow shell literal or `search_text`, depending on whether you want repository-backed results and follow-up
 2. Upgrade to regex only when the literal underfills
 3. Use `search_text` with `path_regex` when you need repository scoping or canonical-path results
 4. Use a shell slice or `read_file` to validate true positives

@@ -107,6 +107,8 @@ mod tests {
             semantic_runtime_model: None,
             semantic_runtime_strict_mode: None,
             watch_mode: None,
+            lexical_backend: None,
+            ripgrep_executable: None,
             watch_debounce_ms: None,
             watch_retry_ms: None,
             command: None,

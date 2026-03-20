@@ -5,7 +5,7 @@ use crate::domain::{FriggResult, model::TextMatch};
 
 use super::{
     BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD, SearchCandidateUniverse, SearchDiagnostic,
-    SearchDiagnosticKind, SearchExecutionOutput, SearchTextQuery,
+    SearchDiagnosticKind, SearchExecutionOutput, SearchLexicalBackend, SearchTextQuery,
     content_scrub::{scrub_search_content, should_scrub_leading_markdown_comment},
     ordering::BoundedTextMatches,
     sort_search_diagnostics_deterministically, text_match_candidate_order,
@@ -178,6 +178,8 @@ where
         total_matches,
         matches,
         diagnostics,
+        lexical_backend: Some(SearchLexicalBackend::Native),
+        lexical_backend_note: None,
     })
 }
 
@@ -361,6 +363,8 @@ where
         total_matches,
         matches,
         diagnostics,
+        lexical_backend: Some(SearchLexicalBackend::Native),
+        lexical_backend_note: None,
     })
 }
 
@@ -460,6 +464,8 @@ where
         total_matches,
         matches,
         diagnostics,
+        lexical_backend: Some(SearchLexicalBackend::Native),
+        lexical_backend_note: None,
     })
 }
 

@@ -3,6 +3,7 @@
 //! the same operating profile.
 
 mod frigg_config;
+mod lexical_runtime;
 mod runtime_profile;
 mod semantic_runtime;
 mod watch;
@@ -13,6 +14,7 @@ use std::path::PathBuf;
 pub use frigg_config::{
     DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_WORKSPACE_ROOT, FriggConfig,
 };
+pub use lexical_runtime::{LexicalBackendMode, LexicalRuntimeConfig};
 pub use runtime_profile::{RuntimeProfile, RuntimeTransportKind, runtime_profile_for_transport};
 pub use semantic_runtime::{
     DEFAULT_GOOGLE_EMBEDDING_MODEL, DEFAULT_OPENAI_EMBEDDING_MODEL, GEMINI_API_KEY_ENV_VAR,
@@ -36,6 +38,30 @@ mod tests {
         let config = SemanticRuntimeConfig::default();
         assert!(!config.enabled);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn lexical_runtime_defaults_and_parsing_are_stable() {
+        let config = LexicalRuntimeConfig::default();
+        assert_eq!(config.backend, LexicalBackendMode::Auto);
+        assert_eq!(
+            "auto"
+                .parse::<LexicalBackendMode>()
+                .unwrap_or(LexicalBackendMode::Native),
+            LexicalBackendMode::Auto
+        );
+        assert_eq!(
+            "native"
+                .parse::<LexicalBackendMode>()
+                .unwrap_or(LexicalBackendMode::Auto),
+            LexicalBackendMode::Native
+        );
+        assert_eq!(
+            "rg".parse::<LexicalBackendMode>()
+                .unwrap_or(LexicalBackendMode::Auto),
+            LexicalBackendMode::Ripgrep
+        );
+        assert!("wat".parse::<LexicalBackendMode>().is_err());
     }
 
     #[test]
@@ -220,6 +246,7 @@ mod tests {
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             watch: WatchConfig::default(),
+            lexical_runtime: LexicalRuntimeConfig::default(),
             semantic_runtime: SemanticRuntimeConfig {
                 enabled: true,
                 provider: None,

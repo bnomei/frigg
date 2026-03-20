@@ -102,3 +102,25 @@ fn search_hybrid_utility_summary_reports_miss_without_pivotable_matches() {
     assert_eq!(summary.best_pivot_path, None);
     assert!(!summary.symbol_navigation_ready);
 }
+
+#[test]
+fn search_text_metadata_maps_ripgrep_backend() {
+    let metadata = FriggMcpServer::search_text_metadata(
+        Some(SearchLexicalBackend::Ripgrep),
+        Some("ripgrep accelerator active".to_owned()),
+    )
+    .expect("metadata should exist");
+    assert_eq!(
+        metadata.lexical_backend,
+        SearchLexicalBackendMetadata::Ripgrep
+    );
+    assert_eq!(
+        metadata.lexical_backend_note.as_deref(),
+        Some("ripgrep accelerator active")
+    );
+}
+
+#[test]
+fn search_text_metadata_returns_none_without_backend() {
+    assert!(FriggMcpServer::search_text_metadata(None, None).is_none());
+}

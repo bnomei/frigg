@@ -132,6 +132,23 @@ pub struct SearchTextParams {
 pub struct SearchTextResponse {
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SearchTextMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchLexicalBackendMetadata {
+    Native,
+    Ripgrep,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchTextMetadata {
+    pub lexical_backend: SearchLexicalBackendMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_backend_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -332,6 +349,10 @@ pub struct SearchHybridLanguageCapabilityMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMetadata {
     pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_backend: Option<SearchLexicalBackendMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_backend_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_requested: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

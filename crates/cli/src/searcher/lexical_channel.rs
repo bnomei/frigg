@@ -7,10 +7,10 @@ use std::path::Path;
 
 use super::{
     HybridChannelHit, HybridDocumentRef, HybridRankingIntent, RepositoryCandidateUniverse,
-    SearchCandidateUniverse, SearchExecutionOutput, StoredPathWitnessProjection,
-    hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_test_double_anchor,
-    hybrid_identifier_tokens, hybrid_overlap_count, hybrid_path_overlap_tokens,
-    hybrid_query_overlap_terms,
+    SearchCandidateUniverse, SearchExecutionOutput, SearchLexicalBackend,
+    StoredPathWitnessProjection, hybrid_excerpt_has_build_flow_anchor,
+    hybrid_excerpt_has_test_double_anchor, hybrid_identifier_tokens, hybrid_overlap_count,
+    hybrid_path_overlap_tokens, hybrid_query_overlap_terms,
     policy::{
         PathWitnessFacts,
         hybrid_path_quality_multiplier_with_intent as policy_path_quality_multiplier_with_intent,
@@ -339,6 +339,23 @@ pub(super) fn merge_hybrid_lexical_search_output(
     supplement: SearchExecutionOutput,
     limit: usize,
 ) {
+    let merged_backend = match (base.lexical_backend, supplement.lexical_backend) {
+        (Some(left), Some(right)) if left == right => Some(left),
+        (Some(_), Some(_)) => Some(SearchLexicalBackend::Mixed),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    };
+    let merged_backend_note = match (
+        base.lexical_backend_note.as_deref(),
+        supplement.lexical_backend_note.as_deref(),
+    ) {
+        (Some(left), Some(right)) if left == right => Some(left.to_owned()),
+        (Some(left), Some(right)) => Some(format!("{left}; {right}")),
+        (Some(left), None) => Some(left.to_owned()),
+        (None, Some(right)) => Some(right.to_owned()),
+        (None, None) => None,
+    };
     let mut merged_by_key: BTreeMap<(String, String, usize, usize, String), TextMatch> =
         BTreeMap::new();
     for found in std::mem::take(&mut base.matches) {
@@ -374,6 +391,8 @@ pub(super) fn merge_hybrid_lexical_search_output(
         .extend(supplement.diagnostics.entries);
     sort_search_diagnostics_deterministically(&mut base.diagnostics.entries);
     base.diagnostics.entries.dedup();
+    base.lexical_backend = merged_backend;
+    base.lexical_backend_note = merged_backend_note;
 }
 
 pub(super) fn candidate_universe_delta(

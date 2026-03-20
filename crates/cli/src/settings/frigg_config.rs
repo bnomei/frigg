@@ -7,7 +7,7 @@ use crate::domain::{
     model::{RepositoryId, RepositoryRecord},
 };
 
-use super::{SemanticRuntimeConfig, WatchConfig};
+use super::{LexicalRuntimeConfig, SemanticRuntimeConfig, WatchConfig};
 
 pub const DEFAULT_WORKSPACE_ROOT: &str = ".";
 pub const DEFAULT_MAX_SEARCH_RESULTS: usize = 200;
@@ -20,6 +20,7 @@ pub struct FriggConfig {
     pub max_search_results: usize,
     pub max_file_bytes: usize,
     pub watch: WatchConfig,
+    pub lexical_runtime: LexicalRuntimeConfig,
     pub semantic_runtime: SemanticRuntimeConfig,
 }
 
@@ -30,6 +31,7 @@ impl Default for FriggConfig {
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             watch: WatchConfig::default(),
+            lexical_runtime: LexicalRuntimeConfig::default(),
             semantic_runtime: SemanticRuntimeConfig::default(),
         }
     }

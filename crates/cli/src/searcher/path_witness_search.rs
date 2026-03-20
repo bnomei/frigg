@@ -193,6 +193,8 @@ impl TextSearcher {
             total_matches: matches.len(),
             matches,
             diagnostics: candidate_universe.diagnostics,
+            lexical_backend: None,
+            lexical_backend_note: None,
         })
     }
 

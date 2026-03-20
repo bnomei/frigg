@@ -70,11 +70,16 @@ Use `path_class` or `path_regex` when overloaded names are noisy.
 
 ## `search_text`
 
-Use `search_text` when shell search is not enough and you specifically need:
+Use `search_text` when you need exact or regex search plus Frigg semantics:
 - canonical repository-relative paths
 - repository scoping
 - regex search over indexed files
 - `path_regex` narrowing
+- easy pivoting into `read_file`, navigation, or other MCP-backed follow-up
+
+Notes:
+- on macOS and Linux, Frigg may use `rg` internally as a lexical accelerator when it is available
+- that does not change the public flow: Frigg still owns candidate scope, ordering, metadata, and fallback behavior
 
 Important inputs:
 - `query`
@@ -87,7 +92,7 @@ Important inputs:
 
 ## `read_file`
 
-Use `read_file` for a bounded repository-backed read, not as the default replacement for a quick shell slice.
+Use `read_file` for a bounded repository-backed read once the path matters to the Frigg investigation flow, not as the default replacement for every quick shell slice.
 
 Important inputs:
 - `path`

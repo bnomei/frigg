@@ -6,6 +6,9 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::domain::{FriggError, FriggResult, model::TextMatch};
 use crate::settings::{
     FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider,
@@ -25,10 +28,11 @@ use crate::searcher::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridRankingIntent,
     HybridSemanticStatus, HybridSourceClass, MAX_REGEX_ALTERNATIONS, MAX_REGEX_GROUPS,
     MAX_REGEX_PATTERN_BYTES, MAX_REGEX_QUANTIFIERS, RegexSearchError, SearchDiagnosticKind,
-    SearchFilters, SearchHybridQuery, SearchTextQuery, SemanticRuntimeQueryEmbeddingExecutor,
-    StoredPathWitnessProjection, TextSearcher, ValidatedManifestCandidateCache,
-    build_hybrid_lexical_hits, build_hybrid_lexical_hits_for_query,
-    build_hybrid_lexical_recall_regex, build_regex_prefilter_plan, compile_safe_regex,
+    SearchFilters, SearchHybridQuery, SearchLexicalBackend, SearchTextQuery,
+    SemanticRuntimeQueryEmbeddingExecutor, StoredPathWitnessProjection, TextSearcher,
+    ValidatedManifestCandidateCache, build_hybrid_lexical_hits,
+    build_hybrid_lexical_hits_for_query, build_hybrid_lexical_recall_regex,
+    build_regex_prefilter_plan, clear_ripgrep_availability_cache, compile_safe_regex,
     hybrid_lexical_recall_tokens, normalize_search_filters, rank_hybrid_evidence,
     rank_hybrid_evidence_for_query,
 };
@@ -130,6 +134,21 @@ fn semantic_runtime_enabled(strict_mode: bool) -> SemanticRuntimeConfig {
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode,
     }
+}
+
+fn write_fake_ripgrep_script(root: &Path, body: &str) -> FriggResult<PathBuf> {
+    let path = root.join("fake-rg.sh");
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'ripgrep 15.1.0'\n  exit 0\nfi\ncat <<'EOF'\n{body}\nEOF\n"
+    );
+    fs::write(&path, script).map_err(FriggError::Io)?;
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&path).map_err(FriggError::Io)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).map_err(FriggError::Io)?;
+    }
+    Ok(path)
 }
 
 fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {

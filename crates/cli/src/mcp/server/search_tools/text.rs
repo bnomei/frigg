@@ -133,6 +133,10 @@ impl FriggMcpServer {
                         .count_by_kind(SearchDiagnosticKind::Read);
                     let mut matches = search_output.matches;
                     let total_matches = search_output.total_matches;
+                    let metadata = Self::search_text_metadata(
+                        search_output.lexical_backend,
+                        search_output.lexical_backend_note.clone(),
+                    );
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
                             repository_id_map.get(&found.repository_id)
@@ -143,11 +147,20 @@ impl FriggMcpServer {
                     let response = SearchTextResponse {
                         total_matches,
                         matches,
+                        metadata,
                     };
                     response_source_refs = json!({
                         "scoped_repository_ids": scoped_repository_ids.clone(),
                         "freshness_basis": cache_freshness.basis.clone(),
                         "total_matches": response.total_matches,
+                        "lexical_backend": response
+                            .metadata
+                            .as_ref()
+                            .map(|metadata| metadata.lexical_backend.clone()),
+                        "lexical_backend_note": response
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.lexical_backend_note.clone()),
                         "diagnostics_count": diagnostics_count,
                         "diagnostics": {
                             "walk": walk_diagnostics_count,

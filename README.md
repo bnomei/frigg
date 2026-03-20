@@ -231,6 +231,8 @@ Frigg includes a built-in watch worker behind `frigg serve` that keeps indexed r
 
 Use shell tools like [`rg`](https://github.com/BurntSushi/ripgrep) for fast literal and regex scans, [`fd`](https://github.com/sharkdp/fd) for quick file and path discovery, and [`ast-grep`](https://github.com/ast-grep/ast-grep) for standalone structural matching in normal repository work.
 
+On macOS and Linux, if `rg` is installed, Frigg can also use it internally as an optional lexical accelerator for `search_text` and the lexical stage of `search_hybrid`. That stays inside Frigg's own candidate scope and falls back to the native scanner automatically when `rg` is missing, disabled, or fails.
+
 Use Frigg when the question is repository-aware:
 
 - definitions

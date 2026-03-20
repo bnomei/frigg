@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use frigg::settings::{SemanticRuntimeProvider, WatchMode};
+use frigg::settings::{LexicalBackendMode, SemanticRuntimeProvider, WatchMode};
 use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS};
 
 #[derive(Debug, Parser)]
@@ -71,6 +71,22 @@ pub(crate) struct Cli {
 
     #[arg(long, value_name = "MODE", env = "FRIGG_WATCH_MODE", global = true)]
     pub(crate) watch_mode: Option<WatchMode>,
+
+    #[arg(
+        long,
+        value_name = "MODE",
+        env = "FRIGG_LEXICAL_BACKEND",
+        global = true
+    )]
+    pub(crate) lexical_backend: Option<LexicalBackendMode>,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "FRIGG_RIPGREP_EXECUTABLE",
+        global = true
+    )]
+    pub(crate) ripgrep_executable: Option<PathBuf>,
 
     #[arg(
         long,

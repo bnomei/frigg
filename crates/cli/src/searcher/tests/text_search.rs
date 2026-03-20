@@ -5,3 +5,4 @@ mod hybrid;
 mod literal;
 mod ordering;
 mod regex;
+mod ripgrep;

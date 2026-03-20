@@ -1,25 +1,26 @@
 ---
 name: frigg-mcp-search-navigation
-description: Use Frigg MCP for repository-aware code discovery and navigation when shell tools are not enough. Trigger when users ask cross-file questions, architecture or onboarding questions, refactor impact, symbol or call-flow questions, structural queries, or multi-repository questions that need `workspace_attach`, `search_hybrid`, `search_symbol`, navigation tools, `document_symbols`, `inspect_syntax_tree`, or bounded repository-backed reads.
+description: Use Frigg MCP for repository-aware code discovery and navigation when questions need canonical paths, cross-file movement, symbol or structural search, multi-repository scope, or MCP-backed follow-up. Trigger when users ask cross-file questions, architecture or onboarding questions, refactor impact, symbol or call-flow questions, structural queries, or multi-repository questions that need `workspace_attach`, `search_hybrid`, `search_symbol`, navigation tools, `document_symbols`, `inspect_syntax_tree`, or bounded repository-backed reads.
 ---
 
 # Frigg MCP Search Navigation
 
-## Shell First
+## Choose The Right Surface
 
-Frigg is not the default replacement for local shell inspection.
+Frigg is not the default replacement for every terminal read, but it also no longer needs to be treated as “too heavy” for exact scans by default.
 
-- Prefer local shell tools such as `rg`, `rg --files`, `fd`, `git grep`, `sed`, or `cat` for simple file listing, literal search, and short direct reads in the checked-out workspace.
+- Prefer local shell tools such as `rg`, `rg --files`, `fd`, `git grep`, `sed`, or `cat` for quick one-off local inspection in the checked-out workspace.
 - Reach for Frigg when repository-aware semantics matter: canonical repository-relative paths, cross-file navigation, symbol lookup, structural search, hybrid doc/runtime discovery, bounded repository-backed reads, or multi-repository search.
+- Do not avoid `search_text` just because the query is exact. On macOS and Linux, Frigg may use `rg` internally as a lexical accelerator while still preserving repository scope, canonical paths, and downstream navigation flow.
 - Treat `workspace_attach` as the explicit setup boundary. Sessions can start detached even when the client is launched inside a repo.
 
 ## Default Loop
 
-1. If the task is a simple local read or literal scan, use shell tools first.
+1. If the task is a simple local read or quick one-off path scan, shell tools are fine.
 2. Call `list_repositories`.
 3. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly. Use `workspace_current` when you need health, precise, or runtime task status.
 4. Start with `search_hybrid` for broad natural-language doc/runtime questions.
-5. Pivot to `search_symbol` when you know an API, type, or function name, or to `search_text` when exact strings or `path_regex` scoping matter.
+5. Pivot to `search_symbol` when you know an API, type, or function name, or to `search_text` when exact strings, canonical paths, `path_regex` scoping, or MCP-backed follow-up matter.
 6. Use navigation tools for impact and code flow: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
 7. Use `read_file` for bounded repository-backed confirmation. Use `explore` when the extended tool profile is enabled and you need probe/zoom/refine follow-up inside one artifact.
 8. Use `document_symbols` or `inspect_syntax_tree` before `search_structural` when syntax shape matters more than ranking.
@@ -30,10 +31,10 @@ Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=t
 
 ## Decision Table
 
-- Simple local file read, file listing, or literal scan with no need for repository-aware semantics: shell tools
+- Simple local file read, file listing, or one-off literal scan with no need for repository-aware semantics: shell tools
 - Broad architecture, onboarding, or "where does this live?" questions: `search_hybrid`
 - Known API, type, trait, class, or function name: `search_symbol`
-- Exact string or regex probe that needs canonical paths or repository scoping: `search_text`
+- Exact string or regex probe that needs canonical paths, repository scoping, or direct MCP follow-up: `search_text`
 - Repository-backed file slice or source proof tied to Frigg results: `read_file`
 - Probe, zoom, or refine within one file after discovery: `explore` when the extended profile is enabled
 - References, definitions, implementations, callers, or callees: navigation tools

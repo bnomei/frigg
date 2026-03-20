@@ -27,6 +27,7 @@ mod ranker;
 mod regex_support;
 mod reranker;
 mod retrieval_projection;
+mod ripgrep_backend;
 mod scan_engine;
 mod semantic;
 mod surfaces;
@@ -97,6 +98,11 @@ use reranker::diversify_hybrid_ranked_evidence;
 #[cfg(test)]
 pub(crate) use retrieval_projection::TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION;
 pub(crate) use retrieval_projection::build_retrieval_projection_bundle;
+#[cfg(test)]
+pub(crate) use ripgrep_backend::clear_ripgrep_availability_cache;
+use ripgrep_backend::{
+    RipgrepPatternMode, resolve_ripgrep_executable, search_with_ripgrep_in_universe,
+};
 use semantic::{
     RuntimeSemanticQueryEmbeddingExecutor, SemanticRuntimeQueryEmbeddingExecutor,
     search_semantic_channel_hits,
@@ -116,7 +122,7 @@ pub use types::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridExecutionNote,
     HybridRankedEvidence, HybridSemanticStatus, SearchDiagnostic, SearchDiagnosticKind,
     SearchExecutionDiagnostics, SearchExecutionOutput, SearchFilters, SearchHybridExecutionOutput,
-    SearchHybridQuery, SearchTextQuery,
+    SearchHybridQuery, SearchLexicalBackend, SearchTextQuery,
 };
 pub(crate) use types::{
     HybridGraphFileAnalysis, HybridGraphFileAnalysisCacheKey, ManifestCandidateFilesBuild,
@@ -424,10 +430,12 @@ impl TextSearcher {
         let matcher = AhoCorasick::new([query.query.as_str()])
             .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
         let normalized_filters = normalize_search_filters(filters)?;
-        self.search_with_streaming_lines(&query, &normalized_filters, |line, columns| {
-            columns.clear();
-            columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
-        })
+        let candidate_universe = self.build_candidate_universe(&query, &normalized_filters);
+        self.search_literal_with_candidate_universe_using_matcher(
+            &query,
+            &candidate_universe,
+            &matcher,
+        )
     }
 
     fn search_literal_with_candidate_universe(
@@ -437,6 +445,24 @@ impl TextSearcher {
     ) -> FriggResult<SearchExecutionOutput> {
         let matcher = AhoCorasick::new([query.query.as_str()])
             .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
+        self.search_literal_with_candidate_universe_using_matcher(
+            query,
+            candidate_universe,
+            &matcher,
+        )
+    }
+
+    fn search_literal_with_candidate_universe_using_matcher(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        matcher: &AhoCorasick,
+    ) -> FriggResult<SearchExecutionOutput> {
+        if let Some(output) =
+            self.search_literal_with_ripgrep_if_available(query, candidate_universe)?
+        {
+            return Ok(output);
+        }
         self.search_with_streaming_lines_in_universe(query, candidate_universe, |line, columns| {
             columns.clear();
             columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
@@ -495,28 +521,12 @@ impl TextSearcher {
         let matcher = compile_safe_regex(&query.query).map_err(regex_error_to_frigg_error)?;
         let prefilter_plan = build_regex_prefilter_plan(&query.query);
         let normalized_filters = normalize_search_filters(filters)?;
-        if prefilter_plan.is_none() {
-            return self.search_with_streaming_lines(
-                &query,
-                &normalized_filters,
-                |line, columns| {
-                    columns.clear();
-                    columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
-                },
-            );
-        }
-        self.search_with_matcher(
+        let candidate_universe = self.build_candidate_universe(&query, &normalized_filters);
+        self.search_regex_with_candidate_universe(
             &query,
-            &normalized_filters,
-            |content| {
-                prefilter_plan
-                    .as_ref()
-                    .is_none_or(|plan| plan.file_may_match(content))
-            },
-            |line, columns| {
-                columns.clear();
-                columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
-            },
+            &candidate_universe,
+            matcher,
+            prefilter_plan,
         )
     }
 
@@ -527,6 +537,11 @@ impl TextSearcher {
         matcher: Regex,
         prefilter_plan: Option<regex_support::RegexPrefilterPlan>,
     ) -> FriggResult<SearchExecutionOutput> {
+        if let Some(output) =
+            self.search_regex_with_ripgrep_if_available(query, candidate_universe)?
+        {
+            return Ok(output);
+        }
         if prefilter_plan.is_none() {
             return self.search_with_streaming_lines_in_universe(
                 query,
@@ -623,19 +638,6 @@ impl TextSearcher {
         )
     }
 
-    fn search_with_streaming_lines<F>(
-        &self,
-        query: &SearchTextQuery,
-        filters: &NormalizedSearchFilters,
-        match_columns: F,
-    ) -> FriggResult<SearchExecutionOutput>
-    where
-        F: FnMut(&str, &mut Vec<usize>),
-    {
-        let candidate_universe = self.build_candidate_universe(query, filters);
-        self.search_with_streaming_lines_in_universe(query, &candidate_universe, match_columns)
-    }
-
     fn search_with_streaming_lines_in_universe<F>(
         &self,
         query: &SearchTextQuery,
@@ -668,7 +670,27 @@ impl TextSearcher {
         )
     }
 
-    fn search_with_matcher<F, P>(
+    fn search_with_matcher_in_universe<F, P>(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        file_may_match: P,
+        match_columns: F,
+    ) -> FriggResult<SearchExecutionOutput>
+    where
+        P: FnMut(&str) -> bool,
+        F: FnMut(&str, &mut Vec<usize>),
+    {
+        scan_engine::search_with_matcher_in_universe(
+            query,
+            candidate_universe,
+            file_may_match,
+            match_columns,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn search_with_matcher<F, P>(
         &self,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
@@ -688,23 +710,200 @@ impl TextSearcher {
         )
     }
 
-    fn search_with_matcher_in_universe<F, P>(
+    fn search_literal_with_ripgrep_if_available(
         &self,
         query: &SearchTextQuery,
         candidate_universe: &SearchCandidateUniverse,
-        file_may_match: P,
-        match_columns: F,
-    ) -> FriggResult<SearchExecutionOutput>
-    where
-        P: FnMut(&str) -> bool,
-        F: FnMut(&str, &mut Vec<usize>),
-    {
-        scan_engine::search_with_matcher_in_universe(
+    ) -> FriggResult<Option<SearchExecutionOutput>> {
+        self.search_with_ripgrep_if_available(
             query,
             candidate_universe,
-            file_may_match,
-            match_columns,
+            RipgrepPatternMode::Literal,
         )
+    }
+
+    fn search_regex_with_ripgrep_if_available(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+    ) -> FriggResult<Option<SearchExecutionOutput>> {
+        self.search_with_ripgrep_if_available(query, candidate_universe, RipgrepPatternMode::Regex)
+    }
+
+    fn search_with_ripgrep_if_available(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        mode: RipgrepPatternMode,
+    ) -> FriggResult<Option<SearchExecutionOutput>> {
+        match self.config.lexical_runtime.backend {
+            crate::settings::LexicalBackendMode::Native => return Ok(None),
+            crate::settings::LexicalBackendMode::Auto
+            | crate::settings::LexicalBackendMode::Ripgrep => {}
+        }
+
+        let Some((ripgrep_universe, native_universe)) =
+            partition_candidate_universe_for_ripgrep(query, candidate_universe)
+        else {
+            return Ok(None);
+        };
+        let Some(ripgrep_universe) = ripgrep_universe else {
+            return Ok(None);
+        };
+
+        let executable = match resolve_ripgrep_executable(&self.config.lexical_runtime) {
+            Ok(Some(executable)) => executable,
+            Ok(None) => return Ok(None),
+            Err(reason) => {
+                let mut fallback =
+                    self.search_with_native_backend(query, candidate_universe, mode)?;
+                fallback.lexical_backend_note = Some(format!(
+                    "ripgrep unavailable; fell back to native scanner: {reason}"
+                ));
+                return Ok(Some(fallback));
+            }
+        };
+
+        let mut output =
+            match search_with_ripgrep_in_universe(&executable, query, &ripgrep_universe, mode) {
+                Ok(output) => output,
+                Err(err) => {
+                    let mut fallback =
+                        self.search_with_native_backend(query, candidate_universe, mode)?;
+                    fallback.lexical_backend_note = Some(format!(
+                        "ripgrep execution failed; fell back to native scanner: {err}"
+                    ));
+                    return Ok(Some(fallback));
+                }
+            };
+        output
+            .diagnostics
+            .entries
+            .extend(candidate_universe.diagnostics.entries.clone());
+        sort_search_diagnostics_deterministically(&mut output.diagnostics.entries);
+        output.diagnostics.entries.dedup();
+
+        if let Some(native_universe) = native_universe {
+            let native_output = self.search_with_native_backend(query, &native_universe, mode)?;
+            merge_hybrid_lexical_search_output(&mut output, native_output, query.limit);
+            output.lexical_backend = Some(SearchLexicalBackend::Mixed);
+            output.lexical_backend_note = Some(
+                "ripgrep accelerator active with native fallback for scrubbed content".to_owned(),
+            );
+        }
+
+        Ok(Some(output))
+    }
+
+    fn search_with_native_backend(
+        &self,
+        query: &SearchTextQuery,
+        candidate_universe: &SearchCandidateUniverse,
+        mode: RipgrepPatternMode,
+    ) -> FriggResult<SearchExecutionOutput> {
+        match mode {
+            RipgrepPatternMode::Literal => {
+                let matcher = AhoCorasick::new([query.query.as_str()])
+                    .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
+                self.search_with_streaming_lines_in_universe(
+                    query,
+                    candidate_universe,
+                    |line, columns| {
+                        columns.clear();
+                        columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+                    },
+                )
+            }
+            RipgrepPatternMode::Regex => {
+                let matcher =
+                    compile_safe_regex(&query.query).map_err(regex_error_to_frigg_error)?;
+                let prefilter_plan = build_regex_prefilter_plan(&query.query);
+                if prefilter_plan.is_none() {
+                    return self.search_with_streaming_lines_in_universe(
+                        query,
+                        candidate_universe,
+                        |line, columns| {
+                            columns.clear();
+                            columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+                        },
+                    );
+                }
+                self.search_with_matcher_in_universe(
+                    query,
+                    candidate_universe,
+                    |content| {
+                        prefilter_plan
+                            .as_ref()
+                            .is_none_or(|plan| plan.file_may_match(content))
+                    },
+                    |line, columns| {
+                        columns.clear();
+                        columns.extend(matcher.find_iter(line).map(|mat| mat.start() + 1));
+                    },
+                )
+            }
+        }
+    }
+}
+
+fn partition_candidate_universe_for_ripgrep(
+    query: &SearchTextQuery,
+    candidate_universe: &SearchCandidateUniverse,
+) -> Option<(
+    Option<SearchCandidateUniverse>,
+    Option<SearchCandidateUniverse>,
+)> {
+    let mut ripgrep_repositories = Vec::new();
+    let mut native_repositories = Vec::new();
+
+    for repository in &candidate_universe.repositories {
+        let mut ripgrep_candidates = Vec::new();
+        let mut native_candidates = Vec::new();
+        for candidate in &repository.candidates {
+            if query
+                .path_regex
+                .as_ref()
+                .is_some_and(|path_regex| !path_regex.is_match(&candidate.relative_path))
+            {
+                continue;
+            }
+            if content_scrub::should_scrub_leading_markdown_comment(&candidate.relative_path) {
+                native_candidates.push(candidate.clone());
+            } else {
+                ripgrep_candidates.push(candidate.clone());
+            }
+        }
+
+        if !ripgrep_candidates.is_empty() {
+            ripgrep_repositories.push(RepositoryCandidateUniverse {
+                repository_id: repository.repository_id.clone(),
+                root: repository.root.clone(),
+                snapshot_id: repository.snapshot_id.clone(),
+                candidates: ripgrep_candidates,
+            });
+        }
+        if !native_candidates.is_empty() {
+            native_repositories.push(RepositoryCandidateUniverse {
+                repository_id: repository.repository_id.clone(),
+                root: repository.root.clone(),
+                snapshot_id: repository.snapshot_id.clone(),
+                candidates: native_candidates,
+            });
+        }
+    }
+
+    let ripgrep_universe = (!ripgrep_repositories.is_empty()).then_some(SearchCandidateUniverse {
+        repositories: ripgrep_repositories,
+        diagnostics: SearchExecutionDiagnostics::default(),
+    });
+    let native_universe = (!native_repositories.is_empty()).then_some(SearchCandidateUniverse {
+        repositories: native_repositories,
+        diagnostics: SearchExecutionDiagnostics::default(),
+    });
+    if ripgrep_universe.is_none() && native_universe.is_none() {
+        None
+    } else {
+        Some((ripgrep_universe, native_universe))
     }
 }
 

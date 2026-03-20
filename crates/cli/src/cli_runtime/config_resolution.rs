@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::io;
 
-use frigg::settings::{FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, WatchConfig};
+use frigg::settings::{
+    FriggConfig, LexicalRuntimeConfig, RuntimeTransportKind, SemanticRuntimeConfig, WatchConfig,
+};
 
 use crate::{Cli, Command};
 
@@ -19,6 +21,7 @@ pub(crate) fn resolve_base_config(
         config.max_file_bytes = max_file_bytes;
     }
     config.watch = resolve_watch_config(cli, watch_default_transport);
+    config.lexical_runtime = resolve_lexical_runtime_config(cli);
     if workspace_roots_required {
         config.validate()?;
     } else {
@@ -71,6 +74,13 @@ pub(crate) fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfi
         provider: cli.semantic_runtime_provider,
         model: cli.semantic_runtime_model.clone(),
         strict_mode: cli.semantic_runtime_strict_mode.unwrap_or(false),
+    }
+}
+
+pub(crate) fn resolve_lexical_runtime_config(cli: &Cli) -> LexicalRuntimeConfig {
+    LexicalRuntimeConfig {
+        backend: cli.lexical_backend.unwrap_or_default(),
+        ripgrep_executable: cli.ripgrep_executable.clone(),
     }
 }
 
