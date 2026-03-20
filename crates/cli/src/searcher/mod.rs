@@ -474,6 +474,11 @@ impl TextSearcher {
         query: &SearchTextQuery,
         candidate_universe: &SearchCandidateUniverse,
     ) -> FriggResult<SearchExecutionOutput> {
+        if let Some(output) =
+            self.search_literal_with_ripgrep_if_available(query, candidate_universe)?
+        {
+            return Ok(output);
+        }
         let matcher = AhoCorasick::new([query.query.as_str()])
             .map_err(|err| FriggError::InvalidInput(format!("invalid query: {err}")))?;
         self.search_with_streaming_lines_prefix_in_universe(
