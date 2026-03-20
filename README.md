@@ -1,5 +1,10 @@
 # frigg
 
+[![Crates.io Version](https://img.shields.io/crates/v/frigg)](https://crates.io/crates/frigg)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
+[![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
+
 Frigg is a local-first, read-only MCP server built in Rust for code understanding. It scans local repositories, stores synchronized indexes in local SQLite, and gives AI agents fast, source-backed search and navigation across Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim, even when the relevant answer lives in another adopted repository.
 All supported languages participate in text search, symbol search, structural search, document outlines, and hybrid retrieval. Blade support is source-based and bounded.
 
