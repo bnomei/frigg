@@ -230,6 +230,7 @@ fn runtime_task_kind_name(kind: RuntimeTaskKind) -> &'static str {
         RuntimeTaskKind::ChangedReindex => "changed_reindex",
         RuntimeTaskKind::SemanticRefresh => "semantic_refresh",
         RuntimeTaskKind::PrecisePrewarm => "precise_prewarm",
+        RuntimeTaskKind::PreciseGenerate => "precise_generate",
         RuntimeTaskKind::WorkspacePrepare => "workspace_prepare",
         RuntimeTaskKind::WorkspaceReindex => "workspace_reindex",
     }

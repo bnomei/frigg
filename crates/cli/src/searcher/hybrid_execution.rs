@@ -482,6 +482,8 @@ pub(super) fn search_hybrid_with_filters_using_executor(
         total_rank_input_count,
         &coverage_hints,
     )?;
+    let lexical_only_mode = semantic_channel_result.health.status != ChannelHealthStatus::Ok
+        || semantic_channel_result.hits.is_empty();
     let (matches, post_selection_trace) = if capture_post_selection_trace {
         super::apply_post_selection_guardrails_with_trace(
             matches,
@@ -489,6 +491,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
             &witness_hits,
             &ranking_intent,
             &query_text,
+            lexical_only_mode,
             query.limit,
         )
     } else {
@@ -499,6 +502,7 @@ pub(super) fn search_hybrid_with_filters_using_executor(
                 &witness_hits,
                 &ranking_intent,
                 &query_text,
+                lexical_only_mode,
                 query.limit,
             ),
             None,

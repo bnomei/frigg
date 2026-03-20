@@ -147,7 +147,13 @@ pub(super) fn selection_guardrail_facts(
 ) -> SelectionFacts {
     let candidate =
         SelectionCandidate::new(entry.clone(), ctx.intent, &ctx.selection_query_context);
-    SelectionFacts::from_candidate(&candidate, ctx.intent, &ctx.selection_query_context, state)
+    SelectionFacts::from_candidate_with_mode(
+        &candidate,
+        ctx.intent,
+        &ctx.selection_query_context,
+        state,
+        ctx.lexical_only_mode,
+    )
 }
 
 pub(super) fn selection_guardrail_score_for_path(

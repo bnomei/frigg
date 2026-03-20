@@ -102,7 +102,7 @@ impl FriggMcpServer {
         &self,
         workspace: &AttachedWorkspace,
         set_default: bool,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<bool, ErrorData> {
         let newly_adopted = {
             let mut adopted = self
                 .session_state
@@ -137,7 +137,7 @@ impl FriggMcpServer {
             self.set_current_repository_id(Some(workspace.repository_id.clone()));
         }
 
-        Ok(())
+        Ok(newly_adopted)
     }
 
     pub(super) fn detach_workspace(

@@ -13,19 +13,21 @@ use crate::indexer::{
     FileMetadataDigest, HeuristicReference, HeuristicReferenceConfidence,
     HeuristicReferenceEvidence, HeuristicReferenceResolver, ManifestBuilder,
     ManifestDiagnosticKind, ReindexMode, SourceSpan, SymbolDefinition, SymbolExtractionOutput,
-    extract_php_source_evidence_from_source, extract_symbols_for_paths,
-    extract_symbols_from_source, navigation_symbol_target_rank,
-    php_declaration_relation_edges_for_file, php_heuristic_implementation_candidates_for_target,
-    register_symbol_definitions, reindex_repository_with_runtime_config,
-    resolve_php_target_evidence_edges, search_structural_in_source,
+    byte_offset_for_line_column, extract_php_source_evidence_from_source,
+    extract_symbols_for_paths, extract_symbols_from_source, inspect_syntax_tree_in_source,
+    navigation_symbol_target_rank, php_declaration_relation_edges_for_file,
+    php_heuristic_implementation_candidates_for_target, register_symbol_definitions,
+    reindex_repository_with_runtime_config, resolve_php_target_evidence_edges,
+    search_structural_in_source,
 };
 use crate::languages::{
     FLUX_REGISTRY_VERSION, HeuristicImplementationStrategy, LanguageCapability,
     LanguageSupportCapability, SymbolLanguage, extract_blade_source_evidence_from_source,
     heuristic_implementation_strategy, heuristic_rust_implementation_candidates,
     mark_local_flux_overlays, parse_rust_impl_signature, parse_supported_language,
-    resolve_blade_relation_evidence_edges, rust_source_suffix_looks_like_call,
-    supported_language_for_path,
+    resolve_blade_relation_evidence_edges, rust_enclosing_symbol_context,
+    rust_navigation_query_hint_from_source, rust_relative_path_module_segments,
+    rust_source_suffix_looks_like_call, supported_language_for_path,
 };
 use crate::manifest_validation::{
     RepositoryManifestFreshness, RepositorySemanticFreshness, repository_freshness_status,
@@ -62,8 +64,8 @@ use crate::mcp::advanced::deep_search::{
 };
 use crate::mcp::explorer::{
     DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES, ExploreMatcher, ExploreScopeRequest,
-    LossyLineSliceError, MAX_CONTEXT_LINES, line_window_around_anchor, read_line_slice_lossy,
-    scan_file_scope_lossy, validate_anchor, validate_cursor,
+    LossyLineSliceError, MAX_CONTEXT_LINES, line_window_around_anchor, validate_anchor,
+    validate_cursor,
 };
 use crate::mcp::guidance::{
     ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
@@ -74,12 +76,13 @@ use crate::mcp::provenance_cache::{ProvenancePersistenceStage, ProvenanceStorage
 use crate::mcp::server_cache::{
     CachedFindDeclarationsResponse, CachedGoToDefinitionResponse, CachedHeuristicReferences,
     CachedRepositorySummary, CachedSearchHybridResponse, CachedSearchSymbolResponse,
-    CachedSearchTextResponse, FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey,
-    HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope, RepositoryResponseCacheFreshness,
-    RepositoryResponseCacheFreshnessMode, RuntimeCacheEvent, RuntimeCacheFamily,
-    RuntimeCacheRegistry, RuntimeCacheTelemetry, SearchHybridResponseCacheKey,
-    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
-    response_cache_scopes_include_repository,
+    CachedSearchTextResponse, CachedWorkspacePreciseGeneration, FileContentSnapshot,
+    FileContentWindowCache, FileContentWindowCacheKey, FindDeclarationsResponseCacheKey,
+    GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope,
+    RepositoryResponseCacheFreshness, RepositoryResponseCacheFreshnessMode, RuntimeCacheBudget,
+    RuntimeCacheEvent, RuntimeCacheFamily, RuntimeCacheRegistry, RuntimeCacheTelemetry,
+    SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey, SearchTextResponseCacheKey,
+    WorkspaceSemanticRefreshPlan, response_cache_scopes_include_repository,
 };
 use crate::mcp::server_state::{
     CachedPreciseGraph, DeterministicSignatureHasher, ExploreExecution, FindReferencesExecution,
@@ -102,19 +105,22 @@ use crate::mcp::types::{
     ExploreOperation, ExploreParams, ExploreResponse, ExploreWindow, FindDeclarationsParams,
     FindDeclarationsResponse, FindImplementationsParams, FindImplementationsResponse,
     FindReferencesParams, FindReferencesResponse, GoToDefinitionParams, GoToDefinitionResponse,
-    ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, ListRepositoriesParams,
-    ListRepositoriesResponse, NavigationLocation, OutgoingCallsParams, OutgoingCallsResponse,
-    ReadFileParams, ReadFileResponse, RecentProvenanceSummary, RepositorySummary,
-    RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, SearchHybridChannelWeightsParams,
-    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, SearchTextResponse, WRITE_CONFIRM_PARAM,
-    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachParams, WorkspaceAttachResponse,
-    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceDetachParams,
-    WorkspaceDetachResponse, WorkspaceIndexComponentState, WorkspaceIndexComponentSummary,
-    WorkspaceIndexHealthSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
-    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
-    WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, InspectSyntaxTreeParams,
+    InspectSyntaxTreeResponse, ListRepositoriesParams, ListRepositoriesResponse,
+    NavigationAvailability, NavigationLocation, NavigationMode, OutgoingCallsParams,
+    OutgoingCallsResponse, ReadFileParams, ReadFileResponse, RecentProvenanceSummary,
+    RepositorySummary, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
+    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
+    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
+    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
+    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
+    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse,
+    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
+    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePrepareParams,
+    WorkspacePrepareResponse, WorkspaceReindexParams, WorkspaceReindexResponse,
+    WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -130,6 +136,14 @@ mod runtime_status;
 mod search_tools;
 mod symbol_index;
 mod workspace;
+
+#[derive(Debug, Clone)]
+struct NavigationLocationTokenHint {
+    symbol_query: String,
+    relative_path: String,
+    resolution_source: &'static str,
+    rust_hint: Option<crate::languages::RustNavigationQueryHint>,
+}
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
 #[derive(Clone)]
@@ -154,6 +168,8 @@ struct FriggMcpRuntimeState {
     searcher_projection_store_service: ProjectionStoreService,
     runtime_cache_registry: Arc<RwLock<RuntimeCacheRegistry>>,
     runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
+    precise_generation_status_cache:
+        Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
 }
 
 #[derive(Clone)]
@@ -175,6 +191,7 @@ struct FriggMcpCacheState {
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
     provenance_storage_cache: Arc<RwLock<BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>>>,
     repository_summary_cache: Arc<RwLock<BTreeMap<String, CachedRepositorySummary>>>,
+    file_content_window_cache: Arc<RwLock<FileContentWindowCache>>,
     search_text_response_cache:
         Arc<RwLock<BTreeMap<SearchTextResponseCacheKey, CachedSearchTextResponse>>>,
     search_hybrid_response_cache:
@@ -785,6 +802,8 @@ impl FriggMcpServer {
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol_query: &str,
         repository_id_hint: Option<&str>,
+        location_relative_path: Option<&str>,
+        rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
     ) -> Result<ResolvedSymbolTarget, ErrorData> {
         // Deterministic precedence: stable-id exact > name exact > case-insensitive name, then
         // repository/path/line/stable-id tie-breakers.
@@ -852,8 +871,21 @@ impl FriggMcpServer {
         }
 
         candidates.sort_by(|left, right| {
+            let left_context = Self::navigation_symbol_context_ranks(
+                corpora,
+                left,
+                location_relative_path,
+                rust_hint,
+            );
+            let right_context = Self::navigation_symbol_context_ranks(
+                corpora,
+                right,
+                location_relative_path,
+                rust_hint,
+            );
             left.rank
                 .cmp(&right.rank)
+                .then(left_context.cmp(&right_context))
                 .then(left.path_class_rank.cmp(&right.path_class_rank))
                 .then(left.repository_id.cmp(&right.repository_id))
                 .then(left.symbol.path.cmp(&right.symbol.path))
@@ -921,6 +953,119 @@ impl FriggMcpServer {
         } else {
             Self::normalize_relative_input_path(raw_path)
         }
+    }
+
+    fn navigation_symbol_context_ranks(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        candidate: &SymbolCandidate,
+        location_relative_path: Option<&str>,
+        rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
+    ) -> (u8, u8, u8, u8, u8) {
+        let relative_path = Self::relative_display_path(&candidate.root, &candidate.symbol.path);
+        let same_file_rank = rust_hint.map_or(1, |hint| {
+            if hint.prefer_same_file && location_relative_path == Some(relative_path.as_str()) {
+                0
+            } else {
+                1
+            }
+        });
+        let method_rank = rust_hint.map_or(0, |hint| {
+            if hint.prefer_method && candidate.symbol.kind != crate::indexer::SymbolKind::Method {
+                1
+            } else {
+                0
+            }
+        });
+        let module_rank = rust_hint.map_or(0, |hint| {
+            Self::rust_navigation_module_affinity_rank(&hint.module_path_segments, &relative_path)
+        });
+        let impl_rank = rust_hint.map_or(0, |hint| {
+            if hint.enclosing_impl_type.is_none() {
+                return 0;
+            }
+            let Some(corpus) = corpora
+                .iter()
+                .find(|corpus| corpus.repository_id == candidate.repository_id)
+            else {
+                return 1;
+            };
+            let context = rust_enclosing_symbol_context(&candidate.symbol, &corpus.symbols);
+            if context
+                .impl_type
+                .as_deref()
+                .zip(hint.enclosing_impl_type.as_deref())
+                .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+            {
+                0
+            } else {
+                1
+            }
+        });
+        let trait_rank = rust_hint.map_or(0, |hint| {
+            if hint.enclosing_trait.is_none() {
+                return 0;
+            }
+            let Some(corpus) = corpora
+                .iter()
+                .find(|corpus| corpus.repository_id == candidate.repository_id)
+            else {
+                return 1;
+            };
+            let context = rust_enclosing_symbol_context(&candidate.symbol, &corpus.symbols);
+            let target_trait = hint.enclosing_trait.as_deref().unwrap_or_default();
+            if context
+                .trait_name
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(target_trait))
+                || context
+                    .impl_trait
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(target_trait))
+            {
+                0
+            } else {
+                1
+            }
+        });
+
+        (
+            same_file_rank,
+            method_rank,
+            module_rank,
+            impl_rank,
+            trait_rank,
+        )
+    }
+
+    fn rust_navigation_module_affinity_rank(hint_segments: &[String], relative_path: &str) -> u8 {
+        if hint_segments.is_empty() {
+            return 0;
+        }
+        let candidate_segments = rust_relative_path_module_segments(relative_path);
+        if candidate_segments.is_empty() {
+            return 3;
+        }
+        if candidate_segments == hint_segments {
+            return 0;
+        }
+        if candidate_segments.starts_with(hint_segments)
+            || candidate_segments.ends_with(hint_segments)
+        {
+            return 0;
+        }
+        if hint_segments
+            .iter()
+            .all(|segment| candidate_segments.contains(segment))
+        {
+            return 1;
+        }
+        if hint_segments
+            .iter()
+            .any(|segment| candidate_segments.contains(segment))
+        {
+            return 2;
+        }
+        3
     }
 
     fn resolve_navigation_symbol_query_from_location(
@@ -1012,6 +1157,88 @@ impl FriggMcpServer {
             })
     }
 
+    fn navigation_symbol_query_token_from_location(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        line: usize,
+        column: usize,
+    ) -> Option<NavigationLocationTokenHint> {
+        for corpus in corpora {
+            let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
+            let absolute_path = corpus.root.join(&requested_path);
+            let Ok(source) = fs::read_to_string(&absolute_path) else {
+                continue;
+            };
+            if supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch)
+                == Some(SymbolLanguage::Rust)
+                && let Some(rust_hint) =
+                    rust_navigation_query_hint_from_source(&absolute_path, &source, line, column)
+                && !rust_hint.symbol_query.is_empty()
+            {
+                return Some(NavigationLocationTokenHint {
+                    symbol_query: rust_hint.symbol_query.clone(),
+                    relative_path: requested_path,
+                    resolution_source: "location_token_rust",
+                    rust_hint: Some(rust_hint),
+                });
+            }
+            let Some(offset) = byte_offset_for_line_column(&source, line, column) else {
+                continue;
+            };
+            let Some(token) = Self::identifier_token_around_offset(&source, offset) else {
+                continue;
+            };
+            if !token.is_empty() {
+                return Some(NavigationLocationTokenHint {
+                    symbol_query: token,
+                    relative_path: requested_path,
+                    resolution_source: "location_token",
+                    rust_hint: None,
+                });
+            }
+        }
+        None
+    }
+
+    fn identifier_token_around_offset(source: &str, offset: usize) -> Option<String> {
+        fn is_identifier_byte(byte: u8) -> bool {
+            byte.is_ascii_alphanumeric() || byte == b'_'
+        }
+
+        let bytes = source.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+        let mut index = offset.min(bytes.len().saturating_sub(1));
+        if !is_identifier_byte(bytes[index]) {
+            if index > 0 && is_identifier_byte(bytes[index - 1]) {
+                index -= 1;
+            } else {
+                let mut probe = index;
+                while probe < bytes.len()
+                    && !is_identifier_byte(bytes[probe])
+                    && bytes[probe] != b'\n'
+                {
+                    probe += 1;
+                }
+                if probe >= bytes.len() || !is_identifier_byte(bytes[probe]) {
+                    return None;
+                }
+                index = probe;
+            }
+        }
+
+        let mut start = index;
+        while start > 0 && is_identifier_byte(bytes[start - 1]) {
+            start -= 1;
+        }
+        let mut end = index + 1;
+        while end < bytes.len() && is_identifier_byte(bytes[end]) {
+            end += 1;
+        }
+        (start < end).then(|| source[start..end].to_owned())
+    }
+
     fn resolve_navigation_target(
         corpora: &[Arc<RepositorySymbolCorpus>],
         symbol: Option<&str>,
@@ -1025,8 +1252,13 @@ impl FriggMcpServer {
             if query.is_empty() {
                 return Err(Self::invalid_params("symbol must not be empty", None));
             }
-            let target =
-                Self::resolve_navigation_symbol_target(corpora, query, repository_id_hint)?;
+            let target = Self::resolve_navigation_symbol_target(
+                corpora,
+                query,
+                repository_id_hint,
+                None,
+                None,
+            )?;
             return Ok(ResolvedNavigationTarget {
                 symbol_query: query.to_owned(),
                 target,
@@ -1045,6 +1277,23 @@ impl FriggMcpServer {
         }
         let line = line
             .ok_or_else(|| Self::invalid_params("line is required when resolving by path", None))?;
+        if let Some(column) = column
+            && let Some(location_hint) =
+                Self::navigation_symbol_query_token_from_location(corpora, raw_path, line, column)
+            && let Ok(target) = Self::resolve_navigation_symbol_target(
+                corpora,
+                &location_hint.symbol_query,
+                repository_id_hint,
+                Some(location_hint.relative_path.as_str()),
+                location_hint.rust_hint.as_ref(),
+            )
+        {
+            return Ok(ResolvedNavigationTarget {
+                symbol_query: location_hint.symbol_query,
+                target,
+                resolution_source: location_hint.resolution_source,
+            });
+        }
         let symbol_query = Self::resolve_navigation_symbol_query_from_location(
             corpora,
             raw_path,
@@ -1052,12 +1301,17 @@ impl FriggMcpServer {
             column,
             repository_id_hint,
         )?;
-        let target =
-            Self::resolve_navigation_symbol_target(corpora, &symbol_query, repository_id_hint)?;
+        let target = Self::resolve_navigation_symbol_target(
+            corpora,
+            &symbol_query,
+            repository_id_hint,
+            None,
+            None,
+        )?;
         Ok(ResolvedNavigationTarget {
             symbol_query,
             target,
-            resolution_source: "location",
+            resolution_source: "location_enclosing_symbol",
         })
     }
 
@@ -1143,6 +1397,7 @@ impl FriggMcpServer {
             return Ok(Some((
                 Json(GoToDefinitionResponse {
                     matches: precise_matches,
+                    mode: Self::navigation_mode_from_precision_label(Some(&precision)),
                     metadata,
                     note,
                 }),
@@ -1634,9 +1889,6 @@ impl FriggMcpServer {
         occurrence: &crate::graph::PreciseOccurrenceRecord,
         source_cache: &mut BTreeMap<String, Option<String>>,
     ) -> &'static str {
-        if !Self::is_precise_callable_kind(&precise_target.kind) {
-            return "refers_to";
-        }
         if Self::precise_occurrence_has_call_like_source(
             root,
             precise_target,
@@ -1674,7 +1926,7 @@ impl FriggMcpServer {
             return false;
         };
         let target_name = Self::precise_target_call_name(precise_target);
-        line.match_indices(target_name).any(|(index, _)| {
+        line.match_indices(target_name.as_str()).any(|(index, _)| {
             let suffix_start = index.saturating_add(target_name.len()).min(line.len());
             line.get(suffix_start..)
                 .map(rust_source_suffix_looks_like_call)
@@ -1682,18 +1934,14 @@ impl FriggMcpServer {
         })
     }
 
-    fn precise_target_call_name<'a>(
-        precise_target: &'a crate::graph::PreciseSymbolRecord,
-    ) -> &'a str {
-        if !precise_target.display_name.is_empty() {
-            return precise_target.display_name.as_str();
-        }
-        precise_target
-            .symbol
-            .rsplit(['#', '/', '.'])
-            .next()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(precise_target.symbol.as_str())
+    fn precise_symbol_label(precise_symbol: &crate::graph::PreciseSymbolRecord) -> String {
+        crate::graph::precise_navigation_identifier(&precise_symbol.display_name)
+            .or_else(|| crate::graph::precise_navigation_identifier(&precise_symbol.symbol))
+            .unwrap_or_else(|| precise_symbol.symbol.clone())
+    }
+
+    fn precise_target_call_name(precise_target: &crate::graph::PreciseSymbolRecord) -> String {
+        Self::precise_symbol_label(precise_target)
     }
 
     fn source_line_for_precise_range<'a>(
@@ -1722,6 +1970,7 @@ impl FriggMcpServer {
             None => return Vec::new(),
         };
         let source_path = Self::canonicalize_navigation_path(root, &source_definition.path);
+        let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
         let mut matches = graph
             .precise_occurrences_for_file(&target_corpus.repository_id, &source_path)
             .into_iter()
@@ -1741,7 +1990,14 @@ impl FriggMcpServer {
                 let callee_symbol = graph
                     .precise_symbol(&target_corpus.repository_id, &occurrence.symbol)?
                     .clone();
-                if !Self::is_precise_callable_kind(&callee_symbol.kind) {
+                if !Self::is_precise_callable_kind(&callee_symbol.kind)
+                    && !Self::precise_occurrence_has_call_like_source(
+                        root,
+                        &callee_symbol,
+                        &occurrence,
+                        &mut source_cache,
+                    )
+                {
                     return None;
                 }
                 let callee_definition = Self::precise_definition_occurrence_for_symbol(
@@ -1757,11 +2013,7 @@ impl FriggMcpServer {
                     } else {
                         precise_target.display_name.clone()
                     },
-                    target_symbol: if callee_symbol.display_name.is_empty() {
-                        callee_symbol.symbol
-                    } else {
-                        callee_symbol.display_name
-                    },
+                    target_symbol: Self::precise_symbol_label(&callee_symbol),
                     repository_id: target_corpus.repository_id.clone(),
                     path: Self::canonicalize_navigation_path(root, &callee_definition.path),
                     line: callee_definition.range.start_line,
@@ -1987,6 +2239,65 @@ impl FriggMcpServer {
         }
 
         "precise_unavailable"
+    }
+
+    fn call_hierarchy_availability(
+        coverage_mode: PreciseCoverageMode,
+        stats: &PreciseIngestStats,
+        precise_match_count: usize,
+        heuristic_match_count: usize,
+    ) -> NavigationAvailability {
+        if precise_match_count > 0 {
+            return NavigationAvailability {
+                status: "available".to_owned(),
+                reason: None,
+                precise_required_for_complete_results: false,
+            };
+        }
+        if heuristic_match_count > 0 {
+            return NavigationAvailability {
+                status: "heuristic".to_owned(),
+                reason: Some(
+                    Self::precise_absence_reason(coverage_mode, stats, precise_match_count)
+                        .to_owned(),
+                ),
+                precise_required_for_complete_results: true,
+            };
+        }
+        if coverage_mode == PreciseCoverageMode::Full {
+            return NavigationAvailability {
+                status: "available".to_owned(),
+                reason: None,
+                precise_required_for_complete_results: false,
+            };
+        }
+
+        NavigationAvailability {
+            status: "unavailable".to_owned(),
+            reason: Some(
+                Self::precise_absence_reason(coverage_mode, stats, precise_match_count).to_owned(),
+            ),
+            precise_required_for_complete_results: true,
+        }
+    }
+
+    fn navigation_mode_from_precision_label(label: Option<&str>) -> NavigationMode {
+        match label {
+            Some("precise") => NavigationMode::Precise,
+            Some("precise_partial") => NavigationMode::PrecisePartial,
+            Some("heuristic") => NavigationMode::HeuristicNoPrecise,
+            _ => NavigationMode::UnavailableNoPrecise,
+        }
+    }
+
+    fn navigation_mode_from_call_hierarchy_availability(
+        availability: &NavigationAvailability,
+    ) -> NavigationMode {
+        match availability.status.as_str() {
+            "available" => NavigationMode::Precise,
+            "heuristic" => NavigationMode::HeuristicNoPrecise,
+            _ => NavigationMode::UnavailableNoPrecise,
+        }
     }
 
     fn precise_coverage_mode(stats: &PreciseIngestStats) -> PreciseCoverageMode {
@@ -2278,6 +2589,7 @@ impl FriggMcpServer {
                 searcher_projection_store_service: ProjectionStoreService::new(),
                 runtime_cache_registry: Arc::new(RwLock::new(RuntimeCacheRegistry::default())),
                 runtime_cache_telemetry: Arc::new(RwLock::new(BTreeMap::new())),
+                precise_generation_status_cache: Arc::new(RwLock::new(BTreeMap::new())),
             },
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
@@ -2286,6 +2598,7 @@ impl FriggMcpServer {
                 latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                file_content_window_cache: Arc::new(RwLock::new(FileContentWindowCache::default())),
                 search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 search_hybrid_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 search_symbol_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -2364,6 +2677,9 @@ impl FriggMcpServer {
         let server = self.clone();
         Arc::new(move |repository_id: &str| {
             server.invalidate_repository_summary_cache(repository_id);
+            server.invalidate_repository_file_content_cache(repository_id);
+            server.scip_invalidate_repository_precise_generation_cache(repository_id);
+            server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_search_response_caches(repository_id);
             server.invalidate_repository_navigation_response_caches(repository_id);
         })
@@ -2417,6 +2733,124 @@ impl FriggMcpServer {
             let _ = cache.pop_first();
             self.record_runtime_cache_event(family, RuntimeCacheEvent::Eviction, 1);
         }
+    }
+
+    fn runtime_cache_budget(&self, family: RuntimeCacheFamily) -> RuntimeCacheBudget {
+        self.runtime_state
+            .runtime_cache_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .policy(family)
+            .map(|policy| policy.budget)
+            .expect("runtime cache family policy should exist")
+    }
+
+    fn cached_file_content_window(
+        &self,
+        cache_key: &FileContentWindowCacheKey,
+    ) -> Option<Arc<FileContentSnapshot>> {
+        let cached = self
+            .cache_state
+            .file_content_window_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(cache_key);
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::FileContentWindow,
+            if cached.is_some() {
+                RuntimeCacheEvent::Hit
+            } else {
+                RuntimeCacheEvent::Miss
+            },
+            1,
+        );
+        cached
+    }
+
+    fn file_content_snapshot_for_workspace(
+        &self,
+        workspace: &AttachedWorkspace,
+        canonical_path: &Path,
+    ) -> Result<Arc<FileContentSnapshot>, ErrorData> {
+        let freshness = self.repository_response_cache_freshness(
+            std::slice::from_ref(workspace),
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+        )?;
+        let Some(scopes) = freshness.scopes else {
+            let bytes = fs::read(canonical_path).map_err(|err| {
+                Self::internal(
+                    format!("failed to read file {}: {err}", canonical_path.display()),
+                    None,
+                )
+            })?;
+            return Ok(Arc::new(FileContentSnapshot::from_bytes(bytes)));
+        };
+        let mut scoped_repository_ids = vec![workspace.repository_id.clone()];
+        scoped_repository_ids.sort();
+        let cache_key = FileContentWindowCacheKey {
+            scoped_repository_ids,
+            freshness_scopes: scopes,
+            canonical_path: canonical_path.to_path_buf(),
+        };
+        if let Some(cached) = self.cached_file_content_window(&cache_key) {
+            return Ok(cached);
+        }
+
+        let bytes = fs::read(canonical_path).map_err(|err| {
+            Self::internal(
+                format!("failed to read file {}: {err}", canonical_path.display()),
+                None,
+            )
+        })?;
+        let snapshot = Arc::new(FileContentSnapshot::from_bytes(bytes));
+        self.cache_file_content_window(cache_key, Arc::clone(&snapshot));
+        Ok(snapshot)
+    }
+
+    fn cache_file_content_window(
+        &self,
+        cache_key: FileContentWindowCacheKey,
+        snapshot: Arc<FileContentSnapshot>,
+    ) {
+        let mut cache = self
+            .cache_state
+            .file_content_window_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let budget = self.runtime_cache_budget(RuntimeCacheFamily::FileContentWindow);
+        let (inserted, evictions) = cache.insert(cache_key, snapshot, budget);
+        if inserted {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::FileContentWindow,
+                RuntimeCacheEvent::Insert,
+                1,
+            );
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::FileContentWindow,
+                RuntimeCacheEvent::Eviction,
+                evictions,
+            );
+        } else {
+            self.record_runtime_cache_event(
+                RuntimeCacheFamily::FileContentWindow,
+                RuntimeCacheEvent::Bypass,
+                1,
+            );
+        }
+    }
+
+    fn invalidate_repository_file_content_cache(&self, repository_id: &str) {
+        let mut cache = self
+            .cache_state
+            .file_content_window_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = cache.retain_repository(repository_id);
+        self.record_runtime_cache_event(
+            RuntimeCacheFamily::FileContentWindow,
+            RuntimeCacheEvent::Invalidation,
+            before,
+        );
     }
 
     fn runtime_cache_contract_summary(&self, families: &[RuntimeCacheFamily]) -> Value {
@@ -2721,7 +3155,7 @@ impl FriggMcpServer {
         let (workspace, resolved_from, resolution) =
             self.resolve_workspace_target(path, repository_id, resolve_mode)?;
 
-        self.adopt_workspace(&workspace, set_default)?;
+        let newly_adopted = self.adopt_workspace(&workspace, set_default)?;
 
         self.runtime_state
             .validated_manifest_candidate_cache
@@ -2729,6 +3163,9 @@ impl FriggMcpServer {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
         self.maybe_refresh_workspace_semantic_snapshot(&workspace);
@@ -2740,6 +3177,10 @@ impl FriggMcpServer {
             .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
         repository.storage = None;
         self.maybe_spawn_workspace_runtime_prewarm(&workspace);
+        let precise_generation_action =
+            self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
+        let precise = self
+            .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
 
         Ok(WorkspaceAttachResponse {
             repository,
@@ -2748,6 +3189,12 @@ impl FriggMcpServer {
             session_default: self.current_repository_id().as_deref()
                 == Some(workspace.repository_id.as_str()),
             storage,
+            action: if newly_adopted {
+                WorkspaceAttachAction::AttachedFresh
+            } else {
+                WorkspaceAttachAction::ReusedWorkspace
+            },
+            precise,
         })
     }
 
@@ -2771,6 +3218,7 @@ impl FriggMcpServer {
         [
             RuntimeTaskKind::ChangedReindex,
             RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::PreciseGenerate,
             RuntimeTaskKind::WorkspacePrepare,
             RuntimeTaskKind::WorkspaceReindex,
         ]
@@ -3060,6 +3508,9 @@ impl FriggMcpServer {
             ));
         };
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         let response = WorkspaceDetachResponse {
             repository_id: workspace.repository_id.clone(),
             session_default: self.current_repository_id().as_deref()
@@ -3170,6 +3621,9 @@ impl FriggMcpServer {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
 
@@ -3186,6 +3640,8 @@ impl FriggMcpServer {
                         Some(error.message.to_string()),
                     );
             })?;
+        self.maybe_spawn_workspace_runtime_prewarm(&workspace);
+        let _ = self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
 
         let mut repository = self.repository_summary(&workspace);
         repository.storage = None;
@@ -3327,6 +3783,9 @@ impl FriggMcpServer {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
 
@@ -3362,6 +3821,11 @@ impl FriggMcpServer {
             files_deleted: reindex_summary.files_deleted,
             diagnostics_count: reindex_summary.diagnostics.total_count(),
         };
+        let _ = self.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &reindex_summary.changed_paths,
+            &reindex_summary.deleted_paths,
+        );
         self.runtime_state
             .runtime_task_registry
             .write()
@@ -3429,12 +3893,16 @@ impl FriggMcpServer {
             .map(|workspace| self.repository_summary(&workspace))
             .collect::<Vec<_>>();
         let runtime = self.runtime_status_summary();
+        let precise = current_workspace
+            .as_ref()
+            .map(|workspace| self.workspace_precise_summary_for_workspace(workspace, None));
         let response = WorkspaceCurrentResponse {
             repository: current_workspace
                 .as_ref()
                 .map(|workspace| self.repository_summary(workspace)),
             session_default: current_workspace.is_some(),
             repositories,
+            precise,
             runtime: Some(runtime),
         };
         let repository_ids = response
@@ -3673,6 +4141,22 @@ impl FriggMcpServer {
         params: Parameters<DocumentSymbolsParams>,
     ) -> Result<Json<DocumentSymbolsResponse>, ErrorData> {
         self.document_symbols_impl(params.0).await
+    }
+
+    #[tool(
+        name = "inspect_syntax_tree",
+        description = "Inspect the tree-sitter node stack around a source file location.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn inspect_syntax_tree(
+        &self,
+        params: Parameters<InspectSyntaxTreeParams>,
+    ) -> Result<Json<InspectSyntaxTreeResponse>, ErrorData> {
+        self.inspect_syntax_tree_impl(params.0).await
     }
 
     #[tool(

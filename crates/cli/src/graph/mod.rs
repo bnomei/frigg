@@ -224,6 +224,33 @@ pub struct PreciseRelationshipRecord {
     pub kind: PreciseRelationshipKind,
 }
 
+pub(crate) fn precise_navigation_identifier(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let terminal = trimmed
+        .trim_end_matches(|character: char| matches!(character, '.' | '#' | '/' | ':' | '$'))
+        .rsplit(['#', '/', '.', ':', '$'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(trimmed);
+    let identifier = terminal
+        .trim_matches(|character: char| matches!(character, '`' | '\'' | '"'))
+        .split(['(', '<', ':'])
+        .next()
+        .unwrap_or(terminal)
+        .trim_matches(|character: char| matches!(character, '`' | '\'' | '"'))
+        .trim_end_matches(|character: char| matches!(character, '.' | '#' | ':' | ')' | '>'))
+        .trim();
+
+    if identifier.is_empty() {
+        None
+    } else {
+        Some(identifier.to_owned())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreciseGraphCounts {
     pub symbols: usize,

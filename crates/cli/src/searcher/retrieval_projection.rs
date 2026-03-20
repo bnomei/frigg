@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::domain::FriggResult;
 use crate::graph::{PreciseRelationshipKind, RelationKind, ScipResourceBudgets, SymbolGraph};
 use crate::indexer::{
-    SymbolDefinition, extract_php_source_evidence_from_source, extract_symbols_for_paths,
+    SymbolDefinition, SymbolKind, extract_php_source_evidence_from_source,
+    extract_symbols_for_paths,
 };
 use crate::languages::{
     SymbolLanguage, extract_blade_source_evidence_from_source, php_symbol_indices_by_lower_name,
@@ -958,7 +959,13 @@ fn apply_ast_projection_contributions(
         );
 
     for (relative_path, symbol) in &relative_symbols {
-        let symbol_terms = symbol_projection_terms(&symbol.name);
+        let Some(witness_projection) = witness_by_path.get(relative_path) else {
+            continue;
+        };
+        let mut symbol_terms = symbol_projection_terms(&symbol.name);
+        symbol_terms.extend(symbol_kind_projection_terms(symbol, witness_projection));
+        symbol_terms.sort();
+        symbol_terms.dedup();
         if symbol_terms.is_empty() {
             continue;
         }
@@ -986,7 +993,7 @@ fn apply_ast_projection_contributions(
                 path: relative_path.clone(),
                 anchor_rank: 0,
                 line: symbol.line.max(1),
-                anchor_kind: "ast_symbol".to_owned(),
+                anchor_kind: ast_anchor_kind(symbol, witness_projection).to_owned(),
                 excerpt: trim_excerpt(&format!("{} {}", symbol.kind.as_str(), symbol.name)),
                 terms: symbol_terms.clone(),
                 score_hint: 48,
@@ -1382,6 +1389,91 @@ fn symbol_projection_terms(name: &str) -> Vec<String> {
     terms.sort();
     terms.dedup();
     terms
+}
+
+fn symbol_kind_projection_terms(
+    symbol: &SymbolDefinition,
+    witness_projection: &StoredPathWitnessProjection,
+) -> Vec<String> {
+    let mut terms = Vec::new();
+    match symbol.kind {
+        SymbolKind::Module => terms.push("module".to_owned()),
+        SymbolKind::Component | SymbolKind::Section | SymbolKind::Slot => {
+            terms.push("component".to_owned());
+        }
+        SymbolKind::Struct
+        | SymbolKind::Enum
+        | SymbolKind::EnumCase
+        | SymbolKind::Class
+        | SymbolKind::Interface
+        | SymbolKind::PhpEnum
+        | SymbolKind::TypeAlias => {
+            terms.push("type".to_owned());
+        }
+        SymbolKind::Trait | SymbolKind::PhpTrait => {
+            terms.push("trait".to_owned());
+            terms.push("interface".to_owned());
+        }
+        SymbolKind::Impl => {
+            terms.push("impl".to_owned());
+            terms.push("implementation".to_owned());
+        }
+        SymbolKind::Function => terms.push("function".to_owned()),
+        SymbolKind::Method => {
+            terms.push("function".to_owned());
+            terms.push("method".to_owned());
+        }
+        SymbolKind::Property => {
+            terms.push("property".to_owned());
+            terms.push("field".to_owned());
+        }
+        SymbolKind::Const | SymbolKind::Static | SymbolKind::Constant => {
+            terms.push("constant".to_owned());
+        }
+    }
+
+    if symbol.name.eq_ignore_ascii_case("main") {
+        terms.push("entrypoint".to_owned());
+    }
+    if witness_projection.flags.is_entrypoint_runtime {
+        terms.push("runtime".to_owned());
+    }
+    if witness_projection.flags.is_test_support
+        || witness_projection.flags.is_test_harness
+        || symbol.name.to_ascii_lowercase().starts_with("test")
+    {
+        terms.push("test".to_owned());
+    }
+
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn ast_anchor_kind(
+    symbol: &SymbolDefinition,
+    witness_projection: &StoredPathWitnessProjection,
+) -> &'static str {
+    if symbol.name.eq_ignore_ascii_case("main") || witness_projection.flags.is_entrypoint_runtime {
+        return "ast_entrypoint";
+    }
+    if witness_projection.flags.is_test_support || witness_projection.flags.is_test_harness {
+        return "ast_test_symbol";
+    }
+    match symbol.kind {
+        SymbolKind::Trait | SymbolKind::PhpTrait => "ast_trait",
+        SymbolKind::Impl => "ast_impl",
+        SymbolKind::Module => "ast_module",
+        SymbolKind::Function => "ast_function",
+        SymbolKind::Method => "ast_method",
+        SymbolKind::Struct
+        | SymbolKind::Enum
+        | SymbolKind::Class
+        | SymbolKind::Interface
+        | SymbolKind::TypeAlias
+        | SymbolKind::PhpEnum => "ast_type",
+        _ => "ast_symbol",
+    }
 }
 
 fn find_path_surface_term_projection_mut<'a>(

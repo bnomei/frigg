@@ -116,19 +116,24 @@ fn path_overlap_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_bonus = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { 0.10 } else { 0.06 }
+    } else {
+        0.0
+    };
     let delta = match ctx.class {
         HybridSourceClass::Runtime => {
             if ctx.seen_count == 0 {
-                0.34
+                0.34 + lexical_only_bonus
             } else {
-                0.18
+                0.18 + lexical_only_bonus
             }
         }
         HybridSourceClass::Support | HybridSourceClass::Tests => {
             if ctx.seen_count == 0 {
-                0.22
+                0.22 + lexical_only_bonus
             } else {
-                0.12
+                0.12 + lexical_only_bonus
             }
         }
         _ => 0.0,
@@ -210,6 +215,11 @@ fn live_navigation_text_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffe
         return None;
     }
 
+    let lexical_only_penalty = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { -0.10 } else { -0.06 }
+    } else {
+        0.0
+    };
     let delta = if ctx.is_repo_metadata {
         if ctx.seen_count == 0 { -0.20 } else { -0.10 }
     } else {
@@ -218,9 +228,9 @@ fn live_navigation_text_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffe
                 if ctx.has_exact_query_term_match || ctx.path_overlap > 0 {
                     0.0
                 } else if ctx.seen_count == 0 {
-                    -0.12
+                    -0.12 + lexical_only_penalty
                 } else {
-                    -0.06
+                    -0.06 + lexical_only_penalty
                 }
             }
             HybridSourceClass::Project => {
@@ -230,9 +240,9 @@ fn live_navigation_text_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffe
                 {
                     0.0
                 } else if ctx.seen_count == 0 {
-                    -0.08
+                    -0.08 + lexical_only_penalty
                 } else {
-                    -0.04
+                    -0.04 + lexical_only_penalty
                 }
             }
             _ => 0.0,
@@ -242,20 +252,86 @@ fn live_navigation_text_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffe
     (delta != 0.0).then_some(PolicyEffect::Add(delta))
 }
 
-fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+fn lexical_only_runtime_source_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.wants_test_witness_recall
+        || ctx.wants_runtime_config_artifacts
+        || ctx.is_repo_metadata
+        || ctx.is_frontend_runtime_noise
+    {
+        return None;
+    }
+
     let delta = match ctx.class {
         HybridSourceClass::Runtime => {
             if ctx.seen_count == 0 {
-                -0.28
+                0.30
             } else {
-                -0.16
+                0.16
+            }
+        }
+        HybridSourceClass::Support => {
+            if ctx.seen_count == 0 {
+                0.18
+            } else {
+                0.10
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn lexical_only_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.wants_test_witness_recall
+        || !ctx.is_test_support
+        || ctx.has_exact_query_term_match
+        || ctx.specific_witness_path_overlap > 0
+        || ctx.path_overlap > 1
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(if ctx.seen_count == 0 {
+        -0.52
+    } else {
+        -0.28
+    }))
+}
+
+fn lexical_only_repo_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.has_exact_query_term_match || ctx.path_overlap > 0 {
+        return None;
+    }
+
+    let delta = if ctx.is_repo_metadata || ctx.is_generic_runtime_witness_doc {
+        if ctx.seen_count == 0 { -0.34 } else { -0.18 }
+    } else {
+        0.0
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_penalty = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { -0.10 } else { -0.06 }
+    } else {
+        0.0
+    };
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime => {
+            if ctx.seen_count == 0 {
+                -0.28 + lexical_only_penalty
+            } else {
+                -0.16 + lexical_only_penalty
             }
         }
         HybridSourceClass::Support | HybridSourceClass::Tests => {
             if ctx.seen_count == 0 {
-                -0.20
+                -0.20 + lexical_only_penalty
             } else {
-                -0.12
+                -0.12 + lexical_only_penalty
             }
         }
         _ => 0.0,
@@ -370,18 +446,23 @@ fn doc_path_overlap_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_penalty = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { -0.18 } else { -0.10 }
+    } else {
+        0.0
+    };
     let state = ctx;
     Some(PolicyEffect::Add(if state.runtime_seen == 0 {
         if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-            -0.86
+            -0.86 + lexical_only_penalty
         } else {
-            -0.52
+            -0.52 + lexical_only_penalty
         }
     } else {
         if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-            -0.44
+            -0.44 + lexical_only_penalty
         } else {
-            -0.24
+            -0.24 + lexical_only_penalty
         }
     }))
 }
@@ -671,7 +752,15 @@ fn non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     }
 
     Some(PolicyEffect::Add(if intent.wants_test_witness_recall {
-        if state.seen_count == 0 { -0.18 } else { -0.10 }
+        if ctx.lexical_only_mode {
+            if state.seen_count == 0 { 0.18 } else { 0.10 }
+        } else if state.seen_count == 0 {
+            -0.18
+        } else {
+            -0.10
+        }
+    } else if ctx.lexical_only_mode {
+        if state.seen_count == 0 { -0.48 } else { -0.28 }
     } else if state.seen_count == 0 {
         -0.34
     } else {
@@ -849,6 +938,36 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             &[],
         ),
         live_navigation_text_noise_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.lexical_only_runtime_source_bonus",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::lexical_only_mode_leaf(),
+            pred::candidate_language_known_leaf(),
+            pred::matches_query_language_leaf(),
+        ]),
+        lexical_only_runtime_source_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime.lexical_only_test_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::lexical_only_mode_leaf(),
+            pred::is_test_support_leaf(),
+        ]),
+        lexical_only_test_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime.lexical_only_repo_noise_penalty",
+        PolicyStage::SelectionRuntimeWitness,
+        Predicate::all(&[
+            pred::wants_runtime_witnesses_leaf(),
+            pred::lexical_only_mode_leaf(),
+        ]),
+        lexical_only_repo_noise_penalty,
     ),
     ScoreRule::when(
         "selection.runtime.language_mismatch_penalty",

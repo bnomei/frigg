@@ -415,6 +415,44 @@ fn precise_navigation_symbol_selection_is_deterministic() {
 }
 
 #[test]
+fn precise_navigation_symbol_selection_matches_symbol_tail_when_display_name_is_missing() {
+    let mut graph = SymbolGraph::default();
+    let payload = br#"{
+          "documents": [
+            {
+              "relative_path": "src/auth.ts",
+              "occurrences": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "range": [0, 6, 23],
+                  "symbol_roles": 1
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "display_name": "",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#;
+    graph
+        .ingest_scip_json("repo-001", "fixture:precise-navigation-tail.json", payload)
+        .expect("fixture payload should ingest");
+
+    let matched = graph
+        .select_precise_symbol_for_navigation("repo-001", "requireServerUser", "fallback")
+        .expect("symbol tail should resolve when display_name is missing");
+    assert_eq!(
+        matched.symbol,
+        "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser."
+    );
+}
+
+#[test]
 fn precise_navigation_location_selection_prefers_containing_occurrence() {
     let mut graph = SymbolGraph::default();
     let payload = br#"{

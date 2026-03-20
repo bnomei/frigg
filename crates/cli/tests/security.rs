@@ -311,6 +311,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(5),
         }))
         .await;

@@ -158,6 +158,7 @@ pub struct HybridExecutionNote {
     pub semantic_candidate_count: usize,
     pub semantic_hit_count: usize,
     pub semantic_match_count: usize,
+    pub lexical_only_mode: bool,
 }
 
 impl Default for HybridExecutionNote {
@@ -170,6 +171,7 @@ impl Default for HybridExecutionNote {
             semantic_candidate_count: 0,
             semantic_hit_count: 0,
             semantic_match_count: 0,
+            lexical_only_mode: true,
         }
     }
 }
@@ -290,6 +292,8 @@ pub(crate) fn hybrid_execution_note_from_channel_results(
     let semantic_candidate_count = semantic.map_or(0, |result| result.stats.candidate_count);
     let semantic_hit_count = semantic.map_or(0, |result| result.stats.hit_count);
     let semantic_match_count = semantic.map_or(0, |result| result.stats.match_count);
+    let lexical_only_mode =
+        semantic_status != HybridSemanticStatus::Ok || semantic_match_count == 0;
 
     HybridExecutionNote {
         semantic_requested,
@@ -299,6 +303,7 @@ pub(crate) fn hybrid_execution_note_from_channel_results(
         semantic_candidate_count,
         semantic_hit_count,
         semantic_match_count,
+        lexical_only_mode,
     }
 }
 

@@ -229,6 +229,22 @@ fn cli_non_support_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     }))
 }
 
+fn lexical_only_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.is_test_support
+        || ctx.has_exact_query_term_match
+        || ctx.specific_witness_path_overlap > 0
+        || ctx.path_overlap > 0
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(if ctx.seen_count == 0 {
+        -0.42
+    } else {
+        -0.22
+    }))
+}
+
 const RULES: &[ScoreRule<SelectionFacts>] = &[
     ScoreRule::when(
         "selection.tests.class_bonus",
@@ -400,6 +416,16 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::class_is_tests_leaf(),
         ]),
         cli_non_support_test_penalty,
+    ),
+    ScoreRule::when(
+        "selection.tests.lexical_only_runtime_penalty",
+        PolicyStage::SelectionTestWitness,
+        Predicate::all(&[
+            pred::wants_test_witness_recall_leaf(),
+            pred::lexical_only_mode_leaf(),
+            pred::class_is_runtime_leaf(),
+        ]),
+        lexical_only_runtime_penalty,
     ),
 ];
 

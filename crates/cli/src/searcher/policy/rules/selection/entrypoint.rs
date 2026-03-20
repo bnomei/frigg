@@ -222,6 +222,57 @@ fn path_witness_subtree_locality_bonus(ctx: &SelectionFacts) -> Option<PolicyEff
     (delta > 0.0).then_some(PolicyEffect::Add(delta))
 }
 
+fn lexical_only_runtime_focus_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_entrypoint_runtime {
+        if ctx.runtime_seen == 0 {
+            0.42
+        } else if ctx.seen_count == 0 {
+            0.20
+        } else {
+            0.10
+        }
+    } else if ctx.is_runtime_config_artifact {
+        if ctx.seen_count == 0 { 0.18 } else { 0.10 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn lexical_only_non_runtime_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.is_entrypoint_runtime
+        || ctx.is_runtime_config_artifact
+        || ctx.is_entrypoint_build_workflow
+        || ctx.has_exact_query_term_match
+        || ctx.path_overlap > 0
+    {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 {
+                -0.18
+            } else {
+                -0.10
+            }
+        }
+        HybridSourceClass::Documentation
+        | HybridSourceClass::Readme
+        | HybridSourceClass::Project => {
+            if ctx.seen_count == 0 {
+                -0.26
+            } else {
+                -0.14
+            }
+        }
+        _ => 0.0,
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
 fn repo_root_runtime_config_without_locality_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
     (ctx.wants_entrypoint_build_flow
         && ctx.is_repo_root_runtime_config_artifact
@@ -562,6 +613,24 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::matches_query_language_leaf(),
         ]),
         same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.lexical_only_runtime_focus_bonus",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::lexical_only_mode_leaf(),
+        ]),
+        lexical_only_runtime_focus_bonus,
+    ),
+    ScoreRule::when(
+        "selection.entrypoint.lexical_only_non_runtime_penalty",
+        PolicyStage::SelectionEntrypoint,
+        Predicate::all(&[
+            pred::wants_entrypoint_build_flow_leaf(),
+            pred::lexical_only_mode_leaf(),
+        ]),
+        lexical_only_non_runtime_penalty,
     ),
     ScoreRule::when(
         "selection.entrypoint.language_mismatch_penalty",

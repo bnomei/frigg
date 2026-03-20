@@ -31,6 +31,10 @@ fn wants_benchmarks(ctx: &SelectionFacts) -> bool {
     ctx.wants_benchmarks
 }
 
+fn lexical_only_mode(ctx: &SelectionFacts) -> bool {
+    ctx.lexical_only_mode
+}
+
 fn wants_example_or_bench_witnesses(ctx: &SelectionFacts) -> bool {
     ctx.wants_example_or_bench_witnesses
 }
@@ -524,6 +528,10 @@ pub(crate) const fn wants_examples_leaf() -> PredicateLeaf<SelectionFacts> {
 
 pub(crate) const fn wants_benchmarks_leaf() -> PredicateLeaf<SelectionFacts> {
     PredicateLeaf::new("intent.benchmarks", wants_benchmarks)
+}
+
+pub(crate) const fn lexical_only_mode_leaf() -> PredicateLeaf<SelectionFacts> {
+    PredicateLeaf::new("execution.lexical_only_mode", lexical_only_mode)
 }
 
 pub(crate) const fn wants_example_or_bench_witnesses_leaf() -> PredicateLeaf<SelectionFacts> {

@@ -49,12 +49,14 @@ use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
 pub use symbols::{
     HeuristicReference, HeuristicReferenceConfidence, HeuristicReferenceEvidence,
     HeuristicReferenceResolver, SourceSpan, StructuralQueryMatch, SymbolDefinition,
-    SymbolExtractionDiagnostic, SymbolExtractionOutput, SymbolKind, extract_symbols_for_paths,
-    extract_symbols_from_file, extract_symbols_from_source, navigation_symbol_target_rank,
+    SymbolExtractionDiagnostic, SymbolExtractionOutput, SymbolKind, SyntaxTreeInspection,
+    SyntaxTreeInspectionNode, extract_symbols_for_paths, extract_symbols_from_file,
+    extract_symbols_from_source, inspect_syntax_tree_in_source, navigation_symbol_target_rank,
     register_symbol_definitions, resolve_heuristic_references, search_structural_in_source,
 };
 pub(crate) use symbols::{
-    line_column_for_offset, push_symbol_definition, source_span, source_span_from_offsets,
+    byte_offset_for_line_column, line_column_for_offset, push_symbol_definition, source_span,
+    source_span_from_offsets,
 };
 
 const FRIGG_SEMANTIC_RUNTIME_ENABLED_ENV: &str = "FRIGG_SEMANTIC_RUNTIME_ENABLED";

@@ -150,13 +150,26 @@ fn exact_runtime_config_match_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect
 }
 
 fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_bonus = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { 0.12 } else { 0.08 }
+    } else {
+        0.0
+    };
     let delta = if ctx.is_entrypoint_runtime {
-        if ctx.seen_count == 0 { 0.36 } else { 0.18 }
+        if ctx.seen_count == 0 {
+            0.36 + lexical_only_bonus
+        } else {
+            0.18 + lexical_only_bonus
+        }
     } else if matches!(
         ctx.class,
         HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
     ) {
-        if ctx.seen_count == 0 { 0.22 } else { 0.12 }
+        if ctx.seen_count == 0 {
+            0.22 + lexical_only_bonus
+        } else {
+            0.12 + lexical_only_bonus
+        }
     } else {
         0.0
     };
@@ -165,15 +178,68 @@ fn same_language_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn language_mismatch_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_penalty = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { -0.12 } else { -0.08 }
+    } else {
+        0.0
+    };
     let delta = if ctx.is_entrypoint_runtime {
-        if ctx.seen_count == 0 { -0.34 } else { -0.18 }
+        if ctx.seen_count == 0 {
+            -0.34 + lexical_only_penalty
+        } else {
+            -0.18 + lexical_only_penalty
+        }
     } else if matches!(
         ctx.class,
         HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests
     ) {
-        if ctx.seen_count == 0 { -0.20 } else { -0.10 }
+        if ctx.seen_count == 0 {
+            -0.20 + lexical_only_penalty
+        } else {
+            -0.10 + lexical_only_penalty
+        }
     } else {
         0.0
+    };
+
+    (delta != 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn lexical_only_artifact_focus_bonus(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let delta = if ctx.is_runtime_config_artifact {
+        if ctx.seen_count == 0 { 0.36 } else { 0.18 }
+    } else if ctx.is_entrypoint_runtime {
+        if ctx.seen_count == 0 { 0.22 } else { 0.12 }
+    } else {
+        0.0
+    };
+
+    (delta > 0.0).then_some(PolicyEffect::Add(delta))
+}
+
+fn lexical_only_non_config_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if ctx.is_runtime_config_artifact
+        || ctx.is_entrypoint_runtime
+        || ctx.has_exact_query_term_match
+        || ctx.path_overlap > 0
+    {
+        return None;
+    }
+
+    let delta = match ctx.class {
+        HybridSourceClass::Runtime | HybridSourceClass::Support | HybridSourceClass::Tests => {
+            if ctx.seen_count == 0 { -0.18 } else { -0.10 }
+        }
+        HybridSourceClass::Documentation
+        | HybridSourceClass::Readme
+        | HybridSourceClass::Project => {
+            if ctx.seen_count == 0 {
+                -0.28
+            } else {
+                -0.14
+            }
+        }
+        _ => 0.0,
     };
 
     (delta != 0.0).then_some(PolicyEffect::Add(delta))
@@ -245,32 +311,53 @@ fn generic_doc_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
 }
 
 fn repo_metadata_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    let lexical_only_penalty = if ctx.lexical_only_mode {
+        if ctx.seen_count == 0 { -0.22 } else { -0.12 }
+    } else {
+        0.0
+    };
     (ctx.wants_runtime_config_artifacts && ctx.is_repo_metadata && !ctx.is_runtime_config_artifact)
         .then_some(PolicyEffect::Add(
             if ctx.runtime_subtree_affinity == 0 && !ctx.has_path_witness_source {
                 if ctx.seen_count == 0 {
                     if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-                        -0.92
+                        -0.92 + lexical_only_penalty
                     } else {
-                        -0.54
+                        -0.54 + lexical_only_penalty
                     }
                 } else if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-                    -0.46
+                    -0.46 + lexical_only_penalty
                 } else {
-                    -0.28
+                    -0.28 + lexical_only_penalty
                 }
             } else if ctx.seen_count == 0 {
                 if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-                    -0.56
+                    -0.56 + lexical_only_penalty
                 } else {
-                    -0.32
+                    -0.32 + lexical_only_penalty
                 }
             } else if ctx.path_overlap == 0 && !ctx.has_exact_query_term_match {
-                -0.28
+                -0.28 + lexical_only_penalty
             } else {
-                -0.18
+                -0.18 + lexical_only_penalty
             },
         ))
+}
+
+fn lexical_only_test_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
+    if !ctx.lexical_only_mode
+        || !ctx.wants_runtime_config_artifacts
+        || !ctx.is_test_support
+        || ctx.wants_test_witness_recall
+    {
+        return None;
+    }
+
+    Some(PolicyEffect::Add(if ctx.seen_count == 0 {
+        -0.58
+    } else {
+        -0.32
+    }))
 }
 
 fn frontend_noise_penalty(ctx: &SelectionFacts) -> Option<PolicyEffect> {
@@ -532,6 +619,34 @@ const RULES: &[ScoreRule<SelectionFacts>] = &[
             pred::matches_query_language_leaf(),
         ]),
         same_language_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.lexical_only_artifact_focus_bonus",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::lexical_only_mode_leaf(),
+        ]),
+        lexical_only_artifact_focus_bonus,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.lexical_only_non_config_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::lexical_only_mode_leaf(),
+        ]),
+        lexical_only_non_config_penalty,
+    ),
+    ScoreRule::when(
+        "selection.runtime_config.lexical_only_test_penalty",
+        PolicyStage::SelectionRuntimeConfig,
+        Predicate::all(&[
+            pred::wants_runtime_config_artifacts_leaf(),
+            pred::lexical_only_mode_leaf(),
+            pred::is_test_support_leaf(),
+        ]),
+        lexical_only_test_penalty,
     ),
     ScoreRule::when(
         "selection.runtime_config.language_mismatch_penalty",

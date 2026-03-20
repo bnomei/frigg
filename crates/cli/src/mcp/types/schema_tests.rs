@@ -588,6 +588,19 @@ fn schema_search_hybrid_utility_summary_is_typed_object() {
 }
 
 #[test]
+fn schema_search_hybrid_lexical_only_mode_is_documented() {
+    let lexical_only_mode = property_schema::<SearchHybridMetadata>("lexical_only_mode");
+    assert!(
+        schema_allows_type(&lexical_only_mode, "boolean"),
+        "search_hybrid.metadata.lexical_only_mode should expose boolean transport: {lexical_only_mode}"
+    );
+
+    let doc = read_doc("search_hybrid.v1.schema.json");
+    let additive_fields = nested_strings(&doc, "/metadata/additive_diagnostic_fields");
+    assert!(additive_fields.contains("lexical_only_mode"));
+}
+
+#[test]
 fn schema_search_hybrid_note_remains_string_encoded() {
     assert_optional_string_property::<SearchHybridResponse>("note");
 }
@@ -701,6 +714,16 @@ fn schema_document_symbols_contract_matches_wrappers() {
         "document_symbols",
         "DocumentSymbolsParams",
         "DocumentSymbolsResponse",
+    );
+}
+
+#[test]
+fn schema_inspect_syntax_tree_contract_matches_wrappers() {
+    assert_contract::<InspectSyntaxTreeParams, InspectSyntaxTreeResponse>(
+        "inspect_syntax_tree.v1.schema.json",
+        "inspect_syntax_tree",
+        "InspectSyntaxTreeParams",
+        "InspectSyntaxTreeResponse",
     );
 }
 
@@ -833,6 +856,7 @@ fn schema_core_read_only_and_session_tools_exclude_confirm_param() {
         field_set::<IncomingCallsParams>(),
         field_set::<OutgoingCallsParams>(),
         field_set::<DocumentSymbolsParams>(),
+        field_set::<InspectSyntaxTreeParams>(),
         field_set::<SearchStructuralParams>(),
         field_set::<DeepSearchRunParams>(),
         field_set::<DeepSearchReplayParams>(),

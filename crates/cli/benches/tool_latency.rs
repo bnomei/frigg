@@ -241,6 +241,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                 path: None,
                 line: None,
                 column: None,
+                include_definition: Some(false),
                 limit: Some(200),
             });
             let response = runtime
@@ -258,6 +259,7 @@ fn tool_latency_benchmarks(c: &mut Criterion) {
                 path: None,
                 line: None,
                 column: None,
+                include_definition: Some(false),
                 limit: Some(200),
             });
             let response = runtime
@@ -570,6 +572,7 @@ fn assert_precise_reference_workload(runtime: &Runtime, server: &FriggMcpServer)
         path: None,
         line: None,
         column: None,
+        include_definition: Some(false),
         limit: Some(200),
     });
     let response = runtime

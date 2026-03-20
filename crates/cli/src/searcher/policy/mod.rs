@@ -38,11 +38,13 @@ pub(super) fn apply_post_selection_guardrails(
     witness_hits: &[super::HybridChannelHit],
     intent: &HybridRankingIntent,
     query_text: &str,
+    lexical_only_mode: bool,
     limit: usize,
 ) -> Vec<super::HybridRankedEvidence> {
-    let ctx = post_selection::PostSelectionContext::new(
+    let ctx = post_selection::PostSelectionContext::new_with_mode(
         intent,
         query_text,
+        lexical_only_mode,
         limit,
         candidate_pool,
         witness_hits,
@@ -56,11 +58,13 @@ pub(crate) fn apply_post_selection_guardrails_with_trace(
     witness_hits: &[super::HybridChannelHit],
     intent: &HybridRankingIntent,
     query_text: &str,
+    lexical_only_mode: bool,
     limit: usize,
 ) -> (Vec<super::HybridRankedEvidence>, Option<PostSelectionTrace>) {
-    let ctx = post_selection::PostSelectionContext::new_with_trace(
+    let ctx = post_selection::PostSelectionContext::new_with_trace_mode(
         intent,
         query_text,
+        lexical_only_mode,
         limit,
         candidate_pool,
         witness_hits,

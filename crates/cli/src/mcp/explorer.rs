@@ -5,6 +5,7 @@ use std::path::Path;
 
 use regex::Regex;
 
+use crate::mcp::server_cache::FileContentSnapshot;
 use crate::mcp::types::{ExploreAnchor, ExploreCursor, ExploreLineWindow};
 
 pub(crate) const DEFAULT_CONTEXT_LINES: usize = 3;
@@ -122,6 +123,7 @@ pub(crate) fn line_window_around_anchor(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn read_line_slice_lossy(
     path: &Path,
     line_start: usize,
@@ -131,12 +133,7 @@ pub(crate) fn read_line_slice_lossy(
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut raw_line = Vec::new();
-    let mut content = String::new();
-    let mut total_lines = 0usize;
-    let mut sliced_bytes = 0usize;
-    let mut exceeded_limit = false;
-    let mut lossy_utf8 = false;
-    let mut first_selected_line = true;
+    let mut bytes = Vec::new();
 
     loop {
         raw_line.clear();
@@ -144,55 +141,13 @@ pub(crate) fn read_line_slice_lossy(
         if bytes_read == 0 {
             break;
         }
-
-        total_lines = total_lines.saturating_add(1);
-        let include_line = total_lines >= line_start
-            && line_end.is_none_or(|effective_end| total_lines <= effective_end);
-        if !include_line {
-            if line_end.is_some_and(|effective_end| total_lines >= effective_end) {
-                break;
-            }
-            continue;
-        }
-
-        let (normalized_line, had_lossy_utf8) = normalize_lossy_line_bytes(&raw_line);
-        lossy_utf8 |= had_lossy_utf8;
-        if !first_selected_line {
-            sliced_bytes = sliced_bytes.saturating_add(1);
-            if !exceeded_limit {
-                content.push('\n');
-            }
-        }
-        sliced_bytes = sliced_bytes.saturating_add(normalized_line.len());
-        if sliced_bytes > max_bytes {
-            exceeded_limit = true;
-        }
-        if !exceeded_limit {
-            content.push_str(&normalized_line);
-        }
-        first_selected_line = false;
-
-        if line_end.is_some_and(|effective_end| total_lines >= effective_end) {
-            break;
-        }
+        bytes.extend_from_slice(&raw_line);
     }
-
-    if total_lines > 0 && line_start > total_lines {
-        return Err(LossyLineSliceError::LineStartOutside {
-            line_start,
-            line_end,
-            total_lines,
-        });
-    }
-
-    Ok(LossyLineSlice {
-        content,
-        bytes: sliced_bytes,
-        total_lines,
-        lossy_utf8,
-    })
+    let snapshot = FileContentSnapshot::from_bytes(bytes);
+    snapshot.read_line_slice_lossy(line_start, line_end, max_bytes)
 }
 
+#[allow(dead_code)]
 pub(crate) fn scan_file_scope_lossy(
     path: &Path,
     scope: ExploreScopeRequest,
@@ -205,15 +160,7 @@ pub(crate) fn scan_file_scope_lossy(
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut raw_line = Vec::new();
-    let mut total_lines = 0usize;
-    let mut total_matches = 0usize;
-    let mut matches = Vec::new();
-    let mut resume_cursor = None;
-    let mut lossy_utf8 = false;
-    let mut scope_content = String::new();
-    let mut scope_bytes = 0usize;
-    let mut scope_within_budget = true;
-    let mut first_scope_line = true;
+    let mut bytes = Vec::new();
 
     loop {
         raw_line.clear();
@@ -221,99 +168,20 @@ pub(crate) fn scan_file_scope_lossy(
         if bytes_read == 0 {
             break;
         }
-
-        total_lines = total_lines.saturating_add(1);
-        let (normalized_line, had_lossy_utf8) = normalize_lossy_line_bytes(&raw_line);
-        lossy_utf8 |= had_lossy_utf8;
-
-        let in_scope = total_lines >= scope.start_line
-            && scope
-                .end_line
-                .is_none_or(|end_line| total_lines <= end_line);
-        if !in_scope {
-            continue;
-        }
-
-        if include_scope_content {
-            if !first_scope_line {
-                scope_bytes = scope_bytes.saturating_add(1);
-                if scope_within_budget {
-                    scope_content.push('\n');
-                }
-            }
-            scope_bytes = scope_bytes.saturating_add(normalized_line.len());
-            if let Some(max_scope_bytes) = max_scope_bytes {
-                if scope_bytes > max_scope_bytes {
-                    scope_within_budget = false;
-                }
-            }
-            if scope_within_budget {
-                scope_content.push_str(&normalized_line);
-            }
-            first_scope_line = false;
-        }
-
-        if let Some(matcher) = matcher {
-            for (start, end) in matcher.find_spans(&normalized_line) {
-                let start_column = start.saturating_add(1);
-                if resume_from.is_some_and(|cursor| {
-                    position_is_before_cursor(total_lines, start_column, cursor)
-                }) {
-                    continue;
-                }
-
-                total_matches = total_matches.saturating_add(1);
-                let anchor = ExploreAnchor {
-                    start_line: total_lines,
-                    start_column,
-                    end_line: total_lines,
-                    end_column: end.saturating_add(1),
-                };
-                if matches.len() < max_matches {
-                    matches.push(ExploreSpanMatch {
-                        start_line: total_lines,
-                        start_column,
-                        end_line: total_lines,
-                        end_column: end.saturating_add(1),
-                        excerpt: normalized_line.clone(),
-                        anchor,
-                    });
-                } else if resume_cursor.is_none() {
-                    resume_cursor = Some(ExploreCursor {
-                        line: total_lines,
-                        column: start_column,
-                    });
-                }
-            }
-        }
+        bytes.extend_from_slice(&raw_line);
     }
-
-    let effective_scope = match total_lines {
-        0 => ExploreLineWindow {
-            start_line: 0,
-            end_line: 0,
-        },
-        _ => ExploreLineWindow {
-            start_line: scope.start_line,
-            end_line: scope.end_line.unwrap_or(total_lines).min(total_lines),
-        },
-    };
-
-    Ok(ExploreScanResult {
-        total_lines,
-        effective_scope,
-        scope_content: include_scope_content.then_some(scope_content),
-        scope_bytes: include_scope_content.then_some(scope_bytes),
-        scope_within_budget,
-        total_matches,
-        matches,
-        truncated: resume_cursor.is_some(),
-        resume_from: resume_cursor,
-        lossy_utf8,
-    })
+    let snapshot = FileContentSnapshot::from_bytes(bytes);
+    Ok(snapshot.scan_file_scope_lossy(
+        scope,
+        matcher,
+        max_matches,
+        resume_from,
+        include_scope_content,
+        max_scope_bytes,
+    ))
 }
 
-fn normalize_lossy_line_bytes(raw_line: &[u8]) -> (String, bool) {
+pub(crate) fn normalize_lossy_line_bytes(raw_line: &[u8]) -> (String, bool) {
     let mut line_bytes = raw_line;
     if line_bytes.ends_with(b"\n") {
         line_bytes = &line_bytes[..line_bytes.len() - 1];
@@ -326,6 +194,10 @@ fn normalize_lossy_line_bytes(raw_line: &[u8]) -> (String, bool) {
     (normalized.into_owned(), had_lossy_utf8)
 }
 
-fn position_is_before_cursor(line: usize, column: usize, cursor: &ExploreCursor) -> bool {
+pub(crate) fn position_is_before_cursor(
+    line: usize,
+    column: usize,
+    cursor: &ExploreCursor,
+) -> bool {
     line < cursor.line || (line == cursor.line && column < cursor.column)
 }

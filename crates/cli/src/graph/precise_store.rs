@@ -452,26 +452,42 @@ pub(super) fn precise_navigation_symbol_rank(
     symbol_query: &str,
     fallback_symbol_name: &str,
 ) -> Option<u8> {
+    let symbol_tail = precise_navigation_identifier(&precise_symbol.symbol);
+    let symbol_tail = symbol_tail
+        .as_deref()
+        .unwrap_or(precise_symbol.symbol.as_str());
     if precise_symbol.symbol == symbol_query {
         return Some(0);
     }
     if precise_symbol.display_name == symbol_query {
         return Some(1);
     }
+    if symbol_tail == symbol_query {
+        return Some(2);
+    }
     if precise_symbol
         .display_name
         .eq_ignore_ascii_case(symbol_query)
     {
-        return Some(2);
+        return Some(3);
+    }
+    if symbol_tail.eq_ignore_ascii_case(symbol_query) {
+        return Some(4);
     }
     if precise_symbol.display_name == fallback_symbol_name {
-        return Some(3);
+        return Some(5);
+    }
+    if symbol_tail == fallback_symbol_name {
+        return Some(6);
     }
     if precise_symbol
         .display_name
         .eq_ignore_ascii_case(fallback_symbol_name)
     {
-        return Some(4);
+        return Some(7);
+    }
+    if symbol_tail.eq_ignore_ascii_case(fallback_symbol_name) {
+        return Some(8);
     }
 
     None

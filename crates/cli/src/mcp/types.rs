@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PUBLIC_TOOL_NAMES: [&str; 22] = [
+pub const PUBLIC_TOOL_NAMES: [&str; 23] = [
     "list_repositories",
     "workspace_attach",
     "workspace_detach",
@@ -28,12 +28,13 @@ pub const PUBLIC_TOOL_NAMES: [&str; 22] = [
     "incoming_calls",
     "outgoing_calls",
     "document_symbols",
+    "inspect_syntax_tree",
     "search_structural",
     "deep_search_run",
     "deep_search_replay",
     "deep_search_compose_citations",
 ];
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 19] = [
     "list_repositories",
     "workspace_current",
     "read_file",
@@ -48,6 +49,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 18] = [
     "incoming_calls",
     "outgoing_calls",
     "document_symbols",
+    "inspect_syntax_tree",
     "search_structural",
     "deep_search_run",
     "deep_search_replay",
@@ -149,6 +151,122 @@ pub struct WorkspaceIndexHealthSummary {
     pub lexical: WorkspaceIndexComponentSummary,
     pub semantic: WorkspaceIndexComponentSummary,
     pub scip: WorkspaceIndexComponentSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub precise_generators: Vec<WorkspacePreciseGeneratorSummary>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseGeneratorState {
+    Available,
+    MissingTool,
+    Unsupported,
+    NotConfigured,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseGenerationStatus {
+    Succeeded,
+    Failed,
+    Skipped,
+    MissingTool,
+    Unsupported,
+    NotConfigured,
+    Timeout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseFailureClass {
+    MissingTool,
+    ToolPanic,
+    ToolTimeout,
+    ToolEnvFailure,
+    ToolInvalidOutput,
+    ToolFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRecommendedAction {
+    InstallTool,
+    RerunReindex,
+    CheckEnvironment,
+    UpstreamToolFailure,
+    UseHeuristicMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseState {
+    Ok,
+    Partial,
+    Failed,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseGenerationAction {
+    Triggered,
+    SkippedNoWork,
+    SkippedActiveTask,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGenerationSummary {
+    pub status: WorkspacePreciseGenerationStatus,
+    pub generated_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<WorkspacePreciseFailureClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_action: Option<WorkspaceRecommendedAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGeneratorSummary {
+    pub state: WorkspacePreciseGeneratorState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_output_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_generation: Option<WorkspacePreciseGenerationSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseSummary {
+    pub state: WorkspacePreciseState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<WorkspacePreciseFailureClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_action: Option<WorkspaceRecommendedAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_action: Option<WorkspacePreciseGenerationAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceAttachAction {
+    AttachedFresh,
+    ReusedWorkspace,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -170,6 +288,8 @@ pub struct WorkspaceAttachResponse {
     pub resolution: WorkspaceResolveMode,
     pub session_default: bool,
     pub storage: WorkspaceStorageSummary,
+    pub action: WorkspaceAttachAction,
+    pub precise: WorkspacePreciseSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -250,6 +370,8 @@ pub struct WorkspaceCurrentResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<RepositorySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub precise: Option<WorkspacePreciseSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
 }
 
@@ -259,6 +381,7 @@ pub enum RuntimeTaskKind {
     ChangedReindex,
     SemanticRefresh,
     PrecisePrewarm,
+    PreciseGenerate,
     WorkspacePrepare,
     WorkspaceReindex,
 }
@@ -666,6 +789,8 @@ pub struct SearchHybridMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_match_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_only_mode: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
     pub diagnostics_count: usize,
     pub diagnostics: SearchHybridDiagnosticsSummary,
@@ -764,13 +889,25 @@ pub struct FindReferencesParams {
     pub line: Option<usize>,
     /// Optional 1-based column used for deterministic location-aware target resolution.
     pub column: Option<usize>,
+    /// Whether definition rows should be included in the returned reference set. Omit to default to `true`.
+    pub include_definition: Option<bool>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationMode {
+    Precise,
+    PrecisePartial,
+    HeuristicNoPrecise,
+    UnavailableNoPrecise,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesResponse {
     pub total_matches: usize,
     pub matches: Vec<ReferenceMatch>,
+    pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -799,6 +936,7 @@ pub struct NavigationLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
+    pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -816,6 +954,7 @@ pub struct FindDeclarationsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsResponse {
     pub matches: Vec<NavigationLocation>,
+    pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -846,6 +985,7 @@ pub struct ImplementationMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsResponse {
     pub matches: Vec<ImplementationMatch>,
+    pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -890,6 +1030,8 @@ pub struct CallHierarchyMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    pub mode: NavigationMode,
+    pub availability: Option<NavigationAvailability>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -897,8 +1039,17 @@ pub struct IncomingCallsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    pub mode: NavigationMode,
+    pub availability: Option<NavigationAvailability>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NavigationAvailability {
+    pub status: String,
+    pub reason: Option<String>,
+    pub precise_required_for_complete_results: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -924,6 +1075,40 @@ pub struct DocumentSymbolItem {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsResponse {
     pub symbols: Vec<DocumentSymbolItem>,
+    pub metadata: Option<Value>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InspectSyntaxTreeParams {
+    pub path: String,
+    pub repository_id: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub max_ancestors: Option<usize>,
+    pub max_children: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SyntaxTreeNodeItem {
+    pub kind: String,
+    pub named: bool,
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+    pub excerpt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InspectSyntaxTreeResponse {
+    pub repository_id: String,
+    pub path: String,
+    pub language: String,
+    pub focus: SyntaxTreeNodeItem,
+    pub ancestors: Vec<SyntaxTreeNodeItem>,
+    pub children: Vec<SyntaxTreeNodeItem>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }

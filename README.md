@@ -132,8 +132,10 @@ This is the default Frigg workflow:
 2. Optionally run `frigg reindex` to prewarm the index before first use.
 3. Start one persistent Frigg HTTP service with `frigg serve`.
 4. Let your agent adopt repositories session-locally with `workspace_attach`.
+   `workspace_attach` reports whether the session attached a fresh workspace or reused an already-adopted one, and it returns a compact precise-index summary for the selected repo. That summary now exposes `state`, `failure_tool`, `failure_class`, `failure_summary`, `recommended_action`, and `generation_action` so clients do not need to parse nested generator detail first.
 5. Use `workspace_prepare` or `workspace_reindex` from MCP only when you intentionally want Frigg to initialize or refresh repository state from inside the client.
 6. Use `search_hybrid` as the discovery surface for broad questions, then pivot into `read_file`, `document_symbols`, `go_to_definition`, or `search_symbol` when you need precise anchors and deeper navigation.
+7. Use `inspect_syntax_tree` before `search_structural` whenever the tree-sitter node shape is unclear.
 
 Typical prompts:
 
@@ -176,7 +178,7 @@ frigg reindex
 
 ### Optional SCIP artifacts
 
-Frigg can consume external SCIP artifacts, but it does not generate them itself. If you want more precise definitions, references, implementations, and call navigation, place generated `.scip` or `.json` files under:
+Frigg can consume external SCIP artifacts, and it can opportunistically detect and run installed external generators for Rust, Go, and TypeScript / JavaScript during workspace attach/reindex flows. If you want more precise definitions, references, implementations, and call navigation, place generated `.scip` or `.json` files under:
 
 ```text
 .frigg/scip/
@@ -216,6 +218,10 @@ mv index.scip .frigg/scip/php.scip
 
 Frigg distills those artifacts into snapshot-scoped retrieval projections on the next `frigg reindex`. Server startup alone does not change retrieval state. If you do not provide SCIP data, Frigg still works with heuristic and source-backed navigation plus path and AST-derived retrieval summaries.
 
+When generator tools are installed, `workspace_current.health.precise_generators` reports their detected status and any last generation result, and Frigg writes best-effort artifacts under `.frigg/scip/`.
+
+Optional repository-local precise config lives at `.frigg/precise.json`. Use it to disable a generator for one repo, add generator-specific extra args, or exclude paths from filtered generation workspaces and trigger calculations without compiling repo-specific path rules into FRIGG itself.
+
 ### Built-in watch worker
 
 Frigg includes a built-in watch worker that keeps the index fresh with changed-only refreshes.
@@ -231,11 +237,26 @@ Frigg includes a built-in watch worker that keeps the index fresh with changed-o
 - the watch worker updates the same `.frigg/storage.sqlite3` database instead of creating a separate sidecar index
 - if you already run an external watcher, start Frigg with `--watch-mode off` to avoid duplicate work
 
+Structural-search workflow:
+
+- use `inspect_syntax_tree` on one representative file when you do not already know the grammar node kinds
+- use `document_symbols` when you need a high-level outline before drilling into AST shape
+- use `search_structural` only after you have confirmed the relevant node kinds or span shape
+- invalid structural queries now report recovery guidance and suggest safer fallback tools instead of failing with only a raw parser message
+
+Call hierarchy behavior:
+
+- when SCIP coverage is present and authoritative, `incoming_calls` and `outgoing_calls` return precise results
+- when precise data is absent or non-authoritative, navigation tools expose a top-level `mode` and call-hierarchy responses still mark `availability` so clients can distinguish precise, heuristic, and unavailable fallbacks without parsing metadata blobs
+- when precise data is absent and no safe fallback result exists, the response marks availability as `unavailable` so an empty list is not mistaken for an authoritative answer
+
 Runtime cache contract:
 
 - cross-request reuse is keyed by repository freshness, not by wall-clock age alone
 - watcher, attach, detach, manifest validation, and reindex transitions can invalidate only the affected repository cache scopes without restarting the server
 - snapshot-scoped projection state is the preferred reusable tier; request-local graph fallbacks stay request-bound
+- `read_file` and `explore` share a bounded live-disk file-content cache keyed by repository freshness and canonical path; this speeds repeated line-window and scoped reads without turning file contents into persisted snapshot state
+- file-content cache entries are invalidated by the same repository freshness transitions as the rest of the runtime cache envelope
 - response caches are bounded and opportunistic, so multiple `stdio` servers may miss independently without affecting correctness
 
 Example:
@@ -294,7 +315,7 @@ Provider defaults:
 - `workspace_detach`: remove a repository adoption from the current session and potentially release a watch lease.
 - `workspace_prepare`: confirm-gated workspace/index preparation for an adopted repository.
 - `workspace_reindex`: confirm-gated full or changed reindex for an adopted repository.
-- `workspace_current`: inspect session-local repository adoption, defaults, health, and runtime status.
+- `workspace_current`: inspect session-local repository adoption, defaults, compact precise status, health, and runtime status.
 - `read_file`: read a file safely inside an adopted repository.
 - `search_text`: run literal or regex text search across repository files.
 - `search_hybrid`: broad natural-language search that blends lexical, graph, witness, and optional semantic evidence.
@@ -306,6 +327,7 @@ Provider defaults:
 - `incoming_calls`: find callers of a callable symbol.
 - `outgoing_calls`: find callees from a callable symbol.
 - `document_symbols`: return a hierarchical outline for a source file.
+- `inspect_syntax_tree`: inspect the bounded AST stack around a source location before writing a structural query.
 - `search_structural`: run Tree-sitter structural queries over supported languages.
 
 ### Extended profile tools

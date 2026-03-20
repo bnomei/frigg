@@ -190,6 +190,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(5),
         }))
         .await

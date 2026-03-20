@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
@@ -9,16 +10,18 @@ use crate::domain::model::TextMatch;
 use crate::indexer::{FileMetadataDigest, ReindexMode, reindex_repository};
 use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::server_cache::{
-    FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey,
-    RepositoryFreshnessCacheScope, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
-    RuntimeCacheResidency, RuntimeCacheReuseClass, SearchHybridResponseCacheKey,
-    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey,
+    FileContentSnapshot, FileContentWindowCacheKey, FindDeclarationsResponseCacheKey,
+    GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope,
+    RuntimeCacheFamily, RuntimeCacheFreshnessContract, RuntimeCacheResidency,
+    RuntimeCacheReuseClass, SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey,
+    SearchTextResponseCacheKey,
 };
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
-    FindDeclarationsResponse, GoToDefinitionResponse, RuntimeTaskKind, RuntimeTaskStatus,
-    SearchHybridResponse, SearchSymbolResponse, SearchTextResponse, WorkspaceAttachParams,
-    WorkspaceDetachParams, WorkspaceIndexComponentState, WorkspaceResolveMode,
+    FindDeclarationsResponse, GoToDefinitionResponse, InspectSyntaxTreeParams, NavigationMode,
+    RuntimeTaskKind, RuntimeTaskStatus, SearchHybridResponse, SearchStructuralParams,
+    SearchSymbolResponse, SearchTextResponse, WorkspaceAttachParams, WorkspaceDetachParams,
+    WorkspaceIndexComponentState, WorkspacePreciseGeneratorState, WorkspaceResolveMode,
 };
 use crate::searcher::ValidatedManifestCandidateCache;
 use crate::settings::{
@@ -38,7 +41,10 @@ use scip::types::{
 };
 use serde_json::Value;
 
-use super::{FriggMcpServer, ReadOnlyToolExecutionContext, RepositoryResponseCacheFreshnessMode};
+use super::{
+    FriggMcpServer, PreciseCoverageMode, PreciseIngestStats, ReadOnlyToolExecutionContext,
+    RepositoryResponseCacheFreshnessMode,
+};
 
 fn fixture_config() -> FriggConfig {
     let workspace_root = std::env::current_dir()
@@ -72,6 +78,62 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
         "frigg-runtime-gate-tests-{test_name}-{}-{nanos_since_epoch}",
         std::process::id()
     ))
+}
+
+fn write_fake_precise_generator_script(
+    bin_dir: &Path,
+    name: &str,
+    version_output: &str,
+    payload: &str,
+) -> PathBuf {
+    let path = bin_dir.join(name);
+    write_fake_precise_generator_script_with_body(
+        bin_dir,
+        name,
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "--version" ] || [ "${{1:-}}" = "version" ]; then
+  printf '%s\n' "{version_output}"
+  exit 0
+fi
+printf '%s' "{payload}"
+"#
+        ),
+    );
+    path
+}
+
+fn write_fake_precise_generator_script_with_body(
+    bin_dir: &Path,
+    name: &str,
+    body: &str,
+) -> PathBuf {
+    let path = bin_dir.join(name);
+    fs::write(&path, body).expect("failed to write fake precise generator script");
+    let mut permissions = fs::metadata(&path)
+        .expect("fake precise generator script should exist")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions)
+        .expect("fake precise generator script should be executable");
+    path
+}
+
+fn with_fake_precise_generator_path<T>(bin_dir: &Path, f: impl FnOnce() -> T) -> T {
+    static PATH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = PATH_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("PATH lock should not be poisoned");
+    FriggMcpServer::set_test_precise_generator_bin_override(Some(bin_dir.to_path_buf()));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    FriggMcpServer::set_test_precise_generator_bin_override(None);
+
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn rewrite_fixture_file_with_mtime_tick(path: &Path, contents: &str) {
@@ -226,6 +288,7 @@ fn response_caches_respect_registry_entry_limits_and_track_evictions() {
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
@@ -393,6 +456,375 @@ fn runtime_text_searchers_share_projection_store_service_across_requests() {
 }
 
 #[test]
+fn workspace_index_health_reports_rust_precise_generation_with_positional_path() {
+    let workspace_root = temp_workspace_root("precise-generator-health");
+    let bin_dir = PathBuf::from("/tmp/frigg-precise-generator-bin");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+
+    let _rust_analyzer = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "rust-analyzer",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "rust-analyzer 1.85.0"
+  exit 0
+fi
+if [ "${1:-}" != "scip" ] || [ -z "${2:-}" ]; then
+  printf '%s\n' "missing positional workspace path" >&2
+  exit 42
+fi
+printf '%s' "fake-scip-rust"
+"#,
+    );
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+        let health = server.workspace_index_health_summary(&workspace, &storage);
+        assert_eq!(health.precise_generators.len(), 1);
+        let rust_generator = health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("rust"))
+            .expect("rust generator should be reported");
+        assert!(
+            rust_generator
+                .tool
+                .as_deref()
+                .expect("rust generator should report a resolved tool")
+                .ends_with("rust-analyzer"),
+            "rust generator should report the resolved rust-analyzer tool"
+        );
+        assert_eq!(
+            rust_generator
+                .expected_output_path
+                .as_deref()
+                .expect("expected output path should be reported"),
+            workspace
+                .root
+                .join(".frigg/scip/rust.scip")
+                .display()
+                .to_string()
+        );
+
+        server.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &[String::from("Cargo.toml")],
+            &[],
+        );
+
+        let expected_artifact = workspace.root.join(".frigg/scip/rust.scip");
+        for _ in 0..200 {
+            if expected_artifact.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            expected_artifact.is_file(),
+            "fake rust-analyzer should have written a cached SCIP artifact"
+        );
+        assert_eq!(
+            fs::read_to_string(&expected_artifact).expect("artifact should be readable"),
+            "fake-scip-rust"
+        );
+
+        let refreshed_health = server.workspace_index_health_summary(&workspace, &storage);
+        let refreshed_rust_generator = refreshed_health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("rust"))
+            .expect("rust generator should still be reported");
+        assert!(
+            refreshed_rust_generator.last_generation.is_some(),
+            "successful generation should be cached even if preflight availability varies by environment"
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
+fn workspace_index_health_reports_php_precise_generation_prefers_repo_local_vendor_bin() {
+    let workspace_root = temp_workspace_root("php-precise-generator-health");
+    let bin_dir = PathBuf::from("/tmp/frigg-precise-generator-bin");
+    fs::create_dir_all(workspace_root.join("vendor/bin"))
+        .expect("failed to create vendor bin directory");
+    fs::create_dir_all(workspace_root.join("vendor/davidrjenni/scip-php/src/Composer"))
+        .expect("failed to create scip-php composer source directory");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("composer.json"),
+        "{\n  \"name\": \"demo/demo\"\n}\n",
+    )
+    .expect("failed to write composer fixture");
+    fs::write(workspace_root.join("composer.lock"), "{ }\n")
+        .expect("failed to write composer lock fixture");
+    fs::write(
+        workspace_root.join("vendor/davidrjenni/scip-php/src/Composer/Composer.php"),
+        r#"<?php
+final class Composer
+{
+    public function __construct(string $projectRoot)
+    {
+        $scipPhpVendorDir = self::join(__DIR__, '..', '..', 'vendor');
+        if (realpath($scipPhpVendorDir) === false) {
+            throw new RuntimeException("Invalid scip-php vendor directory: {$scipPhpVendorDir}.");
+        }
+        $this->scipPhpVendorDir = realpath($scipPhpVendorDir);
+    }
+}
+"#,
+    )
+    .expect("failed to write scip-php Composer fixture");
+
+    let _path_scip_php = write_fake_precise_generator_script(
+        &bin_dir,
+        "scip-php",
+        "scip-php 9.9.9",
+        "wrong-scip-php",
+    );
+    let _local_scip_php = write_fake_precise_generator_script_with_body(
+        &workspace_root.join("vendor/bin"),
+        "scip-php",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "scip-php 1.0.0"
+  exit 0
+fi
+composer_file="$(dirname "$0")/../davidrjenni/scip-php/src/Composer/Composer.php"
+if ! grep -q "https://github.com/davidrjenni/scip-php/issues/235" "$composer_file"; then
+  printf '%s\n' "missing FRIGG workaround comment" >&2
+  exit 51
+fi
+if ! grep -q "projectRoot, 'vendor'" "$composer_file"; then
+  printf '%s\n' "missing project vendor fallback" >&2
+  exit 52
+fi
+printf '%s' "local-scip-php"
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+        let health = server.workspace_index_health_summary(&workspace, &storage);
+        assert_eq!(health.precise_generators.len(), 1);
+        let php_generator = health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("php"))
+            .expect("php generator should be reported");
+        assert_eq!(php_generator.language.as_deref(), Some("php"));
+        assert!(
+            php_generator
+                .tool
+                .as_deref()
+                .expect("php generator should report a resolved tool")
+                .ends_with("vendor/bin/scip-php"),
+            "repo-local vendor/bin/scip-php should be preferred in health reporting"
+        );
+        assert_eq!(
+            php_generator
+                .expected_output_path
+                .as_deref()
+                .expect("expected output path should be reported"),
+            workspace
+                .root
+                .join(".frigg/scip/php.scip")
+                .display()
+                .to_string()
+        );
+
+        server.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &[String::from("composer.lock")],
+            &[],
+        );
+
+        let expected_artifact = workspace.root.join(".frigg/scip/php.scip");
+        for _ in 0..200 {
+            if expected_artifact.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            expected_artifact.is_file(),
+            "repo-local vendor/bin/scip-php should have written a cached SCIP artifact"
+        );
+        assert_eq!(
+            fs::read_to_string(&expected_artifact).expect("artifact should be readable"),
+            "local-scip-php"
+        );
+        let patched_composer = fs::read_to_string(
+            workspace_root.join("vendor/davidrjenni/scip-php/src/Composer/Composer.php"),
+        )
+        .expect("patched scip-php Composer source should be readable");
+        assert!(
+            patched_composer.contains("https://github.com/davidrjenni/scip-php/issues/235"),
+            "patched Composer.php should include the upstream issue reference"
+        );
+        assert!(
+            patched_composer.contains("self::join($projectRoot, 'vendor')"),
+            "patched Composer.php should fall back to the project vendor directory"
+        );
+
+        let refreshed_health = server.workspace_index_health_summary(&workspace, &storage);
+        let refreshed_php_generator = refreshed_health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("php"))
+            .expect("php generator should still be reported");
+        assert_eq!(
+            refreshed_php_generator.state,
+            WorkspacePreciseGeneratorState::Available
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
+fn workspace_index_health_reports_go_precise_generation_uses_explicit_output_and_local_caches() {
+    let workspace_root = temp_workspace_root("go-precise-generator-health");
+    let bin_dir = PathBuf::from("/tmp/frigg-precise-generator-bin");
+    fs::create_dir_all(&workspace_root).expect("failed to create go workspace root");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("go.mod"),
+        "module example.com/demo\n\ngo 1.24.0\n",
+    )
+    .expect("failed to write go.mod fixture");
+    fs::create_dir_all(workspace_root.join("cmd/demo"))
+        .expect("failed to create go source fixture directory");
+    fs::write(
+        workspace_root.join("cmd/demo/main.go"),
+        "package main\nfunc main() {}\n",
+    )
+    .expect("failed to write go source fixture");
+    let stale_artifact = workspace_root.join(".frigg/scip/go.scip");
+    fs::create_dir_all(
+        stale_artifact
+            .parent()
+            .expect("artifact path should have a parent"),
+    )
+    .expect("failed to prepare stale artifact directory");
+    fs::write(&stale_artifact, "stale-go-log").expect("failed to seed stale artifact");
+
+    let _scip_go = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "scip-go",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "scip-go 0.1.26"
+  exit 0
+fi
+if [ "${1:-}" != "-q" ] || [ "${2:-}" != "-o" ] || [ -z "${3:-}" ]; then
+  printf '%s\n' "missing quiet/output args" >&2
+  exit 41
+fi
+if [ -z "${GOCACHE:-}" ] || [ -z "${GOMODCACHE:-}" ] || [ -z "${GOPATH:-}" ]; then
+  printf '%s\n' "missing go cache env" >&2
+  exit 42
+fi
+printf '%s\n' "Resolving module name"
+printf '%s' "binary-go-scip" > "$3"
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        server.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &[String::from("go.mod")],
+            &[],
+        );
+
+        for _ in 0..200 {
+            let ready = fs::read(&stale_artifact)
+                .map(|contents| contents == b"binary-go-scip")
+                .unwrap_or(false);
+            if ready {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert_eq!(
+            fs::read(&stale_artifact).expect("artifact should be readable"),
+            b"binary-go-scip"
+        );
+
+        let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+        let health = server.workspace_index_health_summary(&workspace, &storage);
+        let go_generator = health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("go"))
+            .expect("go generator should be reported");
+        let expected_tool = bin_dir.join("scip-go").display().to_string();
+        assert_eq!(go_generator.tool.as_deref(), Some(expected_tool.as_str()));
+        let generation = go_generator
+            .last_generation
+            .as_ref()
+            .expect("go generation should be cached");
+        assert_eq!(
+            generation.status,
+            crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
+        );
+        assert_eq!(
+            generation
+                .artifact_path
+                .as_deref()
+                .expect("artifact path should be recorded"),
+            fs::canonicalize(&stale_artifact)
+                .expect("artifact path should canonicalize")
+                .display()
+                .to_string()
+        );
+    });
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
 fn read_only_tool_execution_context_rejects_unknown_repository_hint() {
     let server = FriggMcpServer::new(fixture_config());
     let error = server
@@ -505,6 +937,12 @@ async fn wait_for_repository_answer_cache_eviction(
             .read()
             .expect("heuristic reference cache should not be poisoned")
             .is_empty();
+        let file_content_evicted = server
+            .cache_state
+            .file_content_window_cache
+            .read()
+            .expect("file content window cache should not be poisoned")
+            .is_empty();
 
         if summary_evicted
             && text_evicted
@@ -513,6 +951,7 @@ async fn wait_for_repository_answer_cache_eviction(
             && definition_evicted
             && declarations_evicted
             && heuristic_evicted
+            && file_content_evicted
         {
             return true;
         }
@@ -778,6 +1217,115 @@ async fn workspace_detach_clears_session_default_and_preserves_known_workspace()
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[tokio::test]
+async fn read_file_and_explore_share_the_file_content_window_cache() {
+    let workspace_root = temp_workspace_root("file-content-window-cache-share");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn alpha() {}\npub fn beta() {}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let read_params = crate::mcp::types::ReadFileParams {
+        path: "src/lib.rs".to_owned(),
+        repository_id: Some(workspace.repository_id.clone()),
+        max_bytes: None,
+        line_start: None,
+        line_end: None,
+    };
+    let first_read = server
+        .read_file_impl(read_params.clone())
+        .await
+        .expect("first read_file call should succeed");
+    assert!(first_read.0.content.contains("pub fn alpha"));
+    assert_eq!(
+        server
+            .cache_state
+            .file_content_window_cache
+            .read()
+            .expect("file content cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert_eq!(
+        server.runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow),
+        crate::mcp::server_cache::RuntimeCacheTelemetry {
+            hits: 0,
+            misses: 1,
+            bypasses: 0,
+            inserts: 1,
+            evictions: 0,
+            invalidations: 0,
+        }
+    );
+
+    let first_explore = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("beta".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(4),
+            resume_from: None,
+        })
+        .await
+        .expect("explore should reuse the shared file content cache");
+    assert_eq!(first_explore.0.total_matches, 1);
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
+            .hits
+            >= 1
+    );
+    assert_eq!(
+        server
+            .cache_state
+            .file_content_window_cache
+            .read()
+            .expect("file content cache should not be poisoned")
+            .len(),
+        1
+    );
+
+    let second_read = server
+        .read_file_impl(read_params)
+        .await
+        .expect("second read_file call should reuse the shared file content cache");
+    assert_eq!(first_read.0.content, second_read.0.content);
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
+            .hits
+            >= 2
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn watch_leases_follow_session_adoption_counts() {
     let workspace_root = temp_workspace_root("watch-lease-counts");
@@ -972,14 +1520,36 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
     let empty_declarations_response = FindDeclarationsResponse {
         matches: Vec::new(),
+        mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
+    server.cache_file_content_window(
+        FileContentWindowCacheKey {
+            scoped_repository_ids: vec!["repo-001".to_owned()],
+            freshness_scopes: vec![repo_001_scope.clone()],
+            canonical_path: PathBuf::from("/tmp/repo-001/file.rs"),
+        },
+        Arc::new(FileContentSnapshot::from_bytes(
+            b"fn repo_001() {}\n".to_vec(),
+        )),
+    );
+    server.cache_file_content_window(
+        FileContentWindowCacheKey {
+            scoped_repository_ids: vec!["repo-002".to_owned()],
+            freshness_scopes: vec![repo_002_scope.clone()],
+            canonical_path: PathBuf::from("/tmp/repo-002/file.rs"),
+        },
+        Arc::new(FileContentSnapshot::from_bytes(
+            b"fn repo_002() {}\n".to_vec(),
+        )),
+    );
 
     server.cache_search_text_response(
         SearchTextResponseCacheKey {
@@ -1240,6 +1810,21 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
             .len(),
         1
     );
+    assert_eq!(
+        server
+            .cache_state
+            .file_content_window_cache
+            .read()
+            .expect("file content cache should not be poisoned")
+            .len(),
+        1
+    );
+    assert!(
+        server
+            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
+            .invalidations
+            >= 1
+    );
     assert!(
         server
             .cache_state
@@ -1443,11 +2028,13 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
     let empty_declarations_response = FindDeclarationsResponse {
         matches: Vec::new(),
+        mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
@@ -2581,4 +3168,192 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
     assert_eq!(response.0.0.matches[0].line, 1);
 
     let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn inspect_syntax_tree_returns_focus_and_ancestor_stack() {
+    let workspace_root = temp_workspace_root("inspect-syntax-tree");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn greet() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let repository_id = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace")
+        .repository_id;
+    let response = server
+        .inspect_syntax_tree(rmcp::handler::server::wrapper::Parameters(
+            InspectSyntaxTreeParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some(repository_id),
+                line: Some(2),
+                column: Some(6),
+                max_ancestors: Some(4),
+                max_children: Some(6),
+            },
+        ))
+        .await
+        .expect("inspect_syntax_tree should succeed")
+        .0;
+
+    assert_eq!(response.language, "rust");
+    assert_eq!(response.path, "src/lib.rs");
+    assert_eq!(response.focus.line, 2);
+    assert!(
+        response
+            .ancestors
+            .iter()
+            .any(|node| node.kind == "call_expression"),
+        "expected call_expression in ancestor stack, got {:?}",
+        response
+            .ancestors
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>()
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn search_structural_invalid_query_returns_recovery_guidance() {
+    let workspace_root = temp_workspace_root("search-structural-guidance");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn greet() {}\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let repository_id = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace")
+        .repository_id;
+    let error = match server
+        .search_structural(rmcp::handler::server::wrapper::Parameters(
+            SearchStructuralParams {
+                query: "(function_item @broken".to_owned(),
+                language: Some("rust".to_owned()),
+                repository_id: Some(repository_id),
+                path_regex: None,
+                limit: Some(10),
+            },
+        ))
+        .await
+    {
+        Ok(_) => panic!("invalid structural query must error"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("likely_cause"))
+            .and_then(|value| value.as_str()),
+        Some("tree_sitter_node_shape_mismatch")
+    );
+    let fallback_tools = error
+        .data
+        .as_ref()
+        .and_then(|value| value.get("fallback_tools"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        fallback_tools
+            .iter()
+            .any(|value| value.as_str() == Some("inspect_syntax_tree"))
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn location_navigation_prefers_token_under_cursor_before_enclosing_symbol() {
+    let workspace_root = temp_workspace_root("location-token-resolution");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "fn helper() {}\n\nfn wrapper() {\n    helper();\n}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let repository_id = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace")
+        .repository_id;
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&repository_id))
+        .expect("symbol corpus collection should succeed");
+    let resolved = FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src/lib.rs"),
+        Some(4),
+        Some(8),
+        None,
+    )
+    .expect("location target resolution should succeed");
+
+    assert_eq!(resolved.symbol_query, "helper");
+    assert_eq!(resolved.resolution_source, "location_token");
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn call_hierarchy_availability_distinguishes_heuristic_and_unavailable_modes() {
+    let no_precise = PreciseIngestStats::default();
+    let unavailable =
+        FriggMcpServer::call_hierarchy_availability(PreciseCoverageMode::None, &no_precise, 0, 0);
+    assert_eq!(unavailable.status, "unavailable");
+    assert_eq!(
+        unavailable.reason.as_deref(),
+        Some("no_scip_artifacts_discovered")
+    );
+    assert!(unavailable.precise_required_for_complete_results);
+
+    let heuristic =
+        FriggMcpServer::call_hierarchy_availability(PreciseCoverageMode::None, &no_precise, 0, 2);
+    assert_eq!(heuristic.status, "heuristic");
+    assert_eq!(
+        heuristic.reason.as_deref(),
+        Some("no_scip_artifacts_discovered")
+    );
+    assert!(heuristic.precise_required_for_complete_results);
 }

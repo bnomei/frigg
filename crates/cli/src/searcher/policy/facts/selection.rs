@@ -195,6 +195,7 @@ pub(crate) struct SelectionFacts {
     pub(crate) wants_entrypoint_build_flow: bool,
     pub(crate) wants_examples: bool,
     pub(crate) wants_benchmarks: bool,
+    pub(crate) lexical_only_mode: bool,
     pub(crate) candidate_language_known: bool,
     pub(crate) matches_query_language: bool,
     pub(crate) is_ci_workflow: bool,
@@ -252,6 +253,16 @@ impl SelectionFacts {
         intent: &HybridRankingIntent,
         query_context: &PolicyQueryContext,
         state: &SelectionState,
+    ) -> Self {
+        Self::from_candidate_with_mode(candidate, intent, query_context, state, false)
+    }
+
+    pub(crate) fn from_candidate_with_mode(
+        candidate: &SelectionCandidate,
+        intent: &HybridRankingIntent,
+        query_context: &PolicyQueryContext,
+        state: &SelectionState,
+        lexical_only_mode: bool,
     ) -> Self {
         let shared_intent = SharedIntentFacts::from_intent(intent);
         let shared_path = &candidate.shared_path;
@@ -344,6 +355,7 @@ impl SelectionFacts {
             wants_entrypoint_build_flow: shared_intent.wants_entrypoint_build_flow,
             wants_examples: shared_intent.wants_examples,
             wants_benchmarks: shared_intent.wants_benchmarks,
+            lexical_only_mode,
             candidate_language_known: shared_path.language.is_some(),
             matches_query_language: shared_path.matches_query_language(intent),
             is_ci_workflow: candidate.static_features.is_ci_workflow,
@@ -462,6 +474,7 @@ impl Default for SelectionFacts {
             wants_entrypoint_build_flow: false,
             wants_examples: false,
             wants_benchmarks: false,
+            lexical_only_mode: false,
             candidate_language_known: false,
             matches_query_language: false,
             is_ci_workflow: false,

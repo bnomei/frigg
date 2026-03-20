@@ -1,8 +1,16 @@
 [package]
 name = "frigg"
+authors.workspace = true
+categories.workspace = true
+description.workspace = true
+documentation.workspace = true
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
+readme.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]
@@ -35,7 +43,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tree-sitter.workspace = true
-tree-sitter-blade = { path = "../../vendor/tree-sitter-blade" }
+tree-sitter-blade.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-kotlin.workspace = true
 tree-sitter-lua.workspace = true

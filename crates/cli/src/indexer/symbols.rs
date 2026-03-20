@@ -105,6 +105,22 @@ pub struct StructuralQueryMatch {
     pub excerpt: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntaxTreeInspectionNode {
+    pub kind: String,
+    pub named: bool,
+    pub span: SourceSpan,
+    pub excerpt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntaxTreeInspection {
+    pub language: SymbolLanguage,
+    pub focus: SyntaxTreeInspectionNode,
+    pub ancestors: Vec<SyntaxTreeInspectionNode>,
+    pub children: Vec<SyntaxTreeInspectionNode>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeuristicReferenceConfidence {
@@ -421,6 +437,79 @@ pub fn search_structural_in_source(
     Ok(matches)
 }
 
+pub fn inspect_syntax_tree_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    max_ancestors: usize,
+    max_children: usize,
+) -> FriggResult<SyntaxTreeInspection> {
+    if line == Some(0) {
+        return Err(FriggError::InvalidInput(
+            "line must be greater than zero when provided".to_owned(),
+        ));
+    }
+    if column == Some(0) {
+        return Err(FriggError::InvalidInput(
+            "column must be greater than zero when provided".to_owned(),
+        ));
+    }
+    if line.is_none() != column.is_none() {
+        return Err(FriggError::InvalidInput(
+            "line and column must be provided together".to_owned(),
+        ));
+    }
+
+    let mut parser = parser_for_path(language, path)?;
+    let tree = parser.parse(source, None).ok_or_else(|| {
+        FriggError::Internal(format!(
+            "failed to parse source for syntax inspection: {}",
+            path.display()
+        ))
+    })?;
+    let root = tree.root_node();
+    let focus_node = match (line, column) {
+        (Some(line), Some(column)) => {
+            let offset = byte_offset_for_line_column(source, line, column).ok_or_else(|| {
+                FriggError::InvalidInput(format!(
+                    "location {line}:{column} is outside file {}",
+                    path.display()
+                ))
+            })?;
+            focus_node_for_offset(root, offset)
+        }
+        _ => root,
+    };
+
+    let mut ancestors = Vec::new();
+    let mut cursor = focus_node;
+    while let Some(parent) = cursor.parent() {
+        ancestors.push(syntax_tree_inspection_node(source, parent));
+        cursor = parent;
+        if ancestors.len() >= max_ancestors {
+            break;
+        }
+    }
+
+    let mut children = Vec::new();
+    let mut child_cursor = focus_node.walk();
+    for child in focus_node.children(&mut child_cursor) {
+        children.push(syntax_tree_inspection_node(source, child));
+        if children.len() >= max_children {
+            break;
+        }
+    }
+
+    Ok(SyntaxTreeInspection {
+        language,
+        focus: syntax_tree_inspection_node(source, focus_node),
+        ancestors,
+        children,
+    })
+}
+
 pub fn extract_symbols_from_file(path: &Path) -> FriggResult<Vec<SymbolDefinition>> {
     let language = SymbolLanguage::from_path(path).ok_or_else(|| {
         FriggError::InvalidInput(format!(
@@ -571,6 +660,41 @@ pub(crate) fn line_column_for_offset(source: &str, offset: usize) -> (usize, usi
     (line, column)
 }
 
+pub(crate) fn byte_offset_for_line_column(
+    source: &str,
+    line: usize,
+    column: usize,
+) -> Option<usize> {
+    if line == 0 || column == 0 {
+        return None;
+    }
+    let bytes = source.as_bytes();
+    let mut current_line = 1usize;
+    let mut line_start = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        if current_line == line {
+            let line_end = bytes[line_start..]
+                .iter()
+                .position(|candidate| *candidate == b'\n')
+                .map(|offset| line_start + offset)
+                .unwrap_or(bytes.len());
+            let line_len = line_end.saturating_sub(line_start);
+            let column_offset = column.saturating_sub(1).min(line_len);
+            return Some(line_start + column_offset);
+        }
+        if *byte == b'\n' {
+            current_line = current_line.saturating_add(1);
+            line_start = index.saturating_add(1);
+        }
+    }
+    if current_line == line {
+        let line_len = bytes.len().saturating_sub(line_start);
+        let column_offset = column.saturating_sub(1).min(line_len);
+        return Some(line_start + column_offset);
+    }
+    None
+}
+
 pub(crate) fn source_span(node: Node<'_>) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
@@ -582,6 +706,60 @@ pub(crate) fn source_span(node: Node<'_>) -> SourceSpan {
         end_line: end.row + 1,
         end_column: end.column + 1,
     }
+}
+
+fn focus_node_for_offset(root: Node<'_>, offset: usize) -> Node<'_> {
+    let mut current = root;
+    loop {
+        let mut next_named = None;
+        let mut next_any = None;
+        let mut cursor = current.walk();
+        for child in current.children(&mut cursor) {
+            if child.start_byte() > offset || child.end_byte() < offset {
+                continue;
+            }
+            if next_any.is_none() {
+                next_any = Some(child);
+            }
+            if child.is_named() {
+                next_named = Some(child);
+                break;
+            }
+        }
+        let Some(next) = next_named.or(next_any) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn syntax_tree_inspection_node(source: &str, node: Node<'_>) -> SyntaxTreeInspectionNode {
+    SyntaxTreeInspectionNode {
+        kind: node.kind().to_owned(),
+        named: node.is_named(),
+        span: source_span(node),
+        excerpt: trim_syntax_excerpt(source, node.start_byte(), node.end_byte()),
+    }
+}
+
+fn trim_syntax_excerpt(source: &str, start_byte: usize, end_byte: usize) -> String {
+    const MAX_EXCERPT_CHARS: usize = 120;
+    if start_byte >= end_byte || start_byte >= source.len() {
+        return String::new();
+    }
+    let clamped_end = end_byte.min(source.len());
+    let raw = String::from_utf8_lossy(&source.as_bytes()[start_byte..clamped_end]);
+    let trimmed = raw.trim();
+    if trimmed.chars().count() <= MAX_EXCERPT_CHARS {
+        return trimmed.to_owned();
+    }
+    let mut excerpt = trimmed.chars().take(MAX_EXCERPT_CHARS).collect::<String>();
+    excerpt.push_str("...");
+    excerpt
 }
 
 fn stable_symbol_id(

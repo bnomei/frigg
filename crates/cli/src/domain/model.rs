@@ -38,12 +38,21 @@ pub struct SymbolMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceMatchKind {
+    Definition,
+    Declaration,
+    Reference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReferenceMatch {
     pub repository_id: String,
     pub symbol: String,
     pub path: String,
     pub line: usize,
     pub column: usize,
+    pub match_kind: ReferenceMatchKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

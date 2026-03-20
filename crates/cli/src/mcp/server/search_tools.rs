@@ -16,6 +16,11 @@ use crate::searcher::{
 };
 
 impl FriggMcpServer {
+    const INSPECT_SYNTAX_TREE_DEFAULT_MAX_ANCESTORS: usize = 8;
+    const INSPECT_SYNTAX_TREE_MAX_ANCESTORS: usize = 24;
+    const INSPECT_SYNTAX_TREE_DEFAULT_MAX_CHILDREN: usize = 12;
+    const INSPECT_SYNTAX_TREE_MAX_CHILDREN: usize = 32;
+
     pub(super) fn invalidate_repository_search_response_caches(&self, repository_id: &str) {
         let mut search_text_cache = self
             .cache_state
@@ -470,6 +475,7 @@ impl FriggMcpServer {
                         semantic_candidate_count,
                         semantic_hit_count,
                         semantic_match_count,
+                        lexical_only_mode: Some(search_output.note.lexical_only_mode),
                         warning: warning.clone(),
                         diagnostics_count,
                         diagnostics: SearchHybridDiagnosticsSummary {
@@ -1111,6 +1117,217 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
+    fn syntax_tree_node_item(
+        path: &str,
+        node: crate::indexer::SyntaxTreeInspectionNode,
+    ) -> SyntaxTreeNodeItem {
+        SyntaxTreeNodeItem {
+            kind: node.kind,
+            named: node.named,
+            path: path.to_owned(),
+            line: node.span.start_line,
+            column: node.span.start_column,
+            end_line: node.span.end_line,
+            end_column: node.span.end_column,
+            excerpt: node.excerpt,
+        }
+    }
+
+    pub(super) async fn inspect_syntax_tree_impl(
+        &self,
+        params: InspectSyntaxTreeParams,
+    ) -> Result<Json<InspectSyntaxTreeResponse>, ErrorData> {
+        let execution_context = self
+            .read_only_tool_execution_context("inspect_syntax_tree", params.repository_id.clone());
+        let params_for_blocking = params.clone();
+        let server = self.clone();
+        let execution = self.run_read_only_tool_blocking(&execution_context, move || {
+            let mut resolved_repository_id: Option<String> = None;
+            let mut resolved_path: Option<String> = None;
+            let mut language_name: Option<String> = None;
+
+            let result = (|| -> Result<Json<InspectSyntaxTreeResponse>, ErrorData> {
+                if params_for_blocking.path.trim().is_empty() {
+                    return Err(Self::invalid_params("path must not be empty", None));
+                }
+                if params_for_blocking.line == Some(0) {
+                    return Err(Self::invalid_params(
+                        "line must be greater than zero when provided",
+                        Some(json!({ "line": params_for_blocking.line })),
+                    ));
+                }
+                if params_for_blocking.column == Some(0) {
+                    return Err(Self::invalid_params(
+                        "column must be greater than zero when provided",
+                        Some(json!({ "column": params_for_blocking.column })),
+                    ));
+                }
+                if params_for_blocking.line.is_none() != params_for_blocking.column.is_none() {
+                    return Err(Self::invalid_params(
+                        "line and column must be provided together",
+                        Some(json!({
+                            "line": params_for_blocking.line,
+                            "column": params_for_blocking.column,
+                        })),
+                    ));
+                }
+
+                let max_ancestors = params_for_blocking
+                    .max_ancestors
+                    .unwrap_or(Self::INSPECT_SYNTAX_TREE_DEFAULT_MAX_ANCESTORS)
+                    .clamp(1, Self::INSPECT_SYNTAX_TREE_MAX_ANCESTORS);
+                let max_children = params_for_blocking
+                    .max_children
+                    .unwrap_or(Self::INSPECT_SYNTAX_TREE_DEFAULT_MAX_CHILDREN)
+                    .clamp(1, Self::INSPECT_SYNTAX_TREE_MAX_CHILDREN);
+                let read_params = ReadFileParams {
+                    path: params_for_blocking.path.clone(),
+                    repository_id: params_for_blocking.repository_id.clone(),
+                    line_start: None,
+                    line_end: None,
+                    max_bytes: None,
+                };
+                let (repository_id, absolute_path, display_path) =
+                    server.resolve_file_path(&read_params)?;
+                resolved_repository_id = Some(repository_id.clone());
+                resolved_path = Some(display_path.clone());
+                let language =
+                    supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch)
+                        .ok_or_else(|| {
+                            Self::invalid_params(
+                                LanguageCapability::StructuralSearch
+                                    .unsupported_file_message("inspect_syntax_tree"),
+                                Some(json!({
+                                    "path": display_path.clone(),
+                                    "supported_extensions": LanguageCapability::StructuralSearch.supported_extensions(),
+                                })),
+                            )
+                        })?;
+                language_name = Some(language.as_str().to_owned());
+                let metadata = fs::metadata(&absolute_path).map_err(|err| {
+                    Self::internal(
+                        format!(
+                            "failed to stat source file {}: {err}",
+                            absolute_path.display()
+                        ),
+                        None,
+                    )
+                })?;
+                let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+                if bytes > server.config.max_file_bytes {
+                    return Err(Self::invalid_params(
+                        format!("file exceeds max_bytes={}", server.config.max_file_bytes),
+                        Some(json!({
+                            "path": display_path.clone(),
+                            "bytes": bytes,
+                            "max_bytes": server.config.max_file_bytes,
+                            "config_max_file_bytes": server.config.max_file_bytes,
+                        })),
+                    ));
+                }
+                let source = fs::read_to_string(&absolute_path).map_err(|err| {
+                    Self::internal(
+                        format!(
+                            "failed to read source file {}: {err}",
+                            absolute_path.display()
+                        ),
+                        None,
+                    )
+                })?;
+                let inspection = inspect_syntax_tree_in_source(
+                    language,
+                    &absolute_path,
+                    &source,
+                    params_for_blocking.line,
+                    params_for_blocking.column,
+                    max_ancestors,
+                    max_children,
+                )
+                .map_err(Self::map_frigg_error)?;
+
+                let metadata = json!({
+                    "source": "tree_sitter",
+                    "language": inspection.language.as_str(),
+                    "selection_mode": if params_for_blocking.line.is_some() {
+                        "location"
+                    } else {
+                        "root"
+                    },
+                    "max_ancestors": max_ancestors,
+                    "max_children": max_children,
+                });
+                let (metadata, note) = Self::metadata_note_pair(metadata);
+                Ok(Json(InspectSyntaxTreeResponse {
+                    repository_id,
+                    path: display_path.clone(),
+                    language: inspection.language.as_str().to_owned(),
+                    focus: Self::syntax_tree_node_item(&display_path, inspection.focus),
+                    ancestors: inspection
+                        .ancestors
+                        .into_iter()
+                        .map(|node| Self::syntax_tree_node_item(&display_path, node))
+                        .collect(),
+                    children: inspection
+                        .children
+                        .into_iter()
+                        .map(|node| Self::syntax_tree_node_item(&display_path, node))
+                        .collect(),
+                    metadata,
+                    note,
+                }))
+            })();
+
+            (result, resolved_repository_id, resolved_path, language_name)
+        })
+        .await?;
+
+        let (result, resolved_repository_id, resolved_path, language_name) = execution;
+        let provenance_result = self
+            .record_provenance_blocking(
+                "inspect_syntax_tree",
+                execution_context.repository_hint.as_deref(),
+                json!({
+                    "repository_id": execution_context.repository_hint,
+                    "path": Self::bounded_text(&params.path),
+                    "line": params.line,
+                    "column": params.column,
+                    "max_ancestors": params.max_ancestors,
+                    "max_children": params.max_children,
+                }),
+                json!({
+                    "resolved_repository_id": resolved_repository_id,
+                    "resolved_path": resolved_path,
+                    "language": language_name,
+                }),
+                &result,
+            )
+            .await;
+        self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    fn structural_invalid_query_error(
+        query: &str,
+        language: SymbolLanguage,
+        raw_message: &str,
+    ) -> ErrorData {
+        Self::invalid_params(
+            raw_message.to_owned(),
+            Some(json!({
+                "query": Self::bounded_text(query),
+                "language": language.as_str(),
+                "error_class": "tree_sitter_query_invalid",
+                "likely_cause": "tree_sitter_node_shape_mismatch",
+                "fallback_tools": [
+                    "inspect_syntax_tree",
+                    "document_symbols",
+                    "search_symbol",
+                    "search_text"
+                ],
+                "guidance": "search_structural expects a valid tree-sitter query for the target language grammar. Use inspect_syntax_tree on a representative file to inspect real node kinds before retrying.",
+            })),
+        )
+    }
+
     pub(super) async fn search_structural_impl(
         &self,
         params: SearchStructuralParams,
@@ -1213,8 +1430,20 @@ impl FriggMcpServer {
                         };
 
                         let structural_matches =
-                            search_structural_in_source(language, source_path, &source, &query)
-                                .map_err(Self::map_frigg_error)?;
+                            match search_structural_in_source(language, source_path, &source, &query)
+                            {
+                                Ok(matches) => matches,
+                                Err(FriggError::InvalidInput(message))
+                                    if message.starts_with("invalid structural query") =>
+                                {
+                                    return Err(Self::structural_invalid_query_error(
+                                        &query,
+                                        language,
+                                        &message,
+                                    ));
+                                }
+                                Err(err) => return Err(Self::map_frigg_error(err)),
+                            };
                         if language == SymbolLanguage::Blade {
                             let blade_evidence =
                                 extract_blade_source_evidence_from_source(&source, &[]);

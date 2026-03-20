@@ -4,14 +4,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use frigg::domain::model::ReferenceMatchKind;
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
     FindDeclarationsParams, FindImplementationsParams, FindReferencesParams, GoToDefinitionParams,
-    IncomingCallsParams, ListRepositoriesParams, OutgoingCallsParams, ReadFileParams,
-    SearchHybridParams, SearchPatternType, SearchStructuralParams, SearchSymbolParams,
-    SearchSymbolPathClass, SearchTextParams, WorkspaceAttachParams, WorkspaceCurrentParams,
-    WorkspaceIndexComponentState, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    IncomingCallsParams, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
+    ReadFileParams, SearchHybridParams, SearchPatternType, SearchStructuralParams,
+    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceAttachAction,
+    WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceIndexComponentState,
+    WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{
     FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
@@ -337,7 +339,25 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert_eq!(first.repository.repository_id, "repo-001");
     assert_eq!(first.resolution, WorkspaceResolveMode::GitRoot);
     assert!(first.session_default);
+    assert_eq!(first.action, WorkspaceAttachAction::AttachedFresh);
     assert_ne!(first.storage.index_state, WorkspaceStorageIndexState::Error);
+    assert!(matches!(
+        first.precise.state,
+        WorkspacePreciseState::Ok
+            | WorkspacePreciseState::Unavailable
+            | WorkspacePreciseState::Partial
+            | WorkspacePreciseState::Failed
+    ));
+    assert!(
+        first.precise.generation_action.is_some(),
+        "workspace_attach should always expose a top-level precise generation action summary"
+    );
+    if first.precise.failure_tool.is_some() {
+        assert!(
+            first.precise.failure_summary.is_some() || first.precise.failure_class.is_some(),
+            "precise failures should surface a summary or typed failure class"
+        );
+    }
     assert!(first.repository.storage.is_none());
     assert!(first.repository.health.is_some());
     let serialized: serde_json::Value =
@@ -365,6 +385,7 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         second.repository.repository_id,
         first.repository.repository_id
     );
+    assert_eq!(second.action, WorkspaceAttachAction::ReusedWorkspace);
 
     let current = server
         .workspace_current(Parameters(WorkspaceCurrentParams {}))
@@ -380,6 +401,7 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert!(current_repository.health.is_some());
     assert_eq!(current.repositories.len(), 1);
     assert_eq!(current.repositories[0].repository_id, "repo-001");
+    assert!(current.precise.is_some());
     let runtime = current
         .runtime
         .as_ref()
@@ -2481,6 +2503,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2492,11 +2515,16 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
         "expected at least two deterministic heuristic references"
     );
     assert_eq!(response.total_matches, response.matches.len());
+    assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
     assert_eq!(response.matches[0].repository_id, "repo-001");
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 2);
     assert_eq!(response.matches[0].column, 25);
+    assert_eq!(
+        response.matches[0].match_kind,
+        ReferenceMatchKind::Reference
+    );
 
     let note = response
         .note
@@ -2526,6 +2554,53 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
             .as_u64()
             .unwrap_or(0)
             >= 1
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_includes_definition_when_requested_by_default() {
+    let workspace_root = temp_workspace_root("find-references-include-definition");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub struct User;\n\
+         pub fn create_user() -> User { User }\n\
+         pub fn use_user() { let _ = User; }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("User".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should return heuristic references with a definition row")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
+    assert_eq!(
+        response
+            .matches
+            .first()
+            .expect("definition row should be present")
+            .match_kind,
+        ReferenceMatchKind::Definition
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .any(|entry| entry.match_kind == ReferenceMatchKind::Reference)
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -2575,6 +2650,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2582,11 +2658,16 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.mode, NavigationMode::Precise);
     assert_eq!(response.matches[0].repository_id, "repo-001");
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 3);
     assert_eq!(response.matches[0].column, 32);
+    assert_eq!(
+        response.matches[0].match_kind,
+        ReferenceMatchKind::Reference
+    );
 
     let note = response
         .note
@@ -2640,6 +2721,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2647,11 +2729,16 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.mode, NavigationMode::Precise);
     assert_eq!(response.matches[0].repository_id, "repo-001");
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 3);
     assert_eq!(response.matches[0].column, 32);
+    assert_eq!(
+        response.matches[0].match_kind,
+        ReferenceMatchKind::Reference
+    );
 
     let note = response
         .note
@@ -2694,6 +2781,7 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2704,6 +2792,7 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
         response.matches.len() >= 2,
         "expected deterministic heuristic fallback references"
     );
+    assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
 
     let note = response
         .note
@@ -2761,6 +2850,7 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2822,6 +2912,7 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2936,6 +3027,7 @@ async fn find_references_precise_results_stay_pinned_to_runtime_target_selection
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -2960,6 +3052,99 @@ async fn find_references_precise_results_stay_pinned_to_runtime_target_selection
         "runtime"
     );
     assert_eq!(note_json["precise"]["reference_count"], 1);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_matches_precise_typescript_symbols_without_display_names() {
+    let workspace_root = temp_workspace_root("find-references-typescript-symbol-tail");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("auth.ts"),
+        "const requireServerUser = () => {};\n\
+         export function handler() {\n\
+             requireServerUser();\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "typescript-tail.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/auth.ts",
+              "occurrences": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "range": [0, 6, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:handler.",
+                  "range": [1, 16, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "range": [2, 4, 21],
+                  "symbol_roles": 8
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "display_name": "",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:handler.",
+                  "display_name": "handler",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("requireServerUser".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should resolve precise TypeScript references")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "requireServerUser");
+    assert_eq!(response.matches[0].path, "src/auth.ts");
+    assert_eq!(response.matches[0].line, 3);
+    assert_eq!(response.matches[0].column, 5);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit precise metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser."
+    );
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -3016,6 +3201,7 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3081,6 +3267,7 @@ async fn find_references_falls_back_when_partial_precise_absence_is_non_authorit
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3133,6 +3320,7 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3183,6 +3371,7 @@ async fn find_references_prefers_location_resolution_when_symbol_and_location_ar
             path: Some("src/lib.php".to_owned()),
             line: Some(3),
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3225,6 +3414,7 @@ async fn find_references_resolves_location_only_requests() {
             path: Some("src/lib.php".to_owned()),
             line: Some(3),
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3258,6 +3448,7 @@ async fn find_references_rejects_requests_without_symbol_or_location() {
             path: None,
             line: None,
             column: None,
+            include_definition: Some(false),
             limit: Some(20),
         }))
         .await
@@ -3462,6 +3653,153 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
     assert_eq!(note_json["resolution_source"], "location");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_rust_use_path_prefers_imported_symbol_over_same_file_name() {
+    let workspace_root = temp_workspace_root("go-to-definition-rust-use-import");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create rust fixture");
+    fs::write(src_root.join("worker.rs"), "pub fn helper() {}\n")
+        .expect("failed to seed imported helper fixture");
+    let use_line = "use crate::worker::helper;\n";
+    fs::write(
+        src_root.join("app.rs"),
+        format!("pub fn helper() {{}}\n{use_line}pub fn call() {{ helper(); }}\n"),
+    )
+    .expect("failed to seed ambiguous import fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/app.rs".to_owned()),
+            line: Some(2),
+            column: Some(use_line.find("helper").expect("import token present") + 1),
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should prefer the imported Rust symbol at use sites")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "helper");
+    assert_eq!(response.matches[0].path, "src/worker.rs");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit location-token metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_rust");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_rust_reexport_alias_resolves_underlying_symbol() {
+    let workspace_root = temp_workspace_root("go-to-definition-rust-reexport-alias");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create rust fixture");
+    fs::write(src_root.join("worker.rs"), "pub fn helper() {}\n")
+        .expect("failed to seed imported helper fixture");
+    let reexport_line = "pub use crate::worker::helper as local_helper;\n";
+    fs::write(
+        src_root.join("lib.rs"),
+        format!("{reexport_line}pub fn local_helper() {{}}\n"),
+    )
+    .expect("failed to seed re-export alias fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/lib.rs".to_owned()),
+            line: Some(1),
+            column: Some(
+                reexport_line
+                    .find("local_helper")
+                    .expect("alias token present")
+                    + 1,
+            ),
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should resolve the underlying re-exported Rust symbol")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "helper");
+    assert_eq!(response.matches[0].path, "src/worker.rs");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit location-token metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_rust");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_free_function() {
+    let workspace_root = temp_workspace_root("go-to-definition-rust-method-vs-function");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create rust fixture");
+    let call_line = "    fn call(&self) { self.render(); }\n";
+    fs::write(
+        src_root.join("lib.rs"),
+        format!(
+            "fn render() {{}}\n\
+             trait Renderer {{ fn render(&self); }}\n\
+             struct App;\n\
+             impl Renderer for App {{\n\
+                 fn render(&self) {{}}\n\
+{call_line}\
+             }}\n"
+        ),
+    )
+    .expect("failed to seed rust method fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("src/lib.rs".to_owned()),
+            line: Some(6),
+            column: Some(call_line.rfind("render").expect("method token present") + 1),
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should prefer the impl method at a Rust field call site")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "render");
+    assert_eq!(response.matches[0].path, "src/lib.rs");
+    assert_eq!(response.matches[0].line, 5);
+    assert_eq!(response.matches[0].kind.as_deref(), Some("method"));
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit location-token metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_rust");
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -4429,6 +4767,7 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
         .0;
 
     assert_eq!(response.matches.len(), 2);
+    assert_eq!(response.mode, NavigationMode::Precise);
     assert_eq!(response.matches[0].source_symbol, "first");
     assert_eq!(response.matches[1].source_symbol, "second");
     assert!(
@@ -4524,6 +4863,190 @@ async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls()
     assert_eq!(response.matches[0].call_column, Some(5));
     assert_eq!(response.matches[0].call_end_line, Some(3));
     assert_eq!(response.matches[0].call_end_column, Some(11));
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_incoming_calls_matches_precise_typescript_symbols_without_display_names() {
+    let workspace_root = temp_workspace_root("navigation-incoming-typescript-symbol-tail");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("auth.ts"),
+        "const requireServerUser = () => {};\n\
+         export function handler() {\n\
+             requireServerUser();\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "typescript-incoming.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/auth.ts",
+              "occurrences": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "range": [0, 6, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:handler.",
+                  "range": [1, 16, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "range": [2, 4, 21],
+                  "symbol_roles": 8
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser.",
+                  "display_name": "",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/auth.ts:handler.",
+                  "display_name": "handler",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .incoming_calls(Parameters(IncomingCallsParams {
+            symbol: Some("requireServerUser".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("incoming_calls should resolve precise TypeScript callers")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].source_symbol, "handler");
+    assert_eq!(response.matches[0].target_symbol, "requireServerUser");
+    assert_eq!(response.matches[0].relation, "calls");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+    assert_eq!(
+        response.matches[0].call_path.as_deref(),
+        Some("src/auth.ts")
+    );
+    assert_eq!(response.matches[0].call_line, Some(3));
+    assert_eq!(response.matches[0].call_column, Some(5));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("incoming_calls should emit precise metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("incoming_calls note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "scip-typescript npm app 1.0.0 src/auth.ts:requireServerUser."
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_incoming_calls_marks_unspecified_typescript_occurrences_as_calls() {
+    let workspace_root =
+        temp_workspace_root("navigation-incoming-typescript-unspecified-callable-kind");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("auth.ts"),
+        "export function requireServerUser() {}\n\
+         export function handler() {\n\
+             requireServerUser();\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "typescript-incoming-unspecified.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/auth.ts",
+              "occurrences": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "range": [0, 16, 33],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/handler().",
+                  "range": [1, 16, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "range": [2, 4, 21],
+                  "symbol_roles": 8
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "display_name": "",
+                  "kind": "unspecified_kind",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/handler().",
+                  "display_name": "",
+                  "kind": "unspecified_kind",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .incoming_calls(Parameters(IncomingCallsParams {
+            symbol: Some("requireServerUser".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("incoming_calls should classify explicit TypeScript call sites as calls")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].source_symbol, "handler");
+    assert_eq!(response.matches[0].target_symbol, "requireServerUser");
+    assert_eq!(response.matches[0].relation, "calls");
+    assert_eq!(
+        response.matches[0].call_path.as_deref(),
+        Some("src/auth.ts")
+    );
+    assert_eq!(response.matches[0].call_line, Some(3));
+    assert_eq!(response.matches[0].call_column, Some(5));
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -4651,6 +5174,95 @@ async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_a
     );
     assert_eq!(note_json["precision"], "precise");
     assert_eq!(note_json["precise"]["outgoing_count"], 2);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_kind() {
+    let workspace_root =
+        temp_workspace_root("navigation-outgoing-typescript-unspecified-callable-kind");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary typescript fixture");
+    fs::write(
+        src_root.join("auth.ts"),
+        "export function requireServerUser() {}\n\
+         export function handler() {\n\
+             requireServerUser();\n\
+         }\n",
+    )
+    .expect("failed to seed temporary typescript fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "typescript-outgoing-unspecified.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/auth.ts",
+              "occurrences": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "range": [0, 16, 33],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/handler().",
+                  "range": [1, 16, 23],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "range": [2, 4, 21],
+                  "symbol_roles": 8
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/requireServerUser().",
+                  "display_name": "",
+                  "kind": "unspecified_kind",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-typescript npm app 1.0.0 src/`auth.ts`/handler().",
+                  "display_name": "",
+                  "kind": "unspecified_kind",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .outgoing_calls(Parameters(OutgoingCallsParams {
+            symbol: Some("handler".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("outgoing_calls should keep explicit TypeScript call sites when kind data is weak")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].source_symbol, "handler");
+    assert_eq!(response.matches[0].target_symbol, "requireServerUser");
+    assert_eq!(response.matches[0].relation, "calls");
+    assert_eq!(response.matches[0].path, "src/auth.ts");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, 17);
+    assert_eq!(
+        response.matches[0].call_path.as_deref(),
+        Some("src/auth.ts")
+    );
+    assert_eq!(response.matches[0].call_line, Some(3));
+    assert_eq!(response.matches[0].call_column, Some(5));
 
     cleanup_workspace_root(&workspace_root);
 }

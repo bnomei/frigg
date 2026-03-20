@@ -1,5 +1,7 @@
 use super::*;
 use crate::domain::WorkloadFallbackReason;
+use crate::domain::model::ReferenceMatchKind;
+use crate::mcp::types::NavigationMode;
 
 impl FriggMcpServer {
     pub(super) async fn find_references_impl(
@@ -44,6 +46,7 @@ impl FriggMcpServer {
                     .limit
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
+                let include_definition = params_for_blocking.include_definition.unwrap_or(true);
                 effective_limit = Some(limit);
 
                 let corpora = server
@@ -92,11 +95,7 @@ impl FriggMcpServer {
                 };
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
-                let target_resolution = Self::resolve_navigation_symbol_target(
-                    &corpora,
-                    &symbol_query,
-                    params_for_blocking.repository_id.as_deref(),
-                )?;
+                let target_resolution = resolved_target.target;
                 target_selection_candidate_count = target_resolution.candidate_count;
                 target_selection_same_rank_count = target_resolution.selected_rank_candidate_count;
                 let target = target_resolution.candidate;
@@ -133,10 +132,17 @@ impl FriggMcpServer {
                 let precise_references = precise_target
                     .as_ref()
                     .map(|precise_target| {
-                        graph.precise_references_for_symbol(
-                            &target_corpus.repository_id,
-                            &precise_target.symbol,
-                        )
+                        if include_definition {
+                            graph.precise_occurrences_for_symbol(
+                                &target_corpus.repository_id,
+                                &precise_target.symbol,
+                            )
+                        } else {
+                            graph.precise_references_for_symbol(
+                                &target_corpus.repository_id,
+                                &precise_target.symbol,
+                            )
+                        }
                     })
                     .unwrap_or_default();
                 precise_reference_count = precise_references.len();
@@ -163,6 +169,11 @@ impl FriggMcpServer {
                                 path: Self::relative_display_path(&target.root, &absolute_path),
                                 line: reference.range.start_line,
                                 column: reference.range.start_column,
+                                match_kind: if reference.is_definition() {
+                                    ReferenceMatchKind::Definition
+                                } else {
+                                    ReferenceMatchKind::Reference
+                                },
                             }
                         })
                         .collect::<Vec<_>>();
@@ -220,6 +231,9 @@ impl FriggMcpServer {
                     return Ok(Json(FindReferencesResponse {
                         total_matches,
                         matches,
+                        mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
+                            precision,
+                        )),
                         metadata,
                         note,
                     }));
@@ -398,7 +412,7 @@ impl FriggMcpServer {
                     );
                     all_references
                 };
-                total_matches = all_references.len();
+                total_matches = all_references.len() + usize::from(include_definition);
                 let references = all_references.into_iter().take(limit).collect::<Vec<_>>();
 
                 let mut high_confidence = 0usize;
@@ -407,9 +421,19 @@ impl FriggMcpServer {
                 let mut graph_evidence = 0usize;
                 let mut lexical_evidence = 0usize;
 
-                let matches = references
-                    .iter()
-                    .map(|reference| {
+                let mut matches = Vec::new();
+                if include_definition {
+                    matches.push(ReferenceMatch {
+                        repository_id: target_corpus.repository_id.clone(),
+                        symbol: target.symbol.name.clone(),
+                        path: Self::relative_display_path(&target.root, &target.symbol.path),
+                        line: target.symbol.line,
+                        column: 1,
+                        match_kind: ReferenceMatchKind::Definition,
+                    });
+                }
+
+                matches.extend(references.iter().map(|reference| {
                         match reference.confidence {
                             HeuristicReferenceConfidence::High => high_confidence += 1,
                             HeuristicReferenceConfidence::Medium => medium_confidence += 1,
@@ -426,9 +450,12 @@ impl FriggMcpServer {
                             path: Self::relative_display_path(&target.root, &reference.path),
                             line: reference.line,
                             column: reference.column,
+                            match_kind: ReferenceMatchKind::Reference,
                         }
-                    })
-                    .collect::<Vec<_>>();
+                    }));
+                if matches.len() > limit {
+                    matches.truncate(limit);
+                }
 
                 diagnostics_count += source_read_diagnostics_count;
                 let metadata = json!({
@@ -494,6 +521,7 @@ impl FriggMcpServer {
                 Ok(Json(FindReferencesResponse {
                     total_matches,
                     matches,
+                    mode: NavigationMode::HeuristicNoPrecise,
                     metadata,
                     note,
                 }))
@@ -811,6 +839,9 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
+                                        mode: FriggMcpServer::navigation_mode_from_precision_label(
+                                            Some(precision),
+                                        ),
                                         metadata,
                                         note,
                                     })
@@ -867,6 +898,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches,
+                                        mode: NavigationMode::HeuristicNoPrecise,
                                         metadata,
                                         note,
                                     })
@@ -988,6 +1020,9 @@ impl FriggMcpServer {
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
                                     matches: precise_matches,
+                                    mode: FriggMcpServer::navigation_mode_from_precision_label(
+                                        Some(precision),
+                                    ),
                                     metadata,
                                     note,
                                 })
@@ -1042,6 +1077,7 @@ impl FriggMcpServer {
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
                                     matches,
+                                    mode: NavigationMode::HeuristicNoPrecise,
                                     metadata,
                                     note,
                                 })
@@ -1159,6 +1195,9 @@ impl FriggMcpServer {
                             let (metadata, note) = Self::metadata_note_pair(metadata);
                             Json(GoToDefinitionResponse {
                                 matches: precise_matches,
+                                mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
+                                    precision,
+                                )),
                                 metadata,
                                 note,
                             })
@@ -1213,6 +1252,7 @@ impl FriggMcpServer {
                             let (metadata, note) = Self::metadata_note_pair(metadata);
                             Json(GoToDefinitionResponse {
                                 matches,
+                                mode: NavigationMode::HeuristicNoPrecise,
                                 metadata,
                                 note,
                             })
@@ -1450,7 +1490,8 @@ impl FriggMcpServer {
                     if !precise_matches.is_empty() {
                         let precision = Self::precise_resolution_precision(precise_coverage);
                         resolution_precision = Some(precision.to_owned());
-                        match_count = precise_matches.len();
+                        let precise_match_count = precise_matches.len();
+                        match_count = precise_match_count;
                         let metadata = json!({
                             "precision": precision,
                             "heuristic": false,
@@ -1476,6 +1517,9 @@ impl FriggMcpServer {
                         let (metadata, note) = Self::metadata_note_pair(metadata);
                         let response = FindDeclarationsResponse {
                             matches: precise_matches,
+                            mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
+                                precision,
+                            )),
                             metadata,
                             note,
                         };
@@ -1543,6 +1587,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = FindDeclarationsResponse {
                         matches,
+                        mode: NavigationMode::HeuristicNoPrecise,
                         metadata,
                         note,
                     };
@@ -1735,7 +1780,8 @@ impl FriggMcpServer {
                     if !precise_matches.is_empty() {
                         let precision = Self::precise_resolution_precision(precise_coverage);
                         resolution_precision = Some(precision.to_owned());
-                        match_count = precise_matches.len();
+                        let precise_match_count = precise_matches.len();
+                        match_count = precise_match_count;
                         let metadata = json!({
                             "precision": precision,
                             "heuristic": false,
@@ -1758,6 +1804,9 @@ impl FriggMcpServer {
                         let (metadata, note) = Self::metadata_note_pair(metadata);
                         return Ok(Json(FindImplementationsResponse {
                             matches: precise_matches,
+                            mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
+                                precision,
+                            )),
                             metadata,
                             note,
                         }));
@@ -1837,6 +1886,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     Ok(Json(FindImplementationsResponse {
                         matches,
+                        mode: NavigationMode::HeuristicNoPrecise,
                         metadata,
                         note,
                     }))
@@ -2015,7 +2065,8 @@ impl FriggMcpServer {
                     if !precise_matches.is_empty() {
                         let precision = Self::precise_resolution_precision(precise_coverage);
                         resolution_precision = Some(precision.to_owned());
-                        match_count = precise_matches.len();
+                        let precise_match_count = precise_matches.len();
+                        match_count = precise_match_count;
                         let metadata = json!({
                             "precision": precision,
                             "heuristic": false,
@@ -2032,12 +2083,22 @@ impl FriggMcpServer {
                                 precise_coverage,
                                 &cached_precise_graph.ingest_stats,
                                 "incoming_count",
-                                precise_matches.len(),
+                                precise_match_count,
                             )
                         });
                         let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let availability = Self::call_hierarchy_availability(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            precise_match_count,
+                            0,
+                        );
                         return Ok(Json(IncomingCallsResponse {
                             matches: precise_matches,
+                            mode: FriggMcpServer::navigation_mode_from_call_hierarchy_availability(
+                                &availability,
+                            ),
+                            availability: Some(availability),
                             metadata,
                             note,
                         }));
@@ -2098,8 +2159,18 @@ impl FriggMcpServer {
                         )
                     });
                     let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let availability = Self::call_hierarchy_availability(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                        matches.len(),
+                    );
                     Ok(Json(IncomingCallsResponse {
                         matches,
+                        mode: FriggMcpServer::navigation_mode_from_call_hierarchy_availability(
+                            &availability,
+                        ),
+                        availability: Some(availability),
                         metadata,
                         note,
                     }))
@@ -2326,7 +2397,8 @@ impl FriggMcpServer {
                     if !precise_matches.is_empty() {
                         let precision = Self::precise_resolution_precision(precise_coverage);
                         resolution_precision = Some(precision.to_owned());
-                        match_count = precise_matches.len();
+                        let precise_match_count = precise_matches.len();
+                        match_count = precise_match_count;
                         let metadata = json!({
                             "precision": precision,
                             "heuristic": false,
@@ -2347,8 +2419,18 @@ impl FriggMcpServer {
                             )
                         });
                         let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let availability = Self::call_hierarchy_availability(
+                            precise_coverage,
+                            &cached_precise_graph.ingest_stats,
+                            precise_match_count,
+                            0,
+                        );
                         return Ok(Json(OutgoingCallsResponse {
                             matches: precise_matches,
+                            mode: FriggMcpServer::navigation_mode_from_call_hierarchy_availability(
+                                &availability,
+                            ),
+                            availability: Some(availability),
                             metadata,
                             note,
                         }));
@@ -2412,8 +2494,18 @@ impl FriggMcpServer {
                         )
                     });
                     let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let availability = Self::call_hierarchy_availability(
+                        precise_coverage,
+                        &cached_precise_graph.ingest_stats,
+                        0,
+                        matches.len(),
+                    );
                     Ok(Json(OutgoingCallsResponse {
                         matches,
+                        mode: FriggMcpServer::navigation_mode_from_call_hierarchy_availability(
+                            &availability,
+                        ),
+                        availability: Some(availability),
                         metadata,
                         note,
                     }))

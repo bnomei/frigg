@@ -16,6 +16,7 @@ pub(super) struct PostSelectionRuleMeta {
 pub(crate) struct PostSelectionContext<'a> {
     pub(super) intent: &'a HybridRankingIntent,
     pub(super) query_text: &'a str,
+    pub(super) lexical_only_mode: bool,
     pub(super) exact_terms: Vec<String>,
     pub(super) selection_query_context: PolicyQueryContext,
     pub(super) limit: usize,
@@ -32,9 +33,28 @@ impl<'a> PostSelectionContext<'a> {
         candidate_pool: &'a [HybridRankedEvidence],
         witness_hits: &'a [HybridChannelHit],
     ) -> Self {
+        Self::new_with_mode(
+            intent,
+            query_text,
+            false,
+            limit,
+            candidate_pool,
+            witness_hits,
+        )
+    }
+
+    pub(crate) fn new_with_mode(
+        intent: &'a HybridRankingIntent,
+        query_text: &'a str,
+        lexical_only_mode: bool,
+        limit: usize,
+        candidate_pool: &'a [HybridRankedEvidence],
+        witness_hits: &'a [HybridChannelHit],
+    ) -> Self {
         Self::with_trace(
             intent,
             query_text,
+            lexical_only_mode,
             limit,
             candidate_pool,
             witness_hits,
@@ -49,9 +69,28 @@ impl<'a> PostSelectionContext<'a> {
         candidate_pool: &'a [HybridRankedEvidence],
         witness_hits: &'a [HybridChannelHit],
     ) -> Self {
+        Self::new_with_trace_mode(
+            intent,
+            query_text,
+            false,
+            limit,
+            candidate_pool,
+            witness_hits,
+        )
+    }
+
+    pub(crate) fn new_with_trace_mode(
+        intent: &'a HybridRankingIntent,
+        query_text: &'a str,
+        lexical_only_mode: bool,
+        limit: usize,
+        candidate_pool: &'a [HybridRankedEvidence],
+        witness_hits: &'a [HybridChannelHit],
+    ) -> Self {
         Self::with_trace(
             intent,
             query_text,
+            lexical_only_mode,
             limit,
             candidate_pool,
             witness_hits,
@@ -62,6 +101,7 @@ impl<'a> PostSelectionContext<'a> {
     fn with_trace(
         intent: &'a HybridRankingIntent,
         query_text: &'a str,
+        lexical_only_mode: bool,
         limit: usize,
         candidate_pool: &'a [HybridRankedEvidence],
         witness_hits: &'a [HybridChannelHit],
@@ -70,6 +110,7 @@ impl<'a> PostSelectionContext<'a> {
         Self {
             intent,
             query_text,
+            lexical_only_mode,
             exact_terms: hybrid_query_exact_terms(query_text),
             selection_query_context: PolicyQueryContext::new(intent, query_text),
             limit,

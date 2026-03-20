@@ -64,14 +64,30 @@ impl FriggMcpServer {
                     resolved_path = Some(display_path.clone());
                     resolved_absolute_path = Some(path.display().to_string());
 
-                    let metadata = fs::metadata(&path).map_err(|err| {
-                        Self::internal(
-                            format!("failed to stat file {}: {err}", path.display()),
-                            None,
-                        )
-                    })?;
-                    let pre_read_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-                    if !has_line_range && pre_read_bytes > max_bytes {
+                    let workspace = server
+                        .attached_workspaces_for_repository(Some(repository_id.as_str()))?
+                        .into_iter()
+                        .find(|workspace| workspace.repository_id == repository_id)
+                        .ok_or_else(|| {
+                            Self::resource_not_found(
+                                "repository_id not found",
+                                Some(json!({ "repository_id": repository_id })),
+                            )
+                        })?;
+                    let pre_read_bytes = if !has_line_range {
+                        let metadata = fs::metadata(&path).map_err(|err| {
+                            Self::internal(
+                                format!("failed to stat file {}: {err}", path.display()),
+                                None,
+                            )
+                        })?;
+                        Some(usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+                    } else {
+                        None
+                    };
+                    if let Some(pre_read_bytes) = pre_read_bytes
+                        && pre_read_bytes > max_bytes
+                    {
                         let suggested_max_bytes = pre_read_bytes.min(server.config.max_file_bytes);
                         return Err(Self::invalid_params(
                             format!("file exceeds max_bytes={max_bytes}"),
@@ -85,35 +101,14 @@ impl FriggMcpServer {
                             })),
                         ));
                     }
-
+                    let snapshot = server.file_content_snapshot_for_workspace(&workspace, &path)?;
+                    let pre_read_bytes = pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
                     if !has_line_range {
-                        let bytes = fs::read(&path).map_err(|err| {
-                            Self::internal(
-                                format!("failed to read file {}: {err}", path.display()),
-                                None,
-                            )
-                        })?;
-
-                        if bytes.len() > max_bytes {
-                            let suggested_max_bytes = bytes.len().min(server.config.max_file_bytes);
-                            return Err(Self::invalid_params(
-                                format!("file exceeds max_bytes={max_bytes}"),
-                                Some(json!({
-                                    "path": display_path.clone(),
-                                    "bytes": bytes.len(),
-                                    "max_bytes": max_bytes,
-                                    "requested_max_bytes": requested_max_bytes,
-                                    "config_max_file_bytes": server.config.max_file_bytes,
-                                    "suggested_max_bytes": suggested_max_bytes,
-                                })),
-                            ));
-                        }
-
-                        let content = String::from_utf8_lossy(&bytes).to_string();
+                        let content = snapshot.read_file_content();
                         return Ok(Json(ReadFileResponse {
                             repository_id,
                             path: display_path,
-                            bytes: bytes.len(),
+                            bytes: pre_read_bytes,
                             content,
                         }));
                     }
@@ -124,9 +119,9 @@ impl FriggMcpServer {
                     effective_line_start = Some(line_start);
                     effective_line_end = Some(effective_end_hint.unwrap_or(1));
 
-                    let line_slice =
-                        read_line_slice_lossy(&path, line_start, requested_line_end, max_bytes)
-                            .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
+                    let line_slice = snapshot
+                        .read_line_slice_lossy(line_start, requested_line_end, max_bytes)
+                        .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
                     let sliced_content = line_slice.content;
                     let sliced_bytes = line_slice.bytes;
                     let total_lines = line_slice.total_lines;
@@ -455,23 +450,25 @@ impl FriggMcpServer {
                     resolved_path = Some(display_path.clone());
                     resolved_absolute_path = Some(path.display().to_string());
 
-                    let mut lossy_utf8 = false;
-                    let scan = scan_file_scope_lossy(
-                        &path,
+                    let workspace = server
+                        .attached_workspaces_for_repository(Some(repository_id.as_str()))?
+                        .into_iter()
+                        .find(|workspace| workspace.repository_id == repository_id)
+                        .ok_or_else(|| {
+                            Self::resource_not_found(
+                                "repository_id not found",
+                                Some(json!({ "repository_id": repository_id })),
+                            )
+                        })?;
+                    let snapshot = server.file_content_snapshot_for_workspace(&workspace, &path)?;
+                    let scan = snapshot.scan_file_scope_lossy(
                         scope,
                         matcher.as_ref(),
                         max_matches,
                         resume_from.as_ref(),
                         include_scope_content,
                         include_scope_content.then_some(server.config.max_file_bytes),
-                    )
-                    .map_err(|err| {
-                        Self::internal(
-                            format!("failed to read file {}: {err}", path.display()),
-                            None,
-                        )
-                    })?;
-                    lossy_utf8 |= scan.lossy_utf8;
+                    );
 
                     if let Some(anchor) = anchor.as_ref()
                         && (scan.total_lines == 0 || anchor.end_line > scan.total_lines)
@@ -522,13 +519,13 @@ impl FriggMcpServer {
                     for (index, matched) in scan.matches.iter().enumerate() {
                         let match_window =
                             line_window_around_anchor(&matched.anchor, context_lines);
-                        let match_window_slice = read_line_slice_lossy(
-                            &path,
-                            match_window.start_line,
-                            Some(match_window.end_line),
-                            server.config.max_file_bytes,
-                        )
-                        .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
+                        let match_window_slice = snapshot
+                            .read_line_slice_lossy(
+                                match_window.start_line,
+                                Some(match_window.end_line),
+                                server.config.max_file_bytes,
+                            )
+                            .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
                         if match_window_slice.bytes > server.config.max_file_bytes {
                             return Err(Self::line_slice_budget_error(
                                 &display_path,
@@ -541,7 +538,6 @@ impl FriggMcpServer {
                                 match_window_slice.total_lines,
                             ));
                         }
-                        lossy_utf8 |= match_window_slice.lossy_utf8;
                         let match_window_end = if match_window_slice.total_lines == 0 {
                             0
                         } else {
@@ -583,7 +579,7 @@ impl FriggMcpServer {
                         truncated: scan.truncated,
                         resume_from: scan.resume_from,
                         metadata: ExploreMetadata {
-                            lossy_utf8,
+                            lossy_utf8: scan.lossy_utf8,
                             effective_context_lines: context_lines,
                             effective_max_matches: max_matches,
                         },

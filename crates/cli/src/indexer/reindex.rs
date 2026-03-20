@@ -125,6 +125,8 @@ pub struct ReindexSummary {
     pub files_scanned: usize,
     pub files_changed: usize,
     pub files_deleted: usize,
+    pub changed_paths: Vec<String>,
+    pub deleted_paths: Vec<String>,
     pub diagnostics: ReindexDiagnostics,
     pub duration_ms: u128,
 }
@@ -393,6 +395,8 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
         files_scanned: plan.files_scanned,
         files_changed: plan.files_changed,
         files_deleted: plan.files_deleted,
+        changed_paths: plan.semantic_refresh.changed_paths,
+        deleted_paths: plan.semantic_refresh.deleted_paths,
         diagnostics: plan.diagnostics,
         duration_ms: started_at.elapsed().as_millis(),
     })
