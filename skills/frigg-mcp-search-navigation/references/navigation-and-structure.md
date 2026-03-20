@@ -131,16 +131,28 @@ Important inputs:
 - `repository_id`
 - `path_regex`
 - `limit`
+- `result_mode`
+- `primary_capture`
 - `include_follow_up_structural`
 
 Important outputs:
 - `matches`
+- `result_mode`
 - `metadata`
 - `note`
 
 When opted in, each structural match may also include `follow_up_structural`.
 
 Practical rules:
+- grouped match rows are the default; use `result_mode=captures` when you need raw capture rows
+- use `primary_capture` when your query includes helper captures but you want one specific capture to anchor the visible row
+- read `anchor_capture_name`, `anchor_selection`, and `captures` before assuming the visible row tells the whole structural story
 - the query must be a valid Tree-sitter query for the target language grammar
 - if Frigg reports an impossible pattern or invalid query, inspect the AST first
 - use `path_regex` to keep structural scans bounded
+
+Example flow:
+- Query: `(function_item name: (identifier) @name) @match`
+- Default grouped result: one row per function, typically anchored to `@match`
+- If you want the function name token as the visible row: set `primary_capture=name`
+- If you want every capture as its own row to debug the query: set `result_mode=captures`

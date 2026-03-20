@@ -142,6 +142,8 @@ Once Frigg is running, the normal workflow is:
 
 `inspect_syntax_tree` and `search_structural` accept `include_follow_up_structural=true` as an opt-in. When enabled, Frigg returns typed `follow_up_structural` suggestions that are replayable `search_structural` invocations derived from the resolved AST focus, not from the user's original query. Omitting the flag keeps the normal response shape unchanged. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 extends the same contract to `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. The phase 2 surfaces require stable `path`, `line`, and `column` anchors, and they omit suggestions when no usable AST focus can be resolved. `search_hybrid` and `search_symbol` remain deferred.
 
+`search_structural` now defaults to one row per Tree-sitter match instead of one row per capture. Use `primary_capture` when your query has helper captures but you want one specific capture to anchor the visible row, or switch to `result_mode=captures` when you want raw capture rows for debugging.
+
 Typical prompts:
 
 - “Where is authentication bootstrapped?”
@@ -263,7 +265,7 @@ Frigg works best when your agent is told to prefer Frigg for repo-aware search a
 - `outgoing_calls`: find callees from a callable symbol.
 - `document_symbols`: return a hierarchical outline for a source file.
 - `inspect_syntax_tree`: inspect the bounded AST stack around a source location before writing a structural query, with optional `include_follow_up_structural=true` for best-effort replayable follow-up queries.
-- `search_structural`: run Tree-sitter structural queries over supported languages, with optional per-match best-effort follow-up queries via `include_follow_up_structural=true`.
+- `search_structural`: run Tree-sitter structural queries over supported languages, grouped one row per match by default, with optional raw `result_mode=captures`, `primary_capture` anchoring, and per-match best-effort follow-up queries via `include_follow_up_structural=true`.
 - Follow-up structural suggestions are opt-in across the phase 1 and phase 2 surfaces above. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 covers `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. `search_hybrid` and `search_symbol` remain deferred.
 
 ### Extended profile tools

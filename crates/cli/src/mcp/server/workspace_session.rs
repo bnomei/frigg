@@ -184,7 +184,6 @@ impl FriggMcpServer {
         [
             RuntimeTaskKind::ChangedReindex,
             RuntimeTaskKind::SemanticRefresh,
-            RuntimeTaskKind::PreciseGenerate,
             RuntimeTaskKind::WorkspacePrepare,
             RuntimeTaskKind::WorkspaceReindex,
         ]

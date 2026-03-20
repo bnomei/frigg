@@ -1,4 +1,8 @@
 use super::*;
+use crate::indexer::{
+    search_structural_grouped_in_source, search_structural_grouped_with_follow_up_in_source,
+};
+use crate::mcp::types::{StructuralAnchorSelection, StructuralCaptureItem, StructuralResultMode};
 
 impl FriggMcpServer {
     const INSPECT_SYNTAX_TREE_DEFAULT_MAX_ANCESTORS: usize = 8;
@@ -20,6 +24,62 @@ impl FriggMcpServer {
             end_column: node.span.end_column,
             excerpt: node.excerpt,
         }
+    }
+
+    fn structural_capture_item(
+        capture: crate::indexer::StructuralQueryCapture,
+    ) -> StructuralCaptureItem {
+        StructuralCaptureItem {
+            name: capture.name,
+            line: capture.span.start_line,
+            column: capture.span.start_column,
+            end_line: capture.span.end_line,
+            end_column: capture.span.end_column,
+            excerpt: capture.excerpt,
+        }
+    }
+
+    fn structural_noisy_result_hints(
+        result_mode: StructuralResultMode,
+        primary_capture: Option<&str>,
+        path_regex_supplied: bool,
+        files_scanned: usize,
+        files_matched: usize,
+        capture_rows_total: usize,
+        grouped_rows_total: usize,
+        grouped_rows_with_multiple_captures: usize,
+    ) -> Vec<String> {
+        let mut hints = Vec::new();
+        if result_mode == StructuralResultMode::Matches
+            && grouped_rows_with_multiple_captures > 0
+            && capture_rows_total > grouped_rows_total
+        {
+            hints.push(
+                "This query produced multiple captures per Tree-sitter match. Capture a higher-level node or set primary_capture to control the visible row anchor.".to_owned(),
+            );
+            hints.push(
+                "Use inspect_syntax_tree on a representative file before retrying when the AST shape is unclear.".to_owned(),
+            );
+            hints.push(
+                "Switch to result_mode=captures when you need raw capture rows for debugging."
+                    .to_owned(),
+            );
+        }
+        if primary_capture.is_none()
+            && result_mode == StructuralResultMode::Matches
+            && grouped_rows_with_multiple_captures > 0
+        {
+            hints.push(
+                "Set primary_capture to the capture name you want returned when your query includes helper captures.".to_owned(),
+            );
+        }
+        if !path_regex_supplied && files_matched > 1 && files_scanned > 1 {
+            hints.push(
+                "Add path_regex to keep structural scans bounded once you know the relevant file family.".to_owned(),
+            );
+        }
+        hints.truncate(4);
+        hints
     }
 
     pub(crate) async fn inspect_syntax_tree_impl(
@@ -273,6 +333,9 @@ impl FriggMcpServer {
             let mut files_scanned = 0usize;
             let mut files_matched = 0usize;
             let mut diagnostics_count = 0usize;
+            let mut capture_rows_total = 0usize;
+            let mut grouped_rows_total = 0usize;
+            let mut grouped_rows_with_multiple_captures = 0usize;
             let mut blade_relations_detected = 0usize;
             let mut blade_livewire_components = BTreeSet::new();
             let mut blade_wire_directives = BTreeSet::new();
@@ -314,6 +377,14 @@ impl FriggMcpServer {
                     .unwrap_or(server.config.max_search_results)
                     .min(server.config.max_search_results.max(1));
                 effective_limit = Some(limit);
+                let result_mode = params_for_blocking
+                    .result_mode
+                    .unwrap_or(StructuralResultMode::Matches);
+                let primary_capture = params_for_blocking
+                    .primary_capture
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
 
@@ -362,16 +433,45 @@ impl FriggMcpServer {
                         };
 
                         let structural_matches = match if include_follow_up_structural {
-                            search_structural_with_follow_up_in_source(
-                                language,
-                                source_path,
-                                &display_path,
-                                &source,
-                                &query,
-                                &corpus.repository_id,
-                            )
+                            match result_mode {
+                                StructuralResultMode::Matches =>
+                                    search_structural_grouped_with_follow_up_in_source(
+                                        language,
+                                        source_path,
+                                        &display_path,
+                                        &source,
+                                        &query,
+                                        primary_capture,
+                                        &corpus.repository_id,
+                                    ),
+                                StructuralResultMode::Captures =>
+                                    search_structural_with_follow_up_in_source(
+                                        language,
+                                        source_path,
+                                        &display_path,
+                                        &source,
+                                        &query,
+                                        &corpus.repository_id,
+                                    ),
+                            }
                         } else {
-                            search_structural_in_source(language, source_path, &source, &query)
+                            match result_mode {
+                                StructuralResultMode::Matches =>
+                                    search_structural_grouped_in_source(
+                                        language,
+                                        source_path,
+                                        &source,
+                                        &query,
+                                        primary_capture,
+                                    ),
+                                StructuralResultMode::Captures =>
+                                    search_structural_in_source(
+                                        language,
+                                        source_path,
+                                        &source,
+                                        &query,
+                                    ),
+                            }
                         } {
                                 Ok(matches) => matches,
                                 Err(FriggError::InvalidInput(message))
@@ -399,6 +499,23 @@ impl FriggMcpServer {
                         }
                         files_matched = files_matched
                             .saturating_add(usize::from(!structural_matches.is_empty()));
+                        capture_rows_total = capture_rows_total.saturating_add(
+                            structural_matches
+                                .iter()
+                                .map(|matched| matched.captures.len().max(1))
+                                .sum::<usize>(),
+                        );
+                        if result_mode == StructuralResultMode::Matches {
+                            grouped_rows_total =
+                                grouped_rows_total.saturating_add(structural_matches.len());
+                            grouped_rows_with_multiple_captures = grouped_rows_with_multiple_captures
+                                .saturating_add(
+                                    structural_matches
+                                        .iter()
+                                        .filter(|matched| matched.captures.len() > 1)
+                                        .count(),
+                                );
+                        }
 
                         for structural_match in structural_matches {
                             matches.push(crate::mcp::types::StructuralMatch {
@@ -409,6 +526,19 @@ impl FriggMcpServer {
                                 end_line: structural_match.span.end_line,
                                 end_column: structural_match.span.end_column,
                                 excerpt: structural_match.excerpt,
+                                anchor_capture_name: structural_match.anchor_capture_name,
+                                anchor_selection: match structural_match.anchor_selection {
+                                    crate::indexer::StructuralQueryAnchorSelection::PrimaryCapture => StructuralAnchorSelection::PrimaryCapture,
+                                    crate::indexer::StructuralQueryAnchorSelection::MatchCapture => StructuralAnchorSelection::MatchCapture,
+                                    crate::indexer::StructuralQueryAnchorSelection::FirstUsefulNamedCapture => StructuralAnchorSelection::FirstUsefulNamedCapture,
+                                    crate::indexer::StructuralQueryAnchorSelection::FirstCapture => StructuralAnchorSelection::FirstCapture,
+                                    crate::indexer::StructuralQueryAnchorSelection::CaptureRow => StructuralAnchorSelection::CaptureRow,
+                                },
+                                captures: structural_match
+                                    .captures
+                                    .into_iter()
+                                    .map(Self::structural_capture_item)
+                                    .collect(),
                                 follow_up_structural: structural_match.follow_up_structural,
                             });
                         }
@@ -428,15 +558,34 @@ impl FriggMcpServer {
                 if matches.len() > limit {
                     matches.truncate(limit);
                 }
+                let effective_grouped_rows_total = if result_mode == StructuralResultMode::Matches {
+                    grouped_rows_total
+                } else {
+                    matches.len()
+                };
+                let noisy_result_hints = Self::structural_noisy_result_hints(
+                    result_mode,
+                    primary_capture,
+                    params_for_blocking.path_regex.is_some(),
+                    files_scanned,
+                    files_matched,
+                    capture_rows_total,
+                    effective_grouped_rows_total,
+                    grouped_rows_with_multiple_captures,
+                );
 
                 let metadata = if target_language == Some(SymbolLanguage::Blade) {
                     json!({
                         "source": "tree_sitter_query",
                         "language": language_filter.clone().unwrap_or_else(|| "mixed".to_owned()),
                         "heuristic": false,
+                        "result_mode": result_mode,
                         "diagnostics_count": diagnostics_count,
                         "files_scanned": files_scanned,
                         "files_matched": files_matched,
+                        "capture_rows_total": capture_rows_total,
+                        "grouped_rows_total": effective_grouped_rows_total,
+                        "noisy_result_hints": noisy_result_hints,
                         "blade": {
                             "relations_detected": blade_relations_detected,
                             "livewire_components": blade_livewire_components.into_iter().collect::<Vec<_>>(),
@@ -450,14 +599,19 @@ impl FriggMcpServer {
                         "source": "tree_sitter_query",
                         "language": language_filter.clone().unwrap_or_else(|| "mixed".to_owned()),
                         "heuristic": false,
+                        "result_mode": result_mode,
                         "diagnostics_count": diagnostics_count,
                         "files_scanned": files_scanned,
                         "files_matched": files_matched,
+                        "capture_rows_total": capture_rows_total,
+                        "grouped_rows_total": effective_grouped_rows_total,
+                        "noisy_result_hints": noisy_result_hints,
                     })
                 };
                 let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(SearchStructuralResponse {
                     matches,
+                    result_mode,
                     metadata,
                     note,
                 }))

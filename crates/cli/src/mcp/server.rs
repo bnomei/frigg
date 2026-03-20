@@ -1207,7 +1207,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_structural",
-        description = "Run Tree-sitter queries when syntax shape matters more than text or symbols. Use inspect_syntax_tree first if the node shape is unclear, and set include_follow_up_structural=true for per-match replayable structural follow-ups.",
+        description = "Run Tree-sitter queries when syntax shape matters more than text or symbols. Grouped match rows are the default; use inspect_syntax_tree first when the node shape is unclear, use primary_capture to choose the visible anchor, and use result_mode=captures for raw capture debugging.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

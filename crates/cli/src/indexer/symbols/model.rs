@@ -88,10 +88,37 @@ pub struct SymbolExtractionOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralQueryResultMode {
+    Matches,
+    Captures,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralQueryAnchorSelection {
+    PrimaryCapture,
+    MatchCapture,
+    FirstUsefulNamedCapture,
+    FirstCapture,
+    CaptureRow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuralQueryCapture {
+    pub name: String,
+    pub span: SourceSpan,
+    pub excerpt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructuralQueryMatch {
     pub path: PathBuf,
     pub span: SourceSpan,
     pub excerpt: String,
+    pub anchor_capture_name: Option<String>,
+    pub anchor_selection: StructuralQueryAnchorSelection,
+    pub captures: Vec<StructuralQueryCapture>,
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 

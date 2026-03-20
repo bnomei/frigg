@@ -52,13 +52,15 @@ use semantic::{RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecuto
 use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
 pub use symbols::{
     HeuristicReference, HeuristicReferenceConfidence, HeuristicReferenceEvidence,
-    HeuristicReferenceResolver, SourceSpan, StructuralQueryMatch, SymbolDefinition,
-    SymbolExtractionDiagnostic, SymbolExtractionOutput, SymbolKind, SyntaxTreeInspection,
-    SyntaxTreeInspectionNode, extract_symbols_for_paths, extract_symbols_from_file,
-    extract_symbols_from_source, generated_follow_up_structural_at_location_in_source,
-    inspect_syntax_tree_in_source, inspect_syntax_tree_with_follow_up_in_source,
-    navigation_symbol_target_rank, register_symbol_definitions, resolve_heuristic_references,
-    search_structural_in_source, search_structural_with_follow_up_in_source,
+    HeuristicReferenceResolver, SourceSpan, StructuralQueryAnchorSelection, StructuralQueryCapture,
+    StructuralQueryMatch, StructuralQueryResultMode, SymbolDefinition, SymbolExtractionDiagnostic,
+    SymbolExtractionOutput, SymbolKind, SyntaxTreeInspection, SyntaxTreeInspectionNode,
+    extract_symbols_for_paths, extract_symbols_from_file, extract_symbols_from_source,
+    generated_follow_up_structural_at_location_in_source, inspect_syntax_tree_in_source,
+    inspect_syntax_tree_with_follow_up_in_source, navigation_symbol_target_rank,
+    register_symbol_definitions, resolve_heuristic_references, search_structural_grouped_in_source,
+    search_structural_grouped_with_follow_up_in_source, search_structural_in_source,
+    search_structural_with_follow_up_in_source,
 };
 pub(crate) use symbols::{
     byte_offset_for_line_column, line_column_for_offset, push_symbol_definition, source_span,

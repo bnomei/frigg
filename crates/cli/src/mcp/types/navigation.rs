@@ -264,6 +264,23 @@ pub struct InspectSyntaxTreeResponse {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralResultMode {
+    Matches,
+    Captures,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralAnchorSelection {
+    PrimaryCapture,
+    MatchCapture,
+    FirstUsefulNamedCapture,
+    FirstCapture,
+    CaptureRow,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchStructuralParams {
     pub query: String,
@@ -271,8 +288,22 @@ pub struct SearchStructuralParams {
     pub repository_id: Option<String>,
     pub path_regex: Option<String>,
     pub limit: Option<usize>,
+    /// Optional grouped-versus-raw result shaping. Omit to default to grouped match rows.
+    pub result_mode: Option<StructuralResultMode>,
+    /// Optional grouped-result anchor capture name. Omit to use the deterministic default anchor policy.
+    pub primary_capture: Option<String>,
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each matched AST node.
     pub include_follow_up_structural: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StructuralCaptureItem {
+    pub name: String,
+    pub line: usize,
+    pub column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+    pub excerpt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -284,6 +315,10 @@ pub struct StructuralMatch {
     pub end_line: usize,
     pub end_column: usize,
     pub excerpt: String,
+    pub anchor_capture_name: Option<String>,
+    pub anchor_selection: StructuralAnchorSelection,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<StructuralCaptureItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
@@ -291,6 +326,7 @@ pub struct StructuralMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchStructuralResponse {
     pub matches: Vec<StructuralMatch>,
+    pub result_mode: StructuralResultMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }

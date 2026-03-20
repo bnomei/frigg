@@ -244,6 +244,8 @@ async fn search_structural_invalid_query_returns_recovery_guidance() {
                 repository_id: Some(repository_id),
                 path_regex: None,
                 limit: Some(10),
+                result_mode: None,
+                primary_capture: None,
                 include_follow_up_structural: None,
             },
         ))

@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::indexer::{StructuralQueryAnchorSelection, search_structural_grouped_in_source};
 
 #[test]
 fn structural_search_rust_returns_deterministic_captures() -> FriggResult<()> {
@@ -200,6 +201,55 @@ fn structural_search_rejects_invalid_query_with_typed_error() {
         }
         other => panic!("expected invalid input, got {other:?}"),
     }
+}
+
+#[test]
+fn structural_search_grouped_mode_groups_multi_capture_matches() -> FriggResult<()> {
+    let source = "pub fn first() {}\n\
+             pub fn second() {}\n";
+    let path = Path::new("fixtures/structural.rs");
+    let query = "(function_item name: (identifier) @name) @match";
+
+    let grouped =
+        search_structural_grouped_in_source(SymbolLanguage::Rust, path, source, query, None)?;
+
+    assert_eq!(grouped.len(), 2);
+    assert_eq!(grouped[0].anchor_capture_name.as_deref(), Some("match"));
+    assert_eq!(
+        grouped[0].anchor_selection,
+        StructuralQueryAnchorSelection::MatchCapture
+    );
+    assert_eq!(grouped[0].captures.len(), 2);
+    assert_eq!(grouped[0].captures[0].name, "match");
+    assert_eq!(grouped[0].captures[1].name, "name");
+    assert_eq!(grouped[0].excerpt, "pub fn first() {}");
+
+    Ok(())
+}
+
+#[test]
+fn structural_search_grouped_mode_honors_primary_capture() -> FriggResult<()> {
+    let source = "pub fn first() {}\n";
+    let path = Path::new("fixtures/structural.rs");
+    let query = "(function_item name: (identifier) @name) @match";
+
+    let grouped = search_structural_grouped_in_source(
+        SymbolLanguage::Rust,
+        path,
+        source,
+        query,
+        Some("name"),
+    )?;
+
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0].anchor_capture_name.as_deref(), Some("name"));
+    assert_eq!(
+        grouped[0].anchor_selection,
+        StructuralQueryAnchorSelection::PrimaryCapture
+    );
+    assert_eq!(grouped[0].excerpt, "first");
+
+    Ok(())
 }
 
 #[test]

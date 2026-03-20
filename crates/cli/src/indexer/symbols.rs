@@ -25,7 +25,8 @@ pub use extraction::{
 pub use heuristics::{HeuristicReferenceResolver, resolve_heuristic_references};
 pub use inspection::{
     generated_follow_up_structural_at_location_in_source, inspect_syntax_tree_in_source,
-    inspect_syntax_tree_with_follow_up_in_source, search_structural_in_source,
+    inspect_syntax_tree_with_follow_up_in_source, search_structural_grouped_in_source,
+    search_structural_grouped_with_follow_up_in_source, search_structural_in_source,
     search_structural_with_follow_up_in_source,
 };
 #[cfg(test)]

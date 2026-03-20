@@ -1,4 +1,5 @@
 use super::*;
+use frigg::mcp::types::{StructuralAnchorSelection, StructuralResultMode};
 
 #[tokio::test]
 async fn search_structural_returns_deterministic_rust_matches() {
@@ -10,6 +11,8 @@ async fn search_structural_returns_deterministic_rust_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -22,6 +25,8 @@ async fn search_structural_returns_deterministic_rust_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -104,6 +109,8 @@ async fn search_structural_returns_deterministic_blade_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"panel\.blade\.php$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -116,6 +123,8 @@ async fn search_structural_returns_deterministic_blade_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"panel\.blade\.php$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -176,6 +185,8 @@ async fn search_structural_returns_typescript_tsx_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"App\.tsx$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -221,6 +232,8 @@ async fn search_structural_returns_python_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"app\.py$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -284,6 +297,8 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"main\.go$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -302,6 +317,8 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"App\.kt$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -320,6 +337,8 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"init\.lua$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -338,6 +357,8 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"main\.roc$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -356,6 +377,8 @@ async fn search_structural_returns_additional_baseline_language_matches() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"main\.nim$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -380,6 +403,8 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: None,
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -418,6 +443,8 @@ async fn search_structural_rejects_invalid_query_with_typed_error() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: None,
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: None,
         }))
         .await
@@ -446,6 +473,8 @@ async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
             include_follow_up_structural: Some(true),
         }))
         .await
@@ -470,4 +499,71 @@ async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
         Some("^src/lib\\.rs$")
     );
     assert_eq!(first_match.follow_up_structural[1].params.path_regex, None);
+}
+
+#[tokio::test]
+async fn search_structural_defaults_to_grouped_match_rows_for_multi_capture_query() {
+    let server = server_for_fixture();
+    let response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_item name: (identifier) @name) @match".to_owned(),
+            language: Some("rust".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
+            include_follow_up_structural: None,
+        }))
+        .await
+        .expect("grouped structural search should succeed")
+        .0;
+
+    assert_eq!(response.result_mode, StructuralResultMode::Matches);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(
+        response.matches[0].anchor_capture_name.as_deref(),
+        Some("match")
+    );
+    assert_eq!(
+        response.matches[0].anchor_selection,
+        StructuralAnchorSelection::MatchCapture
+    );
+    assert_eq!(response.matches[0].captures.len(), 2);
+    assert_eq!(response.matches[0].captures[0].name, "match");
+    assert_eq!(response.matches[0].captures[1].name, "name");
+    assert!(
+        response
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("noisy_result_hints"))
+            .and_then(|value| value.as_array())
+            .is_some_and(|items| !items.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn search_structural_capture_mode_remains_available_for_debugging() {
+    let server = server_for_fixture();
+    let response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(function_item name: (identifier) @name) @match".to_owned(),
+            language: Some("rust".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(20),
+            result_mode: Some(StructuralResultMode::Captures),
+            primary_capture: Some("name".to_owned()),
+            include_follow_up_structural: None,
+        }))
+        .await
+        .expect("capture mode structural search should succeed")
+        .0;
+
+    assert_eq!(response.result_mode, StructuralResultMode::Captures);
+    assert_eq!(response.matches.len(), 2);
+    assert!(response.matches.iter().all(|matched| {
+        matched.anchor_selection == StructuralAnchorSelection::CaptureRow
+            && matched.captures.len() == 1
+    }));
 }

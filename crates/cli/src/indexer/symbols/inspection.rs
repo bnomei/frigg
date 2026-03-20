@@ -41,13 +41,27 @@ struct StructuralFollowUpContext<'a> {
     repository_id: &'a str,
 }
 
+struct StructuralQueryCaptureNode<'tree> {
+    name: String,
+    node: Node<'tree>,
+    item: StructuralQueryCapture,
+}
+
 pub fn search_structural_in_source(
     language: SymbolLanguage,
     path: &Path,
     source: &str,
     query: &str,
 ) -> FriggResult<Vec<StructuralQueryMatch>> {
-    search_structural_matches_in_source(language, path, source, query, None)
+    search_structural_matches_in_source(
+        language,
+        path,
+        source,
+        query,
+        StructuralQueryResultMode::Captures,
+        None,
+        None,
+    )
 }
 
 pub fn search_structural_with_follow_up_in_source(
@@ -63,6 +77,49 @@ pub fn search_structural_with_follow_up_in_source(
         path,
         source,
         query,
+        StructuralQueryResultMode::Captures,
+        None,
+        Some(StructuralFollowUpContext {
+            display_path,
+            repository_id,
+        }),
+    )
+}
+
+pub fn search_structural_grouped_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    source: &str,
+    query: &str,
+    primary_capture: Option<&str>,
+) -> FriggResult<Vec<StructuralQueryMatch>> {
+    search_structural_matches_in_source(
+        language,
+        path,
+        source,
+        query,
+        StructuralQueryResultMode::Matches,
+        primary_capture,
+        None,
+    )
+}
+
+pub fn search_structural_grouped_with_follow_up_in_source(
+    language: SymbolLanguage,
+    path: &Path,
+    display_path: &str,
+    source: &str,
+    query: &str,
+    primary_capture: Option<&str>,
+    repository_id: &str,
+) -> FriggResult<Vec<StructuralQueryMatch>> {
+    search_structural_matches_in_source(
+        language,
+        path,
+        source,
+        query,
+        StructuralQueryResultMode::Matches,
+        primary_capture,
         Some(StructuralFollowUpContext {
             display_path,
             repository_id,
@@ -205,6 +262,8 @@ fn search_structural_matches_in_source(
     path: &Path,
     source: &str,
     query: &str,
+    result_mode: StructuralQueryResultMode,
+    primary_capture: Option<&str>,
     follow_up_context: Option<StructuralFollowUpContext<'_>>,
 ) -> FriggResult<Vec<StructuralQueryMatch>> {
     let query = query.trim();
@@ -218,26 +277,86 @@ fn search_structural_matches_in_source(
     let tree = parse_tree_for_source(language, path, source, "structural search")?;
     let mut cursor = QueryCursor::new();
     let mut matches = Vec::new();
-    let mut captures = cursor.captures(&compiled_query, tree.root_node(), source.as_bytes());
-    while let Some((query_match, capture_index)) = captures.next() {
-        let capture = query_match.captures[*capture_index];
-        let follow_up_structural = follow_up_context
-            .as_ref()
-            .map(|context| {
-                structural_follow_up_queries_for_node(
-                    language,
-                    context.display_path,
-                    context.repository_id,
+    match result_mode {
+        StructuralQueryResultMode::Captures => {
+            let capture_names = compiled_query.capture_names();
+            let mut captures =
+                cursor.captures(&compiled_query, tree.root_node(), source.as_bytes());
+            while let Some((query_match, capture_index)) = captures.next() {
+                let capture = query_match.captures[*capture_index];
+                let capture_name = capture_names
+                    .get(capture.index as usize)
+                    .cloned()
+                    .unwrap_or(GENERATED_STRUCTURAL_CAPTURE_NAME);
+                let follow_up_structural = follow_up_context
+                    .as_ref()
+                    .map(|context| {
+                        structural_follow_up_queries_for_node(
+                            language,
+                            context.display_path,
+                            context.repository_id,
+                            capture.node,
+                        )
+                    })
+                    .unwrap_or_default();
+                let Some(matched) = structural_query_capture_row(
+                    source,
+                    path,
+                    &capture_name,
                     capture.node,
-                )
-            })
-            .unwrap_or_default();
-        let Some(matched) =
-            structural_query_match(source, path, capture.node, follow_up_structural)
-        else {
-            continue;
-        };
-        matches.push(matched);
+                    follow_up_structural,
+                ) else {
+                    continue;
+                };
+                matches.push(matched);
+            }
+        }
+        StructuralQueryResultMode::Matches => {
+            let capture_names = compiled_query.capture_names();
+            let mut query_matches =
+                cursor.matches(&compiled_query, tree.root_node(), source.as_bytes());
+            while let Some(query_match) = query_matches.next() {
+                let mut capture_nodes = query_match
+                    .captures
+                    .iter()
+                    .filter_map(|capture| {
+                        let capture_name = capture_names
+                            .get(capture.index as usize)
+                            .cloned()
+                            .unwrap_or(GENERATED_STRUCTURAL_CAPTURE_NAME);
+                        structural_query_capture_node(source, &capture_name, capture.node)
+                    })
+                    .collect::<Vec<_>>();
+                if capture_nodes.is_empty() {
+                    continue;
+                }
+                capture_nodes.sort_by(structural_capture_node_order);
+                let (anchor_index, anchor_selection) =
+                    select_structural_anchor(&capture_nodes, primary_capture);
+                let anchor_node = capture_nodes[anchor_index].node;
+                let follow_up_structural = follow_up_context
+                    .as_ref()
+                    .map(|context| {
+                        structural_follow_up_queries_for_node(
+                            language,
+                            context.display_path,
+                            context.repository_id,
+                            anchor_node,
+                        )
+                    })
+                    .unwrap_or_default();
+                let Some(matched) = structural_query_grouped_match(
+                    path,
+                    &capture_nodes,
+                    anchor_index,
+                    anchor_selection,
+                    follow_up_structural,
+                ) else {
+                    continue;
+                };
+                matches.push(matched);
+            }
+        }
     }
     matches.sort_by(structural_query_match_order);
     matches.dedup();
@@ -371,12 +490,11 @@ fn build_syntax_tree_inspection(
     }
 }
 
-fn structural_query_match(
+fn structural_query_capture_node<'tree>(
     source: &str,
-    path: &Path,
-    node: Node<'_>,
-    follow_up_structural: Vec<GeneratedStructuralFollowUp>,
-) -> Option<StructuralQueryMatch> {
+    capture_name: &str,
+    node: Node<'tree>,
+) -> Option<StructuralQueryCaptureNode<'tree>> {
     let span = source_span(node);
     let start_byte = node.start_byte();
     let end_byte = node.end_byte();
@@ -390,12 +508,101 @@ fn structural_query_match(
     if excerpt.is_empty() {
         return None;
     }
+    Some(StructuralQueryCaptureNode {
+        name: capture_name.to_owned(),
+        node,
+        item: StructuralQueryCapture {
+            name: capture_name.to_owned(),
+            span,
+            excerpt,
+        },
+    })
+}
+
+fn structural_query_capture_row(
+    source: &str,
+    path: &Path,
+    capture_name: &str,
+    node: Node<'_>,
+    follow_up_structural: Vec<GeneratedStructuralFollowUp>,
+) -> Option<StructuralQueryMatch> {
+    let capture = structural_query_capture_node(source, capture_name, node)?;
     Some(StructuralQueryMatch {
         path: path.to_path_buf(),
-        span,
-        excerpt,
+        span: capture.item.span.clone(),
+        excerpt: capture.item.excerpt.clone(),
+        anchor_capture_name: Some(capture.name.clone()),
+        anchor_selection: StructuralQueryAnchorSelection::CaptureRow,
+        captures: vec![capture.item],
         follow_up_structural,
     })
+}
+
+fn structural_query_grouped_match(
+    path: &Path,
+    captures: &[StructuralQueryCaptureNode<'_>],
+    anchor_index: usize,
+    anchor_selection: StructuralQueryAnchorSelection,
+    follow_up_structural: Vec<GeneratedStructuralFollowUp>,
+) -> Option<StructuralQueryMatch> {
+    let anchor = captures.get(anchor_index)?;
+    Some(StructuralQueryMatch {
+        path: path.to_path_buf(),
+        span: anchor.item.span.clone(),
+        excerpt: anchor.item.excerpt.clone(),
+        anchor_capture_name: Some(anchor.name.clone()),
+        anchor_selection,
+        captures: captures
+            .iter()
+            .map(|capture| capture.item.clone())
+            .collect(),
+        follow_up_structural,
+    })
+}
+
+fn structural_capture_node_order(
+    left: &StructuralQueryCaptureNode<'_>,
+    right: &StructuralQueryCaptureNode<'_>,
+) -> std::cmp::Ordering {
+    left.item
+        .span
+        .start_byte
+        .cmp(&right.item.span.start_byte)
+        .then(left.item.span.end_byte.cmp(&right.item.span.end_byte))
+        .then(left.item.name.cmp(&right.item.name))
+        .then(left.item.excerpt.cmp(&right.item.excerpt))
+}
+
+fn select_structural_anchor(
+    captures: &[StructuralQueryCaptureNode<'_>],
+    primary_capture: Option<&str>,
+) -> (usize, StructuralQueryAnchorSelection) {
+    let preferred_capture = primary_capture
+        .map(str::trim)
+        .filter(|capture| !capture.is_empty());
+    if let Some(primary_capture) = preferred_capture
+        && let Some(index) = captures
+            .iter()
+            .position(|capture| capture.name == primary_capture)
+    {
+        return (index, StructuralQueryAnchorSelection::PrimaryCapture);
+    }
+    if let Some(index) = captures
+        .iter()
+        .position(|capture| capture.name == GENERATED_STRUCTURAL_CAPTURE_NAME)
+    {
+        return (index, StructuralQueryAnchorSelection::MatchCapture);
+    }
+    if let Some(index) = captures
+        .iter()
+        .position(|capture| is_useful_named_node(capture.node))
+    {
+        return (
+            index,
+            StructuralQueryAnchorSelection::FirstUsefulNamedCapture,
+        );
+    }
+    (0, StructuralQueryAnchorSelection::FirstCapture)
 }
 
 fn structural_follow_up_queries_for_node(
