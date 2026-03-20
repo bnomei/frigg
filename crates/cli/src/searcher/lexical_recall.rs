@@ -5,15 +5,20 @@ use regex::escape;
 use super::{HYBRID_LEXICAL_RECALL_MAX_TOKENS, HYBRID_LEXICAL_RECALL_MIN_TOKEN_LEN};
 
 pub(super) fn build_hybrid_lexical_recall_regex(query_text: &str) -> Option<String> {
-    let tokens = hybrid_lexical_recall_tokens(query_text);
-    if tokens.len() < 2 {
+    build_hybrid_lexical_recall_regex_from_terms(&hybrid_lexical_recall_tokens(query_text))
+}
+
+pub(in crate::searcher) fn build_hybrid_lexical_recall_regex_from_terms(
+    terms: &[String],
+) -> Option<String> {
+    if terms.is_empty() {
         return None;
     }
 
-    let token_pattern = tokens
-        .into_iter()
+    let token_pattern = terms
+        .iter()
         .take(HYBRID_LEXICAL_RECALL_MAX_TOKENS)
-        .map(|token| escape(&token))
+        .map(|token| escape(token))
         .collect::<Vec<_>>()
         .join("|");
     if token_pattern.is_empty() {

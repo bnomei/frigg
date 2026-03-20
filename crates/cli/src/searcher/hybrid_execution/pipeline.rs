@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
-use aho_corasick::AhoCorasickBuilder;
 use regex::{Regex, escape};
 
 use crate::domain::{
@@ -14,6 +13,7 @@ use crate::searcher::lexical_channel::{
     HybridLexicalQueryFeatures, HybridPathWitnessQueryContext,
     build_hybrid_lexical_hits_with_features, candidate_universe_delta,
 };
+use crate::searcher::lexical_recall::build_hybrid_lexical_recall_regex_from_terms;
 use crate::searcher::policy;
 use crate::searcher::{
     HYBRID_LEXICAL_RECALL_MAX_TOKENS, HybridRankingIntent, SearchCandidateUniverse,
@@ -583,13 +583,13 @@ fn search_case_insensitive_recall_terms_with_universe(
         return Ok(SearchExecutionOutput::default());
     }
 
-    let matcher = AhoCorasickBuilder::new()
-        .ascii_case_insensitive(true)
-        .build(terms.iter().map(String::as_str))
-        .map_err(|err| FriggError::InvalidInput(format!("invalid recall terms: {err}")))?;
-    let query_text = terms.join(" ");
+    let regex_query = build_hybrid_lexical_recall_regex_from_terms(terms).ok_or_else(|| {
+        FriggError::InvalidInput(
+            "invalid recall terms: could not build lexical recall regex".to_owned(),
+        )
+    })?;
     let scoped_query = SearchTextQuery {
-        query: query_text.clone(),
+        query: regex_query.clone(),
         path_regex: if path_prefilter {
             build_recall_path_regex(terms)
         } else {
@@ -597,31 +597,20 @@ fn search_case_insensitive_recall_terms_with_universe(
         },
         limit,
     };
-    let search_lines = |query: &SearchTextQuery| {
-        searcher.search_with_streaming_lines_in_universe(
-            query,
-            candidate_universe,
-            |line, columns| {
-                columns.clear();
-                columns.extend(
-                    matcher
-                        .find_iter(line)
-                        .filter(|mat| is_ascii_word_boundary_match(line, mat.start(), mat.end()))
-                        .map(|mat| mat.start() + 1),
-                );
-            },
-        )
-    };
-    let scoped_output = search_lines(&scoped_query)?;
+    let scoped_output = search_regex_with_universe(searcher, &scoped_query, candidate_universe)?;
     if !scoped_output.matches.is_empty() || scoped_query.path_regex.is_none() {
         return Ok(scoped_output);
     }
 
-    search_lines(&SearchTextQuery {
-        query: query_text,
-        path_regex: None,
-        limit,
-    })
+    search_regex_with_universe(
+        searcher,
+        &SearchTextQuery {
+            query: regex_query,
+            path_regex: None,
+            limit,
+        },
+        candidate_universe,
+    )
 }
 
 fn distinct_match_document_count(matches: &[TextMatch]) -> usize {
@@ -630,16 +619,6 @@ fn distinct_match_document_count(matches: &[TextMatch]) -> usize {
         .map(|matched| (&matched.repository_id, &matched.path))
         .collect::<BTreeSet<_>>()
         .len()
-}
-
-fn is_ascii_word_boundary_match(line: &str, start: usize, end: usize) -> bool {
-    let bytes = line.as_bytes();
-    (start == 0 || !is_ascii_word_byte(bytes[start - 1]))
-        && (end == bytes.len() || !is_ascii_word_byte(bytes[end]))
-}
-
-fn is_ascii_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn build_recall_path_regex(terms: &[String]) -> Option<Regex> {
