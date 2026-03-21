@@ -237,9 +237,40 @@ Laravel PHP workspaces prefer repo-local `vendor/bin/scip-laravel` when `bootstr
 
 Frigg distills those artifacts into snapshot-scoped retrieval projections on the next `frigg reindex`. Server startup alone does not change retrieval state. If you do not provide SCIP data, Frigg still works with heuristic and source-backed navigation plus path and AST-derived retrieval summaries.
 
-When generator tools are installed, `workspace_current.health.precise_generators` reports their detected status and any last generation result, and Frigg writes best-effort artifacts under `.frigg/scip/`. Python uses `scip-python index . --project-name <derived-name>` with a deterministic derived name, and Kotlin uses `scip-java index` only on Gradle/KTS workspaces that also contain Kotlin sources.
+When generator tools are installed, `repository.health.precise_generators` and `workspace_current.repository.health.precise_generators` report their detected status and any last generation result, and Frigg writes best-effort artifacts under `.frigg/scip/`.
 
-Optional repository-local precise config lives at `.frigg/precise.json`. Use it to disable a generator for one repo, add generator-specific extra args, or exclude paths from filtered generation workspaces and trigger calculations without compiling repo-specific path rules into FRIGG itself.
+Python generation now uses the `scip-python index` subcommand shape directly:
+
+```bash
+scip-python index --quiet --project-name <derived-name> --output .frigg/scip/python.scip
+```
+
+If the monolithic Python artifact exceeds Frigg's active per-artifact ingest budget, Frigg automatically republishes deterministic Python shards under `.frigg/scip/` using names like `python--src-pkg-a-<hash>.scip` instead of leaving an oversized unusable monolith behind.
+
+Optional repository-local precise config lives at `.frigg/precise.json`. Use it to disable a generator for one repo, add generator-specific extra args, or exclude paths from filtered generation workspaces and trigger calculations without compiling repo-specific path rules into Frigg itself.
+
+Example:
+
+```json
+{
+  "precise": {
+    "disabled_generators": ["python"],
+    "generation_excludes": ["vendor/**", "generated/**"],
+    "ingest_excludes": ["**/python-tests.scip"],
+    "generator_extra_args": {
+      "python": ["--target-only", "src/app"]
+    }
+  }
+}
+```
+
+Status surfaces are separated on purpose:
+
+- `health.scip` reports raw `.scip` artifact discovery only.
+- `health.precise_ingest` reports whether Frigg could actually ingest those artifacts, with coverage mode, discovered or ingested byte counts, and sampled failed artifact reasons.
+- `workspace_current.precise` stays as the compact operator summary built on top of that ingest status.
+
+`workspace_attach` and `workspace_reindex` also support `wait_for_precise=true`. By default they remain non-blocking and may return while precise generation is still running. With `wait_for_precise`, the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary with artifact path or multi-artifact shard details.
 
 ## Built-In Watch Mode
 

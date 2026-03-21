@@ -113,18 +113,22 @@ use crate::mcp::types::{
     NavigationAvailability, NavigationLocation, NavigationMode, OutgoingCallsParams,
     OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams, ReadMatchResponse,
     RecentProvenanceSummary, RepositorySummary, ResponseMode, RuntimeStatusSummary,
-    RuntimeTaskKind, RuntimeTaskStatus, SearchHybridChannelWeightsParams, SearchHybridMatch,
-    SearchHybridParams, SearchHybridResponse, SearchPatternType, SearchStructuralParams,
-    SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
-    SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM,
-    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction, WorkspaceAttachParams,
-    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
-    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexComponentState,
-    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspacePreciseGenerationStatus,
+    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelWeightsParams,
+    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem,
+    WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction,
+    WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
+    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse,
+    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
+    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
     WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
-    WorkspacePreciseGeneratorSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
-    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
-    WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
+    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseSummary,
+    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceReindexParams,
+    WorkspaceReindexResponse, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -636,6 +640,7 @@ impl FriggMcpServer {
         let params = params.0;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let wait_for_precise = params.wait_for_precise.unwrap_or(false);
         let started_at = Instant::now();
         info!(
             requested_path = params.path.as_deref().unwrap_or(""),
@@ -644,7 +649,7 @@ impl FriggMcpServer {
             resolve_mode = ?resolve_mode,
             "workspace attach started"
         );
-        let response = match self.attach_workspace_target_internal(
+        let mut response = match self.attach_workspace_target_internal(
             params.path.as_deref(),
             params.repository_id.as_deref(),
             set_default,
@@ -664,6 +669,36 @@ impl FriggMcpServer {
                 return Err(err);
             }
         };
+        if wait_for_precise {
+            let repository_id = response.repository.repository_id.clone();
+            let completed = self
+                .wait_for_repository_precise_generation(&repository_id, Duration::from_secs(30))
+                .await;
+            if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
+                let mut repository = self.repository_summary(&workspace);
+                let storage = repository
+                    .storage
+                    .clone()
+                    .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
+                repository.storage = None;
+                let generation_action = response
+                    .precise
+                    .generation_action
+                    .unwrap_or(WorkspacePreciseGenerationAction::NotApplicable);
+                let precise = self
+                    .workspace_precise_summary_for_workspace(&workspace, Some(generation_action));
+                response.repository = repository;
+                response.storage = storage;
+                response.precise = precise.clone();
+                response.precise_lifecycle = self.workspace_precise_lifecycle_summary(
+                    &workspace,
+                    generation_action,
+                    &precise,
+                    true,
+                    !completed,
+                );
+            }
+        }
         info!(
             repository_id = %response.repository.repository_id,
             root = %response.repository.root_path,
@@ -672,6 +707,7 @@ impl FriggMcpServer {
             session_default = response.session_default,
             precise_state = ?response.precise.state,
             precise_generation_action = ?response.precise.generation_action,
+            precise_phase = ?response.precise_lifecycle.phase,
             duration_ms = started_at.elapsed().as_millis() as u64,
             "workspace attach completed"
         );
@@ -687,6 +723,11 @@ impl FriggMcpServer {
                     "exists": response.storage.exists,
                     "initialized": response.storage.initialized,
                     "index_state": response.storage.index_state,
+                },
+                "precise_lifecycle": {
+                    "phase": response.precise_lifecycle.phase,
+                    "waited_for_completion": response.precise_lifecycle.waited_for_completion,
+                    "generation_action": response.precise_lifecycle.generation_action,
                 },
             }),
             Some(FriggMcpServer::provenance_normalized_workload_metadata(
@@ -708,6 +749,7 @@ impl FriggMcpServer {
                     "repository_id": params.repository_id,
                     "set_default": params.set_default,
                     "resolve_mode": params.resolve_mode,
+                    "wait_for_precise": params.wait_for_precise,
                 }),
                 finalization.source_refs,
                 &result,
@@ -885,7 +927,6 @@ impl FriggMcpServer {
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
-        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
@@ -1115,13 +1156,27 @@ impl FriggMcpServer {
                         Some(error.message.to_string()),
                     );
             })?;
+        let precise_generation_action = self.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &reindex_summary.changed_paths,
+            &reindex_summary.deleted_paths,
+        );
+        let precise = self
+            .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
+        let precise_lifecycle = self.workspace_precise_lifecycle_summary(
+            &workspace,
+            precise_generation_action,
+            &precise,
+            false,
+            false,
+        );
         let mut repository = self.repository_summary(&workspace);
         let storage = repository
             .storage
             .clone()
             .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
         repository.storage = None;
-        let response = WorkspaceReindexResponse {
+        let mut response = WorkspaceReindexResponse {
             repository,
             resolved_from,
             resolution,
@@ -1133,12 +1188,34 @@ impl FriggMcpServer {
             files_changed: reindex_summary.files_changed,
             files_deleted: reindex_summary.files_deleted,
             diagnostics_count: reindex_summary.diagnostics.total_count(),
+            precise_lifecycle,
         };
-        let _ = self.maybe_spawn_workspace_precise_generation_for_paths(
-            &workspace,
-            &reindex_summary.changed_paths,
-            &reindex_summary.deleted_paths,
-        );
+        if params.wait_for_precise.unwrap_or(false) {
+            let repository_id = response.repository.repository_id.clone();
+            let completed = self
+                .wait_for_repository_precise_generation(&repository_id, Duration::from_secs(30))
+                .await;
+            if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
+                let generation_action = response.precise_lifecycle.generation_action;
+                let precise = self
+                    .workspace_precise_summary_for_workspace(&workspace, Some(generation_action));
+                let mut repository = self.repository_summary(&workspace);
+                let storage = repository
+                    .storage
+                    .clone()
+                    .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
+                repository.storage = None;
+                response.repository = repository;
+                response.storage = storage;
+                response.precise_lifecycle = self.workspace_precise_lifecycle_summary(
+                    &workspace,
+                    generation_action,
+                    &precise,
+                    true,
+                    !completed,
+                );
+            }
+        }
         info!(
             repository_id = %response.repository.repository_id,
             root = %response.repository.root_path,
@@ -1149,6 +1226,7 @@ impl FriggMcpServer {
             files_changed = response.files_changed,
             files_deleted = response.files_deleted,
             diagnostics_count = response.diagnostics_count,
+            precise_phase = ?response.precise_lifecycle.phase,
             duration_ms = started_at.elapsed().as_millis() as u64,
             "workspace reindex completed"
         );
@@ -1168,6 +1246,11 @@ impl FriggMcpServer {
                 "files_deleted": response.files_deleted,
                 "diagnostics_count": response.diagnostics_count,
                 "session_default": response.session_default,
+                "precise_lifecycle": {
+                    "phase": response.precise_lifecycle.phase,
+                    "waited_for_completion": response.precise_lifecycle.waited_for_completion,
+                    "generation_action": response.precise_lifecycle.generation_action,
+                },
             }),
             Some(FriggMcpServer::provenance_normalized_workload_metadata(
                 "workspace_reindex",
@@ -1189,6 +1272,7 @@ impl FriggMcpServer {
                     "set_default": params.set_default,
                     "resolve_mode": params.resolve_mode,
                     "confirm": params.confirm,
+                    "wait_for_precise": params.wait_for_precise,
                 }),
                 finalization.source_refs,
                 &result,
@@ -1213,6 +1297,9 @@ impl FriggMcpServer {
         let _params = params.0;
         let execution_context = self.read_only_tool_execution_context("workspace_current", None);
         let current_workspace = self.current_workspace();
+        let current_repository = current_workspace
+            .as_ref()
+            .map(|workspace| self.repository_summary(workspace));
         let repositories = self
             .attached_workspaces()
             .into_iter()
@@ -1222,13 +1309,16 @@ impl FriggMcpServer {
         let precise = current_workspace
             .as_ref()
             .map(|workspace| self.workspace_precise_summary_for_workspace(workspace, None));
+        let precise_ingest = current_repository
+            .as_ref()
+            .and_then(|repository| repository.health.as_ref())
+            .and_then(|health| health.precise_ingest.clone());
         let response = WorkspaceCurrentResponse {
-            repository: current_workspace
-                .as_ref()
-                .map(|workspace| self.repository_summary(workspace)),
+            repository: current_repository,
             session_default: current_workspace.is_some(),
             repositories,
             precise,
+            precise_ingest,
             runtime: Some(runtime),
         };
         let repository_ids = response

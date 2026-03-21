@@ -128,6 +128,142 @@ impl FriggMcpServer {
         }
     }
 
+    pub(super) fn workspace_by_repository_id(
+        &self,
+        repository_id: &str,
+    ) -> Option<AttachedWorkspace> {
+        self.runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(repository_id)
+    }
+
+    fn latest_repository_precise_generation_summary(
+        &self,
+        repository_id: &str,
+    ) -> Option<WorkspacePreciseGenerationSummary> {
+        Self::precise_generator_specs()
+            .into_iter()
+            .filter_map(|spec| {
+                self.scip_cached_workspace_precise_generation(repository_id, spec.generator_id)
+            })
+            .max_by_key(|summary| summary.generated_at_ms)
+    }
+
+    fn active_repository_precise_generation_task(
+        &self,
+        repository_id: &str,
+    ) -> Option<RuntimeTaskSummary> {
+        self.runtime_state
+            .runtime_task_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_tasks()
+            .into_iter()
+            .find(|task| {
+                task.kind == RuntimeTaskKind::PreciseGenerate && task.repository_id == repository_id
+            })
+    }
+
+    pub(super) fn workspace_precise_lifecycle_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+        generation_action: WorkspacePreciseGenerationAction,
+        precise: &WorkspacePreciseSummary,
+        waited_for_completion: bool,
+        timed_out: bool,
+    ) -> WorkspacePreciseLifecycleSummary {
+        let active_task = self.active_repository_precise_generation_task(&workspace.repository_id);
+        let last_generation =
+            self.latest_repository_precise_generation_summary(&workspace.repository_id);
+        let active_task_phase = active_task.as_ref().map(|task| task.phase.clone());
+        let failure_class = precise.failure_class.or_else(|| {
+            last_generation
+                .as_ref()
+                .and_then(|summary| summary.failure_class)
+        });
+        let failure_summary = precise.failure_summary.clone().or_else(|| {
+            last_generation
+                .as_ref()
+                .and_then(|summary| summary.detail.clone())
+        });
+        let recommended_action = precise.recommended_action.or_else(|| {
+            last_generation
+                .as_ref()
+                .and_then(|summary| summary.recommended_action)
+        });
+        let phase = if timed_out {
+            WorkspacePreciseLifecyclePhase::Timeout
+        } else if let Some(_task) = active_task.as_ref() {
+            WorkspacePreciseLifecyclePhase::Running
+        } else if let Some(summary) = last_generation.as_ref() {
+            match summary.status {
+                WorkspacePreciseGenerationStatus::Succeeded => {
+                    WorkspacePreciseLifecyclePhase::Succeeded
+                }
+                WorkspacePreciseGenerationStatus::Failed
+                | WorkspacePreciseGenerationStatus::Timeout => {
+                    WorkspacePreciseLifecyclePhase::Failed
+                }
+                WorkspacePreciseGenerationStatus::MissingTool
+                | WorkspacePreciseGenerationStatus::Unsupported => {
+                    WorkspacePreciseLifecyclePhase::Unavailable
+                }
+                WorkspacePreciseGenerationStatus::NotConfigured
+                | WorkspacePreciseGenerationStatus::Skipped => {
+                    WorkspacePreciseLifecyclePhase::Skipped
+                }
+            }
+        } else {
+            match generation_action {
+                WorkspacePreciseGenerationAction::Triggered => {
+                    WorkspacePreciseLifecyclePhase::NotStarted
+                }
+                WorkspacePreciseGenerationAction::SkippedActiveTask => {
+                    WorkspacePreciseLifecyclePhase::Running
+                }
+                WorkspacePreciseGenerationAction::SkippedNoWork
+                | WorkspacePreciseGenerationAction::NotApplicable => {
+                    WorkspacePreciseLifecyclePhase::Skipped
+                }
+            }
+        };
+        WorkspacePreciseLifecycleSummary {
+            phase,
+            waited_for_completion,
+            generation_action,
+            last_generation,
+            active_task_phase,
+            failure_class,
+            failure_summary,
+            recommended_action,
+        }
+    }
+
+    pub(super) async fn wait_for_repository_precise_generation(
+        &self,
+        repository_id: &str,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let active = self
+                .runtime_state
+                .runtime_task_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .has_active_task_for_repository(RuntimeTaskKind::PreciseGenerate, repository_id);
+            if !active {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     pub(super) fn attach_workspace_target_internal(
         &self,
         path: Option<&str>,
@@ -153,7 +289,6 @@ impl FriggMcpServer {
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
-        self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
@@ -170,6 +305,13 @@ impl FriggMcpServer {
             self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
         let precise = self
             .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
+        let precise_lifecycle = self.workspace_precise_lifecycle_summary(
+            &workspace,
+            precise_generation_action,
+            &precise,
+            false,
+            false,
+        );
 
         Ok(WorkspaceAttachResponse {
             repository,
@@ -184,6 +326,7 @@ impl FriggMcpServer {
                 WorkspaceAttachAction::ReusedWorkspace
             },
             precise,
+            precise_lifecycle,
         })
     }
 

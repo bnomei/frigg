@@ -1,6 +1,9 @@
 #![allow(clippy::panic)]
 
 use super::*;
+use crate::mcp::types::{
+    WorkspacePreciseCoverageMode, WorkspacePreciseIngestState, WorkspacePreciseState,
+};
 
 #[test]
 fn extended_only_tools_are_hidden_by_default_runtime_options() {
@@ -239,4 +242,64 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
         }),
         "active tasks should surface semantic-followup watch work distinctly"
     );
+}
+
+#[test]
+fn repository_summary_reports_precise_ingest_failures_separately_from_scip_discovery() {
+    let workspace_root = temp_workspace_root("precise-ingest-failure-summary");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct PreciseFailure;\n",
+    )
+    .expect("failed to write source fixture");
+    let scip_dir = workspace_root.join(".frigg/scip");
+    fs::create_dir_all(&scip_dir).expect("failed to create scip dir");
+    fs::write(scip_dir.join("oversized.scip"), "0123456789")
+        .expect("failed to write oversized scip artifact");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.max_file_bytes = 1;
+    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    let summary = server.repository_summary(&workspace);
+    let health = summary
+        .health
+        .as_ref()
+        .expect("repository summary should expose health");
+    assert_eq!(health.scip.state, WorkspaceIndexComponentState::Ready);
+    let precise_ingest = health
+        .precise_ingest
+        .as_ref()
+        .expect("repository health should expose precise ingest status");
+    assert_eq!(precise_ingest.state, WorkspacePreciseIngestState::Failed);
+    assert_eq!(
+        precise_ingest.coverage_mode,
+        Some(WorkspacePreciseCoverageMode::None)
+    );
+    assert_eq!(precise_ingest.artifacts_discovered, 1);
+    assert_eq!(precise_ingest.artifacts_failed, 1);
+    assert!(
+        precise_ingest
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("scip ingest failed"))
+    );
+
+    let precise = server.workspace_precise_summary_for_workspace(&workspace, None);
+    assert_eq!(precise.state, WorkspacePreciseState::Failed);
+    assert!(precise.failure_summary.is_some());
+
+    let _ = fs::remove_dir_all(workspace_root);
 }

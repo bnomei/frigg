@@ -1,4 +1,5 @@
 use super::*;
+use frigg::mcp::types::WorkspacePreciseLifecyclePhase;
 
 #[tokio::test]
 async fn core_list_repositories_is_deterministic() {
@@ -62,6 +63,7 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
             repository_id: None,
             set_default: None,
             resolve_mode: None,
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should succeed for fixture file path")
@@ -84,6 +86,17 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert!(
         first.precise.generation_action.is_some(),
         "workspace_attach should always expose a top-level precise generation action summary"
+    );
+    assert!(
+        matches!(
+            first.precise_lifecycle.phase,
+            WorkspacePreciseLifecyclePhase::Running
+                | WorkspacePreciseLifecyclePhase::Succeeded
+                | WorkspacePreciseLifecyclePhase::Skipped
+                | WorkspacePreciseLifecyclePhase::Unavailable
+                | WorkspacePreciseLifecyclePhase::NotStarted
+        ),
+        "workspace_attach should expose the precise lifecycle phase"
     );
     if first.precise.failure_tool.is_some() {
         assert!(
@@ -110,6 +123,7 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
             repository_id: None,
             set_default: Some(false),
             resolve_mode: None,
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should reuse existing root")
@@ -141,6 +155,23 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         first.repository.repository_id
     );
     assert!(current.precise.is_some());
+    let current_precise_ingest = current
+        .precise_ingest
+        .as_ref()
+        .expect("workspace_current should expose precise ingest status");
+    let repository_precise_ingest = current_repository
+        .health
+        .as_ref()
+        .and_then(|health| health.precise_ingest.as_ref())
+        .expect("repository health should expose precise ingest status");
+    assert_eq!(
+        current_precise_ingest.state,
+        repository_precise_ingest.state
+    );
+    assert_eq!(
+        current_precise_ingest.artifacts_discovered,
+        repository_precise_ingest.artifacts_discovered
+    );
     let runtime = current
         .runtime
         .as_ref()
@@ -211,6 +242,7 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
             repository_id: None,
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should succeed for schema-only storage")
@@ -335,6 +367,7 @@ async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
             repository_id: None,
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should succeed for indexed workspace")
@@ -392,6 +425,7 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
             repository_id: None,
             set_default: Some(false),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should attach repo a")
@@ -402,6 +436,7 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
             repository_id: None,
             set_default: Some(true),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
         }))
         .await
         .expect("workspace_attach should attach repo b and set default")

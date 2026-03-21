@@ -2,7 +2,9 @@ use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::repository::{RepositorySummary, WorkspaceResolveMode, WorkspaceStorageSummary};
+use super::repository::{
+    RepositorySummary, WorkspacePreciseIngestSummary, WorkspaceResolveMode, WorkspaceStorageSummary,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -65,12 +67,28 @@ pub enum WorkspacePreciseGenerationAction {
     NotApplicable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseLifecyclePhase {
+    Unavailable,
+    NotStarted,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Timeout,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseGenerationSummary {
     pub status: WorkspacePreciseGenerationStatus,
     pub generated_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_sample_paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<WorkspacePreciseFailureClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +129,23 @@ pub struct WorkspacePreciseSummary {
     pub generation_action: Option<WorkspacePreciseGenerationAction>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseLifecycleSummary {
+    pub phase: WorkspacePreciseLifecyclePhase,
+    pub waited_for_completion: bool,
+    pub generation_action: WorkspacePreciseGenerationAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_generation: Option<WorkspacePreciseGenerationSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_task_phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<WorkspacePreciseFailureClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_action: Option<WorkspaceRecommendedAction>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceAttachAction {
@@ -128,6 +163,8 @@ pub struct WorkspaceAttachParams {
     pub set_default: Option<bool>,
     /// Workspace resolution strategy. Omit to prefer the enclosing Git root before falling back to the direct directory.
     pub resolve_mode: Option<WorkspaceResolveMode>,
+    /// Whether to wait for triggered or active precise generation before returning.
+    pub wait_for_precise: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -139,6 +176,7 @@ pub struct WorkspaceAttachResponse {
     pub storage: WorkspaceStorageSummary,
     pub action: WorkspaceAttachAction,
     pub precise: WorkspacePreciseSummary,
+    pub precise_lifecycle: WorkspacePreciseLifecycleSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -191,6 +229,8 @@ pub struct WorkspaceReindexParams {
     pub resolve_mode: Option<WorkspaceResolveMode>,
     /// Explicit confirmation required before Frigg updates storage.
     pub confirm: Option<bool>,
+    /// Whether to wait for triggered or active precise generation before returning.
+    pub wait_for_precise: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -207,6 +247,7 @@ pub struct WorkspaceReindexResponse {
     pub files_changed: usize,
     pub files_deleted: usize,
     pub diagnostics_count: usize,
+    pub precise_lifecycle: WorkspacePreciseLifecycleSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -220,6 +261,8 @@ pub struct WorkspaceCurrentResponse {
     pub repositories: Vec<RepositorySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub precise: Option<WorkspacePreciseSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precise_ingest: Option<WorkspacePreciseIngestSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
 }

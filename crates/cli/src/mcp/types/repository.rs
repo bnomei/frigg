@@ -93,6 +93,48 @@ pub struct WorkspaceIndexComponentSummary {
     pub artifact_count: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseCoverageMode {
+    Full,
+    Partial,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePreciseIngestState {
+    Missing,
+    Ready,
+    Partial,
+    Failed,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseArtifactFailureSummary {
+    pub artifact_label: String,
+    pub stage: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseIngestSummary {
+    pub state: WorkspacePreciseIngestState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage_mode: Option<WorkspacePreciseCoverageMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub artifacts_discovered: usize,
+    pub artifacts_discovered_bytes: u64,
+    pub artifacts_ingested: usize,
+    pub artifacts_ingested_bytes: u64,
+    pub artifacts_failed: usize,
+    pub artifacts_failed_bytes: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_artifacts: Vec<WorkspacePreciseArtifactFailureSummary>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// High-level view of which retrieval substrates are ready for a workspace and therefore how rich
 /// downstream search or navigation responses can be.
@@ -100,6 +142,8 @@ pub struct WorkspaceIndexHealthSummary {
     pub lexical: WorkspaceIndexComponentSummary,
     pub semantic: WorkspaceIndexComponentSummary,
     pub scip: WorkspaceIndexComponentSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precise_ingest: Option<WorkspacePreciseIngestSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub precise_generators: Vec<WorkspacePreciseGeneratorSummary>,
 }

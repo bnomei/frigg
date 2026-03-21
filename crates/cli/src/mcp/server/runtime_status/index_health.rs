@@ -78,7 +78,141 @@ impl FriggMcpServer {
             lexical: self.workspace_lexical_index_summary(workspace, storage),
             semantic: self.workspace_semantic_index_summary(workspace, storage),
             scip: self.workspace_scip_index_summary(workspace),
+            precise_ingest: Some(self.workspace_precise_ingest_summary(workspace)),
             precise_generators: self.workspace_precise_generator_summaries(workspace),
+        }
+    }
+
+    fn public_precise_coverage_mode(
+        coverage_mode: PreciseCoverageMode,
+    ) -> WorkspacePreciseCoverageMode {
+        match coverage_mode {
+            PreciseCoverageMode::Full => WorkspacePreciseCoverageMode::Full,
+            PreciseCoverageMode::Partial => WorkspacePreciseCoverageMode::Partial,
+            PreciseCoverageMode::None => WorkspacePreciseCoverageMode::None,
+        }
+    }
+
+    fn precise_ingest_failure_summaries(
+        stats: &PreciseIngestStats,
+    ) -> Vec<WorkspacePreciseArtifactFailureSummary> {
+        stats
+            .failed_artifacts
+            .iter()
+            .map(|failure| WorkspacePreciseArtifactFailureSummary {
+                artifact_label: failure.artifact_label.clone(),
+                stage: failure.stage.clone(),
+                detail: failure.detail.clone(),
+            })
+            .collect()
+    }
+
+    fn precise_ingest_reason(
+        state: WorkspacePreciseIngestState,
+        stats: &PreciseIngestStats,
+    ) -> Option<String> {
+        match state {
+            WorkspacePreciseIngestState::Missing => Some("no_scip_artifacts_discovered".to_owned()),
+            WorkspacePreciseIngestState::Ready => None,
+            WorkspacePreciseIngestState::Partial => Some(format!(
+                "scip ingest partial: {} of {} artifacts failed",
+                stats.artifacts_failed, stats.artifacts_discovered
+            )),
+            WorkspacePreciseIngestState::Failed => Some(format!(
+                "scip ingest failed: {} of {} artifacts failed",
+                stats.artifacts_failed, stats.artifacts_discovered
+            )),
+            WorkspacePreciseIngestState::Error => None,
+        }
+    }
+
+    fn precise_ingest_summary_from_stats(
+        stats: &PreciseIngestStats,
+        coverage_mode: PreciseCoverageMode,
+    ) -> WorkspacePreciseIngestSummary {
+        let state = if stats.artifacts_discovered == 0 {
+            WorkspacePreciseIngestState::Missing
+        } else {
+            match coverage_mode {
+                PreciseCoverageMode::Full => WorkspacePreciseIngestState::Ready,
+                PreciseCoverageMode::Partial => WorkspacePreciseIngestState::Partial,
+                PreciseCoverageMode::None => {
+                    if stats.artifacts_failed > 0 {
+                        WorkspacePreciseIngestState::Failed
+                    } else {
+                        WorkspacePreciseIngestState::Missing
+                    }
+                }
+            }
+        };
+        WorkspacePreciseIngestSummary {
+            state,
+            coverage_mode: Some(Self::public_precise_coverage_mode(coverage_mode)),
+            reason: Self::precise_ingest_reason(state, stats),
+            artifacts_discovered: stats.artifacts_discovered,
+            artifacts_discovered_bytes: stats.artifacts_discovered_bytes,
+            artifacts_ingested: stats.artifacts_ingested,
+            artifacts_ingested_bytes: stats.artifacts_ingested_bytes,
+            artifacts_failed: stats.artifacts_failed,
+            artifacts_failed_bytes: stats.artifacts_failed_bytes,
+            failed_artifacts: Self::precise_ingest_failure_summaries(stats),
+        }
+    }
+
+    pub(in crate::mcp::server) fn workspace_precise_ingest_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> WorkspacePreciseIngestSummary {
+        let discovery = Self::collect_scip_artifact_digests(&workspace.root);
+        if discovery.artifact_digests.is_empty() {
+            return WorkspacePreciseIngestSummary {
+                state: WorkspacePreciseIngestState::Missing,
+                coverage_mode: Some(WorkspacePreciseCoverageMode::None),
+                reason: Some("no_scip_artifacts_discovered".to_owned()),
+                artifacts_discovered: 0,
+                artifacts_discovered_bytes: 0,
+                artifacts_ingested: 0,
+                artifacts_ingested_bytes: 0,
+                artifacts_failed: 0,
+                artifacts_failed_bytes: 0,
+                failed_artifacts: Vec::new(),
+            };
+        }
+
+        if let Some(cached) = self.try_reuse_latest_precise_graph_for_repository(
+            &workspace.repository_id,
+            &workspace.root,
+        ) {
+            return Self::precise_ingest_summary_from_stats(
+                &cached.ingest_stats,
+                cached.coverage_mode,
+            );
+        }
+
+        match self.precise_graph_for_repository_root(
+            &workspace.repository_id,
+            &workspace.root,
+            self.find_references_resource_budgets(),
+        ) {
+            Ok(cached) => {
+                Self::precise_ingest_summary_from_stats(&cached.ingest_stats, cached.coverage_mode)
+            }
+            Err(err) => WorkspacePreciseIngestSummary {
+                state: WorkspacePreciseIngestState::Error,
+                coverage_mode: None,
+                reason: Some(err.message.to_string()),
+                artifacts_discovered: discovery.artifact_digests.len(),
+                artifacts_discovered_bytes: discovery
+                    .artifact_digests
+                    .iter()
+                    .map(|artifact| artifact.size_bytes)
+                    .sum(),
+                artifacts_ingested: 0,
+                artifacts_ingested_bytes: 0,
+                artifacts_failed: 0,
+                artifacts_failed_bytes: 0,
+                failed_artifacts: Vec::new(),
+            },
         }
     }
 
@@ -848,15 +982,48 @@ impl FriggMcpServer {
         let default_action =
             generation_action.or(Some(WorkspacePreciseGenerationAction::NotApplicable));
 
-        if health.scip.state == WorkspaceIndexComponentState::Ready {
-            return WorkspacePreciseSummary {
-                state: WorkspacePreciseState::Ok,
-                failure_tool: None,
-                failure_class: None,
-                failure_summary: None,
-                recommended_action: None,
-                generation_action: default_action,
-            };
+        if let Some(precise_ingest) = health.precise_ingest.as_ref() {
+            let failure_summary = precise_ingest.reason.clone().or_else(|| {
+                precise_ingest.failed_artifacts.first().map(|failure| {
+                    format!(
+                        "{} [{}]: {}",
+                        failure.artifact_label, failure.stage, failure.detail
+                    )
+                })
+            });
+            match precise_ingest.state {
+                WorkspacePreciseIngestState::Ready => {
+                    return WorkspacePreciseSummary {
+                        state: WorkspacePreciseState::Ok,
+                        failure_tool: None,
+                        failure_class: None,
+                        failure_summary: None,
+                        recommended_action: None,
+                        generation_action: default_action,
+                    };
+                }
+                WorkspacePreciseIngestState::Partial => {
+                    return WorkspacePreciseSummary {
+                        state: WorkspacePreciseState::Partial,
+                        failure_tool: None,
+                        failure_class: None,
+                        failure_summary,
+                        recommended_action: Some(WorkspaceRecommendedAction::UseHeuristicMode),
+                        generation_action: default_action,
+                    };
+                }
+                WorkspacePreciseIngestState::Failed | WorkspacePreciseIngestState::Error => {
+                    return WorkspacePreciseSummary {
+                        state: WorkspacePreciseState::Failed,
+                        failure_tool: None,
+                        failure_class: None,
+                        failure_summary,
+                        recommended_action: Some(WorkspaceRecommendedAction::UseHeuristicMode),
+                        generation_action: default_action,
+                    };
+                }
+                WorkspacePreciseIngestState::Missing => {}
+            }
         }
 
         let failed_generator =
@@ -919,14 +1086,14 @@ impl FriggMcpServer {
         }
 
         WorkspacePreciseSummary {
-            state: if health.scip.state == WorkspaceIndexComponentState::Stale {
-                WorkspacePreciseState::Partial
-            } else {
-                WorkspacePreciseState::Unavailable
-            },
+            state: WorkspacePreciseState::Unavailable,
             failure_tool: None,
             failure_class: None,
-            failure_summary: health.scip.reason.clone(),
+            failure_summary: health
+                .precise_ingest
+                .as_ref()
+                .and_then(|summary| summary.reason.clone())
+                .or_else(|| health.scip.reason.clone()),
             recommended_action: Some(WorkspaceRecommendedAction::UseHeuristicMode),
             generation_action: default_action,
         }

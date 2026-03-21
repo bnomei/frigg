@@ -48,7 +48,7 @@ pub(super) struct PreciseGeneratorSpec {
     pub(super) trigger_markers: &'static [&'static str],
     pub(super) output_artifact_name: &'static str,
     pub(super) stdout_artifact_fallback: bool,
-    pub(super) quiet_arg: Option<&'static str>,
+    pub(super) output_flag: Option<&'static str>,
 }
 
 #[derive(Debug)]

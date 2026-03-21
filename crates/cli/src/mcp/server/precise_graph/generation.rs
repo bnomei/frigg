@@ -14,7 +14,7 @@ impl FriggMcpServer {
                 trigger_markers: &["Cargo.toml", "Cargo.lock", "src/lib.rs", "src/main.rs"],
                 output_artifact_name: "rust.scip",
                 stdout_artifact_fallback: true,
-                quiet_arg: None,
+                output_flag: None,
             },
             PreciseGeneratorSpec {
                 language: SymbolLanguage::Go,
@@ -22,12 +22,12 @@ impl FriggMcpServer {
                 tool_name: "scip-go",
                 tool_candidates: &["$GOPATH/bin/scip-go", "scip-go"],
                 version_arg_sets: &[&["version"], &["--version"]],
-                generate_args: &[],
+                generate_args: &["-q"],
                 infer_tsconfig: false,
                 trigger_markers: &["go.mod", "go.sum"],
                 output_artifact_name: "go.scip",
                 stdout_artifact_fallback: false,
-                quiet_arg: Some("-q"),
+                output_flag: Some("-o"),
             },
             PreciseGeneratorSpec {
                 language: SymbolLanguage::TypeScript,
@@ -52,7 +52,7 @@ impl FriggMcpServer {
                 ],
                 output_artifact_name: "typescript.scip",
                 stdout_artifact_fallback: false,
-                quiet_arg: None,
+                output_flag: None,
             },
             PreciseGeneratorSpec {
                 language: SymbolLanguage::Php,
@@ -65,7 +65,7 @@ impl FriggMcpServer {
                 trigger_markers: &["composer.json", "composer.lock"],
                 output_artifact_name: "php.scip",
                 stdout_artifact_fallback: true,
-                quiet_arg: None,
+                output_flag: None,
             },
             PreciseGeneratorSpec {
                 language: SymbolLanguage::Python,
@@ -77,7 +77,7 @@ impl FriggMcpServer {
                     "scip-python",
                 ],
                 version_arg_sets: &[&["--version"], &["version"], &["index", "--help"]],
-                generate_args: &["index", "."],
+                generate_args: &["index", "--quiet"],
                 infer_tsconfig: false,
                 trigger_markers: &[
                     "pyproject.toml",
@@ -90,7 +90,7 @@ impl FriggMcpServer {
                 ],
                 output_artifact_name: "python.scip",
                 stdout_artifact_fallback: false,
-                quiet_arg: Some("--quiet"),
+                output_flag: Some("--output"),
             },
             PreciseGeneratorSpec {
                 language: SymbolLanguage::Kotlin,
@@ -111,7 +111,7 @@ impl FriggMcpServer {
                 ],
                 output_artifact_name: "kotlin.scip",
                 stdout_artifact_fallback: false,
-                quiet_arg: None,
+                output_flag: None,
             },
         ]
     }
@@ -596,11 +596,7 @@ impl FriggMcpServer {
         generator_workspace_root: &Path,
         spec: &PreciseGeneratorSpec,
     ) -> Vec<String> {
-        let mut args = spec
-            .generate_args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>();
+        let mut args = Vec::new();
 
         if spec.language == SymbolLanguage::TypeScript {
             let has_tsconfig = generator_workspace_root.join("tsconfig.json").is_file()
@@ -616,6 +612,600 @@ impl FriggMcpServer {
         }
 
         args
+    }
+
+    fn append_precise_output_arg(
+        command: &mut Command,
+        spec: &PreciseGeneratorSpec,
+        output_path: &Path,
+    ) {
+        if let Some(output_flag) = spec.output_flag {
+            let output_path_arg = output_path.to_string_lossy().to_string();
+            command.args([output_flag, output_path_arg.as_str()]);
+        }
+    }
+
+    fn display_precise_artifact_path(path: &Path) -> String {
+        fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    }
+
+    fn precise_generation_succeeded_summary(
+        generated_at_ms: u64,
+        artifact_paths: &[PathBuf],
+        detail: String,
+    ) -> WorkspacePreciseGenerationSummary {
+        let mut published_paths = artifact_paths
+            .iter()
+            .map(|path| Self::display_precise_artifact_path(path))
+            .collect::<Vec<_>>();
+        published_paths.sort();
+        published_paths.dedup();
+        let artifact_count = published_paths.len();
+        let artifact_path = (artifact_count == 1).then(|| published_paths[0].clone());
+        let artifact_sample_paths = if artifact_count > 1 {
+            published_paths
+                .iter()
+                .take(Self::PRECISE_DISCOVERY_SAMPLE_LIMIT)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        WorkspacePreciseGenerationSummary {
+            status: WorkspacePreciseGenerationStatus::Succeeded,
+            generated_at_ms,
+            artifact_path,
+            artifact_count: (artifact_count > 1).then_some(artifact_count),
+            artifact_sample_paths,
+            failure_class: None,
+            recommended_action: None,
+            detail: Some(detail),
+        }
+    }
+
+    fn remove_file_if_exists(path: &Path) -> Result<(), String> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("failed to remove {}: {err}", path.display())),
+        }
+    }
+
+    fn python_shard_artifact_name(target: &Path) -> String {
+        let normalized = if target.as_os_str().is_empty() {
+            "workspace".to_owned()
+        } else {
+            target.to_string_lossy().replace('\\', "/")
+        };
+        let mut label = String::new();
+        for ch in normalized.chars() {
+            if ch.is_ascii_alphanumeric() {
+                label.push(ch.to_ascii_lowercase());
+            } else if !label.ends_with('-') {
+                label.push('-');
+            }
+        }
+        let label = label.trim_matches('-');
+        let mut hasher = DeterministicSignatureHasher::new();
+        hasher.write_str(&normalized);
+        let digest = hasher.finish_hex();
+        let suffix = &digest[..8];
+        let prefix = if label.is_empty() { "workspace" } else { label };
+        format!("python--{prefix}-{suffix}.scip")
+    }
+
+    fn collect_python_source_relative_paths(root: &Path) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                let path = entry.path();
+                if path == root {
+                    return true;
+                }
+                let Ok(relative) = path.strip_prefix(root) else {
+                    return false;
+                };
+                let Some(first) = relative.components().next() else {
+                    return true;
+                };
+                let segment = first.as_os_str().to_string_lossy();
+                !matches!(
+                    segment.as_ref(),
+                    ".git"
+                        | ".frigg"
+                        | "node_modules"
+                        | ".venv"
+                        | "venv"
+                        | ".mypy_cache"
+                        | ".pytest_cache"
+                        | ".ruff_cache"
+                        | "__pycache__"
+                        | "dist"
+                        | "build"
+                        | "target"
+                )
+            })
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let is_python = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("py"));
+            if !is_python {
+                continue;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                sources.push(relative.to_path_buf());
+            }
+        }
+        sources.sort();
+        sources.dedup();
+        sources
+    }
+
+    fn python_shard_targets(source_paths: &[PathBuf], prefix: Option<&Path>) -> Vec<PathBuf> {
+        let mut targets = BTreeSet::new();
+        for source in source_paths {
+            let candidate = match prefix {
+                Some(prefix) => {
+                    if !source.starts_with(prefix) || source == prefix {
+                        continue;
+                    }
+                    let Ok(remainder) = source.strip_prefix(prefix) else {
+                        continue;
+                    };
+                    let Some(child) = remainder.components().next() else {
+                        continue;
+                    };
+                    prefix.join(child.as_os_str())
+                }
+                None => {
+                    let Some(first) = source.components().next() else {
+                        continue;
+                    };
+                    if source.components().count() == 1 {
+                        source.clone()
+                    } else {
+                        PathBuf::from(first.as_os_str())
+                    }
+                }
+            };
+            targets.insert(candidate);
+        }
+        targets.into_iter().collect()
+    }
+
+    fn python_managed_artifact_paths(
+        output_dir: &Path,
+        spec: &PreciseGeneratorSpec,
+    ) -> Result<Vec<PathBuf>, String> {
+        let mut paths = Vec::new();
+        let entries = match fs::read_dir(output_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(paths),
+            Err(err) => {
+                return Err(format!(
+                    "failed to read precise artifact directory {}: {err}",
+                    output_dir.display()
+                ));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                format!(
+                    "failed to inspect precise artifact entry in {}: {err}",
+                    output_dir.display()
+                )
+            })?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if file_name == spec.output_artifact_name
+                || (file_name.starts_with("python--") && file_name.ends_with(".scip"))
+            {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+
+    fn clear_python_managed_artifacts(
+        output_dir: &Path,
+        spec: &PreciseGeneratorSpec,
+    ) -> Result<(), String> {
+        for path in Self::python_managed_artifact_paths(output_dir, spec)? {
+            Self::remove_file_if_exists(&path)?;
+        }
+        Ok(())
+    }
+
+    fn publish_precise_artifact(staged_path: &Path, final_path: &Path) -> Result<(), String> {
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "failed to prepare precise artifact directory {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+        match fs::rename(staged_path, final_path) {
+            Ok(()) => Ok(()),
+            Err(rename_err) => {
+                fs::copy(staged_path, final_path).map_err(|copy_err| {
+                    format!(
+                        "failed to publish precise artifact {} to {}: rename={rename_err}; copy={copy_err}",
+                        staged_path.display(),
+                        final_path.display()
+                    )
+                })?;
+                Self::remove_file_if_exists(staged_path)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn publish_staged_python_artifacts(
+        staging_dir: &Path,
+        output_dir: &Path,
+    ) -> Result<Vec<PathBuf>, String> {
+        let entries = fs::read_dir(staging_dir).map_err(|err| {
+            format!(
+                "failed to read staged python artifact directory {}: {err}",
+                staging_dir.display()
+            )
+        })?;
+        let mut published = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|err| {
+                format!(
+                    "failed to inspect staged python artifact in {}: {err}",
+                    staging_dir.display()
+                )
+            })?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name() else {
+                continue;
+            };
+            let final_path = output_dir.join(file_name);
+            Self::publish_precise_artifact(&path, &final_path)?;
+            published.push(final_path);
+        }
+        published.sort();
+        Ok(published)
+    }
+
+    fn run_precise_generator_command(
+        workspace: &AttachedWorkspace,
+        spec: &PreciseGeneratorSpec,
+        tool: &ResolvedPreciseGeneratorTool,
+        version: &str,
+        generator_workspace_root: &Path,
+        output_path: &Path,
+        generator_extra_args: &[String],
+        extra_args: &[String],
+        generated_at_ms: u64,
+    ) -> Result<PathBuf, WorkspacePreciseGenerationSummary> {
+        let output_dir = output_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| generator_workspace_root.to_path_buf());
+        if let Err(detail) = Self::remove_file_if_exists(output_path) {
+            return Err(Self::precise_failed_summary(generated_at_ms, None, detail));
+        }
+
+        let mut command = Command::new(&tool.command);
+        command
+            .current_dir(generator_workspace_root)
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped());
+        command.args(spec.generate_args);
+        command.args(Self::precise_generation_command_args(
+            workspace,
+            generator_workspace_root,
+            spec,
+        ));
+        Self::append_precise_output_arg(&mut command, spec, output_path);
+        if !extra_args.is_empty() {
+            command.args(extra_args.iter());
+        }
+        if !generator_extra_args.is_empty() {
+            command.args(generator_extra_args.iter());
+        }
+        Self::apply_generator_environment(&mut command, workspace, spec);
+
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    return Err(WorkspacePreciseGenerationSummary {
+                        status: WorkspacePreciseGenerationStatus::MissingTool,
+                        generated_at_ms,
+                        artifact_path: None,
+                        artifact_count: None,
+                        artifact_sample_paths: Vec::new(),
+                        failure_class: Some(WorkspacePreciseFailureClass::MissingTool),
+                        recommended_action: Some(WorkspaceRecommendedAction::InstallTool),
+                        detail: Some(err.to_string()),
+                    });
+                }
+                return Err(Self::precise_failed_summary(
+                    generated_at_ms,
+                    None,
+                    err.to_string(),
+                ));
+            }
+        };
+
+        if !output.status.success() {
+            let stderr_detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(Self::precise_failed_summary(
+                generated_at_ms,
+                None,
+                if stderr_detail.is_empty() {
+                    format!(
+                        "generator '{}' exited unsuccessfully (version={version})",
+                        tool.display
+                    )
+                } else {
+                    stderr_detail
+                },
+            ));
+        }
+
+        match Self::write_precise_artifact(
+            generator_workspace_root,
+            &output_dir,
+            output_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(spec.output_artifact_name),
+            &output.stdout,
+            spec.stdout_artifact_fallback,
+        ) {
+            Ok(Some(path)) => Ok(path),
+            Ok(None) => Err(Self::precise_failed_summary(
+                generated_at_ms,
+                None,
+                format!(
+                    "generator '{}' succeeded but no SCIP artifact was produced",
+                    tool.display
+                ),
+            )),
+            Err(detail) => Err(Self::precise_failed_summary(generated_at_ms, None, detail)),
+        }
+    }
+
+    fn run_workspace_python_shard(
+        workspace: &AttachedWorkspace,
+        spec: &PreciseGeneratorSpec,
+        tool: &ResolvedPreciseGeneratorTool,
+        version: &str,
+        generator_workspace_root: &Path,
+        staging_dir: &Path,
+        source_paths: &[PathBuf],
+        target: &Path,
+        generator_extra_args: &[String],
+        generated_at_ms: u64,
+        budget_bytes: u64,
+    ) -> Result<Vec<PathBuf>, WorkspacePreciseGenerationSummary> {
+        let artifact_name = Self::python_shard_artifact_name(target);
+        let output_path = staging_dir.join(&artifact_name);
+        let target_arg = target.to_string_lossy().to_string();
+        let extra_args = vec!["--target-only".to_owned(), target_arg.clone()];
+        let artifact_path = Self::run_precise_generator_command(
+            workspace,
+            spec,
+            tool,
+            version,
+            generator_workspace_root,
+            &output_path,
+            generator_extra_args,
+            &extra_args,
+            generated_at_ms,
+        )?;
+        let artifact_bytes = fs::metadata(&artifact_path)
+            .map_err(|err| {
+                Self::precise_failed_summary(
+                    generated_at_ms,
+                    None,
+                    format!(
+                        "failed to inspect generated python shard {}: {err}",
+                        artifact_path.display()
+                    ),
+                )
+            })?
+            .len();
+        if artifact_bytes <= budget_bytes {
+            return Ok(vec![artifact_path]);
+        }
+
+        let _ = Self::remove_file_if_exists(&artifact_path);
+        let child_targets = Self::python_shard_targets(source_paths, Some(target));
+        if child_targets.is_empty() {
+            return Err(Self::precise_failed_summary(
+                generated_at_ms,
+                None,
+                format!(
+                    "python shard '{}' produced artifact bytes {} above configured per-file limit {} and could not be split further",
+                    target_arg, artifact_bytes, budget_bytes
+                ),
+            ));
+        }
+
+        let mut published = Vec::new();
+        for child_target in child_targets {
+            published.extend(Self::run_workspace_python_shard(
+                workspace,
+                spec,
+                tool,
+                version,
+                generator_workspace_root,
+                staging_dir,
+                source_paths,
+                &child_target,
+                generator_extra_args,
+                generated_at_ms,
+                budget_bytes,
+            )?);
+        }
+        Ok(published)
+    }
+
+    fn run_workspace_python_precise_generation(
+        &self,
+        workspace: &AttachedWorkspace,
+        spec: &PreciseGeneratorSpec,
+        tool: &ResolvedPreciseGeneratorTool,
+        version: &str,
+        generator_workspace_root: &Path,
+        output_dir: &Path,
+        generator_extra_args: &[String],
+        generated_at_ms: u64,
+    ) -> WorkspacePreciseGenerationSummary {
+        let budget_bytes = u64::try_from(
+            self.find_references_resource_budgets()
+                .scip_max_artifact_bytes,
+        )
+        .unwrap_or(u64::MAX);
+        let staging_dir = output_dir.join(format!(
+            ".python-stage-{}-{}",
+            std::process::id(),
+            generated_at_ms
+        ));
+        let result =
+            (|| -> Result<WorkspacePreciseGenerationSummary, WorkspacePreciseGenerationSummary> {
+                fs::create_dir_all(&staging_dir).map_err(|err| {
+                    Self::precise_failed_summary(
+                        generated_at_ms,
+                        None,
+                        format!(
+                            "failed to prepare staged python artifact directory {}: {err}",
+                            staging_dir.display()
+                        ),
+                    )
+                })?;
+                Self::clear_python_managed_artifacts(output_dir, spec).map_err(|detail| {
+                    Self::precise_failed_summary(generated_at_ms, None, detail)
+                })?;
+
+                let monolith_output_path = staging_dir.join(spec.output_artifact_name);
+                let monolith_path = Self::run_precise_generator_command(
+                    workspace,
+                    spec,
+                    tool,
+                    version,
+                    generator_workspace_root,
+                    &monolith_output_path,
+                    generator_extra_args,
+                    &[],
+                    generated_at_ms,
+                )?;
+                let monolith_bytes = fs::metadata(&monolith_path)
+                    .map_err(|err| {
+                        Self::precise_failed_summary(
+                            generated_at_ms,
+                            None,
+                            format!(
+                                "failed to inspect generated python artifact {}: {err}",
+                                monolith_path.display()
+                            ),
+                        )
+                    })?
+                    .len();
+                if monolith_bytes <= budget_bytes {
+                    let final_path = output_dir.join(spec.output_artifact_name);
+                    Self::publish_precise_artifact(&monolith_path, &final_path).map_err(
+                        |detail| Self::precise_failed_summary(generated_at_ms, None, detail),
+                    )?;
+                    return Ok(Self::precise_generation_succeeded_summary(
+                        generated_at_ms,
+                        &[final_path],
+                        format!(
+                            "generator={} tool={} version={version}",
+                            spec.generator_id, tool.display
+                        ),
+                    ));
+                }
+
+                let _ = Self::remove_file_if_exists(&monolith_path);
+                let source_paths =
+                    Self::collect_python_source_relative_paths(generator_workspace_root);
+                let shard_targets = Self::python_shard_targets(&source_paths, None);
+                if shard_targets.is_empty() {
+                    return Err(Self::precise_failed_summary(
+                        generated_at_ms,
+                        None,
+                        format!(
+                            "python artifact bytes {} exceed configured per-file limit {} and no shard targets were available",
+                            monolith_bytes, budget_bytes
+                        ),
+                    ));
+                }
+
+                for target in shard_targets {
+                    Self::run_workspace_python_shard(
+                        workspace,
+                        spec,
+                        tool,
+                        version,
+                        generator_workspace_root,
+                        &staging_dir,
+                        &source_paths,
+                        &target,
+                        generator_extra_args,
+                        generated_at_ms,
+                        budget_bytes,
+                    )?;
+                }
+
+                let published_paths =
+                    Self::publish_staged_python_artifacts(&staging_dir, output_dir).map_err(
+                        |detail| Self::precise_failed_summary(generated_at_ms, None, detail),
+                    )?;
+                Ok(Self::precise_generation_succeeded_summary(
+                    generated_at_ms,
+                    &published_paths,
+                    format!(
+                        "generator={} tool={} version={version} shards={}",
+                        spec.generator_id,
+                        tool.display,
+                        published_paths.len()
+                    ),
+                ))
+            })();
+
+        if let Err(error) = fs::remove_dir_all(&staging_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                path = %staging_dir.display(),
+                error = %error,
+                "failed to clean staged python artifact directory"
+            );
+        }
+
+        match result {
+            Ok(summary) => summary,
+            Err(summary) => summary,
+        }
     }
 
     fn workspace_precise_generation_needed(
@@ -789,6 +1379,8 @@ impl FriggMcpServer {
             status: WorkspacePreciseGenerationStatus::Failed,
             generated_at_ms,
             artifact_path,
+            artifact_count: None,
+            artifact_sample_paths: Vec::new(),
             failure_class: Some(failure_class),
             recommended_action: Some(Self::precise_recommended_action(failure_class)),
             detail: Some(detail),
@@ -879,6 +1471,7 @@ impl FriggMcpServer {
                             generator = spec.generator_id,
                             status = ?summary.status,
                             artifact_path = summary.artifact_path.as_deref().unwrap_or(""),
+                            artifact_count = summary.artifact_count.unwrap_or(1),
                             duration_ms,
                             detail = summary.detail.as_deref().unwrap_or(""),
                             "workspace precise generator completed"
@@ -918,6 +1511,8 @@ impl FriggMcpServer {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
                 artifact_path: None,
+                artifact_count: None,
+                artifact_sample_paths: Vec::new(),
                 failure_class: None,
                 recommended_action: None,
                 detail: Some("disabled_by_workspace_precise_config".to_owned()),
@@ -928,6 +1523,8 @@ impl FriggMcpServer {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
                 artifact_path: None,
+                artifact_count: None,
+                artifact_sample_paths: Vec::new(),
                 failure_class: None,
                 recommended_action: None,
                 detail: Some("missing_language_markers".to_owned()),
@@ -943,6 +1540,8 @@ impl FriggMcpServer {
                     status: WorkspacePreciseGenerationStatus::MissingTool,
                     generated_at_ms,
                     artifact_path: None,
+                    artifact_count: None,
+                    artifact_sample_paths: Vec::new(),
                     failure_class: Some(WorkspacePreciseFailureClass::MissingTool),
                     recommended_action: Some(WorkspaceRecommendedAction::InstallTool),
                     detail: Some(format!(
@@ -1009,97 +1608,40 @@ impl FriggMcpServer {
         );
 
         let generation_result = (|| {
-            let mut command = Command::new(&tool.command);
-            command
-                .current_dir(&generator_workspace_root)
-                .stdin(Stdio::null())
-                .stderr(Stdio::piped())
-                .stdout(Stdio::piped());
-            if let Some(quiet_arg) = spec.quiet_arg {
-                command.arg(quiet_arg);
-            }
-            let output_path = output_dir.join(spec.output_artifact_name);
-            let _ = fs::remove_file(&output_path);
-            if spec.language == SymbolLanguage::Go {
-                let output_path_arg = output_path.to_string_lossy().to_string();
-                command.args(["-o", output_path_arg.as_str()]);
-            }
-            command.args(Self::precise_generation_command_args(
-                workspace,
-                &generator_workspace_root,
-                spec,
-            ));
-            if !generator_extra_args.is_empty() {
-                command.args(generator_extra_args.iter());
-            }
-            Self::apply_generator_environment(&mut command, workspace, spec);
-
-            let output = match command.output() {
-                Ok(output) => output,
-                Err(err) => {
-                    if err.kind() == std::io::ErrorKind::NotFound {
-                        return WorkspacePreciseGenerationSummary {
-                            status: WorkspacePreciseGenerationStatus::MissingTool,
-                            generated_at_ms,
-                            artifact_path: None,
-                            failure_class: Some(WorkspacePreciseFailureClass::MissingTool),
-                            recommended_action: Some(WorkspaceRecommendedAction::InstallTool),
-                            detail: Some(err.to_string()),
-                        };
-                    }
-                    return Self::precise_failed_summary(generated_at_ms, None, err.to_string());
-                }
-            };
-
-            if !output.status.success() {
-                let stderr_detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-                return Self::precise_failed_summary(
+            if spec.language == SymbolLanguage::Python {
+                return self.run_workspace_python_precise_generation(
+                    workspace,
+                    spec,
+                    &tool,
+                    &version,
+                    &generator_workspace_root,
+                    &output_dir,
+                    &generator_extra_args,
                     generated_at_ms,
-                    None,
-                    if stderr_detail.is_empty() {
-                        format!(
-                            "generator '{}' exited unsuccessfully (version={version})",
-                            tool.display
-                        )
-                    } else {
-                        stderr_detail
-                    },
                 );
             }
 
-            let artifact_path = match Self::write_precise_artifact(
+            let output_path = output_dir.join(spec.output_artifact_name);
+            match Self::run_precise_generator_command(
+                workspace,
+                spec,
+                &tool,
+                &version,
                 &generator_workspace_root,
-                &output_dir,
-                spec.output_artifact_name,
-                &output.stdout,
-                spec.stdout_artifact_fallback,
-            ) {
-                Ok(Some(path)) => path,
-                Ok(None) => {
-                    return Self::precise_failed_summary(
-                        generated_at_ms,
-                        None,
-                        format!(
-                            "generator '{}' succeeded but no SCIP artifact was produced",
-                            tool.display
-                        ),
-                    );
-                }
-                Err(detail) => {
-                    return Self::precise_failed_summary(generated_at_ms, None, detail);
-                }
-            };
-
-            WorkspacePreciseGenerationSummary {
-                status: WorkspacePreciseGenerationStatus::Succeeded,
+                &output_path,
+                &generator_extra_args,
+                &[],
                 generated_at_ms,
-                artifact_path: Some(artifact_path.display().to_string()),
-                failure_class: None,
-                recommended_action: None,
-                detail: Some(format!(
-                    "generator={} tool={} version={version}",
-                    spec.generator_id, tool.display
-                )),
+            ) {
+                Ok(artifact_path) => Self::precise_generation_succeeded_summary(
+                    generated_at_ms,
+                    &[artifact_path],
+                    format!(
+                        "generator={} tool={} version={version}",
+                        spec.generator_id, tool.display
+                    ),
+                ),
+                Err(summary) => summary,
             }
         })();
 
@@ -1227,6 +1769,10 @@ impl FriggMcpServer {
                         summary,
                     );
                 }
+                server.invalidate_repository_summary_cache(&workspace.repository_id);
+                server.invalidate_repository_search_response_caches(&workspace.repository_id);
+                server.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+                server.invalidate_repository_precise_graph_caches(&workspace.repository_id);
                 server.maybe_spawn_workspace_runtime_prewarm(&workspace);
                 let detail = Some(format!(
                     "generators={} succeeded={} failed={}",
