@@ -1669,6 +1669,15 @@ impl ServerHandler for FriggMcpServer {
     fn get_info(&self) -> ServerInfo {
         let tool_surface_profile = self.tool_surface_profile.as_str();
         let runtime_profile = self.runtime_state.runtime_profile.as_str();
+        let tool_surface_note = if self.tool_surface_profile == ToolSurfaceProfile::Extended {
+            format!(
+                "The extended tool surface is enabled by default. Set `{TOOL_SURFACE_PROFILE_ENV}=core` to restrict the runtime to the stable core subset."
+            )
+        } else {
+            format!(
+                "The runtime is pinned to the restricted core tool surface. Set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose `explore` and deep-search tools."
+            )
+        };
         ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_prompts()
@@ -1685,7 +1694,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. If the extended profile is enabled, use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows. Runtime tool-surface profile is `{tool_surface_profile}`; set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose explore and deep-search tools. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows when those tools are present in the active profile. {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
                 ),
             )
     }

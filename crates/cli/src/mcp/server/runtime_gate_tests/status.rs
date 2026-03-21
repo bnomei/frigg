@@ -50,7 +50,8 @@ fn server_info_enables_resources_and_prompts() {
     assert!(instructions.contains("call workspace_attach explicitly"));
     assert!(instructions.contains("Use workspace_current for repository health"));
     assert!(instructions.contains("Prefer shell tools for cheap local reads"));
-    assert!(instructions.contains("If the extended profile is enabled"));
+    assert!(instructions.contains("restricted core tool surface"));
+    assert!(instructions.contains("Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`"));
 }
 
 #[test]

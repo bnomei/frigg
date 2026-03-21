@@ -6,9 +6,9 @@ pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolSurfaceProfile {
-    /// Stable default public runtime surface.
+    /// Stable restricted public runtime surface.
     Core,
-    /// Advanced-consumer runtime surface that layers deep-search tools on top of the stable profile.
+    /// Default public runtime surface that layers advanced exploration and deep-search tools on top of the stable profile.
     Extended,
 }
 
@@ -42,12 +42,13 @@ pub fn active_runtime_tool_surface_profile() -> ToolSurfaceProfile {
 
 fn runtime_tool_surface_profile_from_env(raw: Option<String>) -> ToolSurfaceProfile {
     let Some(raw) = raw else {
-        return ToolSurfaceProfile::Core;
+        return ToolSurfaceProfile::Extended;
     };
 
     match raw.trim().to_ascii_lowercase().as_str() {
+        "core" => ToolSurfaceProfile::Core,
         "extended" => ToolSurfaceProfile::Extended,
-        _ => ToolSurfaceProfile::Core,
+        _ => ToolSurfaceProfile::Extended,
     }
 }
 
@@ -123,23 +124,31 @@ mod tests {
     use super::{ToolSurfaceProfile, runtime_tool_surface_profile_from_env};
 
     #[test]
-    fn runtime_tool_surface_profile_from_env_defaults_to_core() {
+    fn runtime_tool_surface_profile_from_env_defaults_to_extended() {
         assert_eq!(
             runtime_tool_surface_profile_from_env(None),
-            ToolSurfaceProfile::Core
+            ToolSurfaceProfile::Extended
         );
         assert_eq!(
             runtime_tool_surface_profile_from_env(Some("".to_owned())),
-            ToolSurfaceProfile::Core
+            ToolSurfaceProfile::Extended
         );
         assert_eq!(
             runtime_tool_surface_profile_from_env(Some("invalid".to_owned())),
-            ToolSurfaceProfile::Core
+            ToolSurfaceProfile::Extended
         );
     }
 
     #[test]
-    fn runtime_tool_surface_profile_from_env_accepts_extended_case_insensitively() {
+    fn runtime_tool_surface_profile_from_env_accepts_profiles_case_insensitively() {
+        assert_eq!(
+            runtime_tool_surface_profile_from_env(Some("core".to_owned())),
+            ToolSurfaceProfile::Core
+        );
+        assert_eq!(
+            runtime_tool_surface_profile_from_env(Some(" CoRe ".to_owned())),
+            ToolSurfaceProfile::Core
+        );
         assert_eq!(
             runtime_tool_surface_profile_from_env(Some("extended".to_owned())),
             ToolSurfaceProfile::Extended

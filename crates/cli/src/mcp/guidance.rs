@@ -136,7 +136,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
-        "default_profile": ToolSurfaceProfile::Core.as_str(),
+        "default_profile": ToolSurfaceProfile::Extended.as_str(),
         "active_profile": active_profile.as_str(),
         "core_tools": core.tool_names,
         "extended_only_tools": extended_only_tool_names(),
@@ -145,7 +145,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
-            "Treat extended tools as advanced consumers of the stable runtime surface, not the product center."
+            "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore or deep-search tools."
         ]
     }))
     .expect("tool surface JSON should serialize")
@@ -485,7 +485,7 @@ mod tests {
 
         assert_eq!(
             parsed["default_profile"].as_str(),
-            Some(ToolSurfaceProfile::Core.as_str())
+            Some(ToolSurfaceProfile::Extended.as_str())
         );
         assert_eq!(
             parsed["core_tools"].as_array(),

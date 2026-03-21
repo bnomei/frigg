@@ -329,6 +329,8 @@ Frigg works best when your agent is told to prefer Frigg for repo-aware search a
 
 ## MCP Tools
 
+Frigg exposes the `extended` MCP tool surface by default. Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=core` when you need the restricted stable subset without `explore` or the deep-search tools.
+
 ### Core tools
 
 - `list_repositories`: list globally known repositories in the runtime catalog.
@@ -355,7 +357,7 @@ Frigg works best when your agent is told to prefer Frigg for repo-aware search a
 
 ### Extended profile tools
 
-Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended` to expose these additional tools:
+These tools are available by default in the `extended` profile. Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=core` to hide them:
 
 - `explore`: bounded follow-up exploration for a single artifact after discovery. `zoom` defaults to text-first output; `probe` and `refine` remain structured by default.
 - `deep_search_run`: run a deeper multi-step search workflow.
@@ -385,6 +387,7 @@ Precedence is `CLI flag > env var > default`.
 | `--mcp-http-host` | unset | Host bind address for HTTP transport. |
 | `--allow-remote-http` | `false` | Required for non-loopback HTTP serving. |
 | `--mcp-http-auth-token` / `FRIGG_MCP_HTTP_AUTH_TOKEN` | unset | Auth token for HTTP mode. Required for non-loopback HTTP. |
+| `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP tool surface profile: `extended` by default, or `core` to restrict the public surface to the stable subset. |
 | `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enables optional semantic retrieval. |
 | `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai` or `google`. |
 | `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Optional embedding model override. |
