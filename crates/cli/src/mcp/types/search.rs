@@ -217,6 +217,20 @@ pub struct SearchHybridMatch {
     /// Live-navigation hint describing whether this match is a good follow-up pivot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub navigation_hint: Option<SearchHybridNavigationHint>,
+    /// Concise explanation of the strongest signals that lifted this match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rank_reasons: Vec<SearchHybridRankReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchHybridRankReason {
+    ExactSymbolMatch,
+    ExactTextMatch,
+    StrongLexicalAnchor,
+    GraphAdjacency,
+    SemanticContribution,
+    WitnessOnlyFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -361,6 +375,22 @@ pub struct SearchHybridLanguageCapabilityMetadata {
     pub capabilities: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchHybridQueryShape {
+    BroadNaturalLanguage,
+    CodeShaped,
+    Neutral,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHybridExactPivotAssistance {
+    pub applied: bool,
+    pub exact_symbol_hit_count: usize,
+    pub exact_text_hit_count: usize,
+    pub boosted_match_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMetadata {
     pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
@@ -385,7 +415,13 @@ pub struct SearchHybridMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_only_mode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_shape: Option<SearchHybridQueryShape>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact_pivot_assistance: Option<SearchHybridExactPivotAssistance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witness_demotion_applied: Option<bool>,
     pub diagnostics_count: usize,
     pub diagnostics: SearchHybridDiagnosticsSummary,
     #[serde(skip_serializing_if = "Option::is_none")]

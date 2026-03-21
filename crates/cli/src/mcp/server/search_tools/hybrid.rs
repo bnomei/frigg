@@ -1,5 +1,50 @@
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::*;
+use crate::mcp::types::{
+    SearchHybridExactPivotAssistance, SearchHybridQueryShape, SearchHybridRankReason,
+};
 use crate::path_class::classify_repository_path;
+use crate::searcher::{SearchFilters, SearchTextQuery, TextSearcher};
+
+#[derive(Debug, Clone, Default)]
+struct SearchHybridExactPivotAssistInternal {
+    applied: bool,
+    symbol_hit_lines: BTreeMap<(String, String), BTreeSet<usize>>,
+    text_hit_lines: BTreeMap<(String, String), BTreeSet<usize>>,
+    exact_symbol_hit_count: usize,
+    exact_text_hit_count: usize,
+}
+
+impl SearchHybridExactPivotAssistInternal {
+    fn score_symbol(&self, repository_id: &str, path: &str, line: usize) -> u8 {
+        let key = (repository_id.to_owned(), path.to_owned());
+        match self.symbol_hit_lines.get(&key) {
+            Some(lines) if lines.contains(&line) => 2,
+            Some(_) => 1,
+            None => 0,
+        }
+    }
+
+    fn score_text(&self, repository_id: &str, path: &str, line: usize) -> u8 {
+        let key = (repository_id.to_owned(), path.to_owned());
+        match self.text_hit_lines.get(&key) {
+            Some(lines) if lines.contains(&line) => 2,
+            Some(_) => 1,
+            None => 0,
+        }
+    }
+
+    fn summary(&self, boosted_match_count: usize) -> SearchHybridExactPivotAssistance {
+        SearchHybridExactPivotAssistance {
+            applied: self.applied,
+            exact_symbol_hit_count: self.exact_symbol_hit_count,
+            exact_text_hit_count: self.exact_text_hit_count,
+            boosted_match_count,
+        }
+    }
+}
 
 impl FriggMcpServer {
     pub(crate) async fn search_hybrid_impl(
@@ -27,6 +72,9 @@ impl FriggMcpServer {
                 let mut semantic_hit_count: Option<usize> = None;
                 let mut semantic_match_count: Option<usize> = None;
                 let mut warning: Option<String> = None;
+                let mut query_shape: Option<SearchHybridQueryShape> = None;
+                let mut exact_pivot_assistance: Option<SearchHybridExactPivotAssistance> = None;
+                let mut witness_demotion_applied: Option<bool> = None;
                 let mut channel_metadata: Option<BTreeMap<String, SearchHybridChannelMetadata>> =
                     None;
                 let mut stage_attribution: Option<crate::searcher::SearchStageAttribution> = None;
@@ -41,6 +89,8 @@ impl FriggMcpServer {
                         .limit
                         .unwrap_or(server.config.max_search_results)
                         .min(server.config.max_search_results.max(1));
+                    let detected_query_shape = Self::search_hybrid_query_shape(&query);
+                    query_shape = Some(detected_query_shape);
                     effective_limit = Some(limit);
 
                     let scoped_execution_context = server.scoped_read_only_tool_execution_context(
@@ -108,7 +158,7 @@ impl FriggMcpServer {
                     let search_output = searcher
                         .search_hybrid_with_filters(
                             SearchHybridQuery {
-                                query,
+                                query: query.clone(),
                                 limit,
                                 weights,
                                 semantic: params_for_blocking.semantic,
@@ -146,14 +196,6 @@ impl FriggMcpServer {
                         semantic_channel.map(|result| result.stats.candidate_count);
                     semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
                     semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
-                    warning = Self::search_hybrid_warning(
-                        &params_for_blocking.query,
-                        search_output.note.lexical_only_mode,
-                        semantic_status,
-                        semantic_reason.as_deref(),
-                        semantic_hit_count,
-                        semantic_match_count,
-                    );
                     let semantic_language_capability =
                         params_for_blocking.language.as_deref().map(|raw_language| {
                             Self::search_hybrid_language_capability_metadata(
@@ -172,6 +214,35 @@ impl FriggMcpServer {
                         .into_iter()
                         .map(Self::search_hybrid_match_from_evidence)
                         .collect::<Vec<_>>();
+                    let exact_pivot_assist = Self::search_hybrid_exact_pivot_assistance(
+                        &server,
+                        &query,
+                        params_for_blocking.repository_id.as_deref(),
+                        params_for_blocking.language.as_deref(),
+                        &searcher,
+                        detected_query_shape,
+                    )?;
+                    let (boosted_match_count, witness_demotion_was_applied) =
+                        Self::search_hybrid_apply_guardrails(
+                            &mut matches,
+                            search_output.note.lexical_only_mode,
+                            exact_pivot_assist.as_ref(),
+                        );
+                    exact_pivot_assistance = exact_pivot_assist
+                        .as_ref()
+                        .map(|assist| assist.summary(boosted_match_count));
+                    witness_demotion_applied = Some(witness_demotion_was_applied);
+                    warning = Self::search_hybrid_warning(
+                        &params_for_blocking.query,
+                        search_output.note.lexical_only_mode,
+                        detected_query_shape,
+                        semantic_status,
+                        semantic_reason.as_deref(),
+                        semantic_hit_count,
+                        semantic_match_count,
+                        exact_pivot_assistance.as_ref(),
+                        witness_demotion_was_applied,
+                    );
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
                             repository_id_map.get(&found.repository_id)
@@ -195,7 +266,10 @@ impl FriggMcpServer {
                         semantic_hit_count,
                         semantic_match_count,
                         lexical_only_mode: Some(search_output.note.lexical_only_mode),
+                        query_shape,
                         warning: warning.clone(),
+                        exact_pivot_assistance: exact_pivot_assistance.clone(),
+                        witness_demotion_applied,
                         diagnostics_count,
                         diagnostics: SearchHybridDiagnosticsSummary {
                             walk: walk_diagnostics_count,
@@ -346,14 +420,20 @@ impl FriggMcpServer {
     pub(crate) fn search_hybrid_warning(
         query: &str,
         lexical_only_mode: bool,
+        query_shape: SearchHybridQueryShape,
         semantic_status: Option<ChannelHealthStatus>,
         semantic_reason: Option<&str>,
         semantic_hit_count: Option<usize>,
         semantic_match_count: Option<usize>,
+        exact_pivot_assistance: Option<&SearchHybridExactPivotAssistance>,
+        witness_demotion_applied: bool,
     ) -> Option<String> {
         let broad_natural_language =
             lexical_only_mode && Self::search_hybrid_query_looks_broad_natural_language(query);
-        match semantic_status {
+        let code_shaped_exact_assist = lexical_only_mode
+            && query_shape == SearchHybridQueryShape::CodeShaped
+            && exact_pivot_assistance.is_some_and(|assistance| assistance.applied);
+        let base = match semantic_status {
             Some(ChannelHealthStatus::Disabled) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "{} ({reason})",
@@ -408,7 +488,77 @@ impl FriggMcpServer {
                 )
             }
             _ => None,
+        }?;
+
+        let mut warning = base;
+        if code_shaped_exact_assist {
+            let boosted = exact_pivot_assistance
+                .map(|assistance| assistance.boosted_match_count)
+                .unwrap_or(0);
+            if boosted > 0 {
+                warning.push_str(
+                    "; code-shaped exact symbol/text pivots were preferred for direct matches",
+                );
+            } else {
+                warning.push_str("; code-shaped exact symbol/text pivots were checked");
+            }
         }
+        if lexical_only_mode && witness_demotion_applied {
+            warning.push_str("; weak witness-only matches were demoted");
+        }
+        Some(warning)
+    }
+
+    fn search_hybrid_query_shape(query: &str) -> SearchHybridQueryShape {
+        if Self::search_hybrid_query_looks_broad_natural_language(query) {
+            SearchHybridQueryShape::BroadNaturalLanguage
+        } else if Self::search_hybrid_query_looks_code_shaped(query) {
+            SearchHybridQueryShape::CodeShaped
+        } else {
+            SearchHybridQueryShape::Neutral
+        }
+    }
+
+    fn search_hybrid_query_looks_code_shaped(query: &str) -> bool {
+        let trimmed = query.trim();
+        if trimmed.is_empty() || Self::search_hybrid_query_looks_broad_natural_language(trimmed) {
+            return false;
+        }
+        if trimmed.contains("::")
+            || trimmed.contains("->")
+            || trimmed.contains("=>")
+            || trimmed.contains('/')
+            || trimmed.contains('\\')
+            || trimmed.contains('#')
+            || trimmed.contains('$')
+            || trimmed.contains('(')
+            || trimmed.contains(')')
+            || trimmed.contains('[')
+            || trimmed.contains(']')
+            || trimmed.contains('{')
+            || trimmed.contains('}')
+        {
+            return true;
+        }
+
+        let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
+        if tokens.len() > 3 {
+            return false;
+        }
+
+        tokens.iter().any(|token| {
+            let cleaned = token.trim_matches(|ch: char| {
+                !ch.is_ascii_alphanumeric() && !matches!(ch, '_' | '-' | '.')
+            });
+            if cleaned.is_empty() {
+                return false;
+            }
+            cleaned.contains('_')
+                || cleaned.contains('.')
+                || cleaned.chars().any(|ch| ch.is_ascii_digit())
+                || cleaned.chars().any(|ch| ch.is_ascii_uppercase())
+                || cleaned.contains('-')
+        })
     }
 
     fn search_hybrid_query_looks_broad_natural_language(query: &str) -> bool {
@@ -584,6 +734,276 @@ impl FriggMcpServer {
         })
     }
 
+    fn search_hybrid_exact_pivot_assistance(
+        server: &Self,
+        query: &str,
+        repository_id: Option<&str>,
+        language: Option<&str>,
+        searcher: &TextSearcher,
+        query_shape: SearchHybridQueryShape,
+    ) -> Result<Option<SearchHybridExactPivotAssistInternal>, ErrorData> {
+        if query_shape != SearchHybridQueryShape::CodeShaped {
+            return Ok(None);
+        }
+
+        let mut assistance = SearchHybridExactPivotAssistInternal {
+            applied: true,
+            ..Default::default()
+        };
+        let normalized_language = language
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        let query_lower = query.to_ascii_lowercase();
+        let query_looks_canonical =
+            query.contains('\\') || query.contains("::") || query.contains('$');
+
+        for corpus in server.collect_repository_symbol_corpora(repository_id)? {
+            let mut matched_indices = BTreeSet::new();
+            if query_looks_canonical {
+                if let Some(indices) = corpus.symbol_indices_by_canonical_name.get(query) {
+                    matched_indices.extend(indices.iter().copied());
+                }
+                if let Some(indices) = corpus
+                    .symbol_indices_by_lower_canonical_name
+                    .get(&query_lower)
+                {
+                    matched_indices.extend(indices.iter().copied());
+                }
+            }
+            if let Some(indices) = corpus.symbol_indices_by_name.get(query) {
+                matched_indices.extend(indices.iter().copied());
+            }
+            if let Some(indices) = corpus.symbol_indices_by_lower_name.get(&query_lower) {
+                matched_indices.extend(indices.iter().copied());
+            }
+
+            for symbol_index in matched_indices {
+                let symbol = &corpus.symbols[symbol_index];
+                if !Self::search_hybrid_symbol_matches_language(
+                    symbol.language,
+                    normalized_language.as_deref(),
+                ) {
+                    continue;
+                }
+                let path = Self::relative_display_path(&corpus.root, &symbol.path);
+                let lines = assistance
+                    .symbol_hit_lines
+                    .entry((corpus.repository_id.clone(), path))
+                    .or_default();
+                if lines.insert(symbol.line) {
+                    assistance.exact_symbol_hit_count =
+                        assistance.exact_symbol_hit_count.saturating_add(1);
+                }
+            }
+        }
+
+        let text_hits = searcher
+            .search_literal_with_filters_diagnostics(
+                SearchTextQuery {
+                    query: query.to_owned(),
+                    path_regex: None,
+                    limit: 32,
+                },
+                SearchFilters {
+                    repository_id: None,
+                    language: normalized_language.clone(),
+                },
+            )
+            .map_err(Self::map_frigg_error)?;
+        for text_match in text_hits.matches {
+            let lines = assistance
+                .text_hit_lines
+                .entry((text_match.repository_id, text_match.path))
+                .or_default();
+            if lines.insert(text_match.line) {
+                assistance.exact_text_hit_count = assistance.exact_text_hit_count.saturating_add(1);
+            }
+        }
+
+        Ok(Some(assistance))
+    }
+
+    fn search_hybrid_symbol_matches_language(
+        symbol_language: SymbolLanguage,
+        normalized_language: Option<&str>,
+    ) -> bool {
+        let Some(normalized_language) = normalized_language else {
+            return true;
+        };
+        SymbolLanguage::parse_alias(normalized_language)
+            .is_some_and(|language| language == symbol_language)
+    }
+
+    fn search_hybrid_source_is_witness_only(source: &str) -> bool {
+        source.starts_with("path_witness:")
+            || source.starts_with("path_surface_witness:")
+            || source.starts_with("witness:")
+    }
+
+    fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {
+        matched.lexical_score > 0.0
+            && !matched.lexical_sources.is_empty()
+            && matched
+                .lexical_sources
+                .iter()
+                .any(|source| !Self::search_hybrid_source_is_witness_only(source))
+    }
+
+    fn search_hybrid_match_is_weak_witness_only(
+        matched: &SearchHybridMatch,
+        exact_symbol_score: u8,
+        exact_text_score: u8,
+    ) -> bool {
+        exact_symbol_score == 0
+            && exact_text_score == 0
+            && matched.graph_score <= 0.0
+            && matched.semantic_score <= 0.0
+            && !matched.lexical_sources.is_empty()
+            && matched
+                .lexical_sources
+                .iter()
+                .all(|source| Self::search_hybrid_source_is_witness_only(source))
+    }
+
+    fn search_hybrid_rank_reasons(
+        matched: &SearchHybridMatch,
+        exact_symbol_score: u8,
+        exact_text_score: u8,
+        weak_witness_only: bool,
+    ) -> Vec<SearchHybridRankReason> {
+        let mut reasons = Vec::new();
+        if exact_symbol_score > 0 {
+            reasons.push(SearchHybridRankReason::ExactSymbolMatch);
+        }
+        if exact_text_score > 0 {
+            reasons.push(SearchHybridRankReason::ExactTextMatch);
+        }
+        if Self::search_hybrid_match_has_strong_lexical_anchor(matched) {
+            reasons.push(SearchHybridRankReason::StrongLexicalAnchor);
+        }
+        if matched.graph_score > 0.0 && !matched.graph_sources.is_empty() {
+            reasons.push(SearchHybridRankReason::GraphAdjacency);
+        }
+        if matched.semantic_score > 0.0 && !matched.semantic_sources.is_empty() {
+            reasons.push(SearchHybridRankReason::SemanticContribution);
+        }
+        if weak_witness_only {
+            reasons.push(SearchHybridRankReason::WitnessOnlyFallback);
+        }
+        reasons.truncate(3);
+        reasons
+    }
+
+    fn search_hybrid_apply_guardrails(
+        matches: &mut Vec<SearchHybridMatch>,
+        lexical_only_mode: bool,
+        exact_pivot_assist: Option<&SearchHybridExactPivotAssistInternal>,
+    ) -> (usize, bool) {
+        #[derive(Debug)]
+        struct GuardedHybridMatch {
+            original_index: usize,
+            matched: SearchHybridMatch,
+            exact_symbol_score: u8,
+            exact_text_score: u8,
+            strong_lexical_anchor: bool,
+            graph_adjacency: bool,
+            weak_witness_only: bool,
+        }
+
+        let mut guarded_matches = matches
+            .drain(..)
+            .enumerate()
+            .map(|(original_index, mut matched)| {
+                let exact_symbol_score = exact_pivot_assist
+                    .map(|assist| {
+                        assist.score_symbol(&matched.repository_id, &matched.path, matched.line)
+                    })
+                    .unwrap_or(0);
+                let exact_text_score = exact_pivot_assist
+                    .map(|assist| {
+                        assist.score_text(&matched.repository_id, &matched.path, matched.line)
+                    })
+                    .unwrap_or(0);
+                let strong_lexical_anchor =
+                    Self::search_hybrid_match_has_strong_lexical_anchor(&matched);
+                let graph_adjacency =
+                    matched.graph_score > 0.0 && !matched.graph_sources.is_empty();
+                let weak_witness_only = Self::search_hybrid_match_is_weak_witness_only(
+                    &matched,
+                    exact_symbol_score,
+                    exact_text_score,
+                );
+                matched.rank_reasons = Self::search_hybrid_rank_reasons(
+                    &matched,
+                    exact_symbol_score,
+                    exact_text_score,
+                    weak_witness_only,
+                );
+                GuardedHybridMatch {
+                    original_index,
+                    matched,
+                    exact_symbol_score,
+                    exact_text_score,
+                    strong_lexical_anchor,
+                    graph_adjacency,
+                    weak_witness_only,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let boosted_match_count = guarded_matches
+            .iter()
+            .filter(|matched| matched.exact_symbol_score > 0 || matched.exact_text_score > 0)
+            .count();
+        let witness_demotion_applied = lexical_only_mode
+            && boosted_match_count > 0
+            && guarded_matches
+                .iter()
+                .any(|matched| matched.weak_witness_only);
+
+        if lexical_only_mode && boosted_match_count > 0 {
+            guarded_matches.sort_by(|left, right| {
+                right
+                    .exact_symbol_score
+                    .cmp(&left.exact_symbol_score)
+                    .then(right.exact_text_score.cmp(&left.exact_text_score))
+                    .then(right.strong_lexical_anchor.cmp(&left.strong_lexical_anchor))
+                    .then(right.graph_adjacency.cmp(&left.graph_adjacency))
+                    .then(left.weak_witness_only.cmp(&right.weak_witness_only))
+                    .then_with(|| {
+                        right
+                            .matched
+                            .blended_score
+                            .partial_cmp(&left.matched.blended_score)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .then_with(|| {
+                        right
+                            .matched
+                            .lexical_score
+                            .partial_cmp(&left.matched.lexical_score)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .then_with(|| {
+                        right
+                            .matched
+                            .graph_score
+                            .partial_cmp(&left.matched.graph_score)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .then(left.matched.repository_id.cmp(&right.matched.repository_id))
+                    .then(left.matched.path.cmp(&right.matched.path))
+                    .then(left.matched.line.cmp(&right.matched.line))
+                    .then(left.matched.column.cmp(&right.matched.column))
+                    .then(left.original_index.cmp(&right.original_index))
+            });
+        }
+
+        matches.extend(guarded_matches.into_iter().map(|matched| matched.matched));
+        (boosted_match_count, witness_demotion_applied)
+    }
+
     fn search_hybrid_match_from_evidence(
         evidence: crate::searcher::HybridRankedEvidence,
     ) -> SearchHybridMatch {
@@ -611,6 +1031,7 @@ impl FriggMcpServer {
                 document_symbols: hybrid_match_document_symbols_supported(&path),
                 go_to_definition: hybrid_match_definition_navigation_supported(&path),
             }),
+            rank_reasons: Vec::new(),
         }
     }
 
@@ -719,5 +1140,117 @@ impl FriggMcpServer {
         ]
         .iter()
         .any(|marker| lower.contains(marker))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hybrid_match_fixture(
+        path: &str,
+        line: usize,
+        lexical_sources: &[&str],
+        excerpt: &str,
+    ) -> SearchHybridMatch {
+        SearchHybridMatch {
+            match_id: None,
+            repository_id: "repo-001".to_owned(),
+            path: path.to_owned(),
+            line,
+            column: 1,
+            excerpt: excerpt.to_owned(),
+            anchor: None,
+            blended_score: 1.0,
+            lexical_score: 1.0,
+            graph_score: 0.0,
+            semantic_score: 0.0,
+            lexical_sources: lexical_sources
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            graph_sources: vec![],
+            semantic_sources: vec![],
+            path_class: None,
+            source_class: Some(SourceClass::Runtime),
+            surface_families: vec!["runtime".to_owned()],
+            navigation_hint: Some(SearchHybridNavigationHint {
+                pivotable: true,
+                document_symbols: true,
+                go_to_definition: true,
+            }),
+            rank_reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn search_hybrid_query_shape_distinguishes_broad_and_code_shaped_queries() {
+        assert_eq!(
+            FriggMcpServer::search_hybrid_query_shape(
+                "where is capture request flow handled after tool layer",
+            ),
+            SearchHybridQueryShape::BroadNaturalLanguage
+        );
+        assert_eq!(
+            FriggMcpServer::search_hybrid_query_shape("setNavigationContext"),
+            SearchHybridQueryShape::CodeShaped
+        );
+        assert_eq!(
+            FriggMcpServer::search_hybrid_query_shape("runtime capture flow"),
+            SearchHybridQueryShape::Neutral
+        );
+    }
+
+    #[test]
+    fn search_hybrid_apply_guardrails_prefers_exact_direct_matches_over_witnesses() {
+        let mut matches = vec![
+            hybrid_match_fixture(
+                "tests/capture_screen_flow.rs",
+                1,
+                &["path_surface_witness:tests/capture_screen_flow.rs:1:1"],
+                "fn smoke_test() {}",
+            ),
+            hybrid_match_fixture(
+                "src/lib.rs",
+                3,
+                &["literal:src/lib.rs:3:1"],
+                "pub fn capture_screen() {}",
+            ),
+        ];
+        let mut exact_pivot_assist = SearchHybridExactPivotAssistInternal {
+            applied: true,
+            ..Default::default()
+        };
+        exact_pivot_assist.text_hit_lines.insert(
+            ("repo-001".to_owned(), "src/lib.rs".to_owned()),
+            BTreeSet::from([3usize]),
+        );
+        exact_pivot_assist.exact_text_hit_count = 1;
+
+        let (boosted_match_count, witness_demotion_applied) =
+            FriggMcpServer::search_hybrid_apply_guardrails(
+                &mut matches,
+                true,
+                Some(&exact_pivot_assist),
+            );
+
+        assert_eq!(boosted_match_count, 1);
+        assert!(witness_demotion_applied);
+        assert_eq!(matches[0].path, "src/lib.rs");
+        assert!(
+            matches[0]
+                .rank_reasons
+                .contains(&SearchHybridRankReason::ExactTextMatch)
+        );
+        assert!(
+            matches[0]
+                .rank_reasons
+                .contains(&SearchHybridRankReason::StrongLexicalAnchor)
+        );
+        assert_eq!(matches[1].path, "tests/capture_screen_flow.rs");
+        assert_eq!(
+            matches[1].rank_reasons,
+            vec![SearchHybridRankReason::WitnessOnlyFallback]
+        );
     }
 }

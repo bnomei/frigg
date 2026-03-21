@@ -675,6 +675,96 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
 }
 
 #[tokio::test]
+async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_rank_reasons() {
+    let workspace_root = temp_workspace_root("search-hybrid-code-shaped-assistance");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");
+    fs::create_dir_all(workspace_root.join("tests")).expect("failed to create tests dir");
+    fs::create_dir_all(workspace_root.join(".git")).expect("failed to create git dir");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn capture_screen() -> &'static str {\n    \"capture_screen\"\n}\n",
+    )
+    .expect("failed to seed runtime source");
+    fs::write(
+        workspace_root.join("tests/capture_screen_flow.rs"),
+        "#[test]\nfn smoke_test() {\n    assert!(true);\n}\n",
+    )
+    .expect("failed to seed witness-style test file");
+    fs::write(workspace_root.join(".gitignore"), "*.tmp\n").expect("failed to seed ignore file");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let full = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "capture_screen".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("full search_hybrid should succeed for code-shaped query")
+        .0;
+
+    let metadata = full
+        .metadata
+        .as_ref()
+        .expect("full response should expose metadata");
+    assert_eq!(
+        metadata.query_shape,
+        Some(SearchHybridQueryShape::CodeShaped)
+    );
+    assert_eq!(metadata.lexical_only_mode, Some(true));
+    let exact_assistance = metadata
+        .exact_pivot_assistance
+        .as_ref()
+        .expect("code-shaped lexical-only query should report exact assistance");
+    assert!(exact_assistance.applied);
+    assert!(exact_assistance.exact_symbol_hit_count >= 1);
+    assert!(exact_assistance.exact_text_hit_count >= 1);
+    assert!(exact_assistance.boosted_match_count >= 1);
+    assert_eq!(full.matches[0].path, "src/lib.rs");
+    assert!(
+        full.matches[0]
+            .rank_reasons
+            .contains(&SearchHybridRankReason::ExactTextMatch)
+    );
+    assert!(
+        full.matches[0]
+            .rank_reasons
+            .contains(&SearchHybridRankReason::StrongLexicalAnchor)
+    );
+
+    let compact = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "capture_screen".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: None,
+        }))
+        .await
+        .expect("compact search_hybrid should succeed for code-shaped query")
+        .0;
+
+    assert!(compact.metadata.is_none());
+    assert_eq!(compact.matches[0].path, "src/lib.rs");
+    assert_eq!(
+        compact.matches[0].rank_reasons,
+        full.matches[0].rank_reasons
+    );
+    assert!(
+        compact.matches[0].match_id.is_some(),
+        "compact search_hybrid should still expose match ids"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
     let server = server_for_fixture();
     let error = match server

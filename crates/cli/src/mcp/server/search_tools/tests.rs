@@ -34,6 +34,7 @@ fn match_fixture(
             document_symbols,
             go_to_definition,
         }),
+        rank_reasons: vec![],
     }
 }
 

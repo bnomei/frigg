@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use super::*;
 use crate::domain::{ChannelHealthStatus, SourceClass};
 use crate::mcp::types::{

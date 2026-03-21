@@ -10,11 +10,11 @@ use frigg::mcp::types::{
     DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
     FindDeclarationsParams, FindImplementationsParams, FindReferencesParams, GoToDefinitionParams,
     IncomingCallsParams, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
-    ReadFileParams, ReadMatchParams, ResponseMode, SearchHybridParams, SearchPatternType,
-    SearchStructuralParams, SearchSymbolParams, SearchSymbolPathClass, SearchTextParams,
-    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams,
-    WorkspaceIndexComponentState, WorkspacePreciseState, WorkspaceResolveMode,
-    WorkspaceStorageIndexState,
+    ReadFileParams, ReadMatchParams, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
+    SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchSymbolParams,
+    SearchSymbolPathClass, SearchTextParams, WorkspaceAttachAction, WorkspaceAttachParams,
+    WorkspaceCurrentParams, WorkspaceIndexComponentState, WorkspacePreciseState,
+    WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{
     FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
