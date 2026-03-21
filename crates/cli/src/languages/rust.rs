@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use tree_sitter::Node;
@@ -32,7 +34,7 @@ pub(crate) struct RustEnclosingSymbolContext {
     pub(crate) impl_trait: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RustSymbolContext {
     pub(crate) inside_test_module: bool,
     pub(crate) inside_cfg_test: bool,
@@ -54,12 +56,19 @@ pub(crate) enum RustImplementationKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RustImplementationFact {
-    pub(crate) source_symbol_id: String,
+    pub(crate) source_symbol_index: usize,
     pub(crate) trait_name: Option<String>,
     pub(crate) self_type: String,
     pub(crate) kind: RustImplementationKind,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RustIndexedSourceAnalysis {
+    pub(crate) symbol_contexts_by_index: Vec<(usize, RustSymbolContext)>,
+    pub(crate) implementation_facts: Vec<RustImplementationFact>,
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RustSourceAnalysis {
     pub(crate) symbol_contexts_by_stable_id: BTreeMap<String, RustSymbolContext>,
@@ -206,26 +215,97 @@ pub(crate) fn heuristic_implementation_candidates<'a>(
     matches
 }
 
+#[cfg(test)]
 pub(crate) fn analyze_source(source: &str, symbols: &[SymbolDefinition]) -> RustSourceAnalysis {
-    let mut symbol_contexts_by_stable_id = BTreeMap::new();
-    let mut implementation_facts = Vec::new();
-
-    for symbol in symbols {
-        symbol_contexts_by_stable_id.insert(
-            symbol.stable_id.clone(),
-            rust_symbol_context_for_symbol(source, symbol, symbols),
-        );
-
-        if symbol.kind != SymbolKind::Impl {
-            continue;
-        }
-        if let Some(fact) = rust_implementation_fact_for_symbol(source, symbol) {
-            implementation_facts.push(fact);
-        }
-    }
+    let symbol_indices = (0..symbols.len()).collect::<Vec<_>>();
+    let indexed = analyze_indexed_source(source, symbols, &symbol_indices);
+    let symbol_contexts_by_stable_id = indexed
+        .symbol_contexts_by_index
+        .into_iter()
+        .filter_map(|(index, context)| {
+            symbols
+                .get(index)
+                .map(|symbol| (symbol.stable_id.clone(), context))
+        })
+        .collect();
 
     RustSourceAnalysis {
         symbol_contexts_by_stable_id,
+        implementation_facts: indexed.implementation_facts,
+    }
+}
+
+pub(crate) fn analyze_indexed_source(
+    source: &str,
+    symbols: &[SymbolDefinition],
+    symbol_indices: &[usize],
+) -> RustIndexedSourceAnalysis {
+    #[derive(Clone, Copy)]
+    struct IndexedSymbolEntry {
+        index: usize,
+        start: usize,
+        end: usize,
+        self_context: RustSymbolContext,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ContextStackEntry {
+        start: usize,
+        end: usize,
+        context: RustSymbolContext,
+    }
+
+    let mut entries = Vec::with_capacity(symbol_indices.len());
+    let mut implementation_facts = Vec::new();
+    for &symbol_index in symbol_indices {
+        let Some(symbol) = symbols.get(symbol_index) else {
+            continue;
+        };
+        entries.push(IndexedSymbolEntry {
+            index: symbol_index,
+            start: symbol.span.start_byte,
+            end: symbol.span.end_byte,
+            self_context: rust_symbol_self_context(source, symbol),
+        });
+        if symbol.kind == SymbolKind::Impl
+            && let Some(fact) = rust_implementation_fact_for_symbol(source, symbol, symbol_index)
+        {
+            implementation_facts.push(fact);
+        }
+    }
+    entries.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then(right.end.cmp(&left.end))
+            .then(left.index.cmp(&right.index))
+    });
+
+    let mut stack = Vec::<ContextStackEntry>::new();
+    let mut symbol_contexts_by_index = Vec::new();
+    for entry in entries {
+        while let Some(ancestor) = stack.last() {
+            if ancestor.start <= entry.start && ancestor.end >= entry.end {
+                break;
+            }
+            stack.pop();
+        }
+
+        let mut context = stack.last().map(|entry| entry.context).unwrap_or_default();
+        context.inside_test_module |= entry.self_context.inside_test_module;
+        context.inside_cfg_test |= entry.self_context.inside_cfg_test;
+        context.inside_test_fn |= entry.self_context.inside_test_fn;
+        if context.is_test_context() {
+            symbol_contexts_by_index.push((entry.index, context));
+        }
+        stack.push(ContextStackEntry {
+            start: entry.start,
+            end: entry.end,
+            context,
+        });
+    }
+
+    RustIndexedSourceAnalysis {
+        symbol_contexts_by_index,
         implementation_facts,
     }
 }
@@ -240,15 +320,11 @@ pub(crate) fn implementation_candidates_from_facts<'a>(
         return Vec::new();
     }
 
-    let symbol_lookup = symbols
-        .iter()
-        .map(|symbol| (symbol.stable_id.as_str(), symbol))
-        .collect::<BTreeMap<_, _>>();
     let mut matches = Vec::new();
     let target_is_trait = target_symbol.kind == SymbolKind::Trait;
 
     for fact in facts {
-        let Some(source_symbol) = symbol_lookup.get(fact.source_symbol_id.as_str()).copied() else {
+        let Some(source_symbol) = symbols.get(fact.source_symbol_index) else {
             continue;
         };
 
@@ -613,46 +689,22 @@ fn rust_focus_node_for_offset(root: Node<'_>, offset: usize) -> Node<'_> {
     current
 }
 
-fn rust_symbol_context_for_symbol(
-    source: &str,
-    symbol: &SymbolDefinition,
-    symbols: &[SymbolDefinition],
-) -> RustSymbolContext {
-    let mut context = RustSymbolContext::default();
-
-    for candidate in symbols {
-        if candidate.path != symbol.path {
-            continue;
-        }
-        if candidate.span.start_byte > symbol.span.start_byte
-            || candidate.span.end_byte < symbol.span.end_byte
-        {
-            continue;
-        }
-
-        let snippet = source_for_symbol_span(source, candidate);
-        let leading = source_before_symbol(source, candidate);
-        if snippet.contains("#[cfg(test") || leading.contains("#[cfg(test") {
-            context.inside_cfg_test = true;
-        }
-        if candidate.kind == SymbolKind::Module
-            && rust_module_looks_like_test(candidate.name.as_str(), snippet, leading)
-        {
-            context.inside_test_module = true;
-        }
-        if matches!(candidate.kind, SymbolKind::Function | SymbolKind::Method)
-            && rust_function_looks_like_test(candidate.name.as_str(), snippet, leading)
-        {
-            context.inside_test_fn = true;
-        }
+fn rust_symbol_self_context(source: &str, symbol: &SymbolDefinition) -> RustSymbolContext {
+    let snippet = source_for_symbol_span(source, symbol);
+    let leading = source_before_symbol(source, symbol);
+    RustSymbolContext {
+        inside_test_module: symbol.kind == SymbolKind::Module
+            && rust_module_looks_like_test(symbol.name.as_str(), snippet, leading),
+        inside_cfg_test: snippet.contains("#[cfg(test") || leading.contains("#[cfg(test"),
+        inside_test_fn: matches!(symbol.kind, SymbolKind::Function | SymbolKind::Method)
+            && rust_function_looks_like_test(symbol.name.as_str(), snippet, leading),
     }
-
-    context
 }
 
 fn rust_implementation_fact_for_symbol(
     source: &str,
     symbol: &SymbolDefinition,
+    source_symbol_index: usize,
 ) -> Option<RustImplementationFact> {
     let (trait_name, self_type) = parse_impl_signature(symbol.name.as_str())?;
     let header = rust_impl_header(source_for_symbol_span(source, symbol));
@@ -668,7 +720,7 @@ fn rust_implementation_fact_for_symbol(
     };
 
     Some(RustImplementationFact {
-        source_symbol_id: symbol.stable_id.clone(),
+        source_symbol_index,
         trait_name: trait_name.map(str::to_owned),
         self_type: self_type.to_owned(),
         kind,
@@ -937,13 +989,13 @@ mod tests {
         let inherent_impl = symbol("impl Wrapper<T>", SymbolKind::Impl, 12);
         let facts = vec![
             RustImplementationFact {
-                source_symbol_id: blanket_impl.stable_id.clone(),
+                source_symbol_index: 0,
                 trait_name: Some("Service".to_owned()),
                 self_type: "Wrapper<T>".to_owned(),
                 kind: RustImplementationKind::BlanketTrait,
             },
             RustImplementationFact {
-                source_symbol_id: inherent_impl.stable_id.clone(),
+                source_symbol_index: 1,
                 trait_name: None,
                 self_type: "Wrapper<T>".to_owned(),
                 kind: RustImplementationKind::Inherent,

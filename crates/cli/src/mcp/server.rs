@@ -1023,7 +1023,7 @@ impl FriggMcpServer {
                     .map_err(|err| err.to_string())?;
                 let credentials = SemanticRuntimeCredentials::from_process_env();
                 reindex_repository_with_runtime_config(
-                    &workspace.repository_id,
+                    &workspace.runtime_repository_id,
                     &workspace.root,
                     &db_path,
                     ReindexMode::ChangedOnly,

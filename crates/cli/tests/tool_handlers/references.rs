@@ -13,6 +13,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
     )
     .expect("failed to seed temporary fixture source");
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -35,7 +36,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
     );
     assert_eq!(response.total_matches, response.matches.len());
     assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 2);
@@ -138,6 +139,7 @@ async fn find_references_opt_in_returns_follow_up_structural() {
     )
     .expect("failed to seed temporary fixture source");
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -161,7 +163,7 @@ async fn find_references_opt_in_returns_follow_up_structural() {
     assert!(!reference_match.follow_up_structural.is_empty());
     assert_eq!(
         reference_match.follow_up_structural[0].params.repository_id,
-        "repo-001"
+        repository_id
     );
     assert_eq!(
         reference_match.follow_up_structural[0]
@@ -210,6 +212,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
         }"#,
     );
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -228,7 +231,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
 
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.mode, NavigationMode::Precise);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 3);
@@ -282,6 +285,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
     .expect("failed to seed temporary fixture source");
     write_scip_protobuf_fixture(&workspace_root, "references.scip");
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -300,7 +304,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
 
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.mode, NavigationMode::Precise);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 3);
@@ -376,6 +380,7 @@ async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_
         }"#,
     );
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -394,7 +399,7 @@ async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_
 
     assert_eq!(response.mode, NavigationMode::Precise);
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "Settings");
     assert_eq!(
         response.matches[0].path,
@@ -483,6 +488,7 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
         ),
     );
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -501,7 +507,7 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
 
     assert_eq!(response.mode, NavigationMode::Precise);
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "features.registration_enabled");
     assert_eq!(
         response.matches[0].path,

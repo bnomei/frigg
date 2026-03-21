@@ -43,8 +43,9 @@ pub(crate) use registry::{
 };
 #[allow(unused_imports)]
 pub(crate) use rust::{
-    RustEnclosingSymbolContext, RustImplementationFact, RustNavigationQueryHint,
-    RustSourceAnalysis, RustSymbolContext, analyze_source as analyze_rust_source,
+    RustEnclosingSymbolContext, RustImplementationFact, RustIndexedSourceAnalysis,
+    RustNavigationQueryHint, RustSymbolContext,
+    analyze_indexed_source as analyze_rust_indexed_source,
     enclosing_symbol_context as rust_enclosing_symbol_context,
     heuristic_implementation_candidates as heuristic_rust_implementation_candidates,
     implementation_candidates_from_facts as rust_implementation_candidates_from_facts,

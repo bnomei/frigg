@@ -11,6 +11,27 @@ pub(in crate::mcp::server) struct DirectPreciseNavigationTarget {
 }
 
 impl FriggMcpServer {
+    fn precise_symbol_matches_php_helper_kind(
+        precise_symbol: &crate::graph::PreciseSymbolRecord,
+        helper_kind: NavigationPhpHelperKind,
+    ) -> bool {
+        let symbol = precise_symbol.symbol.as_str();
+        match helper_kind {
+            NavigationPhpHelperKind::Translation => {
+                symbol.starts_with("trans/") || symbol.contains(" trans/")
+            }
+            NavigationPhpHelperKind::Route => {
+                symbol.starts_with("route/")
+                    || symbol.contains(" route/")
+                    || symbol.contains(" routes/")
+            }
+            NavigationPhpHelperKind::Config => {
+                symbol.starts_with("config/") || symbol.contains(" config/")
+            }
+            NavigationPhpHelperKind::Env => symbol.starts_with("env/") || symbol.contains(" env/"),
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub(in crate::mcp::server) fn try_precise_definition_fast_path(
         &self,
@@ -247,6 +268,75 @@ impl FriggMcpServer {
                     symbol_query,
                 )
                 .into_iter()
+                .enumerate()
+            {
+                let definition = graph.precise_definition_occurrence_for_symbol(
+                    &corpus.repository_id,
+                    &precise_target.symbol,
+                );
+                let candidate_rank = (
+                    symbol_rank,
+                    usize::from(definition.is_none()),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.path.clone())
+                        .unwrap_or_default(),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.range.start_line)
+                        .unwrap_or(usize::MAX),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.range.start_column)
+                        .unwrap_or(usize::MAX),
+                    corpus.repository_id.clone(),
+                    precise_target.symbol.clone(),
+                );
+                let candidate_target = DirectPreciseNavigationTarget {
+                    repository_id: corpus.repository_id.clone(),
+                    root: corpus.root.clone(),
+                    precise_target,
+                    coverage_mode: cached_precise_graph.coverage_mode,
+                    ingest_stats: cached_precise_graph.ingest_stats.clone(),
+                    graph: Arc::clone(&graph),
+                    source_files_discovered: corpus.source_paths.len(),
+                };
+                if best_rank
+                    .as_ref()
+                    .is_none_or(|current_best| candidate_rank < *current_best)
+                {
+                    best_rank = Some(candidate_rank);
+                    best_target = Some(candidate_target);
+                }
+            }
+        }
+
+        Ok(best_target)
+    }
+
+    pub(in crate::mcp::server) fn select_direct_precise_navigation_target_for_php_helper(
+        &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol_query: &str,
+        helper_kind: NavigationPhpHelperKind,
+        resource_budgets: FindReferencesResourceBudgets,
+    ) -> Result<Option<DirectPreciseNavigationTarget>, ErrorData> {
+        let mut best_rank: Option<(usize, usize, String, usize, usize, String, String)> = None;
+        let mut best_target: Option<DirectPreciseNavigationTarget> = None;
+        for corpus in corpora {
+            let cached_precise_graph =
+                self.precise_graph_for_corpus(corpus.as_ref(), resource_budgets)?;
+            let graph = cached_precise_graph.graph;
+            for (symbol_rank, precise_target) in graph
+                .matching_precise_symbols_for_navigation(
+                    &corpus.repository_id,
+                    symbol_query,
+                    symbol_query,
+                )
+                .into_iter()
+                .filter(|precise_symbol| {
+                    Self::precise_symbol_matches_php_helper_kind(precise_symbol, helper_kind)
+                })
                 .enumerate()
             {
                 let definition = graph.precise_definition_occurrence_for_symbol(
@@ -758,6 +848,7 @@ impl FriggMcpServer {
         source.lines().nth(range.start_line.saturating_sub(1))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::mcp::server) fn precise_outgoing_matches_from_occurrences(
         graph: &SymbolGraph,
         target_corpus: &RepositorySymbolCorpus,
@@ -766,6 +857,8 @@ impl FriggMcpServer {
         coverage_mode: PreciseCoverageMode,
         precise_target: &crate::graph::PreciseSymbolRecord,
         enclosing_symbol_id: &str,
+        occurrence_cache: &mut BTreeMap<String, Vec<crate::graph::PreciseOccurrenceRecord>>,
+        source_cache: &mut BTreeMap<String, Option<String>>,
     ) -> Vec<CallHierarchyMatch> {
         let precision = Self::precise_match_precision(coverage_mode).to_owned();
         let source_definition = match Self::precise_definition_occurrence_for_symbol(
@@ -777,17 +870,20 @@ impl FriggMcpServer {
             None => return Vec::new(),
         };
         let source_path = Self::canonicalize_navigation_path(root, &source_definition.path);
-        let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
-        let mut matches = graph
-            .precise_occurrences_for_file(&target_corpus.repository_id, &source_path)
-            .into_iter()
+        let file_occurrences = occurrence_cache
+            .entry(source_path.clone())
+            .or_insert_with(|| {
+                graph.precise_occurrences_for_file(&target_corpus.repository_id, &source_path)
+            });
+        let mut matches = file_occurrences
+            .iter()
             .filter(|occurrence| !occurrence.is_definition())
             .filter(|occurrence| occurrence.symbol != precise_target.symbol)
             .filter_map(|occurrence| {
                 let enclosing_symbol = Self::precise_enclosing_symbol_for_occurrence(
                     target_corpus,
                     root,
-                    &occurrence,
+                    occurrence,
                     None,
                 )?;
                 if enclosing_symbol.stable_id != enclosing_symbol_id {
@@ -800,8 +896,8 @@ impl FriggMcpServer {
                 if !Self::precise_occurrence_has_call_like_source(
                     root,
                     &callee_symbol,
-                    &occurrence,
-                    &mut source_cache,
+                    occurrence,
+                    source_cache,
                 ) {
                     return None;
                 }
@@ -811,7 +907,7 @@ impl FriggMcpServer {
                     &occurrence.symbol,
                 )?;
                 let (call_path, call_line, call_column, call_end_line, call_end_column) =
-                    Self::precise_call_site_fields(root, &occurrence);
+                    Self::precise_call_site_fields(root, occurrence);
                 Some(CallHierarchyMatch {
                     source_symbol: if precise_target.display_name.is_empty() {
                         source_symbol_name.to_owned()

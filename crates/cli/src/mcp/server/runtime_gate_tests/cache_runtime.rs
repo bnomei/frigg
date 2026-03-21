@@ -263,7 +263,7 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -397,13 +397,19 @@ async fn watch_leases_follow_session_adoption_counts() {
         .next()
         .expect("startup roots should register globally known workspaces");
 
-    assert!(!runtime.lease_status(&workspace.repository_id).active);
+    assert!(
+        !runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .active
+    );
 
     server
         .adopt_workspace(&workspace, true)
         .expect("first session should adopt workspace");
     assert_eq!(
-        runtime.lease_status(&workspace.repository_id).lease_count,
+        runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .lease_count,
         1
     );
 
@@ -411,7 +417,9 @@ async fn watch_leases_follow_session_adoption_counts() {
         .adopt_workspace(&workspace, true)
         .expect("second session should share the same watch lease");
     assert_eq!(
-        runtime.lease_status(&workspace.repository_id).lease_count,
+        runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .lease_count,
         2
     );
 
@@ -419,7 +427,9 @@ async fn watch_leases_follow_session_adoption_counts() {
         .detach_workspace(&workspace.repository_id)
         .expect("first session should detach workspace");
     assert_eq!(
-        runtime.lease_status(&workspace.repository_id).lease_count,
+        runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .lease_count,
         1
     );
 
@@ -427,10 +437,16 @@ async fn watch_leases_follow_session_adoption_counts() {
         .detach_workspace(&workspace.repository_id)
         .expect("second session should detach workspace");
     assert_eq!(
-        runtime.lease_status(&workspace.repository_id).lease_count,
+        runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .lease_count,
         0
     );
-    assert!(!runtime.lease_status(&workspace.repository_id).active);
+    assert!(
+        !runtime
+            .lease_status(&workspace.runtime_repository_id)
+            .active
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -511,6 +527,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
         Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
     );
 
+    let attached_repository_id = crate::domain::model::stable_repository_id_for_root(&root).0;
     let scope = |repository_id: &str, snapshot_id: &str| RepositoryFreshnessCacheScope {
         repository_id: repository_id.to_owned(),
         snapshot_id: snapshot_id.to_owned(),
@@ -518,7 +535,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
         semantic_provider: None,
         semantic_model: None,
     };
-    let repo_001_scope = scope("repo-001", "snapshot-001");
+    let attached_scope = scope(&attached_repository_id, "snapshot-001");
     let repo_002_scope = scope("repo-002", "snapshot-002");
 
     let empty_text_response = SearchTextResponse {
@@ -557,12 +574,12 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     };
     server.cache_file_content_window(
         FileContentWindowCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
-            canonical_path: PathBuf::from("/tmp/repo-001/file.rs"),
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
+            canonical_path: PathBuf::from("/tmp/attached/file.rs"),
         },
         Arc::new(FileContentSnapshot::from_bytes(
-            b"fn repo_001() {}\n".to_vec(),
+            b"fn attached() {}\n".to_vec(),
         )),
     );
     server.cache_file_content_window(
@@ -578,8 +595,8 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
 
     server.cache_search_text_response(
         SearchTextResponseCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
             query: "needle".to_owned(),
             pattern_type: "literal",
             path_regex: None,
@@ -602,8 +619,8 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     server.cache_search_hybrid_response(
         SearchHybridResponseCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
             query: "runtime".to_owned(),
             language: None,
             limit: 10,
@@ -632,15 +649,15 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     server.cache_search_symbol_response(
         SearchSymbolResponseCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
             query: "User".to_owned(),
             path_class: None,
             path_regex: None,
             limit: 10,
         },
         &empty_symbol_response,
-        &["repo-001".to_owned()],
+        std::slice::from_ref(&attached_repository_id),
         0,
         0,
         0,
@@ -666,9 +683,9 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     server.cache_go_to_definition_response(
         GoToDefinitionResponseCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
-            repository_id: Some("repo-001".to_owned()),
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
+            repository_id: Some(attached_repository_id.clone()),
             symbol: Some("User".to_owned()),
             path: None,
             line: None,
@@ -677,7 +694,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
             limit: 10,
         },
         &empty_navigation_response,
-        &["repo-001".to_owned()],
+        std::slice::from_ref(&attached_repository_id),
         None,
         None,
         None,
@@ -712,9 +729,9 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     server.cache_find_declarations_response(
         FindDeclarationsResponseCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![repo_001_scope.clone()],
-            repository_id: Some("repo-001".to_owned()),
+            scoped_repository_ids: vec![attached_repository_id.clone()],
+            freshness_scopes: vec![attached_scope.clone()],
+            repository_id: Some(attached_repository_id.clone()),
             symbol: Some("User".to_owned()),
             path: None,
             line: None,
@@ -723,7 +740,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
             limit: 10,
         },
         &empty_declarations_response,
-        &["repo-001".to_owned()],
+        std::slice::from_ref(&attached_repository_id),
         None,
         None,
         None,
@@ -758,7 +775,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     server.cache_heuristic_references(
         HeuristicReferenceCacheKey {
-            repository_id: "repo-001".to_owned(),
+            repository_id: attached_repository_id,
             symbol_id: "symbol-001".to_owned(),
             corpus_signature: "corpus-001".to_owned(),
             scip_signature: "scip-001".to_owned(),

@@ -524,6 +524,12 @@ impl FriggMcpServer {
                 precise_artifacts_failed = cached_precise_graph.ingest_stats.artifacts_failed;
 
                 let mut precise_matches = Vec::new();
+                let mut precise_occurrence_cache = std::collections::BTreeMap::<
+                    String,
+                    Vec<crate::graph::PreciseOccurrenceRecord>,
+                >::new();
+                let mut precise_source_cache =
+                    std::collections::BTreeMap::<String, Option<String>>::new();
                 let precise_targets = Self::matching_precise_symbols_for_resolved_target(
                     graph.as_ref(),
                     &target_corpus.repository_id,
@@ -540,6 +546,8 @@ impl FriggMcpServer {
                         precise_coverage,
                         precise_target,
                         &target.symbol.stable_id,
+                        &mut precise_occurrence_cache,
+                        &mut precise_source_cache,
                     );
                     if !matches.is_empty() {
                         selected_precise_symbol = Some(precise_target.symbol.clone());
@@ -647,6 +655,10 @@ impl FriggMcpServer {
 
                 let mut source_cache: std::collections::BTreeMap<String, Option<String>> =
                     std::collections::BTreeMap::new();
+                let mut call_target_cache: std::collections::BTreeMap<
+                    String,
+                    Option<std::collections::BTreeSet<String>>,
+                > = std::collections::BTreeMap::new();
                 let mut matches = graph
                     .outgoing_adjacency(&target.symbol.stable_id)
                     .into_iter()
@@ -658,6 +670,7 @@ impl FriggMcpServer {
                                 &target.symbol,
                                 adjacent.symbol.display_name.as_str(),
                                 &mut source_cache,
+                                &mut call_target_cache,
                             )
                     })
                     .map(|adjacent| CallHierarchyMatch {
@@ -754,32 +767,68 @@ impl FriggMcpServer {
         source_symbol: &SymbolDefinition,
         target_name: &str,
         source_cache: &mut std::collections::BTreeMap<String, Option<String>>,
+        call_target_cache: &mut std::collections::BTreeMap<
+            String,
+            Option<std::collections::BTreeSet<String>>,
+        >,
     ) -> bool {
         if target_name.trim().is_empty() {
             return false;
         }
+        let call_targets = call_target_cache
+            .entry(source_symbol.stable_id.clone())
+            .or_insert_with(|| {
+                Self::heuristic_symbol_body_call_targets(root, source_symbol, source_cache)
+            });
+        call_targets
+            .as_ref()
+            .is_some_and(|targets| targets.contains(target_name))
+    }
+
+    fn heuristic_symbol_body_call_targets(
+        root: &Path,
+        source_symbol: &SymbolDefinition,
+        source_cache: &mut std::collections::BTreeMap<String, Option<String>>,
+    ) -> Option<std::collections::BTreeSet<String>> {
         let relative_path = Self::relative_display_path(root, &source_symbol.path);
         let source = source_cache
             .entry(relative_path)
             .or_insert_with(|| fs::read_to_string(&source_symbol.path).ok())
-            .as_deref();
-        let Some(source) = source else {
-            return false;
-        };
-
+            .as_deref()?;
         let start = source_symbol.span.start_byte.min(source.len());
         let end = source_symbol.span.end_byte.min(source.len());
-        let Some(body) = source.get(start..end) else {
-            return false;
-        };
+        let body = source.get(start..end)?;
+        let bytes = body.as_bytes();
+        let mut targets = std::collections::BTreeSet::new();
+        let mut index = 0usize;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if !(byte.is_ascii_alphabetic() || byte == b'_') {
+                index = index.saturating_add(1);
+                continue;
+            }
 
-        body.match_indices(target_name).any(|(index, _)| {
-            let suffix_start = index.saturating_add(target_name.len()).min(body.len());
-            let suffix = body.get(suffix_start..).unwrap_or_default();
-            match source_symbol.language {
+            let start_index = index;
+            index = index.saturating_add(1);
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index = index.saturating_add(1);
+            }
+
+            let Some(name) = body.get(start_index..index) else {
+                continue;
+            };
+            let suffix = body.get(index..).unwrap_or_default();
+            let is_call = match source_symbol.language {
                 SymbolLanguage::Rust => rust_source_suffix_looks_like_call(suffix),
                 _ => suffix.trim_start().starts_with('('),
+            };
+            if is_call {
+                targets.insert(name.to_owned());
             }
-        })
+        }
+
+        Some(targets)
     }
 }

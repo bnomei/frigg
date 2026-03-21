@@ -4,6 +4,7 @@ use frigg::mcp::types::{StructuralAnchorSelection, StructuralResultMode};
 #[tokio::test]
 async fn search_structural_returns_deterministic_rust_matches() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let first = server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item) @fn".to_owned(),
@@ -66,7 +67,7 @@ async fn search_structural_returns_deterministic_rust_matches() {
             .collect::<Vec<_>>()
     );
     assert!(!first.matches.is_empty());
-    assert_eq!(first.matches[0].repository_id, "repo-001");
+    assert_eq!(first.matches[0].repository_id, repository_id);
     assert_eq!(first.matches[0].path, "src/lib.rs");
     assert!(first.matches[0].line >= 1);
 

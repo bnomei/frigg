@@ -26,7 +26,9 @@ impl FriggMcpServer {
             },
             Ok(_) => match storage.verify() {
                 Ok(_) => {
-                    match storage.load_latest_manifest_for_repository(&workspace.repository_id) {
+                    match storage
+                        .load_latest_manifest_for_repository(&workspace.runtime_repository_id)
+                    {
                         Ok(Some(_)) => WorkspaceStorageSummary {
                             db_path: workspace.db_path.display().to_string(),
                             exists: true,
@@ -149,7 +151,7 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
-            .map(|runtime| runtime.lease_status(&workspace.repository_id))
+            .map(|runtime| runtime.lease_status(&workspace.runtime_repository_id))
             .unwrap_or_default();
         let summary = RepositorySummary {
             repository_id: workspace.repository_id.clone(),

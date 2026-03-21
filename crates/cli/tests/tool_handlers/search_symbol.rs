@@ -3,6 +3,7 @@ use super::*;
 #[tokio::test]
 async fn core_search_symbol_returns_tree_sitter_matches() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
@@ -16,7 +17,7 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "greeting");
     assert_eq!(response.matches[0].kind, "function");
     assert_eq!(response.matches[0].path, "src/lib.rs");

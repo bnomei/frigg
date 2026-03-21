@@ -26,6 +26,7 @@ async fn core_read_file_returns_typed_not_found_error() {
 async fn core_read_file_returns_repository_relative_canonical_path() {
     let workspace_root = fresh_fixture_root("tool-handlers-core-read-file");
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
     let absolute_path = workspace_root.join("src/lib.rs");
     let absolute_response = server
         .read_file(Parameters(ReadFileParams {
@@ -38,7 +39,7 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
         .await
         .expect("absolute read_file path under workspace root should resolve")
         .0;
-    assert_eq!(absolute_response.repository_id, "repo-001");
+    assert_eq!(absolute_response.repository_id, repository_id);
     assert_eq!(absolute_response.path, "src/lib.rs");
     assert!(
         !Path::new(&absolute_response.path).is_absolute(),
@@ -56,7 +57,10 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
         .await
         .expect("relative read_file path under workspace root should resolve")
         .0;
-    assert_eq!(relative_response.repository_id, "repo-001");
+    assert_eq!(
+        relative_response.repository_id,
+        public_repository_id(&server).await
+    );
     assert_eq!(relative_response.path, "src/lib.rs");
     assert_eq!(relative_response.path, absolute_response.path);
 }
@@ -64,6 +68,7 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
 #[tokio::test]
 async fn core_read_file_supports_line_range_slicing() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
@@ -76,7 +81,7 @@ async fn core_read_file_supports_line_range_slicing() {
         .expect("line-range slice should succeed")
         .0;
 
-    assert_eq!(response.repository_id, "repo-001");
+    assert_eq!(response.repository_id, repository_id);
     assert_eq!(response.path, "src/lib.rs");
     assert_eq!(response.content, "    \"hello from fixture\"");
     assert_eq!(response.bytes, response.content.len());
@@ -169,6 +174,7 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
 #[tokio::test]
 async fn core_search_text_literal_scoped_to_repository() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .search_text(Parameters(SearchTextParams {
             query: "hello from fixture".to_owned(),
@@ -183,13 +189,14 @@ async fn core_search_text_literal_scoped_to_repository() {
 
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.total_matches, 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].path, "src/lib.rs");
 }
 
 #[tokio::test]
 async fn core_search_text_regex_mode_executes_regex_search() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .search_text(Parameters(SearchTextParams {
             query: "hello\\s+from\\s+fixture".to_owned(),
@@ -203,13 +210,14 @@ async fn core_search_text_regex_mode_executes_regex_search() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].path, "src/lib.rs");
 }
 
 #[tokio::test]
 async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let first = server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "hello from fixture".to_owned(),
@@ -237,7 +245,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
 
     assert_eq!(first.matches, second.matches);
     assert_eq!(first.matches.len(), 1);
-    assert_eq!(first.matches[0].repository_id, "repo-001");
+    assert_eq!(first.matches[0].repository_id, repository_id);
     assert_eq!(first.matches[0].path, "src/lib.rs");
     assert_eq!(first.matches[0].line, 2);
     assert_eq!(first.matches[0].column, 6);

@@ -100,6 +100,19 @@ fn cleanup_workspace(workspace_root: &Path) {
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+async fn public_repository_id(server: &FriggMcpServer) -> String {
+    server
+        .list_repositories(Parameters(ListRepositoriesParams {}))
+        .await
+        .expect("list_repositories should succeed")
+        .0
+        .repositories
+        .into_iter()
+        .next()
+        .expect("server should expose one repository")
+        .repository_id
+}
+
 fn error_code_tag(error: &rmcp::ErrorData) -> Option<&str> {
     error
         .data
@@ -120,6 +133,7 @@ fn retryable_tag(error: &rmcp::ErrorData) -> Option<bool> {
 async fn provenance_core_tool_invocations_are_persisted() {
     let workspace_root = build_workspace_fixture("core-invocations");
     let server = server_for_workspace(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     server
         .list_repositories(Parameters(ListRepositoriesParams {}))
@@ -128,7 +142,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
     server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -139,7 +153,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
         .search_text(Parameters(SearchTextParams {
             query: "hello provenance".to_owned(),
             pattern_type: Some(SearchPatternType::Literal),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(10),
         }))
@@ -149,7 +163,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -160,7 +174,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
     server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("greeting".to_owned()),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             path: None,
             line: None,
             column: None,
@@ -221,12 +235,13 @@ async fn provenance_core_tool_invocations_are_persisted() {
 async fn provenance_bounded_text_fields_are_truncated() {
     let workspace_root = build_workspace_fixture("bounded-fields");
     let server = server_for_workspace(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
     let long_query = "q".repeat(2_048);
 
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: long_query,
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -262,11 +277,12 @@ async fn provenance_bounded_text_fields_are_truncated() {
 async fn provenance_search_symbol_records_baseline_language_queries() {
     let workspace_root = build_multilang_workspace_fixture("search-symbol-multilang");
     let server = server_for_workspace(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "DashboardCard".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -276,7 +292,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "PyService".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -286,7 +302,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "GoService".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -296,7 +312,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "KotlinService".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -306,7 +322,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "luaRun".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -316,7 +332,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "nimHelper".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -326,7 +342,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
     server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "rocGreet".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -498,11 +514,12 @@ async fn provenance_best_effort_mode_is_opt_in() {
 async fn provenance_extended_explore_invocations_include_scope_metadata() {
     let workspace_root = build_workspace_fixture("explore-runtime-provenance");
     let server = extended_runtime_server_for_workspace(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     server
         .explore(Parameters(ExploreParams {
             path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             operation: ExploreOperation::Probe,
             query: Some("provenance".to_owned()),
             pattern_type: Some(SearchPatternType::Literal),
@@ -542,11 +559,12 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
 async fn provenance_search_hybrid_invocations_include_winning_anchor_metadata() {
     let workspace_root = build_workspace_fixture("search-hybrid-anchor-provenance");
     let server = server_for_workspace(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "hello provenance".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             language: Some("rust".to_owned()),
             limit: Some(5),
             weights: None,

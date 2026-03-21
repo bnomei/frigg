@@ -91,7 +91,7 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
 
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -142,7 +142,7 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );

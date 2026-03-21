@@ -35,6 +35,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
         }"#,
     );
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -51,7 +52,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
         .0;
 
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "User");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 1);
@@ -378,6 +379,157 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
         }))
         .await
         .expect("go_to_definition should use the Blade attribute route helper literal")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "dashboard");
+    assert_eq!(response.matches[0].path, "routes/web.php");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, route_definition_column + 1);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_php_helper");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "route/`name:dashboard`."
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_prefers_route_helper_precise_match_when_cursor_is_on_helper_prefix()
+ {
+    let workspace_root = temp_workspace_root("go-to-definition-blade-route-helper-prefix");
+    let sidebar_root = workspace_root.join("resources/views/partials/sidebar");
+    let flux_root = workspace_root.join("resources/views/flux/navlist");
+    let routes_root = workspace_root.join("routes");
+    fs::create_dir_all(&sidebar_root).expect("failed to create sidebar blade fixture root");
+    fs::create_dir_all(&flux_root).expect("failed to create flux blade fixture root");
+    fs::create_dir_all(&routes_root).expect("failed to create routes fixture root");
+    let blade_source = concat!(
+        "<flux:navlist.group class=\"grid\">\n",
+        "    <flux:navlist.item icon=\"home\" :href=\"route('dashboard')\" :current=\"request()->routeIs('dashboard')\" wire:navigate>\n",
+        "        <span class=\"sidebar-nav-label\">{{ __('Dashboard') }}</span>\n",
+        "    </flux:navlist.item>\n",
+    );
+    let group_source = "<div>shadow dashboard module</div>\n";
+    let route_source = "Route::get('/dashboard', fn () => view('welcome'))->name('dashboard');\n";
+    fs::write(sidebar_root.join("primary-nav.blade.php"), blade_source)
+        .expect("failed to seed sidebar blade fixture");
+    fs::write(flux_root.join("group.blade.php"), group_source)
+        .expect("failed to seed flux blade fixture");
+    fs::write(routes_root.join("web.php"), route_source).expect("failed to seed route fixture");
+    let line_one = blade_source.lines().next().expect("line one should exist");
+    let line_two = blade_source.lines().nth(1).expect("line two should exist");
+    let line_three = blade_source
+        .lines()
+        .nth(2)
+        .expect("line three should exist");
+    let group_reference_column = line_one
+        .find("navlist.group")
+        .expect("group reference should exist");
+    let route_literal_column = line_two
+        .find("'dashboard'")
+        .expect("route literal should exist")
+        + 1;
+    let current_route_literal_column = line_two
+        .rfind("'dashboard'")
+        .expect("routeIs literal should exist")
+        + 1;
+    let route_helper_column = line_two.find("route(").expect("route helper should exist") + 2;
+    let dashboard_label_column = line_three
+        .find("Dashboard")
+        .expect("dashboard label should exist");
+    let route_definition_column = route_source
+        .rfind("dashboard")
+        .expect("route definition should exist");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_blade_route_helper_prefix.json",
+        &format!(
+            r#"{{
+          "documents": [
+            {{
+              "relative_path": "resources/views/partials/sidebar/primary-nav.blade.php",
+              "occurrences": [
+                {{ "symbol": "views/`partials.sidebar.primary-nav`.", "range": [0, 0, 1], "symbol_roles": 1 }},
+                {{ "symbol": "alpha/dashboard.", "range": [0, {group_reference_column}, {group_reference_column_end}], "symbol_roles": 8 }},
+                {{ "symbol": "route/`name:dashboard`.", "range": [1, {route_literal_column}, {route_literal_column_end}], "symbol_roles": 8 }},
+                {{ "symbol": "route/`name:dashboard`.", "range": [1, {current_route_literal_column}, {current_route_literal_column_end}], "symbol_roles": 8 }},
+                {{ "symbol": "trans/`json:Dashboard`.", "range": [2, {dashboard_label_column}, {dashboard_label_column_end}], "symbol_roles": 8 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "views/`partials.sidebar.primary-nav`.",
+                  "display_name": "partials.sidebar.primary-nav",
+                  "kind": "module",
+                  "relationships": []
+                }}
+              ]
+            }},
+            {{
+              "relative_path": "resources/views/flux/navlist/group.blade.php",
+              "occurrences": [
+                {{ "symbol": "alpha/dashboard.", "range": [0, 0, 1], "symbol_roles": 1 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "alpha/dashboard.",
+                  "display_name": "dashboard",
+                  "kind": "module",
+                  "relationships": []
+                }}
+              ]
+            }},
+            {{
+              "relative_path": "routes/web.php",
+              "occurrences": [
+                {{ "symbol": "route/`name:dashboard`.", "range": [0, {route_definition_column}, {route_definition_column_end}], "symbol_roles": 1 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "route/`name:dashboard`.",
+                  "display_name": "dashboard",
+                  "kind": "route",
+                  "relationships": []
+                }}
+              ]
+            }}
+          ]
+        }}"#,
+            group_reference_column = group_reference_column,
+            group_reference_column_end = group_reference_column + "navlist.group".len(),
+            route_literal_column = route_literal_column,
+            route_literal_column_end = route_literal_column + "dashboard".len(),
+            current_route_literal_column = current_route_literal_column,
+            current_route_literal_column_end = current_route_literal_column + "dashboard".len(),
+            dashboard_label_column = dashboard_label_column,
+            dashboard_label_column_end = dashboard_label_column + "Dashboard".len(),
+            route_definition_column = route_definition_column,
+            route_definition_column_end = route_definition_column + "dashboard".len(),
+        ),
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
+            line: Some(2),
+            column: Some(route_helper_column),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should prefer route helper precise match")
         .0;
 
     assert_eq!(response.mode, NavigationMode::Precise);
@@ -1045,6 +1197,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
 #[tokio::test]
 async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_data() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .find_declarations(Parameters(FindDeclarationsParams {
             symbol: Some("greeting".to_owned()),
@@ -1060,7 +1213,7 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
         .0;
 
     assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].symbol, "greeting");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
@@ -1227,6 +1380,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
     )
     .expect("failed to seed temporary fixture source");
     let server = server_for_workspace_root(&workspace_root);
+    let repository_id = public_repository_id(&server).await;
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
@@ -1247,7 +1401,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
         "expected heuristic implementation matches from symbol corpus fallback"
     );
     let first = &response.matches[0];
-    assert_eq!(first.repository_id, "repo-001");
+    assert_eq!(first.repository_id, repository_id);
     assert_eq!(first.path, "src/lib.rs");
     assert_eq!(first.symbol, "Impl");
     assert_eq!(first.relation.as_deref(), Some("implements"));
@@ -1271,6 +1425,111 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
     assert_eq!(
         note_json["precise"]["implementation_count"].as_u64(),
         Some(response.matches.len() as u64)
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_find_implementations_reports_missing_precise_matches_when_php_symbols_lack_relationships()
+ {
+    let workspace_root = temp_workspace_root("navigation-implementations-php-missing-edges");
+    let contracts_root = workspace_root.join("app/Support/Analytics/Contracts");
+    let drivers_root = workspace_root.join("app/Support/Analytics/Drivers");
+    fs::create_dir_all(&contracts_root).expect("failed to create contracts fixture root");
+    fs::create_dir_all(&drivers_root).expect("failed to create drivers fixture root");
+    let interface_source = "<?php\n\
+namespace App\\Support\\Analytics\\Contracts;\n\
+\n\
+interface AnalyticsRecorder\n\
+{\n\
+    public function capture(object $event): void;\n\
+}\n";
+    let implementation_source = "<?php\n\
+namespace App\\Support\\Analytics\\Drivers;\n\
+\n\
+use App\\Support\\Analytics\\Contracts\\AnalyticsRecorder;\n\
+\n\
+class NullAnalyticsRecorder implements AnalyticsRecorder\n\
+{\n\
+    public function capture(object $event): void {}\n\
+}\n";
+    fs::write(
+        contracts_root.join("AnalyticsRecorder.php"),
+        interface_source,
+    )
+    .expect("failed to seed interface fixture");
+    fs::write(
+        drivers_root.join("NullAnalyticsRecorder.php"),
+        implementation_source,
+    )
+    .expect("failed to seed implementation fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "php_missing_implementation_edges.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "app/Support/Analytics/Contracts/AnalyticsRecorder.php",
+              "occurrences": [
+                { "symbol": "scip-php composer app#App\\Support\\Analytics\\Contracts\\AnalyticsRecorder", "range": [3, 10, 27], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-php composer app#App\\Support\\Analytics\\Contracts\\AnalyticsRecorder",
+                  "display_name": "AnalyticsRecorder",
+                  "kind": "interface",
+                  "relationships": []
+                }
+              ]
+            },
+            {
+              "relative_path": "app/Support/Analytics/Drivers/NullAnalyticsRecorder.php",
+              "occurrences": [
+                { "symbol": "scip-php composer app#App\\Support\\Analytics\\Drivers\\NullAnalyticsRecorder", "range": [5, 6, 27], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-php composer app#App\\Support\\Analytics\\Drivers\\NullAnalyticsRecorder",
+                  "display_name": "NullAnalyticsRecorder",
+                  "kind": "class",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_implementations(Parameters(FindImplementationsParams {
+            symbol: Some("AnalyticsRecorder".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_implementations should report missing precise matches when relationships are absent")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "NullAnalyticsRecorder");
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_implementations should emit fallback metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_implementations note should be valid JSON");
+    assert_eq!(
+        note_json["precise_absence_reason"],
+        "required_precise_matches_not_present_in_precise_graph"
     );
 
     cleanup_workspace_root(&workspace_root);

@@ -3,6 +3,21 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 impl FriggMcpServer {
+    fn php_helper_prefixes() -> &'static [(&'static str, NavigationPhpHelperKind)] {
+        &[
+            ("__(", NavigationPhpHelperKind::Translation),
+            ("trans(", NavigationPhpHelperKind::Translation),
+            ("route(", NavigationPhpHelperKind::Route),
+            ("to_route(", NavigationPhpHelperKind::Route),
+            ("config(", NavigationPhpHelperKind::Config),
+            ("env(", NavigationPhpHelperKind::Env),
+            ("Lang::get(", NavigationPhpHelperKind::Translation),
+            ("->route(", NavigationPhpHelperKind::Route),
+            ("routeIs(", NavigationPhpHelperKind::Route),
+            ("->routeIs(", NavigationPhpHelperKind::Route),
+        ]
+    }
+
     pub(in crate::mcp::server) fn relative_display_path(root: &Path, path: &Path) -> String {
         let normalized = path
             .strip_prefix(root)
@@ -74,8 +89,9 @@ impl FriggMcpServer {
             }
         }
         let rust_context = corpus
-            .rust_symbol_context_by_stable_id
-            .get(symbol.stable_id.as_str());
+            .rust_symbol_context_by_index
+            .get(symbol_index)
+            .and_then(Option::as_ref);
         if path_class_filter == Some(SearchSymbolPathClass::Runtime)
             && rust_context.is_some_and(crate::languages::RustSymbolContext::is_test_context)
         {
@@ -626,31 +642,116 @@ impl FriggMcpServer {
             .find('\n')
             .map(|delta| offset + delta)
             .unwrap_or(source.len());
-        let (quote_start, quote_end) =
-            Self::enclosing_simple_quoted_span_in_line(source, line_start, line_end, offset)?;
+        if let Some((quote_start, quote_end)) =
+            Self::enclosing_simple_quoted_span_in_line(source, line_start, line_end, offset)
+            && let Some(helper_match) =
+                Self::php_helper_token_for_quote_span(source, line_start, quote_start, quote_end)
+        {
+            return Some(helper_match);
+        }
+
+        Self::php_helper_token_for_helper_call_span(source, line_start, line_end, offset)
+    }
+
+    fn php_helper_token_for_quote_span(
+        source: &str,
+        line_start: usize,
+        quote_start: usize,
+        quote_end: usize,
+    ) -> Option<(String, NavigationPhpHelperKind)> {
         let literal = source[quote_start + 1..quote_end].trim();
         if literal.is_empty() || literal.contains('\n') || literal.contains('\r') {
             return None;
         }
 
         let prefix = source[line_start..quote_start].trim_end();
-        let helper_prefixes = [
-            ("__(", NavigationPhpHelperKind::Translation),
-            ("trans(", NavigationPhpHelperKind::Translation),
-            ("route(", NavigationPhpHelperKind::Route),
-            ("to_route(", NavigationPhpHelperKind::Route),
-            ("config(", NavigationPhpHelperKind::Config),
-            ("env(", NavigationPhpHelperKind::Env),
-            ("Lang::get(", NavigationPhpHelperKind::Translation),
-            ("->route(", NavigationPhpHelperKind::Route),
-            ("routeIs(", NavigationPhpHelperKind::Route),
-            ("->routeIs(", NavigationPhpHelperKind::Route),
-        ];
-        helper_prefixes.iter().find_map(|(suffix, kind)| {
-            prefix
-                .ends_with(suffix)
-                .then(|| (literal.to_owned(), *kind))
-        })
+        Self::php_helper_prefixes()
+            .iter()
+            .find_map(|(suffix, kind)| {
+                prefix
+                    .ends_with(suffix)
+                    .then(|| (literal.to_owned(), *kind))
+            })
+    }
+
+    fn php_helper_token_for_helper_call_span(
+        source: &str,
+        line_start: usize,
+        line_end: usize,
+        offset: usize,
+    ) -> Option<(String, NavigationPhpHelperKind)> {
+        let line = &source[line_start..line_end];
+        let bytes = source.as_bytes();
+        let mut best_match: Option<(usize, usize, String, NavigationPhpHelperKind)> = None;
+
+        for (suffix, _kind) in Self::php_helper_prefixes() {
+            for (match_offset, _) in line.match_indices(suffix) {
+                let helper_start = line_start + match_offset;
+                let search_start = helper_start + suffix.len();
+                let Some((quote_start, quote_end)) =
+                    Self::first_simple_quoted_span_in_line(source, search_start, line_end)
+                else {
+                    continue;
+                };
+                let Some((literal, helper_kind)) = Self::php_helper_token_for_quote_span(
+                    source,
+                    helper_start,
+                    quote_start,
+                    quote_end,
+                ) else {
+                    continue;
+                };
+                let mut helper_end = quote_end.saturating_add(1);
+                while helper_end < line_end && bytes[helper_end].is_ascii_whitespace() {
+                    helper_end += 1;
+                }
+                if helper_end < line_end && bytes[helper_end] == b')' {
+                    helper_end += 1;
+                }
+                if offset < helper_start || offset >= helper_end {
+                    continue;
+                }
+
+                let candidate = (
+                    helper_end - helper_start,
+                    helper_start,
+                    literal,
+                    helper_kind,
+                );
+                if best_match
+                    .as_ref()
+                    .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1))
+                {
+                    best_match = Some(candidate);
+                }
+            }
+        }
+
+        best_match.map(|(_, _, literal, kind)| (literal, kind))
+    }
+
+    fn first_simple_quoted_span_in_line(
+        source: &str,
+        search_start: usize,
+        line_end: usize,
+    ) -> Option<(usize, usize)> {
+        let bytes = source.as_bytes();
+        let mut start = search_start;
+        while start < line_end {
+            let quote = bytes[start];
+            if (quote == b'\'' || quote == b'"') && !Self::is_escaped_byte(bytes, start) {
+                let mut end = start + 1;
+                while end < line_end {
+                    if bytes[end] == quote && !Self::is_escaped_byte(bytes, end) {
+                        return Some((start, end));
+                    }
+                    end += 1;
+                }
+                return None;
+            }
+            start += 1;
+        }
+        None
     }
 
     fn enclosing_simple_quoted_span_in_line(
@@ -859,6 +960,18 @@ mod tests {
     fn php_helper_string_token_extracts_blade_attribute_route_literal() {
         let source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
         let offset = byte_offset_for_line_column(source, 1, 31).expect("offset should resolve");
+        assert_eq!(
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset),
+            Some(("dashboard".to_owned(), NavigationPhpHelperKind::Route))
+        );
+    }
+
+    #[test]
+    fn php_helper_string_token_extracts_route_literal_from_helper_prefix_offset() {
+        let source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
+        let route_column = source.find("route(").expect("helper should exist") + 3;
+        let offset =
+            byte_offset_for_line_column(source, 1, route_column).expect("offset should resolve");
         assert_eq!(
             FriggMcpServer::php_helper_string_token_around_offset(source, offset),
             Some(("dashboard".to_owned(), NavigationPhpHelperKind::Route))

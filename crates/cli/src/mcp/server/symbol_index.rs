@@ -5,7 +5,7 @@
 //! snapshot forever.
 
 use super::*;
-use crate::languages::analyze_rust_source;
+use crate::languages::analyze_rust_indexed_source;
 use rayon::prelude::*;
 
 const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
@@ -106,7 +106,7 @@ impl FriggMcpServer {
         let symbol_index_by_stable_id = Self::symbol_index_by_stable_id(&symbols);
         let symbol_indices_by_name = Self::symbol_indices_by_name(&symbols);
         let symbol_indices_by_lower_name = Self::symbol_indices_by_lower_name(&symbols);
-        let mut rust_symbol_context_by_stable_id = BTreeMap::new();
+        let mut rust_symbol_context_by_index = vec![None; symbols.len()];
         let mut rust_implementation_facts = Vec::new();
         let mut php_evidence_by_relative_path = BTreeMap::new();
         let mut blade_evidence_by_relative_path = BTreeMap::new();
@@ -114,13 +114,11 @@ impl FriggMcpServer {
 
         for path in &source_paths {
             let relative_path = Self::relative_display_path(&root, path);
-            let file_symbols = symbols_by_relative_path
+            let file_symbol_indices = symbols_by_relative_path
                 .get(&relative_path)
-                .into_iter()
-                .flatten()
-                .map(|index| symbols[*index].clone())
-                .collect::<Vec<_>>();
-            if file_symbols.is_empty() {
+                .cloned()
+                .unwrap_or_default();
+            if file_symbol_indices.is_empty() {
                 continue;
             }
             let Ok(source) = fs::read_to_string(path) else {
@@ -128,11 +126,20 @@ impl FriggMcpServer {
             };
             match supported_language_for_path(path, LanguageCapability::SymbolCorpus) {
                 Some(SymbolLanguage::Rust) => {
-                    let analysis = analyze_rust_source(&source, &file_symbols);
-                    rust_symbol_context_by_stable_id.extend(analysis.symbol_contexts_by_stable_id);
+                    let analysis =
+                        analyze_rust_indexed_source(&source, &symbols, &file_symbol_indices);
+                    for (symbol_index, context) in analysis.symbol_contexts_by_index {
+                        if let Some(slot) = rust_symbol_context_by_index.get_mut(symbol_index) {
+                            *slot = Some(context);
+                        }
+                    }
                     rust_implementation_facts.extend(analysis.implementation_facts);
                 }
                 Some(SymbolLanguage::Php) => {
+                    let file_symbols = file_symbol_indices
+                        .iter()
+                        .map(|index| symbols[*index].clone())
+                        .collect::<Vec<_>>();
                     let Ok(evidence) =
                         extract_php_source_evidence_from_source(path, &source, &file_symbols)
                     else {
@@ -143,6 +150,10 @@ impl FriggMcpServer {
                     php_evidence_by_relative_path.insert(relative_path, evidence);
                 }
                 Some(SymbolLanguage::Blade) => {
+                    let file_symbols = file_symbol_indices
+                        .iter()
+                        .map(|index| symbols[*index].clone())
+                        .collect::<Vec<_>>();
                     let mut evidence =
                         extract_blade_source_evidence_from_source(&source, &file_symbols);
                     mark_local_flux_overlays(&mut evidence, &symbols, &symbol_indices_by_name);
@@ -173,7 +184,7 @@ impl FriggMcpServer {
             canonical_symbol_name_by_stable_id,
             symbol_indices_by_canonical_name,
             symbol_indices_by_lower_canonical_name,
-            rust_symbol_context_by_stable_id,
+            rust_symbol_context_by_index,
             rust_implementation_facts,
             php_evidence_by_relative_path,
             blade_evidence_by_relative_path,

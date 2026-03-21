@@ -3,6 +3,7 @@ use super::*;
 #[tokio::test]
 async fn document_symbols_returns_outline_for_supported_files() {
     let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
             path: "src/lib.rs".to_owned(),
@@ -23,7 +24,7 @@ async fn document_symbols_returns_outline_for_supported_files() {
         response
             .symbols
             .iter()
-            .all(|symbol| symbol.path == "src/lib.rs" && symbol.repository_id == "repo-001")
+            .all(|symbol| symbol.path == "src/lib.rs" && symbol.repository_id == repository_id)
     );
     assert_eq!(
         response

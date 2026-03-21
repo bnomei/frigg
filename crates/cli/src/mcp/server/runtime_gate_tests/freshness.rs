@@ -21,7 +21,7 @@ fn read_only_tool_execution_context_scopes_session_repository_with_manifest_fres
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -96,7 +96,7 @@ fn read_only_navigation_tool_execution_context_scopes_explicit_repository() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -148,19 +148,19 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
 
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
     let storage = Storage::new(&workspace.db_path);
     storage
         .replace_semantic_embeddings_for_repository(
-            &workspace.repository_id,
+            &workspace.runtime_repository_id,
             "snapshot-001",
             "openai",
             "text-embedding-3-small",
             &[semantic_record(
-                &workspace.repository_id,
+                &workspace.runtime_repository_id,
                 "snapshot-001",
                 "src/lib.rs",
             )],
@@ -168,7 +168,7 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
         .expect("seed semantic embeddings should persist");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-002",
         &["src/lib.rs"],
     );
@@ -203,7 +203,7 @@ fn repository_response_cache_freshness_returns_ready_manifest_scope() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -282,7 +282,7 @@ fn repository_response_cache_freshness_marks_dirty_root_uncacheable() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -405,7 +405,7 @@ fn repository_response_cache_freshness_marks_stale_snapshot_uncacheable() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
@@ -463,18 +463,18 @@ fn repository_response_cache_freshness_includes_semantic_scope_metadata() {
         .expect("server should register workspace");
     seed_manifest_snapshot(
         &workspace_root,
-        &workspace.repository_id,
+        &workspace.runtime_repository_id,
         "snapshot-001",
         &["src/lib.rs"],
     );
     Storage::new(&workspace.db_path)
         .replace_semantic_embeddings_for_repository(
-            &workspace.repository_id,
+            &workspace.runtime_repository_id,
             "snapshot-001",
             "openai",
             "text-embedding-3-small",
             &[semantic_record(
-                &workspace.repository_id,
+                &workspace.runtime_repository_id,
                 "snapshot-001",
                 "src/lib.rs",
             )],

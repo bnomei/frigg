@@ -49,6 +49,18 @@ fn cleanup_workspace(root: &Path) {
     let _ = fs::remove_dir_all(root);
 }
 
+async fn public_repository_ids(server: &FriggMcpServer) -> Vec<String> {
+    server
+        .list_repositories(Parameters(ListRepositoriesParams::default()))
+        .await
+        .expect("list_repositories should succeed")
+        .0
+        .repositories
+        .into_iter()
+        .map(|repository| repository.repository_id)
+        .collect()
+}
+
 fn error_code_tag(error: &rmcp::ErrorData) -> Option<&str> {
     error
         .data
@@ -233,6 +245,11 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     .expect("failed to seed fixture file");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
 
     let list_result = server
         .list_repositories(Parameters(ListRepositoriesParams::default()))
@@ -250,7 +267,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     let read_result = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -270,7 +287,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         .search_text(Parameters(SearchTextParams {
             query: "hello".to_owned(),
             pattern_type: Some(SearchPatternType::Literal),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_regex: None,
             limit: Some(5),
         }))
@@ -288,7 +305,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     let search_symbol_result = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path_class: None,
             path_regex: None,
             limit: Some(5),
@@ -307,7 +324,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     let find_references_result = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("greeting".to_owned()),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             path: None,
             line: None,
             column: None,
@@ -327,10 +344,15 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     find_references_result.expect("find_references should succeed");
 
     let extended_server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let extended_repository_id = public_repository_ids(&extended_server)
+        .await
+        .into_iter()
+        .next()
+        .expect("extended server should expose one repository");
     let explore_result = extended_server
         .explore(Parameters(ExploreParams {
             path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(extended_repository_id),
             operation: ExploreOperation::Probe,
             query: Some("hello".to_owned()),
             pattern_type: Some(SearchPatternType::Literal),
@@ -388,11 +410,16 @@ async fn security_extended_explore_enforces_workspace_boundary() {
         .expect("failed to seed outside file");
 
     let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let escaped_path = outside_root.join("escape.rs");
     let error = server
         .explore(Parameters(ExploreParams {
             path: escaped_path.display().to_string(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             operation: ExploreOperation::Probe,
             query: Some("outside".to_owned()),
             pattern_type: Some(SearchPatternType::Literal),
@@ -425,11 +452,16 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
     fs::write(src_root.join("lib.rs"), "pub fn needle() {}\n").expect("failed to seed repo file");
 
     let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let abusive = "needle+".repeat(MAX_REGEX_QUANTIFIERS + 1);
     let error = server
         .explore(Parameters(ExploreParams {
             path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             operation: ExploreOperation::Probe,
             query: Some(abusive),
             pattern_type: Some(SearchPatternType::Regex),
@@ -471,10 +503,15 @@ async fn security_read_file_rejects_relative_path_traversal_outside_workspace() 
     fs::write(workspace.join("outside.txt"), "secret\n").expect("failed to seed outside file");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "../outside.txt".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -511,10 +548,15 @@ async fn security_read_file_rejects_symlink_escape_outside_workspace() {
         .expect("failed to create fixture symlink");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "src/linked-outside.txt".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -546,10 +588,15 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
     fs::write(&outside_path, "secret\n").expect("failed to seed outside file");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: outside_path.display().to_string(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -585,6 +632,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
         .expect("failed to seed second root fixture file");
 
     let server = build_server_for_roots(vec![first_root.clone(), second_root.clone()]);
+    let repository_ids = public_repository_ids(&server).await;
     let response = server
         .read_file(Parameters(ReadFileParams {
             path: second_root.join("src/lib.rs").display().to_string(),
@@ -597,7 +645,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
         .expect("absolute path under second root should resolve")
         .0;
 
-    assert_eq!(response.repository_id, "repo-002");
+    assert_eq!(response.repository_id, repository_ids[1]);
     assert_eq!(response.path, "src/lib.rs");
     assert!(
         !Path::new(&response.path).is_absolute(),
@@ -622,10 +670,15 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
     fs::write(&outside_existing_path, "secret\n").expect("failed to seed outside file");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let existing_error = match server
         .read_file(Parameters(ReadFileParams {
             path: outside_existing_path.display().to_string(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id.clone()),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -638,7 +691,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
     let missing_error = match server
         .read_file(Parameters(ReadFileParams {
             path: outside_missing_path.display().to_string(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             max_bytes: None,
             line_start: None,
             line_end: None,
@@ -674,10 +727,15 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
         .expect("failed to create symlink to outside file");
 
     let server = build_server_for_repo(&repo_root);
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "src/outside-link.txt".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
+            repository_id: Some(repository_id),
             max_bytes: None,
             line_start: None,
             line_end: None,

@@ -38,7 +38,7 @@ pub(super) fn watched_repository_for_workspace(
     workspace: &AttachedWorkspace,
 ) -> FriggResult<WatchedRepository> {
     watched_repository_for_root(
-        workspace.repository_id.clone(),
+        workspace.runtime_repository_id.clone(),
         workspace.root.clone(),
         workspace.db_path.clone(),
     )

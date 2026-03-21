@@ -22,6 +22,13 @@ impl FriggMcpSessionStateInner {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .mark_session_released(repository_id);
+        let runtime_repository_id = self
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(repository_id)
+            .map(|workspace| workspace.runtime_repository_id)
+            .unwrap_or_else(|| repository_id.to_owned());
         if let Some(watch_runtime) = self
             .watch_runtime
             .read()
@@ -29,7 +36,7 @@ impl FriggMcpSessionStateInner {
             .as_ref()
             .cloned()
         {
-            watch_runtime.release_lease(repository_id);
+            watch_runtime.release_lease(&runtime_repository_id);
         }
     }
 }

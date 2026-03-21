@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn workspace_index_health_reports_rust_precise_generation_with_positional_path() {
     let workspace_root = temp_workspace_root("precise-generator-health");
-    let bin_dir = PathBuf::from("/tmp/frigg-precise-generator-bin");
+    let bin_dir = temp_workspace_root("precise-generator-health-bin");
     fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
     fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
     fs::write(
@@ -429,7 +429,7 @@ printf '%s' "wrong-local-scip-php"
 #[test]
 fn workspace_index_health_reports_go_precise_generation_uses_explicit_output_and_local_caches() {
     let workspace_root = temp_workspace_root("go-precise-generator-health");
-    let bin_dir = PathBuf::from("/tmp/frigg-precise-generator-bin");
+    let bin_dir = temp_workspace_root("go-precise-generator-health-bin");
     fs::create_dir_all(&workspace_root).expect("failed to create go workspace root");
     fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
     fs::write(

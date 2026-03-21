@@ -210,7 +210,7 @@ impl FriggMcpServer {
             PreciseCoverageMode::Full | PreciseCoverageMode::Partial
                 if stats.artifacts_ingested > 0 && precise_match_count == 0 =>
             {
-                return "target_not_present_in_precise_graph";
+                return "required_precise_matches_not_present_in_precise_graph";
             }
             PreciseCoverageMode::None => {
                 return "no_usable_precise_data";

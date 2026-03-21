@@ -52,7 +52,7 @@ impl FriggMcpServer {
 
         repository_freshness_status(
             &storage,
-            &workspace.repository_id,
+            &workspace.runtime_repository_id,
             &workspace.root,
             semantic_runtime,
             |_| false,
@@ -198,7 +198,7 @@ impl FriggMcpServer {
             if let Some(snapshot) =
                 crate::manifest_validation::latest_validated_manifest_snapshot_shared(
                     &storage,
-                    &workspace.repository_id,
+                    &workspace.runtime_repository_id,
                     &workspace.root,
                     Some(&self.runtime_state.validated_manifest_candidate_cache),
                 )
@@ -207,7 +207,7 @@ impl FriggMcpServer {
             }
         }
 
-        Self::load_latest_manifest_snapshot(&workspace.root, &workspace.repository_id)
+        Self::load_latest_manifest_snapshot(&workspace.root, &workspace.runtime_repository_id)
             .map(|snapshot| snapshot.entries.len())
     }
 
@@ -351,7 +351,7 @@ impl FriggMcpServer {
             .expect("semantic model should exist after config validation");
         let semantic_health = storage_reader
             .collect_semantic_storage_health_for_repository_model(
-                &workspace.repository_id,
+                &workspace.runtime_repository_id,
                 provider_ref,
                 model_ref,
             )
@@ -420,7 +420,7 @@ impl FriggMcpServer {
                         .or_else(|| {
                             storage_reader
                                 .count_semantic_embeddings_for_repository_snapshot_model(
-                                    &workspace.repository_id,
+                                    &workspace.runtime_repository_id,
                                     &snapshot_id,
                                     provider_ref,
                                     model_ref,
@@ -538,7 +538,7 @@ impl FriggMcpServer {
             .map_err(|err| err.to_string())?;
 
         reindex_repository_with_runtime_config(
-            &workspace.repository_id,
+            &workspace.runtime_repository_id,
             &workspace.root,
             &workspace.db_path,
             ReindexMode::Full,

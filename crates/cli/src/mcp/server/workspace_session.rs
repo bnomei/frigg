@@ -21,6 +21,16 @@ impl FriggMcpServer {
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
         let server = self.clone();
         Arc::new(move |repository_id: &str| {
+            let workspace = server
+                .runtime_state
+                .workspace_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .workspace_by_any_repository_id(repository_id);
+            let repository_id = workspace
+                .as_ref()
+                .map(|workspace| workspace.repository_id.as_str())
+                .unwrap_or(repository_id);
             server.invalidate_repository_summary_cache(repository_id);
             server.invalidate_repository_file_content_cache(repository_id);
             server
@@ -183,6 +193,12 @@ impl FriggMcpServer {
     }
 
     pub(super) fn repository_has_active_runtime_work(&self, repository_id: &str) -> bool {
+        let workspace = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(repository_id);
         let registry = self
             .runtime_state
             .runtime_task_registry
@@ -195,7 +211,14 @@ impl FriggMcpServer {
             RuntimeTaskKind::WorkspaceReindex,
         ]
         .into_iter()
-        .any(|kind| registry.has_active_task_for_repository(kind, repository_id))
+        .any(|kind| {
+            registry.has_active_task_for_repository(kind, repository_id)
+                || workspace.as_ref().is_some_and(|workspace| {
+                    workspace.runtime_repository_id != repository_id
+                        && registry
+                            .has_active_task_for_repository(kind, &workspace.runtime_repository_id)
+                })
+        })
     }
 
     pub(super) fn scoped_search_config(

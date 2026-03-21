@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use frigg::domain::model::ReferenceMatchKind;
+use frigg::domain::model::{ReferenceMatchKind, stable_repository_id_for_root};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
@@ -68,6 +68,23 @@ fn server_for_fixture() -> FriggMcpServer {
         FriggConfig::from_workspace_roots(vec![fresh_fixture_root("tool-handlers-fixture-server")])
             .expect("fixture root must produce valid config");
     FriggMcpServer::new(config)
+}
+
+async fn public_repository_id(server: &FriggMcpServer) -> String {
+    server
+        .list_repositories(Parameters(ListRepositoriesParams {}))
+        .await
+        .expect("list_repositories should succeed")
+        .0
+        .repositories
+        .first()
+        .expect("test server should expose one repository")
+        .repository_id
+        .clone()
+}
+
+fn stable_public_repository_id_for_root(root: &Path) -> String {
+    stable_repository_id_for_root(root).0
 }
 
 fn error_code_tag(error: &rmcp::ErrorData) -> Option<&str> {

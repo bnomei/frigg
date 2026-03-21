@@ -17,7 +17,10 @@ async fn core_list_repositories_is_deterministic() {
 
     assert_eq!(first.repositories.len(), second.repositories.len());
     assert_eq!(first.repositories.len(), 1);
-    assert_eq!(first.repositories[0].repository_id, "repo-001");
+    assert_eq!(
+        first.repositories[0].repository_id,
+        stable_public_repository_id_for_root(Path::new(&first.repositories[0].root_path))
+    );
     assert_eq!(
         first.repositories[0].repository_id,
         second.repositories[0].repository_id
@@ -63,7 +66,10 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         .await
         .expect("workspace_attach should succeed for fixture file path")
         .0;
-    assert_eq!(first.repository.repository_id, "repo-001");
+    assert_eq!(
+        first.repository.repository_id,
+        stable_public_repository_id_for_root(&workspace_root)
+    );
     assert_eq!(first.resolution, WorkspaceResolveMode::GitRoot);
     assert!(first.session_default);
     assert_eq!(first.action, WorkspaceAttachAction::AttachedFresh);
@@ -124,10 +130,16 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         .repository
         .as_ref()
         .expect("workspace_current should return attached repository");
-    assert_eq!(current_repository.repository_id, "repo-001");
+    assert_eq!(
+        current_repository.repository_id,
+        first.repository.repository_id
+    );
     assert!(current_repository.health.is_some());
     assert_eq!(current.repositories.len(), 1);
-    assert_eq!(current.repositories[0].repository_id, "repo-001");
+    assert_eq!(
+        current.repositories[0].repository_id,
+        first.repository.repository_id
+    );
     assert!(current.precise.is_some());
     let runtime = current
         .runtime
@@ -278,19 +290,32 @@ async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
     )
     .expect("workspace source file should be writable");
 
+    let repository_id = stable_public_repository_id_for_root(&workspace_root);
     seed_manifest_snapshot(
         &workspace_root,
-        "repo-001",
+        &repository_id,
         "snapshot-001",
         &["src/main.rs", "src/lib.rs"],
     );
     seed_semantic_embeddings(
         &workspace_root,
-        "repo-001",
+        &repository_id,
         "snapshot-001",
         &[
-            semantic_record("repo-001", "snapshot-001", "src/main.rs", 0, vec![1.0, 0.0]),
-            semantic_record("repo-001", "snapshot-001", "src/lib.rs", 0, vec![0.6, 0.0]),
+            semantic_record(
+                &repository_id,
+                "snapshot-001",
+                "src/main.rs",
+                0,
+                vec![1.0, 0.0],
+            ),
+            semantic_record(
+                &repository_id,
+                "snapshot-001",
+                "src/lib.rs",
+                0,
+                vec![0.6, 0.0],
+            ),
         ],
     );
 

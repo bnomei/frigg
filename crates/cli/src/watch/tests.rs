@@ -70,6 +70,7 @@ fn test_attached_workspace(
 ) -> crate::mcp::workspace_registry::AttachedWorkspace {
     crate::mcp::workspace_registry::AttachedWorkspace {
         repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
         display_name: workspace_root
             .file_name()
             .and_then(|name| name.to_str())
@@ -996,6 +997,7 @@ async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initia
 
     let attached_workspace = crate::mcp::workspace_registry::AttachedWorkspace {
         repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
         display_name: workspace_root
             .file_name()
             .and_then(|name| name.to_str())
@@ -1154,6 +1156,7 @@ async fn watch_runtime_repairs_missing_retrieval_projection_family_and_invalidat
 
     let attached_workspace = crate::mcp::workspace_registry::AttachedWorkspace {
         repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
         display_name: workspace_root
             .file_name()
             .and_then(|name| name.to_str())

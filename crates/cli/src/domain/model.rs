@@ -1,9 +1,18 @@
+use std::path::Path;
+
+use blake3::Hasher;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryId(pub String);
+
+impl RepositoryId {
+    pub fn for_root(root: &Path) -> Self {
+        stable_repository_id_for_root(root)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryRecord {
@@ -110,4 +119,37 @@ pub struct ToolInvocation {
     pub trace_id: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
+}
+
+pub fn stable_repository_id_for_root(root: &Path) -> RepositoryId {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let display = canonical_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repo");
+    let slug = stable_repository_slug(display);
+    let mut hasher = Hasher::new();
+    hasher.update(canonical_root.to_string_lossy().as_bytes());
+    let hash = hasher.finalize().to_hex().to_string();
+    RepositoryId(format!("{slug}-{}", &hash[..12]))
+}
+
+fn stable_repository_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "repo".to_owned()
+    } else {
+        slug.to_owned()
+    }
 }
