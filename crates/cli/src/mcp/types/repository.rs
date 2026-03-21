@@ -41,7 +41,9 @@ pub struct ListRepositoriesParams {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceResolveMode {
+    #[serde(alias = "git", alias = "repo_root", alias = "repo")]
     GitRoot,
+    #[serde(alias = "dir", alias = "directory")]
     Direct,
 }
 

@@ -144,6 +144,8 @@ impl FriggMcpServer {
                     semantic_hit_count = semantic_channel.map(|result| result.stats.hit_count);
                     semantic_match_count = semantic_channel.map(|result| result.stats.match_count);
                     warning = Self::search_hybrid_warning(
+                        &params_for_blocking.query,
+                        search_output.note.lexical_only_mode,
                         semantic_status,
                         semantic_reason.as_deref(),
                         semantic_hit_count,
@@ -335,23 +337,49 @@ impl FriggMcpServer {
     }
 
     pub(crate) fn search_hybrid_warning(
+        query: &str,
+        lexical_only_mode: bool,
         semantic_status: Option<ChannelHealthStatus>,
         semantic_reason: Option<&str>,
         semantic_hit_count: Option<usize>,
         semantic_match_count: Option<usize>,
     ) -> Option<String> {
+        let broad_natural_language =
+            lexical_only_mode && Self::search_hybrid_query_looks_broad_natural_language(query);
         match semantic_status {
             Some(ChannelHealthStatus::Disabled) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
-                    "semantic retrieval is disabled; results are ranked from lexical and graph signals only ({reason})"
+                    "{} ({reason})",
+                    if broad_natural_language {
+                        "semantic retrieval is disabled; broad natural-language ranking is weaker in lexical-only mode, so use results as candidate pivots and switch to exact tools"
+                    } else {
+                        "semantic retrieval is disabled; results are ranked from lexical and graph signals only"
+                    }
                 ),
-                _ => "semantic retrieval is disabled; results are ranked from lexical and graph signals only".to_owned(),
+                _ => {
+                    if broad_natural_language {
+                        "semantic retrieval is disabled; broad natural-language ranking is weaker in lexical-only mode, so use results as candidate pivots and switch to exact tools".to_owned()
+                    } else {
+                        "semantic retrieval is disabled; results are ranked from lexical and graph signals only".to_owned()
+                    }
+                }
             }),
             Some(ChannelHealthStatus::Unavailable) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
-                    "semantic retrieval is unavailable; results are ranked from lexical and graph signals only ({reason})"
+                    "{} ({reason})",
+                    if broad_natural_language {
+                        "semantic retrieval is unavailable; broad natural-language ranking is weaker in lexical-only mode, so use results as candidate pivots and switch to exact tools"
+                    } else {
+                        "semantic retrieval is unavailable; results are ranked from lexical and graph signals only"
+                    }
                 ),
-                _ => "semantic retrieval is unavailable; results are ranked from lexical and graph signals only".to_owned(),
+                _ => {
+                    if broad_natural_language {
+                        "semantic retrieval is unavailable; broad natural-language ranking is weaker in lexical-only mode, so use results as candidate pivots and switch to exact tools".to_owned()
+                    } else {
+                        "semantic retrieval is unavailable; results are ranked from lexical and graph signals only".to_owned()
+                    }
+                }
             }),
             Some(ChannelHealthStatus::Degraded) => Some(match semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
@@ -374,6 +402,39 @@ impl FriggMcpServer {
             }
             _ => None,
         }
+    }
+
+    fn search_hybrid_query_looks_broad_natural_language(query: &str) -> bool {
+        let trimmed = query.trim();
+        if trimmed.len() < 18 || !trimmed.contains(char::is_whitespace) {
+            return false;
+        }
+        if trimmed.contains("::")
+            || trimmed.contains('/')
+            || trimmed.contains('\\')
+            || trimmed.contains('_')
+            || trimmed.contains('.')
+            || trimmed.contains('#')
+            || trimmed.contains("->")
+        {
+            return false;
+        }
+
+        let mut token_count = 0usize;
+        let mut alphabetic_like_count = 0usize;
+        for token in trimmed.split_whitespace() {
+            token_count += 1;
+            let cleaned = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
+            if !cleaned.is_empty()
+                && cleaned
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphabetic() || ch == '-')
+            {
+                alphabetic_like_count += 1;
+            }
+        }
+
+        token_count >= 4 && alphabetic_like_count + 1 >= token_count
     }
 
     fn search_hybrid_semantic_accelerator_state(

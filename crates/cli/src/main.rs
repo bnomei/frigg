@@ -65,7 +65,7 @@ fn startup_trace(enabled: bool, message: &str) {
 }
 
 fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'static str {
-    if cli.command.is_none() && transport == RuntimeTransportKind::Stdio {
+    if cli.quiet || (cli.command.is_none() && transport == RuntimeTransportKind::Stdio) {
         "error"
     } else {
         "info"
@@ -96,6 +96,7 @@ mod tests {
 
     fn base_cli() -> Cli {
         Cli {
+            quiet: false,
             workspace_roots: vec![PathBuf::from(".")],
             max_file_bytes: None,
             mcp_http_port: None,
@@ -398,7 +399,7 @@ mod tests {
         let cli = base_cli();
         let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));
         assert_eq!(watch.mode, WatchMode::Off);
-        assert_eq!(watch.debounce_ms, 750);
+        assert_eq!(watch.debounce_ms, 2_000);
         assert_eq!(watch.retry_ms, 5_000);
     }
 
@@ -407,7 +408,7 @@ mod tests {
         let cli = base_cli();
         let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::LoopbackHttp));
         assert_eq!(watch.mode, WatchMode::Auto);
-        assert_eq!(watch.debounce_ms, 750);
+        assert_eq!(watch.debounce_ms, 2_000);
         assert_eq!(watch.retry_ms, 5_000);
     }
 
@@ -486,6 +487,17 @@ mod tests {
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "info"
+        );
+    }
+
+    #[test]
+    fn quiet_flag_forces_error_log_filter() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Serve);
+        cli.quiet = true;
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::LoopbackHttp),
+            "error"
         );
     }
 

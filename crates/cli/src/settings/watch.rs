@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::RuntimeTransportKind;
 
-pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 750;
+pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 2_000;
 pub const DEFAULT_WATCH_RETRY_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

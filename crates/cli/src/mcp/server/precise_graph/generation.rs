@@ -866,27 +866,72 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         spec: &PreciseGeneratorSpec,
     ) -> WorkspacePreciseGenerationSummary {
+        let started_at = Instant::now();
         let generated_at_ms = Self::scip_now_unix_ms();
+        let finish =
+            |summary: WorkspacePreciseGenerationSummary| -> WorkspacePreciseGenerationSummary {
+                let duration_ms = started_at.elapsed().as_millis() as u64;
+                match summary.status {
+                    WorkspacePreciseGenerationStatus::Succeeded => {
+                        tracing::info!(
+                            repository_id = %workspace.repository_id,
+                            root = %workspace.root.display(),
+                            generator = spec.generator_id,
+                            status = ?summary.status,
+                            artifact_path = summary.artifact_path.as_deref().unwrap_or(""),
+                            duration_ms,
+                            detail = summary.detail.as_deref().unwrap_or(""),
+                            "workspace precise generator completed"
+                        );
+                    }
+                    WorkspacePreciseGenerationStatus::NotConfigured => {
+                        tracing::info!(
+                            repository_id = %workspace.repository_id,
+                            root = %workspace.root.display(),
+                            generator = spec.generator_id,
+                            status = ?summary.status,
+                            duration_ms,
+                            detail = summary.detail.as_deref().unwrap_or(""),
+                            "workspace precise generator skipped"
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            repository_id = %workspace.repository_id,
+                            root = %workspace.root.display(),
+                            generator = spec.generator_id,
+                            status = ?summary.status,
+                            artifact_path = summary.artifact_path.as_deref().unwrap_or(""),
+                            failure_class = ?summary.failure_class,
+                            recommended_action = ?summary.recommended_action,
+                            duration_ms,
+                            detail = summary.detail.as_deref().unwrap_or(""),
+                            "workspace precise generator failed"
+                        );
+                    }
+                }
+                summary
+            };
         let precise_config = Self::load_workspace_precise_config(&workspace.root);
         if Self::workspace_precise_generator_disabled(&precise_config, spec.generator_id) {
-            return WorkspacePreciseGenerationSummary {
+            return finish(WorkspacePreciseGenerationSummary {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
                 artifact_path: None,
                 failure_class: None,
                 recommended_action: None,
                 detail: Some("disabled_by_workspace_precise_config".to_owned()),
-            };
+            });
         }
         if !Self::workspace_has_precise_generator_markers(&workspace.root, spec) {
-            return WorkspacePreciseGenerationSummary {
+            return finish(WorkspacePreciseGenerationSummary {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
                 artifact_path: None,
                 failure_class: None,
                 recommended_action: None,
                 detail: Some("missing_language_markers".to_owned()),
-            };
+            });
         }
 
         let (tool, version) = match Self::probe_precise_generator_tool(&workspace.root, spec) {
@@ -894,7 +939,7 @@ impl FriggMcpServer {
             Err(PreciseToolProbeError::MissingTool) => {
                 let tool_candidates =
                     Self::precise_generator_tool_candidates(&workspace.root, spec);
-                return WorkspacePreciseGenerationSummary {
+                return finish(WorkspacePreciseGenerationSummary {
                     status: WorkspacePreciseGenerationStatus::MissingTool,
                     generated_at_ms,
                     artifact_path: None,
@@ -904,29 +949,29 @@ impl FriggMcpServer {
                         "precise generator tool '{}' is not installed",
                         tool_candidates.join(" or ")
                     )),
-                };
+                });
             }
             Err(PreciseToolProbeError::Failed(error)) => {
-                return Self::precise_failed_summary(generated_at_ms, None, error);
+                return finish(Self::precise_failed_summary(generated_at_ms, None, error));
             }
         };
 
         let output_dir = workspace.root.join(".frigg").join("scip");
         if let Err(err) = fs::create_dir_all(&output_dir) {
-            return Self::precise_failed_summary(
+            return finish(Self::precise_failed_summary(
                 generated_at_ms,
                 None,
                 format!(
                     "failed to prepare SCIP artifact directory {}: {err}",
                     output_dir.display()
                 ),
-            );
+            ));
         }
 
         if let Err(detail) =
             Self::maybe_patch_repo_local_scip_php_vendor_dir(&workspace.root, spec, &tool)
         {
-            return Self::precise_failed_summary(generated_at_ms, None, detail);
+            return finish(Self::precise_failed_summary(generated_at_ms, None, detail));
         }
 
         let generation_matcher = Self::compile_workspace_precise_exclude_matcher(
@@ -940,7 +985,9 @@ impl FriggMcpServer {
                 spec.generator_id,
             ) {
                 Ok(path) => Some(path),
-                Err(detail) => return Self::precise_failed_summary(generated_at_ms, None, detail),
+                Err(detail) => {
+                    return finish(Self::precise_failed_summary(generated_at_ms, None, detail));
+                }
             },
             None => None,
         };
@@ -950,6 +997,16 @@ impl FriggMcpServer {
             .to_path_buf();
         let generator_extra_args =
             Self::workspace_precise_generator_extra_args(&precise_config, spec.generator_id);
+        tracing::info!(
+            repository_id = %workspace.repository_id,
+            root = %workspace.root.display(),
+            generator = spec.generator_id,
+            tool = %tool.display,
+            workspace_root = %generator_workspace_root.display(),
+            filtered_generation_root = filtered_generation_root.is_some(),
+            version = %version,
+            "workspace precise generator started"
+        );
 
         let generation_result = (|| {
             let mut command = Command::new(&tool.command);
@@ -1056,7 +1113,7 @@ impl FriggMcpServer {
             }
         }
 
-        generation_result
+        finish(generation_result)
     }
 
     pub(in crate::mcp::server) fn maybe_spawn_workspace_precise_generation(
@@ -1078,6 +1135,13 @@ impl FriggMcpServer {
             }
         }
         if selected.is_empty() {
+            tracing::info!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                changed_paths = changed_paths.len(),
+                deleted_paths = deleted_paths.len(),
+                "workspace precise generation skipped because no generators need refresh"
+            );
             return WorkspacePreciseGenerationAction::SkippedNoWork;
         }
 
@@ -1093,6 +1157,18 @@ impl FriggMcpServer {
                     && task.repository_id == workspace.repository_id
             });
         if active_precise_generation {
+            tracing::info!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                changed_paths = changed_paths.len(),
+                deleted_paths = deleted_paths.len(),
+                generators = %selected
+                    .iter()
+                    .map(|spec| spec.generator_id)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                "workspace precise generation skipped because a generation task is already active"
+            );
             return WorkspacePreciseGenerationAction::SkippedActiveTask;
         }
 
@@ -1101,6 +1177,19 @@ impl FriggMcpServer {
         let selected_generators = selected.to_vec();
         let changed_paths = changed_paths.to_vec();
         let deleted_paths = deleted_paths.to_vec();
+        let selected_generator_ids = selected_generators
+            .iter()
+            .map(|spec| spec.generator_id)
+            .collect::<Vec<_>>()
+            .join(",");
+        tracing::info!(
+            repository_id = %workspace.repository_id,
+            root = %workspace.root.display(),
+            changed_paths = changed_paths.len(),
+            deleted_paths = deleted_paths.len(),
+            generators = %selected_generator_ids,
+            "workspace precise generation started"
+        );
         let task_id = self
             .runtime_state
             .runtime_task_registry
@@ -1145,6 +1234,14 @@ impl FriggMcpServer {
                     succeeded,
                     failed
                 ));
+                tracing::info!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    generators = succeeded + failed,
+                    succeeded,
+                    failed,
+                    "workspace precise generation finished"
+                );
                 task_registry
                     .write()
                     .expect("runtime task registry poisoned")

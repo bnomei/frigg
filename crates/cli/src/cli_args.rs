@@ -8,6 +8,9 @@ use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVE
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
 pub(crate) struct Cli {
+    #[arg(long, global = true)]
+    pub(crate) quiet: bool,
+
     #[arg(long = "workspace-root", value_name = "PATH", global = true)]
     pub(crate) workspace_roots: Vec<PathBuf>,
 

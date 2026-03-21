@@ -145,6 +145,26 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     );
 }
 
+#[test]
+fn workspace_attach_accepts_natural_resolve_mode_aliases() {
+    let git_alias: WorkspaceAttachParams = serde_json::from_value(serde_json::json!({
+        "path": "/tmp/example",
+        "resolve_mode": "git"
+    }))
+    .expect("git alias should deserialize");
+    assert_eq!(git_alias.resolve_mode, Some(WorkspaceResolveMode::GitRoot));
+
+    let directory_alias: WorkspaceAttachParams = serde_json::from_value(serde_json::json!({
+        "path": "/tmp/example",
+        "resolve_mode": "directory"
+    }))
+    .expect("directory alias should deserialize");
+    assert_eq!(
+        directory_alias.resolve_mode,
+        Some(WorkspaceResolveMode::Direct)
+    );
+}
+
 #[tokio::test]
 async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
     let workspace_root = temp_workspace_root("workspace-attach-schema-only-storage");

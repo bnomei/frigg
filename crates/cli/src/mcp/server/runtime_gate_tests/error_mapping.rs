@@ -154,6 +154,8 @@ fn internal_error_maps_to_internal_error_class() {
 #[test]
 fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
     let warning = FriggMcpServer::search_hybrid_warning(
+        "capture_screen",
+        false,
         Some(crate::domain::ChannelHealthStatus::Ok),
         None,
         Some(0),
@@ -171,6 +173,8 @@ fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
 #[test]
 fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
     let warning = FriggMcpServer::search_hybrid_warning(
+        "capture_screen",
+        false,
         Some(crate::domain::ChannelHealthStatus::Ok),
         None,
         Some(3),
@@ -181,6 +185,25 @@ fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
         warning.as_deref(),
         Some(
             "semantic retrieval retained semantic hits, but none contributed to the returned top results; ranking is effectively lexical and graph for this result set"
+        )
+    );
+}
+
+#[test]
+fn search_hybrid_warning_escalates_broad_queries_in_lexical_only_mode() {
+    let warning = FriggMcpServer::search_hybrid_warning(
+        "where is capture request flow handled after tool layer",
+        true,
+        Some(crate::domain::ChannelHealthStatus::Disabled),
+        None,
+        Some(0),
+        Some(0),
+    );
+
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            "semantic retrieval is disabled; broad natural-language ranking is weaker in lexical-only mode, so use results as candidate pivots and switch to exact tools"
         )
     );
 }

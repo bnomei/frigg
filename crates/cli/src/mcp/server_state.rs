@@ -17,6 +17,7 @@ use crate::mcp::types::{
 use rmcp::ErrorData;
 use rmcp::handler::server::wrapper::Json;
 use serde_json::Value;
+use tracing::info;
 
 #[derive(Clone)]
 pub(crate) struct RepositorySymbolCorpus {
@@ -152,6 +153,7 @@ impl RuntimeTaskRegistry {
     ) -> String {
         self.next_sequence = self.next_sequence.saturating_add(1);
         let repository_id = repository_id.into();
+        let phase = phase.into();
         let task_id = format!(
             "{}:{}:{:04}",
             runtime_task_kind_name(kind),
@@ -163,11 +165,19 @@ impl RuntimeTaskRegistry {
             kind,
             status: RuntimeTaskStatus::Running,
             repository_id,
-            phase: phase.into(),
+            phase,
             created_at_ms: now_unix_ms(),
             finished_at_ms: None,
             detail,
         };
+        info!(
+            task_id = %summary.task_id,
+            task_kind = runtime_task_kind_name(summary.kind),
+            repository_id = %summary.repository_id,
+            phase = %summary.phase,
+            detail = summary.detail.as_deref().unwrap_or(""),
+            "runtime task started"
+        );
         self.active.insert(task_id.clone(), summary);
         task_id
     }
@@ -186,6 +196,20 @@ impl RuntimeTaskRegistry {
         if detail.is_some() {
             summary.detail = detail;
         }
+        let duration_ms = summary
+            .finished_at_ms
+            .unwrap_or(summary.created_at_ms)
+            .saturating_sub(summary.created_at_ms);
+        info!(
+            task_id = %summary.task_id,
+            task_kind = runtime_task_kind_name(summary.kind),
+            repository_id = %summary.repository_id,
+            phase = %summary.phase,
+            status = runtime_task_status_name(summary.status),
+            duration_ms,
+            detail = summary.detail.as_deref().unwrap_or(""),
+            "runtime task finished"
+        );
         self.push_recent(summary);
     }
 
@@ -235,6 +259,14 @@ fn runtime_task_kind_name(kind: RuntimeTaskKind) -> &'static str {
         RuntimeTaskKind::PreciseGenerate => "precise_generate",
         RuntimeTaskKind::WorkspacePrepare => "workspace_prepare",
         RuntimeTaskKind::WorkspaceReindex => "workspace_reindex",
+    }
+}
+
+fn runtime_task_status_name(status: RuntimeTaskStatus) -> &'static str {
+    match status {
+        RuntimeTaskStatus::Running => "running",
+        RuntimeTaskStatus::Succeeded => "succeeded",
+        RuntimeTaskStatus::Failed => "failed",
     }
 }
 

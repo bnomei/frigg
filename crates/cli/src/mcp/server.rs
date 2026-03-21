@@ -57,7 +57,7 @@ use rmcp::{
 use scip::types::symbol_information::Kind as ScipSymbolKind;
 use serde_json::{Value, json};
 use tokio::task;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::mcp::advanced::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
@@ -481,12 +481,45 @@ impl FriggMcpServer {
         let params = params.0;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
-        let response = self.attach_workspace_target_internal(
+        let started_at = Instant::now();
+        info!(
+            requested_path = params.path.as_deref().unwrap_or(""),
+            requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
+            set_default,
+            resolve_mode = ?resolve_mode,
+            "workspace attach started"
+        );
+        let response = match self.attach_workspace_target_internal(
             params.path.as_deref(),
             params.repository_id.as_deref(),
             set_default,
             resolve_mode,
-        )?;
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                warn!(
+                    requested_path = params.path.as_deref().unwrap_or(""),
+                    requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
+                    set_default,
+                    resolve_mode = ?resolve_mode,
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    error = %err.message,
+                    "workspace attach failed"
+                );
+                return Err(err);
+            }
+        };
+        info!(
+            repository_id = %response.repository.repository_id,
+            root = %response.repository.root_path,
+            action = ?response.action,
+            resolution = ?response.resolution,
+            session_default = response.session_default,
+            precise_state = ?response.precise.state,
+            precise_generation_action = ?response.precise.generation_action,
+            duration_ms = started_at.elapsed().as_millis() as u64,
+            "workspace attach completed"
+        );
         let finalization = self.tool_execution_finalization(
             json!({
                 "repository_id": response.repository.repository_id.clone(),
@@ -610,12 +643,28 @@ impl FriggMcpServer {
         Self::require_confirm("workspace_prepare", params.confirm)?;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let started_at = Instant::now();
         let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
             params.path.as_deref(),
             params.repository_id.as_deref(),
             resolve_mode,
         )?;
+        info!(
+            repository_id = %workspace.repository_id,
+            root = %workspace.root.display(),
+            set_default,
+            resolve_mode = ?resolve_mode,
+            requested_path = params.path.as_deref().unwrap_or(""),
+            requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
+            "workspace prepare started"
+        );
         if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "workspace prepare rejected because runtime work is active"
+            );
             return Err(Self::invalid_params(
                 "repository already has active runtime work",
                 Some(json!({ "repository_id": workspace.repository_id })),
@@ -649,6 +698,13 @@ impl FriggMcpServer {
         })
         .await?
         .map_err(|err| {
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err,
+                "workspace prepare failed during storage initialization"
+            );
             self.runtime_state
                 .runtime_task_registry
                 .write()
@@ -676,6 +732,13 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 3.0, 4.0, "activate watcher lease").await;
         self.adopt_workspace(&workspace, set_default)
             .inspect_err(|error| {
+                warn!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    error = %error.message,
+                    "workspace prepare failed while adopting workspace"
+                );
                 self.runtime_state
                     .runtime_task_registry
                     .write()
@@ -699,6 +762,16 @@ impl FriggMcpServer {
                 == Some(workspace.repository_id.as_str()),
             storage: prepared_storage,
         };
+        info!(
+            repository_id = %response.repository.repository_id,
+            root = %response.repository.root_path,
+            session_default = response.session_default,
+            resolution = ?response.resolution,
+            storage_db_path = %response.storage.db_path,
+            storage_index_state = ?response.storage.index_state,
+            duration_ms = started_at.elapsed().as_millis() as u64,
+            "workspace prepare completed"
+        );
         self.runtime_state
             .runtime_task_registry
             .write()
@@ -766,12 +839,28 @@ impl FriggMcpServer {
         Self::require_confirm("workspace_reindex", params.confirm)?;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let started_at = Instant::now();
         let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
             params.path.as_deref(),
             params.repository_id.as_deref(),
             resolve_mode,
         )?;
+        info!(
+            repository_id = %workspace.repository_id,
+            root = %workspace.root.display(),
+            set_default,
+            resolve_mode = ?resolve_mode,
+            requested_path = params.path.as_deref().unwrap_or(""),
+            requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
+            "workspace reindex started"
+        );
         if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "workspace reindex rejected because runtime work is active"
+            );
             return Err(Self::invalid_params(
                 "repository already has active runtime work",
                 Some(json!({ "repository_id": workspace.repository_id })),
@@ -811,6 +900,13 @@ impl FriggMcpServer {
         })
         .await?
         .map_err(|err| {
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err,
+                "workspace reindex failed during lexical refresh"
+            );
             self.runtime_state
                 .runtime_task_registry
                 .write()
@@ -838,6 +934,13 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 3.0, 4.0, "finalize").await;
         self.adopt_workspace(&workspace, set_default)
             .inspect_err(|error| {
+                warn!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    error = %error.message,
+                    "workspace reindex failed while adopting workspace"
+                );
                 self.runtime_state
                     .runtime_task_registry
                     .write()
@@ -871,6 +974,19 @@ impl FriggMcpServer {
             &workspace,
             &reindex_summary.changed_paths,
             &reindex_summary.deleted_paths,
+        );
+        info!(
+            repository_id = %response.repository.repository_id,
+            root = %response.repository.root_path,
+            resolution = ?response.resolution,
+            session_default = response.session_default,
+            snapshot_id = %response.snapshot_id,
+            files_scanned = response.files_scanned,
+            files_changed = response.files_changed,
+            files_deleted = response.files_deleted,
+            diagnostics_count = response.diagnostics_count,
+            duration_ms = started_at.elapsed().as_millis() as u64,
+            "workspace reindex completed"
         );
         self.runtime_state
             .runtime_task_registry
@@ -1047,7 +1163,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Use for broad natural-language repository discovery. Then pivot to search_symbol, navigation, or read_file once you have an anchor.",
+        description = "Use for broad repository discovery. If semantic is unavailable, treat broad natural-language ranking as weaker and pivot to exact tools sooner.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1291,7 +1407,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, or read_file once you have a concrete anchor. Use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. If the extended profile is enabled, use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows. Runtime tool-surface profile is `{tool_surface_profile}`; set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose explore and deep-search tools. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. If the extended profile is enabled, use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows. Runtime tool-surface profile is `{tool_surface_profile}`; set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose explore and deep-search tools. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
                 ),
             )
     }

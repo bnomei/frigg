@@ -510,8 +510,27 @@ impl FriggMcpServer {
     pub(in crate::mcp::server) fn refresh_workspace_semantic_snapshot_with_plan(
         &self,
         workspace: &AttachedWorkspace,
-        _plan: &WorkspaceSemanticRefreshPlan,
+        plan: &WorkspaceSemanticRefreshPlan,
     ) -> Result<(), String> {
+        let started_at = Instant::now();
+        tracing::info!(
+            repository_id = %workspace.repository_id,
+            root = %workspace.root.display(),
+            snapshot_id = %plan.latest_snapshot_id,
+            reason = plan.reason,
+            provider = self
+                .config
+                .semantic_runtime
+                .provider
+                .map(|value| value.as_str())
+                .unwrap_or(""),
+            model = self
+                .config
+                .semantic_runtime
+                .normalized_model()
+                .unwrap_or(""),
+            "workspace semantic refresh started"
+        );
         let credentials = SemanticRuntimeCredentials::from_process_env();
         self.config
             .semantic_runtime
@@ -526,8 +545,29 @@ impl FriggMcpServer {
             &self.config.semantic_runtime,
             &credentials,
         )
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+        .map(|_| {
+            tracing::info!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                snapshot_id = %plan.latest_snapshot_id,
+                reason = plan.reason,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                "workspace semantic refresh completed"
+            );
+        })
+        .map_err(|err| {
+            let error = err.to_string();
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                snapshot_id = %plan.latest_snapshot_id,
+                reason = plan.reason,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %error,
+                "workspace semantic refresh failed"
+            );
+            error
+        })
     }
 
     pub(in crate::mcp::server) fn maybe_refresh_workspace_semantic_snapshot(
