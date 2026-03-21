@@ -1,0 +1,705 @@
+================================================================================
+type_annotation
+================================================================================
+main : Try({}, [])
+main =
+{
+	task = a
+	task
+    }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (record_type))
+        type_args: (apply_type_arg
+          (tags_type))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (value_declaration
+          (decl_left
+            (identifier_pattern
+              (identifier)))
+          body: (expr_body
+            (variable_expr
+              (identifier))))
+        (variable_expr
+          (identifier))))))
+
+================================================================================
+internal
+================================================================================
+main=
+  {
+  p:Int
+  p=10
+  p
+  }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (value_declaration
+          (annotation_type_def
+            (annotation_pre_colon
+              (identifier))
+            (apply_type
+              (concrete_type)))
+          (decl_left
+            (identifier_pattern
+              (identifier)))
+          body: (expr_body
+            (const
+              (int))))
+        (variable_expr
+          (identifier))))))
+
+================================================================================
+types_nominal_simple
+================================================================================
+Username :: Str
+--------------------------------------------------------------------------------
+
+(file
+  (opaque_type_def
+    (apply_type
+      (concrete_type))
+    (double_colon)
+    (apply_type
+      (concrete_type))))
+
+================================================================================
+types_nominal_with_methods
+================================================================================
+Color := [Red, Green, Blue].{
+    as_str : Color -> Str
+    as_str = |c| c
+}
+--------------------------------------------------------------------------------
+
+(file
+  (nominal_type_def
+    (apply_type
+      (concrete_type))
+    (colon_equals)
+    (tags_type
+      (tag_type)
+      (tag_type)
+      (tag_type))
+    (nominal_methods
+      (value_declaration
+        (annotation_type_def
+          (annotation_pre_colon
+            (identifier))
+          (function_type
+            param: (apply_type
+              (concrete_type))
+            (arrow)
+            (apply_type
+              (concrete_type))))
+        (decl_left
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (anon_fun_expr
+            args: (argument_patterns
+              (identifier_pattern
+                (identifier)))
+            body: (expr_body
+              (variable_expr
+                (identifier)))))))))
+
+================================================================================
+types_nominal_empty_methods
+================================================================================
+Wrapper := Str.{}
+--------------------------------------------------------------------------------
+
+(file
+  (nominal_type_def
+    (apply_type
+      (concrete_type))
+    (colon_equals)
+    (apply_type
+      (concrete_type))
+    (nominal_methods)))
+
+================================================================================
+types_functions
+================================================================================
+A: R,(B(a)
+  ->Int)
+  ->String
+
+--------------------------------------------------------------------------------
+
+(file
+  (alias_type_def
+    (apply_type
+      (concrete_type))
+    body: (function_type
+      param: (apply_type
+        (concrete_type))
+      param: (parenthesized_type
+        (function_type
+          param: (apply_type
+            (concrete_type)
+            type_args: (apply_type_arg
+              (bound_variable)))
+          (arrow)
+          (apply_type
+            (concrete_type))))
+      (arrow)
+      (apply_type
+        (concrete_type)))))
+
+================================================================================
+types_alias
+================================================================================
+A:A b
+a:A->B
+a=|a| b
+--------------------------------------------------------------------------------
+
+(file
+  (alias_type_def
+    (apply_type
+      (concrete_type))
+    body: (apply_type
+      (concrete_type)))
+  (expr_body
+    (variable_expr
+      (identifier)))
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (function_type
+        param: (apply_type
+          (concrete_type))
+        (arrow)
+        (apply_type
+          (concrete_type))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (variable_expr
+            (identifier)))))))
+
+================================================================================
+types_nested_func
+================================================================================
+fun:  a,
+  (
+    a,
+    b->
+    S(a)
+  )->
+  (SS(b)->
+  b)
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (bound_variable)
+      param: (tuple_type
+        (bound_variable)
+        (function_type
+          param: (bound_variable)
+          (arrow)
+          (apply_type
+            (concrete_type)
+            type_args: (apply_type_arg
+              (bound_variable)))))
+      (arrow)
+      (parenthesized_type
+        (function_type
+          param: (apply_type
+            (concrete_type)
+            type_args: (apply_type_arg
+              (bound_variable)))
+          (arrow)
+          (bound_variable))))))
+
+================================================================================
+types_tuples
+================================================================================
+a:(Num(a),Num(b))
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (tuple_type
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (bound_variable)))
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (bound_variable))))))
+
+================================================================================
+types_args
+================================================================================
+A b : B b
+
+A2 b2 c2 : B2 b2 c2
+--------------------------------------------------------------------------------
+
+(file
+  (expr_body
+    (tag_expr
+      (tag
+        (identifier))))
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (apply_type
+      (concrete_type)))
+  (expr_body
+    (variable_expr
+      (identifier)))
+  (expr_body
+    (tag_expr
+      (tag
+        (identifier))))
+  (expr_body
+    (variable_expr
+      (identifier)))
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (apply_type
+      (concrete_type)))
+  (expr_body
+    (variable_expr
+      (identifier)))
+  (expr_body
+    (variable_expr
+      (identifier))))
+
+================================================================================
+types_paren_generic
+================================================================================
+foo : List(a) -> List(a)
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (bound_variable)))
+      (arrow)
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (bound_variable))))))
+
+================================================================================
+types_paren_generic_multi
+================================================================================
+foo : Result(Ok, Err) -> Bool
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (apply_type
+            (concrete_type)))
+        type_args: (apply_type_arg
+          (apply_type
+            (concrete_type))))
+      (arrow)
+      (apply_type
+        (concrete_type)))))
+
+================================================================================
+types_effectful_simple
+================================================================================
+print! : Str => {}
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type))
+      (fat_arrow)
+      (record_type))))
+
+================================================================================
+types_effectful_with_return
+================================================================================
+main! : List(Str) => Try({}, [Exit(I32)])
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (apply_type
+            (concrete_type))))
+      (fat_arrow)
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (record_type))
+        type_args: (apply_type_arg
+          (tags_type
+            (tag_type
+              type_args: (apply_type_arg
+                (apply_type
+                  (concrete_type))))))))))
+
+================================================================================
+types_effectful_multi_arg
+================================================================================
+write! : Str, Str => Try({}, Str)
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type))
+      param: (apply_type
+        (concrete_type))
+      (fat_arrow)
+      (apply_type
+        (concrete_type)
+        type_args: (apply_type_arg
+          (record_type))
+        type_args: (apply_type_arg
+          (apply_type
+            (concrete_type)))))))
+
+===
+types_static_basic
+===
+helper1 : a -> b where [a.to_str : a -> b]
+helper1 = |x| x.to_str()
+---
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (where_implements
+        type: (function_type
+          param: (bound_variable)
+          (arrow)
+          (bound_variable))
+        (where)
+        implements: (static_dispatch_list
+          (static_dispatch
+            (static_dispatch_target
+              (bound_variable)
+              (identifier))
+            (function_type
+              param: (bound_variable)
+              (arrow)
+              (bound_variable))))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (function_call_pnc_expr
+            caller: (field_access_expr
+              target: (variable_expr
+                (identifier))
+              (identifier))))))))
+
+===
+types_static_complex
+===
+modify : a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]
+modify = |x, fn| x.transform(fn)
+
+multi_fun: b -> c where [b.b_thing : b, d -> c, b.str_thing : b, Str -> d]
+
+---
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (where_implements
+        type: (function_type
+          param: (bound_variable)
+          param: (parenthesized_type
+            (function_type
+              param: (apply_type
+                (concrete_type))
+              (arrow)
+              (apply_type
+                (concrete_type))))
+          (arrow)
+          (bound_variable))
+        (where)
+        implements: (static_dispatch_list
+          (static_dispatch
+            (static_dispatch_target
+              (bound_variable)
+              (identifier))
+            (function_type
+              param: (bound_variable)
+              param: (parenthesized_type
+                (function_type
+                  param: (apply_type
+                    (concrete_type))
+                  (arrow)
+                  (apply_type
+                    (concrete_type))))
+              (arrow)
+              (bound_variable))))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (function_call_pnc_expr
+            caller: (field_access_expr
+              target: (variable_expr
+                (identifier))
+              (identifier))
+            args: (variable_expr
+              (identifier)))))))
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (where_implements
+      type: (function_type
+        param: (bound_variable)
+        (arrow)
+        (bound_variable))
+      (where)
+      implements: (static_dispatch_list
+        (static_dispatch
+          (static_dispatch_target
+            (bound_variable)
+            (identifier))
+          (function_type
+            param: (bound_variable)
+            param: (bound_variable)
+            (arrow)
+            (bound_variable)))
+        (static_dispatch
+          (static_dispatch_target
+            (bound_variable)
+            (identifier))
+          (function_type
+            param: (bound_variable)
+            param: (apply_type
+              (concrete_type))
+            (arrow)
+            (bound_variable)))))))
+
+===
+types_tag_union_extensible
+===
+# Type alias for an extensible tag union. You can use a type var (`others`) like so:
+Letters(others) : [A, B, ..others]
+---
+
+(file
+  (line_comment)
+  (alias_type_def
+    (apply_type
+      (concrete_type)
+      type_args: (apply_type_arg
+        (bound_variable)))
+    body: (tags_type
+      (tag_type)
+      (tag_type)
+      (spread_type
+        (type_variable
+          (bound_variable))))))
+
+===
+types_static_basic
+===
+helper1 : a -> b where [a.to_str : a -> b]
+helper1 = |x| x.to_str()
+---
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (where_implements
+        type: (function_type
+          param: (bound_variable)
+          (arrow)
+          (bound_variable))
+        (where)
+        implements: (static_dispatch_list
+          (static_dispatch
+            (static_dispatch_target
+              (bound_variable)
+              (identifier))
+            (function_type
+              param: (bound_variable)
+              (arrow)
+              (bound_variable))))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (function_call_pnc_expr
+            caller: (field_access_expr
+              target: (variable_expr
+                (identifier))
+              (identifier))))))))
+
+===
+types_static_complex
+===
+modify : a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]
+modify = |x, fn| x.transform(fn)
+
+multi_fun: b -> c where [b.b_thing : b, d -> c, b.str_thing : b, Str -> d]
+---
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (where_implements
+        type: (function_type
+          param: (bound_variable)
+          param: (parenthesized_type
+            (function_type
+              param: (apply_type
+                (concrete_type))
+              (arrow)
+              (apply_type
+                (concrete_type))))
+          (arrow)
+          (bound_variable))
+        (where)
+        implements: (static_dispatch_list
+          (static_dispatch
+            (static_dispatch_target
+              (bound_variable)
+              (identifier))
+            (function_type
+              param: (bound_variable)
+              param: (parenthesized_type
+                (function_type
+                  param: (apply_type
+                    (concrete_type))
+                  (arrow)
+                  (apply_type
+                    (concrete_type))))
+              (arrow)
+              (bound_variable))))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (function_call_pnc_expr
+            caller: (field_access_expr
+              target: (variable_expr
+                (identifier))
+              (identifier))
+            args: (variable_expr
+              (identifier)))))))
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (where_implements
+      type: (function_type
+        param: (bound_variable)
+        (arrow)
+        (bound_variable))
+      (where)
+      implements: (static_dispatch_list
+        (static_dispatch
+          (static_dispatch_target
+            (bound_variable)
+            (identifier))
+          (function_type
+            param: (bound_variable)
+            param: (bound_variable)
+            (arrow)
+            (bound_variable)))
+        (static_dispatch
+          (static_dispatch_target
+            (bound_variable)
+            (identifier))
+          (function_type
+            param: (bound_variable)
+            param: (apply_type
+              (concrete_type))
+            (arrow)
+            (bound_variable)))))))

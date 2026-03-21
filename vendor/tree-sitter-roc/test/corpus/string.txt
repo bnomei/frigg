@@ -1,0 +1,207 @@
+================================================================================
+string_basic
+================================================================================
+a="foo"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string)))))
+
+================================================================================
+string_multiline
+================================================================================
+a=
+
+  \\foo
+  \\bar
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (multiline_string)))))
+
+================================================================================
+string_multiline_with_string
+================================================================================
+
+main =
+    \\"test"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (multiline_string)))))
+
+================================================================================
+string_multiline_wierd
+================================================================================
+
+main =
+    \\ " '"' \n \t #hi
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (multiline_string
+          (escape_char)
+          (escape_char))))))
+
+================================================================================
+string_wierd
+================================================================================
+
+main =
+    "'\"' \n \t #hi"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string
+          (escape_char)
+          (escape_char)
+          (escape_char))))))
+
+================================================================================
+string_comment
+================================================================================
+
+main =
+    "#hi"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string)))))
+
+================================================================================
+string_interpolation
+================================================================================
+msg = "Hello, ${name}!"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string
+          (interpolation_char
+            (variable_expr
+              (identifier))))))))
+
+================================================================================
+string_interpolation_expr
+================================================================================
+msg = "Result: ${x + 1}"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string
+          (interpolation_char
+            (bin_op_expr
+              part: (variable_expr
+                (identifier))
+              part: (operator)
+              part: (const
+                (int)))))))))
+
+================================================================================
+string_unicode_escape
+================================================================================
+nbsp = "\u(00A0)\u(A)\u(00A00A)"
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (string
+          (escape_char)
+          (escape_char)
+          (escape_char))))))
+
+================================================================================
+line_string_simple
+================================================================================
+msg =
+    \\Hello
+    \\World
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (multiline_string)))))
+
+================================================================================
+line_string_with_interpolation
+================================================================================
+msg =
+    \\Hello ${name}
+    \\Count: ${x + 1}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (const
+        (multiline_string
+          (interpolation_char
+            (variable_expr
+              (identifier)))
+          (interpolation_char
+            (bin_op_expr
+              part: (variable_expr
+                (identifier))
+              part: (operator)
+              part: (const
+                (int)))))))))

@@ -1,0 +1,375 @@
+================================================================================
+modern_app_header
+================================================================================
+app [main!] { pf: platform "./platform/main.roc" }
+
+import pf.Stdout
+
+main! = || Stdout.line!("Hello")
+--------------------------------------------------------------------------------
+
+(file
+  (app_header
+    (provides_list
+      (identifier))
+    (packages_list
+      (platform_ref
+        (identifier)
+        (package_uri))))
+  (import_expr
+    (import_ident
+      (identifier)
+      (module)))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        body: (expr_body
+          (function_call_pnc_expr
+            caller: (variable_expr
+              (module)
+              (identifier))
+            args: (const
+              (string))))))))
+
+================================================================================
+modern_match_expression
+================================================================================
+color_name = |color| match color {
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
+}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (match_expr
+            (match)
+            (variable_expr
+              (identifier))
+            branch: (match_branch
+              pattern: (tag_pattern
+                (tag
+                  (identifier)))
+              (fat_arrow)
+              expr: (expr_body
+                (const
+                  (string))))
+            branch: (match_branch
+              pattern: (tag_pattern
+                (tag
+                  (identifier)))
+              (fat_arrow)
+              expr: (expr_body
+                (const
+                  (string))))
+            branch: (match_branch
+              pattern: (tag_pattern
+                (tag
+                  (identifier)))
+              (fat_arrow)
+              expr: (expr_body
+                (const
+                  (string))))))))))
+
+================================================================================
+modern_lambda_syntax
+================================================================================
+add = |a, b| a + b
+identity = |x| x
+thunk = || 42
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (bin_op_expr
+            part: (variable_expr
+              (identifier))
+            part: (operator)
+            part: (variable_expr
+              (identifier)))))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (variable_expr
+            (identifier))))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        body: (expr_body
+          (const
+            (int)))))))
+
+================================================================================
+modern_opaque_type
+================================================================================
+Color := [Red, Green, Blue].{
+    to_str : Color -> Str
+    to_str = |c| "color"
+}
+--------------------------------------------------------------------------------
+
+(file
+  (nominal_type_def
+    (apply_type
+      (concrete_type))
+    (colon_equals)
+    (tags_type
+      (tag_type)
+      (tag_type)
+      (tag_type))
+    (nominal_methods
+      (value_declaration
+        (annotation_type_def
+          (annotation_pre_colon
+            (identifier))
+          (function_type
+            param: (apply_type
+              (concrete_type))
+            (arrow)
+            (apply_type
+              (concrete_type))))
+        (decl_left
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (anon_fun_expr
+            args: (argument_patterns
+              (identifier_pattern
+                (identifier)))
+            body: (expr_body
+              (const
+                (string)))))))))
+
+================================================================================
+modern_type_alias
+================================================================================
+Username :: Str
+Point :: { x: I64, y: I64 }
+--------------------------------------------------------------------------------
+
+(file
+  (opaque_type_def
+    (apply_type
+      (concrete_type))
+    (double_colon)
+    (apply_type
+      (concrete_type)))
+  (opaque_type_def
+    (apply_type
+      (concrete_type))
+    (double_colon)
+    (record_type
+      (record_field_type
+        (field_name)
+        (apply_type
+          (concrete_type)))
+      (record_field_type
+        (field_name)
+        (apply_type
+          (concrete_type))))))
+
+================================================================================
+modern_effectful_types
+================================================================================
+print! : Str => {}
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (function_type
+      param: (apply_type
+        (concrete_type))
+      (fat_arrow)
+      (record_type))))
+
+================================================================================
+modern_paren_generics
+================================================================================
+numbers : List(I64)
+--------------------------------------------------------------------------------
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (apply_type
+      (concrete_type)
+      type_args: (apply_type_arg
+        (apply_type
+          (concrete_type))))))
+
+================================================================================
+modern_block_body
+================================================================================
+compute = |x| {
+    doubled = x * 2
+    tripled = x * 3
+    doubled + tripled
+}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (body_expression
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (bin_op_expr
+                  part: (variable_expr
+                    (identifier))
+                  part: (operator)
+                  part: (const
+                    (int)))))
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (bin_op_expr
+                  part: (variable_expr
+                    (identifier))
+                  part: (operator)
+                  part: (const
+                    (int)))))
+            (bin_op_expr
+              part: (variable_expr
+                (identifier))
+              part: (operator)
+              part: (variable_expr
+                (identifier)))))))))
+
+================================================================================
+modern_match_with_payload
+================================================================================
+unwrap = |opt| match opt {
+    Some(x) => x
+    None => 0
+}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (match_expr
+            (match)
+            (variable_expr
+              (identifier))
+            branch: (match_branch
+              pattern: (tag_pattern
+                (tag
+                  (identifier))
+                args: (identifier_pattern
+                  (identifier)))
+              (fat_arrow)
+              expr: (expr_body
+                (variable_expr
+                  (identifier))))
+            branch: (match_branch
+              pattern: (tag_pattern
+                (tag
+                  (identifier)))
+              (fat_arrow)
+              expr: (expr_body
+                (const
+                  (int))))))))))
+
+================================================================================
+modern_record_update
+================================================================================
+update_name = |person| { ..person, name: "New" }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (record_expr
+            (spread_expr
+              (variable_expr
+                (identifier)))
+            (record_field_expr
+              (field_name)
+              (expr_body
+                (const
+                  (string))))))))))
+
+================================================================================
+modern_expect
+================================================================================
+expect 1 + 1 == 2
+--------------------------------------------------------------------------------
+
+(file
+  (expect
+    body: (expr_body
+      (bin_op_expr
+        part: (const
+          (int))
+        part: (operator)
+        part: (const
+          (int))
+        part: (operator)
+        part: (const
+          (int))))))

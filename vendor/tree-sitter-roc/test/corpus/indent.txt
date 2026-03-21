@@ -1,0 +1,60 @@
+===
+ident_module
+===
+
+a=variable
+a=Module.variable
+a=Module.SubModule.variable
+a=Module.SubModule.variable.field
+a=Module.SubModule.variable.function()
+
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (module)
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (module)
+        (module)
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (field_access_expr
+        target: (variable_expr
+          (module)
+          (module)
+          (identifier))
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (function_call_pnc_expr
+        caller: (field_access_expr
+          target: (variable_expr
+            (module)
+            (module)
+            (identifier))
+          (identifier))))))

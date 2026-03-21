@@ -1,0 +1,45 @@
+{
+  "name": "tree-sitter-roc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "grammar.js",
+  "types": "bindings/node",
+  "scripts": {
+    "test": "npm run ts:test",
+    "install": "node-gyp-build",
+    "prebuildify": "prebuildify --napi --strip",
+    "template-queries": "node tools/template-queries.js",
+    "ts:generate": "tree-sitter generate",
+    "ts:generate-check": "tree-sitter generate && git diff --exit-code src/parser.c src/grammar.json src/node-types.json",
+    "ts:test": "tree-sitter test",
+    "queries:generate": "node tools/template-queries.js --queries-dir queries",
+    "queries:check": "node tools/template-queries.js --queries-dir queries && git diff --exit-code queries-generated",
+    "ci": "npm run ts:generate-check && npm run ts:test && npm run queries:check"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-addon-api": "^7.1.0",
+    "node-gyp-build": "^4.8.0"
+  },
+  "peerDependencies": {
+    "tree-sitter": "^0.25.0"
+  },
+  "peerDependenciesMeta": {
+    "tree_sitter": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "0.25.10",
+    "prebuildify": "^6.0.0"
+  },
+  "files": [
+    "grammar.js",
+    "binding.gyp",
+    "prebuilds/**",
+    "bindings/node/*",
+    "queries/*",
+    "src/**"
+  ]
+}

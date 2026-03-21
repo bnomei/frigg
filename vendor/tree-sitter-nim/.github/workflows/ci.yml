@@ -1,0 +1,53 @@
+# Copyright 2022 Leorize <leorize+oss@disroot.org>
+#
+# SPDX-License-Identifier: MPL-2.0
+
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: Run test suite on ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v3
+      - uses: tree-sitter/parser-test-action@v2
+        with:
+          abi-version: 14
+          test-rust: true
+          test-node: true
+          # Stay on Node 22 until node-gyp works in CI again
+          node-version: lts/jod
+          test-python: true
+          test-go: true
+          # XXX: Swift pending https://github.com/swift-actions/setup-swift/issues/694
+          test-swift: false
+          test-parser: true
+          test-parser-cmd: |
+            set -eux
+
+            tree-sitter test
+            : "Test parsing samples"
+            tree-sitter parse -s -t -q 'samples/**/*.nim'
+            : "Test build WASM version"
+            if [ "$RUNNER_OS" = Linux ]; then
+              tree-sitter build --wasm
+            fi
+
+  success:
+    needs:
+      - tests
+    if: cancelled() || failure()
+    runs-on: ubuntu-latest
+    name: "All checks passed"
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        name: "Previous jobs failed"
+        run: |
+          echo "::error::One of the previous jobs failed"
+          exit 1

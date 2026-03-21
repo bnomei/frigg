@@ -1,0 +1,73 @@
+===
+tags_usage
+===
+b=Test
+a=Bool.True
+a= boolean_operators(Bool.True, Bool.False)
+
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (tag_expr
+        (tag
+          (identifier)))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (tag_expr
+        (tag
+          (module)
+          (identifier)))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (function_call_pnc_expr
+        caller: (variable_expr
+          (identifier))
+        args: (tag_expr
+          (tag
+            (module)
+            (identifier)))
+        args: (tag_expr
+          (tag
+            (module)
+            (identifier)))))))
+
+===
+tag_pattern
+===
+a=
+  match a {
+  Test(hi) => hi
+  }
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (match_expr
+        (match)
+        (variable_expr
+          (identifier))
+        branch: (match_branch
+          pattern: (tag_pattern
+            (tag
+              (identifier))
+            args: (identifier_pattern
+              (identifier)))
+          (fat_arrow)
+          expr: (expr_body
+            (variable_expr
+              (identifier))))))))

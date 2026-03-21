@@ -1,0 +1,283 @@
+================================================================================
+value_decl
+================================================================================
+x = a
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier)))))
+
+================================================================================
+value_decl_nested
+================================================================================
+x = a
+x =
+{
+	b=10
+	b
+    }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (value_declaration
+          (decl_left
+            (identifier_pattern
+              (identifier)))
+          body: (expr_body
+            (const
+              (int))))
+        (variable_expr
+          (identifier))))))
+
+================================================================================
+value_decl_typed
+================================================================================
+x :Int
+x = a
+x =
+  {
+  p:Int
+  p=10
+  p
+  }
+x =
+  {
+  p:Int
+  p=
+    10
+  p
+  }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (apply_type
+        (concrete_type)))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (value_declaration
+          (annotation_type_def
+            (annotation_pre_colon
+              (identifier))
+            (apply_type
+              (concrete_type)))
+          (decl_left
+            (identifier_pattern
+              (identifier)))
+          body: (expr_body
+            (const
+              (int))))
+        (variable_expr
+          (identifier)))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (value_declaration
+          (annotation_type_def
+            (annotation_pre_colon
+              (identifier))
+            (apply_type
+              (concrete_type)))
+          (decl_left
+            (identifier_pattern
+              (identifier)))
+          body: (expr_body
+            (const
+              (int))))
+        (variable_expr
+          (identifier))))))
+
+================================================================================
+value_record
+================================================================================
+
+{ result: commaResult, rest: nextBytes } = comma( beforeCommaOrBreak)
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (record_pattern
+        (record_field_pattern
+          (field_name)
+          (identifier_pattern
+            (identifier)))
+        (record_field_pattern
+          (field_name)
+          (identifier_pattern
+            (identifier)))))
+    body: (expr_body
+      (function_call_pnc_expr
+        caller: (variable_expr
+          (identifier))
+        args: (variable_expr
+          (identifier))))))
+
+================================================================================
+value_field
+================================================================================
+a= Bool.field
+a= {a}.field
+a= ({a}).field
+a= a.field.b.c.d
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (module)
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (field_access_expr
+        target: (body_expression
+          (variable_expr
+            (identifier)))
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (field_access_expr
+        target: (parenthesized_expr
+          expression: (expr_body
+            (body_expression
+              (variable_expr
+                (identifier)))))
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (field_access_expr
+        target: (field_access_expr
+          target: (field_access_expr
+            target: (field_access_expr
+              target: (variable_expr
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier))
+        (identifier)))))
+
+================================================================================
+value_ignore
+================================================================================
+_= a
+_a= a
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (wildcard_pattern))
+    body: (expr_body
+      (variable_expr
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier)))))
+
+================================================================================
+value_var
+================================================================================
+a:Str
+var a= ""
+--------------------------------------------------------------------------------
+
+(file
+  (var_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (apply_type
+        (concrete_type)))
+    name: (identifier)
+    body: (expr_body
+      (const
+        (string)))))
+
+================================================================================
+value_var_$
+================================================================================
+$a:Str
+var $a= ""
+--------------------------------------------------------------------------------
+
+(file
+  (var_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (apply_type
+        (concrete_type)))
+    name: (identifier)
+    body: (expr_body
+      (const
+        (string)))))
+
+====
+value_tuple
+====
+tup = ("Roc", 1)
+----
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (tuple_expr
+        expr: (const
+          (string))
+        expr: (const
+          (int))))))

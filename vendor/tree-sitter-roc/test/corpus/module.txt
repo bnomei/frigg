@@ -1,0 +1,66 @@
+===
+module_long
+===
+a=Mod.Sub.func
+a=Mod.Sub.func(a)
+a=Mod.Sub.Tag(a)
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (module)
+        (module)
+        (identifier))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (function_call_pnc_expr
+        caller: (variable_expr
+          (module)
+          (module)
+          (identifier))
+        args: (variable_expr
+          (identifier)))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (function_call_pnc_expr
+        caller: (tag_expr
+          (tag
+            (module)
+            (module)
+            (identifier)))
+        args: (variable_expr
+          (identifier))))))
+
+===
+module_long_type
+===
+a:Mod.List(a)
+a:Mod.Sub.List(a)
+---
+
+(file
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (apply_type
+      (concrete_type)
+      type_args: (apply_type_arg
+        (bound_variable))))
+  (annotation_type_def
+    (annotation_pre_colon
+      (identifier))
+    (apply_type
+      (concrete_type)
+      type_args: (apply_type_arg
+        (bound_variable)))))

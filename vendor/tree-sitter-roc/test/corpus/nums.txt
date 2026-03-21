@@ -1,0 +1,506 @@
+===
+Dot-suffix unsigned integers
+===
+{
+  u8:   123.U8,
+  u16:  123.U16,
+  u32:  123.U32,
+  u64:  123.U64,
+  u128: 123.U128,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint_dot)))))))
+
+===
+Dot-suffix signed integers
+===
+{
+  i8:   123.I8,
+  i16:  123.I16,
+  i32:  123.I32,
+  i64:  123.I64,
+  i128: 123.I128,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint_dot)))))))
+
+===
+Dot-suffix decimal
+===
+{
+  dec:  123.Dec,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (decimal_dot)))))))
+
+===
+Dot-suffix negative numbers
+===
+{
+  u8Neg:   -123.U8,
+  u16Neg:  -123.U16,
+  u32Neg:  -123.U32,
+  u64Neg:  -123.U64,
+  u128Neg: -123.U128,
+  i8Neg:   -123.I8,
+  i16Neg:  -123.I16,
+  i32Neg:  -123.I32,
+  i64Neg:  -123.I64,
+  i128Neg: -123.I128,
+  decNeg:  -123.Dec,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (uint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (uint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (uint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (uint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (uint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (iint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (iint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (iint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (iint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (iint_dot)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (prefixed_expression
+            (const
+              (decimal_dot))))))))
+
+===
+Dot-suffix binary numbers
+===
+{
+  u8Bin:   0b101.U8,
+  u16Bin:  0b101.U16,
+  u32Bin:  0b101.U32,
+  u64Bin:  0b101.U64,
+  u128Bin: 0b101.U128,
+  i8Bin:   0b101.I8,
+  i16Bin:  0b101.I16,
+  i32Bin:  0b101.I32,
+  i64Bin:  0b101.I64,
+  i128Bin: 0b101.I128,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot)))))))
+
+===
+Dot-suffix hex numbers
+===
+{
+  u8Hex:   0xFF.U8,
+  i32Hex:  0xDEADBEEF.I32,
+  u64Hex:  0x123ABC.U64,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (xint_dot)))))))
+
+===
+Old immediate suffix format still works
+===
+{
+  oldU8: 123u8,
+  oldI32: 456i32,
+  oldDec: 789dec,
+}
+---
+
+(file
+  (expr_body
+    (record_expr
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (uint))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (iint))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (const
+            (decimal)))))))
+
+===
+nums_literals
+===
+
+number_literals : {
+	usage_based: I64,
+	explicit_u8: U8,
+	explicit_i8: I8,
+	explicit_u16: U16,
+	explicit_i16: I16,
+	explicit_u32: U32,
+	explicit_i32: I32,
+	explicit_u64: U64,
+	explicit_i64: I64,
+	explicit_u128: U128,
+	explicit_i128: I128,
+	# Note: F32, F64, and Dec literals use type inference which doesn't work with Str.inspect
+	# So we use simple Dec literals here
+	explicit_dec: Dec,
+	hex: I64,
+	octal: I64,
+	binary: I64,
+}
+number_literals = {
+	usage_based: 5,
+	explicit_u8: 5,
+	explicit_i8: 5,
+	explicit_u16: 5,
+	explicit_i16: 5,
+	explicit_u32: 5,
+	explicit_i32: 5,
+	explicit_u64: 5,
+	explicit_i64: 5,
+	explicit_u128: 5,
+	explicit_i128: 5,
+	explicit_dec: 5.0,
+	hex: 0x5,
+	octal: 0o5,
+	binary: 0b0101,
+}
+---
+
+(file
+  (value_declaration
+    (annotation_type_def
+      (annotation_pre_colon
+        (identifier))
+      (record_type
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (line_comment)
+        (line_comment)
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))
+        (record_field_type
+          (field_name)
+          (apply_type
+            (concrete_type)))))
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (record_expr
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (float))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (xint))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (xint))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (xint))))))))

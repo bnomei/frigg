@@ -1,0 +1,77 @@
+{
+  "highlights": {
+    "comment.block.documentation": "comment.documentation",
+    "comment.line": "comment",
+    "constant.builtin.boolean": "boolean",
+    "constant.character": "character",
+    "constant.character.escape": "",
+    "constant.numeric.float": "number.float",
+    "constant.numeric.integer": "number",
+    "constructor": "constructor",
+    "function": "function",
+    "function.builtin": "keyword.debug",
+    "function.method": "function.method.call",
+    "ignoreme.module": "module",
+    "keyword.control": "keyword",
+    "keyword.control.conditional": "keyword.conditional",
+    "keyword.control.import": "keyword.import",
+    "keyword.control.return": "",
+    "keyword.operator": "",
+    "module": "module",
+    "namespace": "module",
+    "namespace.roc-special.builtin": "module",
+    "operator": "operator",
+    "punctuation.bracket": "punctuation.bracket",
+    "punctuation.bracket.roc-special.in-typedef": "punctuation.bracket",
+    "punctuation.delimiter": "punctuation.delimiter",
+    "punctuation.delimiter.roc-special.in-typedef": "punctuation.delimiter",
+    "punctuation.special": "",
+    "special.roc-special.exposed": "",
+    "special.roc-special.package": "",
+    "special.roc-special.provided": "",
+    "string": "string",
+    "string.special.url": "string",
+    "type": "type",
+    "type.builtin": "type",
+    "type.definition": "type",
+    "type.enum.variant": "constructor",
+    "type.parameter": "type",
+    "type.roc-special.inferred": "type",
+    "variable": "variable",
+    "variable.other.member": "variable.member",
+    "variable.other.member.roc-special.in-typedef": "variable.member",
+    "variable.parameter": "variable.parameter"
+  },
+  "indents": {
+    "indent": "indent.begin"
+  },
+  "injections": {
+    "injection.content": "injection.content",
+    "injection.language": "injection.language"
+  },
+  "locals": {
+    "local.definition.variable.parameter": "local.definition",
+    "local.reference": "local.reference",
+    "local.scope": "local.scope"
+  },
+  "textobjects": {
+    "class.around": "class.outer",
+    "class.inside": "class.inner",
+    "comment.around": "comment.outer",
+    "function.around": "function.outer",
+    "function.inside": "function.inner",
+    "parameter.around": "parameter.outer",
+    "parameter.inside": "parameter.inner",
+    "test.around": "",
+    "test.inside": ""
+  },
+  "tags": {
+    "definition.function": "",
+    "name": "",
+    "reference.call": ""
+  },
+  "rainbows": {
+    "rainbow.scope": "rainbow.scope",
+    "rainbow.bracket": "rainbow.bracket"
+  }
+}

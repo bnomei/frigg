@@ -1,0 +1,177 @@
+================================================================================
+pattern_tag
+================================================================================
+bfs = |a, b, Tag(c)| c
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier))
+          (tag_pattern
+            (tag
+              (identifier))
+            args: (identifier_pattern
+              (identifier))))
+        body: (expr_body
+          (variable_expr
+            (identifier)))))))
+
+================================================================================
+pattern_range
+================================================================================
+bfs = |a, b, [head, .. as tail]| tail
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier))
+          (list_pattern
+            (identifier_pattern
+              (identifier))
+            (spread_pattern
+              (identifier))))
+        body: (expr_body
+          (variable_expr
+            (identifier)))))))
+
+================================================================================
+pattern_range_many
+================================================================================
+
+record = |bytes, dict| match bytes {
+    ['}'] => decOk((dict), rest)
+}
+
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier))
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (match_expr
+            (match)
+            (variable_expr
+              (identifier))
+            branch: (match_branch
+              pattern: (list_pattern
+                (const
+                  (char)))
+              (fat_arrow)
+              expr: (expr_body
+                (function_call_pnc_expr
+                  caller: (variable_expr
+                    (identifier))
+                  args: (parenthesized_expr
+                    expression: (expr_body
+                      (variable_expr
+                        (identifier))))
+                  args: (variable_expr
+                    (identifier)))))))))))
+
+====
+pattern_destructuring
+====
+destructuring = || {
+    tup = ("Roc", 1)
+    (str, num) = tup
+
+    rec = { x: 1, y: str } # TODO implement tuple access with `.index` ?
+    { x, y } = rec
+
+    (str, num, x, y)
+}
+
+----
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        body: (expr_body
+          (body_expression
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (tuple_expr
+                  expr: (const
+                    (string))
+                  expr: (const
+                    (int)))))
+            (value_declaration
+              (decl_left
+                (tuple_pattern
+                  (identifier_pattern
+                    (identifier))
+                  (identifier_pattern
+                    (identifier))))
+              body: (expr_body
+                (variable_expr
+                  (identifier))))
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (record_expr
+                  (record_field_expr
+                    (field_name)
+                    (expr_body
+                      (const
+                        (int))))
+                  (record_field_expr
+                    (field_name)
+                    (expr_body
+                      (variable_expr
+                        (identifier)))))))
+            (line_comment)
+            (value_declaration
+              (decl_left
+                (record_pattern
+                  (record_field_pattern
+                    (field_name))
+                  (record_field_pattern
+                    (field_name))))
+              body: (expr_body
+                (variable_expr
+                  (identifier))))
+            (tuple_expr
+              expr: (variable_expr
+                (identifier))
+              expr: (variable_expr
+                (identifier))
+              expr: (variable_expr
+                (identifier))
+              expr: (variable_expr
+                (identifier)))))))))

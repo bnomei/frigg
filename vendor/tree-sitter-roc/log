@@ -1,0 +1,317 @@
+new_parse
+process version:0, version_count:1, state:1, row:0, col:0
+lex_internal state:111, row:0, column:0
+  consume character:'f'
+  consume character:'o'
+  consume character:'o'
+  consume character:'f'
+lexed_lookahead sym:_lower_identifier, size:3
+shift state:212
+process version:0, version_count:1, state:212, row:0, col:3
+lex_internal state:109, row:0, column:3
+  skip character:' '
+  consume character:'='
+lexed_lookahead sym:=, size:2
+reduce sym:identifier, child_count:1
+reduce sym:identifier_pattern, child_count:1
+reduce sym:decl_left, child_count:1
+shift state:92
+process version:0, version_count:1, state:92, row:0, col:5
+lex_internal state:111, row:0, column:5
+  skip character:' '
+  consume character:'|'
+lexed_lookahead sym:|, size:2
+shift state:591
+process version:0, version_count:1, state:591, row:0, col:7
+lex_internal state:23, row:0, column:7
+  consume character:'x'
+lexed_lookahead sym:_lower_identifier, size:1
+shift state:1296
+process version:0, version_count:1, state:1296, row:0, col:8
+lex_internal state:37, row:0, column:8
+  consume character:'|'
+lexed_lookahead sym:|, size:1
+reduce sym:identifier, child_count:1
+reduce sym:identifier_pattern, child_count:1
+reduce sym:argument_patterns, child_count:1
+shift state:104
+process version:0, version_count:1, state:104, row:0, col:9
+lex_internal state:111, row:0, column:9
+  skip character:' '
+  consume character:'m'
+  consume character:'a'
+  consume character:'t'
+  consume character:'c'
+  consume character:'h'
+  consume character:'m'
+  consume character:'a'
+  consume character:'t'
+  consume character:'c'
+  consume character:'h'
+lexed_lookahead sym:match, size:6
+shift state:194
+process version:0, version_count:1, state:194, row:0, col:15
+lex_internal state:111, row:0, column:15
+  skip character:' '
+  consume character:'{'
+lexed_lookahead sym:{, size:2
+shift state:40
+process version:0, version_count:1, state:40, row:0, col:17
+lex_external state:3, row:0, column:17
+lex_internal state:111, row:0, column:17
+  consume character:'a'
+  consume character:'a'
+lexed_lookahead sym:_lower_identifier, size:1
+shift state:234
+process version:0, version_count:1, state:234, row:0, col:18
+lex_external state:3, row:0, column:18
+lex_internal state:24, row:0, column:18
+  consume character:'='
+lexed_lookahead sym:=, size:1
+reduce sym:identifier, child_count:1
+reduce sym:identifier_pattern, child_count:1
+reduce sym:decl_left, child_count:1
+shift state:114
+process version:0, version_count:1, state:114, row:0, col:19
+lex_internal state:111, row:0, column:19
+  consume character:'R'
+  consume character:'e'
+  consume character:'d'
+lexed_lookahead sym:_upper_identifier, size:3
+shift state:324
+process version:0, version_count:1, state:324, row:0, col:22
+lex_external state:3, row:0, column:22
+  skip character:10
+lex_internal state:111, row:0, column:22
+  skip character:10
+  consume character:'a'
+  consume character:'a'
+lexed_lookahead sym:_lower_identifier, size:2
+reduce sym:tag_expr, child_count:1
+reduce sym:_expr_inner, child_count:1
+reduce sym:expr_body, child_count:1
+reduce sym:value_declaration, child_count:3
+shift state:316
+process version:0, version_count:1, state:316, row:1, col:1
+lex_external state:3, row:1, column:1
+  skip character:10
+lex_internal state:25, row:1, column:1
+  skip character:10
+  consume character:'}'
+lexed_lookahead sym:}, size:2
+reduce sym:identifier, child_count:1
+reduce sym:variable_expr, child_count:1
+reduce sym:_atom_expr, child_count:1
+reduce sym:_expr_inner, child_count:1
+reduce sym:body_expression_repeat1, child_count:2
+shift state:268
+process version:0, version_count:1, state:268, row:2, col:1
+lex_internal state:112, row:2, column:1
+  skip character:' '
+  consume character:'{'
+lexed_lookahead sym:{, size:2
+reduce sym:body_expression, child_count:3
+reduce sym:_expr_inner, child_count:1
+reduce sym:_match_start, child_count:2
+shift state:537
+process version:0, version_count:1, state:537, row:2, col:3
+lex_internal state:23, row:2, column:3
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  consume character:'R'
+  consume character:'e'
+  consume character:'d'
+lexed_lookahead sym:_upper_identifier, size:8
+shift state:439
+process version:0, version_count:1, state:439, row:3, col:7
+lex_internal state:23, row:3, column:7
+  skip character:' '
+  consume character:'='
+  consume character:'>'
+lexed_lookahead sym:=>, size:3
+reduce sym:tag_pattern, child_count:1
+shift state:720
+process version:0, version_count:1, state:720, row:3, col:10
+lex_internal state:111, row:3, column:10
+  skip character:' '
+  consume character:'{'
+lexed_lookahead sym:{, size:2
+reduce sym:fat_arrow, child_count:1
+shift state:39
+process version:0, version_count:1, state:39, row:3, col:12
+lex_external state:3, row:3, column:12
+lex_internal state:111, row:3, column:12
+  consume character:'1'
+lexed_lookahead sym:int, size:1
+shift state:393
+process version:0, version_count:1, state:393, row:3, col:13
+lex_external state:3, row:3, column:13
+lex_internal state:111, row:3, column:13
+  consume character:'}'
+lexed_lookahead sym:}, size:1
+reduce sym:const, child_count:1
+reduce sym:_expr_inner, child_count:1
+shift state:505
+process version:0, version_count:1, state:505, row:3, col:14
+lex_external state:3, row:3, column:14
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+lex_internal state:23, row:3, column:14
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  consume character:'_'
+lexed_lookahead sym:_, size:6
+reduce sym:body_expression, child_count:3
+reduce sym:_expr_body_actual, child_count:1
+reduce sym:_atom_expr, child_count:1
+reduce sym:_expr_inner, child_count:1
+process version:1, version_count:2, state:519, row:3, col:14
+reduce sym:expr_body, child_count:1
+select_earlier symbol:expr_body, over_symbol:expr_body
+reduce sym:match_branch, child_count:3
+shift state:1428
+process version:0, version_count:1, state:1428, row:4, col:5
+lex_internal state:23, row:4, column:5
+  skip character:' '
+  consume character:'='
+  consume character:'>'
+lexed_lookahead sym:=>, size:3
+reduce sym:_pattern, child_count:1
+shift state:720
+process version:0, version_count:1, state:720, row:4, col:8
+lex_internal state:111, row:4, column:8
+  skip character:' '
+  consume character:'{'
+lexed_lookahead sym:{, size:2
+reduce sym:fat_arrow, child_count:1
+shift state:39
+process version:0, version_count:1, state:39, row:4, col:10
+lex_external state:3, row:4, column:10
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+lex_internal state:111, row:4, column:10
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  consume character:'a'
+  consume character:'a'
+lexed_lookahead sym:_lower_identifier, size:8
+shift state:234
+process version:0, version_count:1, state:234, row:5, col:7
+lex_external state:3, row:5, column:7
+lex_internal state:24, row:5, column:7
+  consume character:'='
+lexed_lookahead sym:=, size:1
+reduce sym:identifier, child_count:1
+reduce sym:identifier_pattern, child_count:1
+reduce sym:decl_left, child_count:1
+shift state:114
+process version:0, version_count:1, state:114, row:5, col:8
+lex_internal state:111, row:5, column:8
+  consume character:'1'
+  consume character:'0'
+lexed_lookahead sym:int, size:2
+shift state:393
+process version:0, version_count:1, state:393, row:5, col:10
+lex_external state:3, row:5, column:10
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+lex_internal state:111, row:5, column:10
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  consume character:'a'
+  consume character:'a'
+lexed_lookahead sym:_lower_identifier, size:8
+reduce sym:const, child_count:1
+reduce sym:_expr_inner, child_count:1
+reduce sym:expr_body, child_count:1
+reduce sym:value_declaration, child_count:3
+shift state:316
+process version:0, version_count:1, state:316, row:6, col:7
+lex_external state:3, row:6, column:7
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+lex_internal state:25, row:6, column:7
+  skip character:10
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  skip character:' '
+  consume character:'}'
+lexed_lookahead sym:}, size:6
+reduce sym:identifier, child_count:1
+reduce sym:variable_expr, child_count:1
+reduce sym:_atom_expr, child_count:1
+reduce sym:_expr_inner, child_count:1
+reduce sym:body_expression_repeat1, child_count:2
+shift state:505
+process version:0, version_count:1, state:505, row:7, col:5
+lex_external state:3, row:7, column:5
+  skip character:10
+lex_internal state:23, row:7, column:5
+  skip character:10
+  consume character:'}'
+lexed_lookahead sym:}, size:2
+reduce sym:body_expression, child_count:3
+reduce sym:_expr_body_actual, child_count:1
+reduce sym:_atom_expr, child_count:1
+reduce sym:_expr_inner, child_count:1
+process version:1, version_count:2, state:519, row:7, col:5
+reduce sym:expr_body, child_count:1
+select_earlier symbol:expr_body, over_symbol:expr_body
+reduce sym:match_branch, child_count:3
+reduce sym:_more_match_branches, child_count:1
+shift state:312
+process version:0, version_count:1, state:312, row:8, col:1
+lex_internal state:112, row:8, column:1
+lexed_lookahead sym:end, size:0
+reduce sym:match_expr, child_count:5
+reduce sym:_expr_inner, child_count:1
+reduce sym:expr_body, child_count:1
+reduce sym:anon_fun_expr, child_count:4
+reduce sym:_expr_inner, child_count:1
+reduce sym:expr_body, child_count:1
+reduce sym:value_declaration, child_count:3
+reduce sym:file, child_count:1
+accept
+done
+  match:
+     20. ✓ [32mmatch_complex[0m
+
+Total parses: 1; successful parses: 1; failed parses: 0; success percentage: 100.00%; average speed: 30 bytes/ms
+
+Error in query file "highlights.scm"
+
+Caused by:
+    Query error at 110:4. Invalid node type dbg

@@ -1,0 +1,162 @@
+================================================================================
+record_basic
+================================================================================
+a = {b:10,c:inp,d}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (record_expr
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (variable_expr
+              (identifier))))
+        (record_field_expr
+          (field_name))))))
+
+================================================================================
+record_expr
+================================================================================
+a =
+  {
+    b:10,
+    c:
+      if a
+        d
+      else
+        v
+  }
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (record_expr
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (const
+              (int))))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (if_expr
+              guard: (variable_expr
+                (identifier))
+              (then
+                then: (variable_expr
+                  (identifier)))
+              (else
+                (variable_expr
+                  (identifier))))))))))
+
+================================================================================
+record_update
+================================================================================
+main={ ..a ,b: c }
+main=
+  a {..a, a: B(a), c:a( b, (c+d))}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (record_expr
+        (spread_expr
+          (variable_expr
+            (identifier)))
+        (record_field_expr
+          (field_name)
+          (expr_body
+            (variable_expr
+              (identifier)))))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (variable_expr
+        (identifier))))
+  (expr_body
+    (record_expr
+      (spread_expr
+        (variable_expr
+          (identifier)))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (function_call_pnc_expr
+            caller: (tag_expr
+              (tag
+                (identifier)))
+            args: (variable_expr
+              (identifier)))))
+      (record_field_expr
+        (field_name)
+        (expr_body
+          (function_call_pnc_expr
+            caller: (variable_expr
+              (identifier))
+            args: (variable_expr
+              (identifier))
+            args: (parenthesized_expr
+              expression: (expr_body
+                (bin_op_expr
+                  part: (variable_expr
+                    (identifier))
+                  part: (operator)
+                  part: (variable_expr
+                    (identifier)))))))))))
+
+================================================================================
+record pattern
+================================================================================
+main= match a {
+    Some({ state: InCond(body, cond) }) => b
+}
+--------------------------------------------------------------------------------
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (match_expr
+        (match)
+        (variable_expr
+          (identifier))
+        branch: (match_branch
+          pattern: (tag_pattern
+            (tag
+              (identifier))
+            args: (record_pattern
+              (record_field_pattern
+                (field_name)
+                (tag_pattern
+                  (tag
+                    (identifier))
+                  args: (identifier_pattern
+                    (identifier))
+                  args: (identifier_pattern
+                    (identifier))))))
+          (fat_arrow)
+          expr: (expr_body
+            (variable_expr
+              (identifier))))))))

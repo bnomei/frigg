@@ -1,0 +1,41 @@
+===
+ops_pipe
+===
+a=
+	b
+	->test()
+	->test2()
+a=
+	b
+	->test()
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (bin_op_expr
+        part: (variable_expr
+          (identifier))
+        part: (operator)
+        part: (function_call_pnc_expr
+          caller: (variable_expr
+            (identifier)))
+        part: (operator)
+        part: (function_call_pnc_expr
+          caller: (variable_expr
+            (identifier))))))
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (bin_op_expr
+        part: (variable_expr
+          (identifier))
+        part: (operator)
+        part: (function_call_pnc_expr
+          caller: (variable_expr
+            (identifier)))))))

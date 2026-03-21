@@ -1,0 +1,182 @@
+===
+structures_if
+===
+a=
+	if a
+	b else if c
+	d
+	else d
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (if_expr
+        guard: (variable_expr
+          (identifier))
+        (then
+          then: (variable_expr
+            (identifier)))
+        (else_if
+          guard: (variable_expr
+            (identifier))
+          (then
+            then: (variable_expr
+              (identifier))))
+        (else
+          (variable_expr
+            (identifier)))))))
+
+===
+structures_for
+===
+a={
+	var $sum = 0
+	for num in num_list {
+		$sum = $sum + num
+	}
+	for num in num_list
+		thing!(num)
+}
+
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (body_expression
+        (var_declaration
+          name: (identifier)
+          body: (expr_body
+            (const
+              (int))))
+        (for_expr
+          pattern: (identifier_pattern
+            (identifier))
+          iterable: (variable_expr
+            (identifier))
+          body: (body_expression
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (bin_op_expr
+                  part: (variable_expr
+                    (identifier))
+                  part: (operator)
+                  part: (variable_expr
+                    (identifier)))))))
+        (for_expr
+          pattern: (identifier_pattern
+            (identifier))
+          iterable: (variable_expr
+            (identifier))
+          body: (function_call_pnc_expr
+            caller: (variable_expr
+              (identifier))
+            args: (variable_expr
+              (identifier))))))))
+
+===
+structures_todo
+===
+implement_me_later = |_str| ...
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (todo_expr))))))
+
+===
+structures_early_return
+===
+early_return = |arg| {
+	first =
+		if !arg {
+			return 99
+		} else {
+			"continue"
+		}
+    other
+}
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (anon_fun_expr
+        args: (argument_patterns
+          (identifier_pattern
+            (identifier)))
+        body: (expr_body
+          (body_expression
+            (value_declaration
+              (decl_left
+                (identifier_pattern
+                  (identifier)))
+              body: (expr_body
+                (if_expr
+                  guard: (prefixed_expression
+                    (variable_expr
+                      (identifier)))
+                  (then
+                    then: (body_expression
+                      (early_return_expr
+                        body: (expr_body
+                          (const
+                            (int))))))
+                  (else
+                    (body_expression
+                      (const
+                        (string)))))))
+            (variable_expr
+              (identifier))))))))
+
+===
+structures_if odd
+===
+early_return =
+  if if a b else c d else e
+---
+
+(file
+  (value_declaration
+    (decl_left
+      (identifier_pattern
+        (identifier)))
+    body: (expr_body
+      (if_expr
+        guard: (if_expr
+          guard: (variable_expr
+            (identifier))
+          (then
+            then: (variable_expr
+              (identifier)))
+          (else
+            (variable_expr
+              (identifier))))
+        (then
+          then: (variable_expr
+            (identifier)))
+        (else
+          (variable_expr
+            (identifier)))))))
