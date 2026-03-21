@@ -175,7 +175,7 @@ Frigg does not modify your source tree during plain session adoption. `workspace
 
 ## Showcases
 
-The [showcases/](/Users/bnomei/Sites/frigg/showcases/) directory contains 52 public example catalogs for real repositories. Each JSON file records realistic questions and the kinds of paths a good Frigg answer should surface.
+The [showcases/](https://github.com/bnomei/frigg/tree/main/showcases) directory contains 52 public example catalogs for real repositories. Each JSON file records realistic questions and the kinds of paths a good Frigg answer should surface.
 
 ## Use Cases
 
