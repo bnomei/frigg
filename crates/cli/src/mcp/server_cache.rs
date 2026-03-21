@@ -23,7 +23,7 @@ use crate::mcp::explorer::{
 use crate::mcp::types::{
     ExploreAnchor, ExploreCursor, ExploreLineWindow, FindDeclarationsResponse,
     GoToDefinitionResponse, RepositorySummary, SearchHybridResponse, SearchSymbolResponse,
-    SearchTextResponse, WorkspacePreciseGenerationSummary,
+    SearchTextResponse, WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -371,6 +371,33 @@ pub(crate) struct CachedWorkspacePreciseGeneration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RepositoryResponseFreshnessCacheKey {
+    pub(crate) scoped_repository_ids: Vec<String>,
+    pub(crate) mode: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CachedRepositoryResponseFreshness {
+    pub(crate) freshness: RepositoryResponseCacheFreshness,
+    pub(crate) generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PreciseGeneratorProbeCacheKey {
+    pub(crate) repository_id: String,
+    pub(crate) generator_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CachedPreciseGeneratorProbe {
+    pub(crate) state: WorkspacePreciseGeneratorState,
+    pub(crate) tool: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) generated_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchTextResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
     pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
@@ -491,6 +518,7 @@ pub(crate) struct HeuristicReferenceCacheKey {
 #[derive(Debug, Clone)]
 pub(crate) struct CachedHeuristicReferences {
     pub(crate) references: Arc<Vec<HeuristicReference>>,
+    pub(crate) source_files_discovered: usize,
     pub(crate) source_read_diagnostics_count: usize,
     pub(crate) source_files_loaded: usize,
     pub(crate) source_bytes_loaded: u64,

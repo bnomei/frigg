@@ -3,6 +3,67 @@ use std::process::{Command, Stdio};
 use std::thread;
 
 impl FriggMcpServer {
+    pub(in crate::mcp::server) fn invalidate_repository_precise_generator_probe_cache(
+        &self,
+        repository_id: &str,
+    ) {
+        self.cache_state
+            .precise_generator_probe_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| key.repository_id != repository_id);
+    }
+
+    fn cached_precise_generator_probe(
+        &self,
+        repository_id: &str,
+        generator_id: &str,
+    ) -> Option<CachedPreciseGeneratorProbe> {
+        let cache = self
+            .cache_state
+            .precise_generator_probe_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get(&PreciseGeneratorProbeCacheKey {
+            repository_id: repository_id.to_owned(),
+            generator_id: generator_id.to_owned(),
+        })?;
+        (entry.generated_at.elapsed() <= Self::PRECISE_GENERATOR_PROBE_CACHE_TTL)
+            .then(|| entry.clone())
+    }
+
+    fn cache_precise_generator_probe(
+        &self,
+        repository_id: &str,
+        generator_id: &str,
+        state: WorkspacePreciseGeneratorState,
+        tool: Option<String>,
+        version: Option<String>,
+        reason: Option<String>,
+    ) {
+        let mut cache = self
+            .cache_state
+            .precise_generator_probe_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            PreciseGeneratorProbeCacheKey {
+                repository_id: repository_id.to_owned(),
+                generator_id: generator_id.to_owned(),
+            },
+            CachedPreciseGeneratorProbe {
+                state,
+                tool,
+                version,
+                reason,
+                generated_at: Instant::now(),
+            },
+        );
+        while cache.len() > Self::PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
     pub(in crate::mcp::server) fn concise_precise_failure_summary(
         tool: Option<&str>,
         failure_class: Option<WorkspacePreciseFailureClass>,
@@ -180,30 +241,45 @@ impl FriggMcpServer {
                         reason: Some("disabled_by_workspace_precise_config".to_owned()),
                     };
                 }
-                let (state, resolved_tool, version, reason) =
-                    match Self::probe_precise_generator_tool(&workspace.root, &spec) {
-                        Ok((tool, version)) => (
-                            WorkspacePreciseGeneratorState::Available,
-                            Some(tool.display),
-                            Some(version),
-                            None,
-                        ),
-                        Err(super::precise_graph::PreciseToolProbeError::MissingTool) => (
-                            WorkspacePreciseGeneratorState::MissingTool,
-                            None,
-                            None,
-                            Some(format!(
-                                "{} is not installed or not on PATH",
-                                spec.tool_name
-                            )),
-                        ),
-                        Err(super::precise_graph::PreciseToolProbeError::Failed(error)) => (
-                            WorkspacePreciseGeneratorState::Error,
-                            None,
-                            None,
-                            Some(error),
-                        ),
-                    };
+                let cached_probe = self
+                    .cached_precise_generator_probe(&workspace.repository_id, spec.generator_id);
+                let (state, resolved_tool, version, reason) = if let Some(cached) = cached_probe {
+                    (cached.state, cached.tool, cached.version, cached.reason)
+                } else {
+                    let (state, resolved_tool, version, reason) =
+                        match Self::probe_precise_generator_tool(&workspace.root, &spec) {
+                            Ok((tool, version)) => (
+                                WorkspacePreciseGeneratorState::Available,
+                                Some(tool.display),
+                                Some(version),
+                                None,
+                            ),
+                            Err(super::precise_graph::PreciseToolProbeError::MissingTool) => (
+                                WorkspacePreciseGeneratorState::MissingTool,
+                                None,
+                                None,
+                                Some(format!(
+                                    "{} is not installed or not on PATH",
+                                    spec.tool_name
+                                )),
+                            ),
+                            Err(super::precise_graph::PreciseToolProbeError::Failed(error)) => (
+                                WorkspacePreciseGeneratorState::Error,
+                                None,
+                                None,
+                                Some(error),
+                            ),
+                        };
+                    self.cache_precise_generator_probe(
+                        &workspace.repository_id,
+                        spec.generator_id,
+                        state,
+                        resolved_tool.clone(),
+                        version.clone(),
+                        reason.clone(),
+                    );
+                    (state, resolved_tool, version, reason)
+                };
                 WorkspacePreciseGeneratorSummary {
                     state,
                     language: Some(Self::precise_generator_language_label(&spec).to_owned()),

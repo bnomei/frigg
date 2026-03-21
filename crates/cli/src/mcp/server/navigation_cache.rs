@@ -262,6 +262,7 @@ impl FriggMcpServer {
         &self,
         cache_key: HeuristicReferenceCacheKey,
         references: Vec<HeuristicReference>,
+        source_files_discovered: usize,
         source_read_diagnostics_count: usize,
         source_files_loaded: usize,
         source_bytes_loaded: u64,
@@ -276,6 +277,7 @@ impl FriggMcpServer {
                 cache_key,
                 CachedHeuristicReferences {
                     references: Arc::new(references),
+                    source_files_discovered,
                     source_read_diagnostics_count,
                     source_files_loaded,
                     source_bytes_loaded,

@@ -75,14 +75,16 @@ use crate::mcp::guidance::{
 use crate::mcp::provenance_cache::{ProvenancePersistenceStage, ProvenanceStorageCacheKey};
 use crate::mcp::server_cache::{
     CachedFindDeclarationsResponse, CachedGoToDefinitionResponse, CachedHeuristicReferences,
-    CachedRepositorySummary, CachedSearchHybridResponse, CachedSearchSymbolResponse,
-    CachedSearchTextResponse, CachedWorkspacePreciseGeneration, FileContentSnapshot,
-    FileContentWindowCache, FileContentWindowCacheKey, FindDeclarationsResponseCacheKey,
-    GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope,
-    RepositoryResponseCacheFreshness, RepositoryResponseCacheFreshnessMode, RuntimeCacheBudget,
-    RuntimeCacheEvent, RuntimeCacheFamily, RuntimeCacheRegistry, RuntimeCacheTelemetry,
-    SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey, SearchTextResponseCacheKey,
-    WorkspaceSemanticRefreshPlan, response_cache_scopes_include_repository,
+    CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness, CachedRepositorySummary,
+    CachedSearchHybridResponse, CachedSearchSymbolResponse, CachedSearchTextResponse,
+    CachedWorkspacePreciseGeneration, FileContentSnapshot, FileContentWindowCache,
+    FileContentWindowCacheKey, FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey,
+    HeuristicReferenceCacheKey, PreciseGeneratorProbeCacheKey, RepositoryFreshnessCacheScope,
+    RepositoryResponseCacheFreshness, RepositoryResponseCacheFreshnessMode,
+    RepositoryResponseFreshnessCacheKey, RuntimeCacheBudget, RuntimeCacheEvent, RuntimeCacheFamily,
+    RuntimeCacheRegistry, RuntimeCacheTelemetry, SearchHybridResponseCacheKey,
+    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
+    response_cache_scopes_include_repository,
 };
 use crate::mcp::server_state::{
     CachedPreciseGraph, DeterministicSignatureHasher, ExploreExecution, FindReferencesExecution,
@@ -333,6 +335,11 @@ struct FriggMcpCacheState {
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
     provenance_storage_cache: Arc<RwLock<BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>>>,
+    repository_response_freshness_cache: Arc<
+        RwLock<BTreeMap<RepositoryResponseFreshnessCacheKey, CachedRepositoryResponseFreshness>>,
+    >,
+    precise_generator_probe_cache:
+        Arc<RwLock<BTreeMap<PreciseGeneratorProbeCacheKey, CachedPreciseGeneratorProbe>>>,
     repository_summary_cache: Arc<RwLock<BTreeMap<String, CachedRepositorySummary>>>,
     file_content_window_cache: Arc<RwLock<FileContentWindowCache>>,
     search_text_response_cache:
@@ -390,6 +397,11 @@ impl FriggMcpServer {
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
     const RUNTIME_RECENT_PROVENANCE_LIMIT: usize = 8;
     const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
+    const REPOSITORY_RESPONSE_FRESHNESS_CACHE_TTL: Duration = Duration::from_secs(2);
+    const REPOSITORY_RESPONSE_FRESHNESS_CACHE_MAX_ENTRIES: usize = 64;
+    const PRECISE_GENERATOR_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
+    const PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES: usize = 128;
+    const PROVENANCE_STORAGE_CACHE_MAX_ENTRIES: usize = 32;
     pub fn new(config: FriggConfig) -> Self {
         Self::new_with_provenance_best_effort(config, Self::provenance_best_effort_from_env())
     }
@@ -465,6 +477,8 @@ impl FriggMcpServer {
                 precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                repository_response_freshness_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                precise_generator_probe_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 file_content_window_cache: Arc::new(RwLock::new(FileContentWindowCache::default())),
                 search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -721,8 +735,11 @@ impl FriggMcpServer {
                 Some(json!({ "repository_id": repository_id })),
             ));
         };
+        self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         let response = WorkspaceDetachResponse {
@@ -857,8 +874,11 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
+        self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
@@ -1059,8 +1079,11 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
+        self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);

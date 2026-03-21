@@ -10,6 +10,15 @@ fn usize_from_u64(value: u64) -> usize {
 }
 
 impl FriggMcpServer {
+    fn trim_provenance_storage_cache(
+        &self,
+        cache: &mut BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>,
+    ) {
+        while cache.len() > Self::PROVENANCE_STORAGE_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
     fn provenance_payload(
         tool_name: &str,
         target_repository_id: &str,
@@ -330,6 +339,7 @@ impl FriggMcpServer {
             return Ok(storage);
         }
         cache.insert(cache_key, storage.clone());
+        self.trim_provenance_storage_cache(&mut cache);
         Ok(storage)
     }
 

@@ -31,12 +31,15 @@ impl FriggMcpServer {
                 .as_ref()
                 .map(|workspace| workspace.repository_id.as_str())
                 .unwrap_or(repository_id);
+            server.invalidate_repository_symbol_corpus_cache(repository_id);
             server.invalidate_repository_summary_cache(repository_id);
+            server.invalidate_repository_response_freshness_cache(repository_id);
             server.invalidate_repository_file_content_cache(repository_id);
             server
                 .runtime_state
                 .searcher_projection_store_service
                 .invalidate_repository(repository_id);
+            server.invalidate_repository_precise_generator_probe_cache(repository_id);
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_search_response_caches(repository_id);
@@ -145,8 +148,11 @@ impl FriggMcpServer {
         self.runtime_state
             .searcher_projection_store_service
             .invalidate_repository(&workspace.repository_id);
+        self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
+        self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
@@ -219,6 +225,30 @@ impl FriggMcpServer {
                             .has_active_task_for_repository(kind, &workspace.runtime_repository_id)
                 })
         })
+    }
+
+    pub(super) fn repository_has_active_watch_lease(&self, repository_id: &str) -> bool {
+        let workspace = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_any_repository_id(repository_id);
+        workspace
+            .as_ref()
+            .and_then(|workspace| {
+                self.runtime_state
+                    .watch_runtime
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_ref()
+                    .map(|runtime| {
+                        runtime
+                            .lease_status(&workspace.runtime_repository_id)
+                            .active
+                    })
+            })
+            .unwrap_or(false)
     }
 
     pub(super) fn scoped_search_config(

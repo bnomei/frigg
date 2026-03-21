@@ -40,6 +40,38 @@ fn literal_search_returns_sorted_deterministic_matches() -> FriggResult<()> {
 }
 
 #[test]
+fn literal_search_repository_filter_accepts_stable_repository_id_alias() -> FriggResult<()> {
+    let root = temp_workspace_root("literal-search-stable-repository-filter");
+    prepare_workspace(
+        &root,
+        &[(
+            "src/main.rs",
+            "pub fn submissions_open() { println!(\"needle\"); }\n",
+        )],
+    )?;
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let matches = searcher.search_literal_with_filters(
+        SearchTextQuery {
+            query: "needle".to_owned(),
+            path_regex: None,
+            limit: 10,
+        },
+        SearchFilters {
+            repository_id: Some(crate::domain::model::RepositoryId::for_root(&root).0),
+            language: None,
+        },
+    )?;
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].path, "src/main.rs");
+    assert_eq!(matches[0].repository_id, "repo-001");
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn literal_search_walk_fallback_respects_gitignored_contract_artifacts() -> FriggResult<()> {
     let root = temp_workspace_root("literal-search-gitignored-contracts");
     prepare_workspace(&root, &[("contracts/errors.md", "invalid_params\n")])?;

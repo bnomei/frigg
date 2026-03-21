@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::domain::model::stable_repository_id_for_root;
 use crate::manifest_validation::latest_validated_manifest_snapshot;
+use crate::settings::FriggConfig;
 use crate::storage::{Storage, resolve_provenance_db_path};
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 
@@ -47,13 +49,17 @@ impl TextSearcher {
 
         let repositories = repositories
             .into_iter()
-            .filter(|repository| {
-                filters
-                    .repository_id
-                    .as_ref()
-                    .is_none_or(|repository_id| repository_id == &repository.repository_id.0)
+            .enumerate()
+            .filter(|(index, repository)| {
+                filters.repository_id.as_ref().is_none_or(|repository_id| {
+                    repository_id == &repository.repository_id.0
+                        || repository_id
+                            == &stable_repository_id_for_root(Path::new(&repository.root_path)).0
+                        || repository_id
+                            == &FriggConfig::legacy_repository_id_for_workspace_index(*index).0
+                })
             })
-            .map(|repository| {
+            .map(|(_, repository)| {
                 let repository_id = repository.repository_id.0;
                 let root = PathBuf::from(repository.root_path);
                 let (snapshot_id, mut candidates) = self

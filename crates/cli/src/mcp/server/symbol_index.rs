@@ -11,6 +11,14 @@ use rayon::prelude::*;
 const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
 
 impl FriggMcpServer {
+    pub(super) fn invalidate_repository_symbol_corpus_cache(&self, repository_id: &str) {
+        self.cache_state
+            .symbol_corpus_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| key.repository_id != repository_id);
+    }
+
     fn trim_symbol_corpus_cache(
         &self,
         cache: &mut BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>,
@@ -28,6 +36,14 @@ impl FriggMcpServer {
         let mut diagnostics = RepositoryDiagnosticsSummary::default();
         let mut manifest_output = None;
         let mut source_paths = None;
+        let dirty_root = self
+            .runtime_state
+            .validated_manifest_candidate_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_dirty_root(&root);
+        let can_reuse_dirty_live_corpus =
+            dirty_root && self.repository_has_active_watch_lease(&repository_id);
         let (file_digests, manifest_token) =
             match Self::load_latest_validated_manifest_snapshot_shared(
                 &root,
@@ -44,6 +60,22 @@ impl FriggMcpServer {
                     )
                 }
                 None => {
+                    if can_reuse_dirty_live_corpus {
+                        let live_cache_key = SymbolCorpusCacheKey {
+                            repository_id: repository_id.clone(),
+                            manifest_token: "live:dirty_root".to_owned(),
+                        };
+                        if let Some(cached) = self
+                            .cache_state
+                            .symbol_corpus_cache
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get(&live_cache_key)
+                            .cloned()
+                        {
+                            return Ok(cached);
+                        }
+                    }
                     let live_output = ManifestBuilder::default()
                         .build_metadata_with_diagnostics(&root)
                         .map_err(Self::map_frigg_error)?;
@@ -57,7 +89,11 @@ impl FriggMcpServer {
                                 .entries
                                 .clone(),
                         ),
-                        format!("live:{live_signature}"),
+                        if can_reuse_dirty_live_corpus {
+                            "live:dirty_root".to_owned()
+                        } else {
+                            format!("live:{live_signature}")
+                        },
                     )
                 }
             };

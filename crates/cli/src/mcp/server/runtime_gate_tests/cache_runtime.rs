@@ -784,6 +784,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
         0,
         0,
         0,
+        0,
     );
     server.cache_heuristic_references(
         HeuristicReferenceCacheKey {
@@ -793,6 +794,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
             scip_signature: "scip-002".to_owned(),
         },
         Vec::new(),
+        0,
         0,
         0,
         0,
@@ -1185,6 +1187,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
             scip_signature: "scip-001".to_owned(),
         },
         Vec::new(),
+        0,
         0,
         0,
         0,

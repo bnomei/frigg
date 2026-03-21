@@ -542,8 +542,12 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
 async fn find_references_supplements_precise_php_method_results_with_blade_hits() {
     let workspace_root = temp_workspace_root("find-references-php-method-supplement");
     let models_root = workspace_root.join("app/Models");
+    let policies_root = workspace_root.join("app/Policies/CourseDocuments");
+    let tests_root = workspace_root.join("tests/Feature/Models");
     let views_root = workspace_root.join("resources/views/components/courses");
     fs::create_dir_all(&models_root).expect("failed to create models fixture root");
+    fs::create_dir_all(&policies_root).expect("failed to create policies fixture root");
+    fs::create_dir_all(&tests_root).expect("failed to create tests fixture root");
     fs::create_dir_all(&views_root).expect("failed to create views fixture root");
     let course_source = "<?php\n\
 namespace App\\Models;\n\
@@ -561,9 +565,29 @@ class Course\n\
     }\n\
 }\n";
     let blade_source = "@if ($course->submissionsOpen()) open @endif\n";
+    let policy_source = "<?php\n\
+namespace App\\Policies\\CourseDocuments;\n\
+\n\
+class CanReplaceCourseSubmission\n\
+{\n\
+    public function allowed(object $course): bool\n\
+    {\n\
+        return $course->submissionsOpen();\n\
+    }\n\
+}\n";
+    let test_source = "<?php\n\
+it('keeps course submissions open state deterministic', function (): void {\n\
+    expect($course->submissionsOpen())->toBeTrue();\n\
+});\n";
     fs::write(models_root.join("Course.php"), course_source).expect("failed to seed model fixture");
-    fs::write(views_root.join("documents-panel.blade.php"), blade_source)
+    fs::write(views_root.join("⚡documents-panel.blade.php"), blade_source)
         .expect("failed to seed blade fixture");
+    fs::write(
+        policies_root.join("CanReplaceCourseSubmission.php"),
+        policy_source,
+    )
+    .expect("failed to seed policy fixture");
+    fs::write(tests_root.join("CourseTest.php"), test_source).expect("failed to seed test fixture");
     let definition_line = 6usize;
     let definition_column = course_source
         .lines()
@@ -625,22 +649,34 @@ class Course\n\
         .0;
 
     assert_eq!(response.mode, NavigationMode::PrecisePartial);
-    assert_eq!(response.total_matches, 2);
-    assert_eq!(response.matches.len(), 2);
+    assert_eq!(response.total_matches, 4);
+    assert_eq!(response.matches.len(), 4);
     assert_eq!(response.matches[0].path, "app/Models/Course.php");
     assert_eq!(response.matches[0].line, php_reference_line);
     assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
     assert_eq!(response.matches[0].fallback_reason, None);
-    assert_eq!(
-        response.matches[1].path,
-        "resources/views/components/courses/documents-panel.blade.php"
+    let supplemental_paths = response
+        .matches
+        .iter()
+        .skip(1)
+        .map(|matched| {
+            assert_eq!(matched.precision.as_deref(), Some("heuristic"));
+            assert_eq!(
+                matched.fallback_reason.as_deref(),
+                Some("precise_supplemented")
+            );
+            matched.path.clone()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        supplemental_paths
+            .contains(&"app/Policies/CourseDocuments/CanReplaceCourseSubmission.php".to_owned())
     );
-    assert_eq!(response.matches[1].line, 1);
-    assert_eq!(response.matches[1].precision.as_deref(), Some("heuristic"));
-    assert_eq!(
-        response.matches[1].fallback_reason.as_deref(),
-        Some("precise_supplemented")
+    assert!(
+        supplemental_paths
+            .contains(&"resources/views/components/courses/⚡documents-panel.blade.php".to_owned())
     );
+    assert!(supplemental_paths.contains(&"tests/Feature/Models/CourseTest.php".to_owned()));
 
     let note = response
         .note
@@ -653,7 +689,7 @@ class Course\n\
     assert_eq!(note_json["precise"]["reference_count"], 1);
     assert_eq!(note_json["heuristic_supplement"]["eligible"], true);
     assert_eq!(note_json["heuristic_supplement"]["applied"], true);
-    assert_eq!(note_json["heuristic_supplement"]["match_count"], 1);
+    assert_eq!(note_json["heuristic_supplement"]["match_count"], 3);
 
     cleanup_workspace_root(&workspace_root);
 }

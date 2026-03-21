@@ -10,12 +10,92 @@ fn error_code_tag(error: &ErrorData) -> Option<&str> {
 
 struct LoadedHeuristicReferences {
     references: Vec<HeuristicReference>,
+    source_files_discovered: usize,
     source_read_diagnostics_count: usize,
     source_files_loaded: usize,
     source_bytes_loaded: u64,
 }
 
 impl FriggMcpServer {
+    fn heuristic_reference_probe_terms(
+        target_corpus: &RepositorySymbolCorpus,
+        target_symbol: &SymbolDefinition,
+    ) -> Vec<String> {
+        let mut terms = Vec::new();
+        let mut seen = BTreeSet::new();
+        let raw_name = target_symbol.name.trim();
+        if !raw_name.is_empty() && seen.insert(raw_name.to_owned()) {
+            terms.push(raw_name.to_owned());
+        }
+        if let Some(canonical_name) = target_corpus
+            .canonical_symbol_name_by_stable_id
+            .get(target_symbol.stable_id.as_str())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty() && *value != raw_name)
+            && seen.insert(canonical_name.to_owned())
+        {
+            terms.push(canonical_name.to_owned());
+        }
+        terms
+    }
+
+    fn heuristic_reference_candidate_paths(
+        &self,
+        target_corpus: &RepositorySymbolCorpus,
+        target_symbol: &SymbolDefinition,
+        resource_budgets: FindReferencesResourceBudgets,
+    ) -> Vec<PathBuf> {
+        let available_source_paths = target_corpus
+            .source_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut candidate_paths = BTreeSet::new();
+        if available_source_paths.contains(&target_symbol.path) {
+            candidate_paths.insert(target_symbol.path.clone());
+        }
+
+        let probe_terms = Self::heuristic_reference_probe_terms(target_corpus, target_symbol);
+        if !probe_terms.is_empty() {
+            let searcher = self.runtime_text_searcher((*self.config).clone());
+            let limit = resource_budgets
+                .source_max_files
+                .saturating_mul(32)
+                .clamp(256, 8_192);
+            for term in probe_terms {
+                let output = searcher.search_literal_with_filters_diagnostics(
+                    SearchTextQuery {
+                        query: term,
+                        path_regex: None,
+                        limit,
+                    },
+                    SearchFilters {
+                        repository_id: Some(target_corpus.repository_id.clone()),
+                        language: None,
+                    },
+                );
+                let Ok(output) = output else {
+                    continue;
+                };
+                for matched in output.matches {
+                    let absolute_path = target_corpus.root.join(&matched.path);
+                    if available_source_paths.contains(&absolute_path) {
+                        candidate_paths.insert(absolute_path);
+                    }
+                }
+            }
+        }
+
+        if candidate_paths.len() <= 1 {
+            let full_sweep_limit = resource_budgets.source_max_files.min(64);
+            if target_corpus.source_paths.len() <= full_sweep_limit {
+                return target_corpus.source_paths.clone();
+            }
+        }
+
+        candidate_paths.into_iter().collect()
+    }
+
     fn load_heuristic_references(
         &self,
         target_corpus: &RepositorySymbolCorpus,
@@ -49,12 +129,19 @@ impl FriggMcpServer {
         if let Some(cached) = self.cached_heuristic_references(&heuristic_cache_key) {
             return Ok(LoadedHeuristicReferences {
                 references: (*cached.references).clone(),
+                source_files_discovered: cached.source_files_discovered,
                 source_read_diagnostics_count: cached.source_read_diagnostics_count,
                 source_files_loaded: cached.source_files_loaded,
                 source_bytes_loaded: cached.source_bytes_loaded,
             });
         }
 
+        let candidate_source_paths = self.heuristic_reference_candidate_paths(
+            target_corpus,
+            target_symbol,
+            resource_budgets,
+        );
+        let source_files_discovered = candidate_source_paths.len();
         let mut source_read_diagnostics_count = 0usize;
         let mut source_files_loaded = 0usize;
         let mut source_bytes_loaded = 0u64;
@@ -63,7 +150,7 @@ impl FriggMcpServer {
         let source_max_file_bytes = Self::usize_to_u64(resource_budgets.source_max_file_bytes);
         let source_max_total_bytes = Self::usize_to_u64(resource_budgets.source_max_total_bytes);
 
-        for (index, path) in target_corpus.source_paths.iter().enumerate() {
+        for (index, path) in candidate_source_paths.iter().enumerate() {
             if source_started_at.elapsed() > source_max_elapsed {
                 let elapsed_ms =
                     u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -190,12 +277,14 @@ impl FriggMcpServer {
         self.cache_heuristic_references(
             heuristic_cache_key,
             references.clone(),
+            source_files_discovered,
             source_read_diagnostics_count,
             source_files_loaded,
             source_bytes_loaded,
         );
         Ok(LoadedHeuristicReferences {
             references,
+            source_files_discovered,
             source_read_diagnostics_count,
             source_files_loaded,
             source_bytes_loaded,
@@ -540,6 +629,7 @@ impl FriggMcpServer {
                             resource_budgets,
                         ) {
                             Ok(loaded) => {
+                                source_files_discovered = loaded.source_files_discovered;
                                 source_read_diagnostics_count =
                                     loaded.source_read_diagnostics_count;
                                 source_files_loaded = loaded.source_files_loaded;
@@ -704,6 +794,7 @@ impl FriggMcpServer {
                     heuristic_scip_signature,
                     resource_budgets,
                 )?;
+                source_files_discovered = loaded.source_files_discovered;
                 source_read_diagnostics_count = loaded.source_read_diagnostics_count;
                 source_files_loaded = loaded.source_files_loaded;
                 source_bytes_loaded = loaded.source_bytes_loaded;

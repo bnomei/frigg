@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     FriggError, FriggResult,
-    model::{RepositoryId, RepositoryRecord},
+    model::{RepositoryId, RepositoryRecord, stable_repository_id_for_root},
 };
 
 use super::{LexicalRuntimeConfig, SemanticRuntimeConfig, WatchConfig};
@@ -38,6 +38,10 @@ impl Default for FriggConfig {
 }
 
 impl FriggConfig {
+    pub(crate) fn legacy_repository_id_for_workspace_index(index: usize) -> RepositoryId {
+        RepositoryId(format!("repo-{:03}", index + 1))
+    }
+
     pub fn from_workspace_roots(workspace_roots: Vec<PathBuf>) -> FriggResult<Self> {
         Self::from_workspace_roots_with_mode(workspace_roots, true)
     }
@@ -139,7 +143,7 @@ impl FriggConfig {
             .iter()
             .enumerate()
             .map(|(idx, root)| RepositoryRecord {
-                repository_id: RepositoryId(format!("repo-{:03}", idx + 1)),
+                repository_id: Self::legacy_repository_id_for_workspace_index(idx),
                 display_name: root
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -153,9 +157,14 @@ impl FriggConfig {
     pub fn root_by_repository_id(&self, repository_id: &str) -> Option<&Path> {
         self.repositories()
             .into_iter()
-            .zip(self.workspace_roots.iter())
-            .find_map(|(repo, root)| {
-                (repo.repository_id.0 == repository_id).then_some(root.as_path())
+            .zip(self.workspace_roots.iter().enumerate())
+            .find_map(|(repo, (index, root))| {
+                let stable_repository_id = stable_repository_id_for_root(root);
+                let legacy_repository_id = Self::legacy_repository_id_for_workspace_index(index);
+                (repo.repository_id.0 == repository_id
+                    || stable_repository_id.0 == repository_id
+                    || legacy_repository_id.0 == repository_id)
+                    .then_some(root.as_path())
             })
     }
 }

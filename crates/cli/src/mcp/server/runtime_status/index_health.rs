@@ -1,6 +1,74 @@
 use super::*;
 
 impl FriggMcpServer {
+    fn response_freshness_cache_eligible(&self, workspaces: &[AttachedWorkspace]) -> bool {
+        !workspaces.is_empty()
+            && workspaces
+                .iter()
+                .all(|workspace| self.repository_has_active_watch_lease(&workspace.repository_id))
+    }
+
+    pub(in crate::mcp::server) fn invalidate_repository_response_freshness_cache(
+        &self,
+        repository_id: &str,
+    ) {
+        self.cache_state
+            .repository_response_freshness_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|key, _| {
+                !key.scoped_repository_ids
+                    .iter()
+                    .any(|candidate| candidate == repository_id)
+            });
+    }
+
+    fn cached_repository_response_freshness(
+        &self,
+        scoped_repository_ids: &[String],
+        mode: RepositoryResponseCacheFreshnessMode,
+    ) -> Option<RepositoryResponseCacheFreshness> {
+        let cache_key = RepositoryResponseFreshnessCacheKey {
+            scoped_repository_ids: scoped_repository_ids.to_vec(),
+            mode: mode.as_str(),
+        };
+        let cache = self
+            .cache_state
+            .repository_response_freshness_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get(&cache_key)?;
+        (entry.generated_at.elapsed() <= Self::REPOSITORY_RESPONSE_FRESHNESS_CACHE_TTL)
+            .then(|| entry.freshness.clone())
+    }
+
+    fn cache_repository_response_freshness(
+        &self,
+        scoped_repository_ids: &[String],
+        mode: RepositoryResponseCacheFreshnessMode,
+        freshness: &RepositoryResponseCacheFreshness,
+    ) {
+        let cache_key = RepositoryResponseFreshnessCacheKey {
+            scoped_repository_ids: scoped_repository_ids.to_vec(),
+            mode: mode.as_str(),
+        };
+        let mut cache = self
+            .cache_state
+            .repository_response_freshness_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            cache_key,
+            CachedRepositoryResponseFreshness {
+                freshness: freshness.clone(),
+                generated_at: Instant::now(),
+            },
+        );
+        while cache.len() > Self::REPOSITORY_RESPONSE_FRESHNESS_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
     pub(in crate::mcp::server) fn workspace_index_health_summary(
         &self,
         workspace: &AttachedWorkspace,
@@ -65,6 +133,19 @@ impl FriggMcpServer {
         workspaces: &[AttachedWorkspace],
         mode: RepositoryResponseCacheFreshnessMode,
     ) -> Result<RepositoryResponseCacheFreshness, ErrorData> {
+        let mut scoped_repository_ids = workspaces
+            .iter()
+            .map(|workspace| workspace.repository_id.clone())
+            .collect::<Vec<_>>();
+        scoped_repository_ids.sort();
+        let cache_eligible = self.response_freshness_cache_eligible(workspaces);
+        if cache_eligible
+            && let Some(cached) =
+                self.cached_repository_response_freshness(&scoped_repository_ids, mode)
+        {
+            return Ok(cached);
+        }
+
         let semantic_runtime = self.cache_freshness_runtime(mode);
         let mut cacheable = true;
         let mut scopes = Vec::with_capacity(workspaces.len());
@@ -136,7 +217,7 @@ impl FriggMcpServer {
 
         scopes.sort();
 
-        Ok(RepositoryResponseCacheFreshness {
+        let freshness = RepositoryResponseCacheFreshness {
             scopes: cacheable.then_some(scopes),
             basis: json!({
                 "mode": mode.as_str(),
@@ -149,9 +230,13 @@ impl FriggMcpServer {
                     crate::mcp::server_cache::RuntimeCacheFamily::SearchSymbolResponse,
                     crate::mcp::server_cache::RuntimeCacheFamily::GoToDefinitionResponse,
                     crate::mcp::server_cache::RuntimeCacheFamily::FindDeclarationsResponse,
-                ]),
+                    ]),
             }),
-        })
+        };
+        if cache_eligible && freshness.scopes.is_some() {
+            self.cache_repository_response_freshness(&scoped_repository_ids, mode, &freshness);
+        }
+        Ok(freshness)
     }
 
     fn cache_freshness_runtime(
