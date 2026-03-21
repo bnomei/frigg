@@ -2,7 +2,7 @@
 
 ## `search_hybrid`
 
-Use `search_hybrid` first for broad natural-language questions. It is the discovery surface, not the final proof step.
+Use `search_hybrid` first for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step.
 
 Important inputs:
 - `query`
@@ -43,7 +43,7 @@ What to inspect in `metadata`:
 Interpretation rules:
 - `warning` present: ranking is weaker than normal, pivot sooner
 - `semantic_status != ok`: semantic is missing, disabled, or degraded
-- `lexical_only_mode = true`: rely more on exact follow-up tools
+- `lexical_only_mode = true`: broad natural-language ranking is weaker; use matches as candidate pivots and move to `search_symbol`, `search_text`, `read_file`, or navigation sooner
 - `utility.best_pivot_*`: good hint for the first file to open next
 
 Typical next move:
