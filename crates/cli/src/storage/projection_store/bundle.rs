@@ -22,7 +22,7 @@ impl Storage {
         &self,
         repository_id: &str,
         snapshot_id: &str,
-        bundle: &RetrievalProjectionBundle,
+        mut bundle: RetrievalProjectionBundle,
     ) -> FriggResult<()> {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
@@ -56,7 +56,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.path_witness.clone();
+            let mut rows = std::mem::take(&mut bundle.path_witness);
             rows.sort_by(|left, right| left.path.cmp(&right.path));
             rows.dedup_by(|left, right| left.path == right.path);
             let mut insert_stmt = tx.prepare(
@@ -107,7 +107,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.test_subject.clone();
+            let mut rows = std::mem::take(&mut bundle.test_subject);
             rows.sort_by(|left, right| {
                 left.test_path
                     .cmp(&right.test_path)
@@ -156,7 +156,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.entrypoint_surface.clone();
+            let mut rows = std::mem::take(&mut bundle.entrypoint_surface);
             rows.sort_by(|left, right| left.path.cmp(&right.path));
             rows.dedup_by(|left, right| left.path == right.path);
             let mut insert_stmt = tx.prepare(
@@ -205,7 +205,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.path_relations.clone();
+            let mut rows = std::mem::take(&mut bundle.path_relations);
             rows.sort_by(|left, right| {
                 left.src_path
                     .cmp(&right.src_path)
@@ -267,7 +267,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.subtree_coverage.clone();
+            let mut rows = std::mem::take(&mut bundle.subtree_coverage);
             rows.sort_by(|left, right| {
                 left.subtree_root
                     .cmp(&right.subtree_root)
@@ -313,7 +313,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.path_surface_terms.clone();
+            let mut rows = std::mem::take(&mut bundle.path_surface_terms);
             rows.sort_by(|left, right| left.path.cmp(&right.path));
             rows.dedup_by(|left, right| left.path == right.path);
             let mut insert_stmt = tx.prepare(
@@ -356,7 +356,7 @@ impl Storage {
         }
 
         {
-            let mut rows = bundle.path_anchor_sketches.clone();
+            let mut rows = std::mem::take(&mut bundle.path_anchor_sketches);
             rows.sort_by(|left, right| {
                 left.path
                     .cmp(&right.path)
@@ -409,7 +409,7 @@ impl Storage {
         }
 
         {
-            let mut heads = bundle.heads.clone();
+            let mut heads = std::mem::take(&mut bundle.heads);
             heads.sort_by(|left, right| left.family.cmp(&right.family));
             heads.dedup_by(|left, right| left.family == right.family);
             let mut insert_stmt = tx.prepare(

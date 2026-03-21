@@ -1,3 +1,9 @@
+//! AST-backed retrieval projection enrichment.
+//!
+//! This module extracts symbol and source-evidence context from manifest-backed source files and
+//! uses that single prepared view to enrich relation, term, and anchor projections without
+//! reparsing the same file set multiple times in one bundle build.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,15 +43,28 @@ enum AstSourceEvidence {
     },
 }
 
-pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidence(
+struct PreparedAstProjectionContext<'a> {
+    witness_by_path: BTreeMap<String, &'a StoredPathWitnessProjection>,
+    relative_symbols: Vec<(String, SymbolDefinition)>,
+    symbols: Vec<SymbolDefinition>,
+    symbol_index_by_stable_id: BTreeMap<String, usize>,
+    relative_path_by_stable_id: BTreeMap<String, String>,
+    symbol_indices_by_name: BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_name: BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_canonical_name: BTreeMap<String, Vec<usize>>,
+    symbol_indices_by_lower_canonical_name: BTreeMap<String, Vec<usize>>,
+    php_evidence: Vec<PhpSourceEvidence>,
+    blade_evidence: Vec<BladeSourceEvidence>,
+}
+
+fn prepare_ast_projection_context<'a>(
     workspace_root: &Path,
     absolute_manifest_paths: &[PathBuf],
-    path_witness: &[StoredPathWitnessProjection],
-    path_relations: &mut Vec<PathRelationProjection>,
-) {
+    path_witness: &'a [StoredPathWitnessProjection],
+) -> Option<PreparedAstProjectionContext<'a>> {
     let extracted = extract_symbols_for_paths(absolute_manifest_paths);
     if extracted.symbols.is_empty() {
-        return;
+        return None;
     }
 
     let witness_by_path = path_witness
@@ -63,7 +82,7 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
         })
         .collect::<Vec<_>>();
     if relative_symbols.is_empty() {
-        return;
+        return None;
     }
 
     let mut symbols = Vec::with_capacity(relative_symbols.len());
@@ -175,21 +194,40 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
             .push(symbol_index);
     }
 
-    for evidence in &php_evidence {
+    Some(PreparedAstProjectionContext {
+        witness_by_path,
+        relative_symbols,
+        symbols,
+        symbol_index_by_stable_id,
+        relative_path_by_stable_id,
+        symbol_indices_by_name,
+        symbol_indices_by_lower_name,
+        symbol_indices_by_canonical_name,
+        symbol_indices_by_lower_canonical_name,
+        php_evidence,
+        blade_evidence,
+    })
+}
+
+fn augment_path_relation_projection_records_with_ast_relation_evidence_prepared(
+    prepared: &PreparedAstProjectionContext<'_>,
+    path_relations: &mut Vec<PathRelationProjection>,
+) {
+    for evidence in &prepared.php_evidence {
         for (source_symbol_index, target_symbol_index, relation) in
             resolve_php_target_evidence_edges(
-                &symbols,
-                &symbol_index_by_stable_id,
-                &symbol_indices_by_canonical_name,
-                &symbol_indices_by_lower_canonical_name,
+                &prepared.symbols,
+                &prepared.symbol_index_by_stable_id,
+                &prepared.symbol_indices_by_canonical_name,
+                &prepared.symbol_indices_by_lower_canonical_name,
                 evidence,
             )
         {
             push_ast_relation_projection(
                 path_relations,
-                &symbols,
-                &witness_by_path,
-                &relative_path_by_stable_id,
+                &prepared.symbols,
+                &prepared.witness_by_path,
+                &prepared.relative_path_by_stable_id,
                 source_symbol_index,
                 target_symbol_index,
                 relation,
@@ -197,21 +235,21 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
         }
     }
 
-    for evidence in &blade_evidence {
+    for evidence in &prepared.blade_evidence {
         for (source_symbol_index, target_symbol_index, relation) in
             resolve_blade_relation_evidence_edges(
-                &symbols,
-                &symbol_index_by_stable_id,
-                &symbol_indices_by_name,
-                &symbol_indices_by_lower_name,
+                &prepared.symbols,
+                &prepared.symbol_index_by_stable_id,
+                &prepared.symbol_indices_by_name,
+                &prepared.symbol_indices_by_lower_name,
                 evidence,
             )
         {
             push_ast_relation_projection(
                 path_relations,
-                &symbols,
-                &witness_by_path,
-                &relative_path_by_stable_id,
+                &prepared.symbols,
+                &prepared.witness_by_path,
+                &prepared.relative_path_by_stable_id,
                 source_symbol_index,
                 target_symbol_index,
                 relation,
@@ -220,8 +258,24 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
     }
 }
 
-#[allow(clippy::ptr_arg)]
-pub(super) fn apply_ast_projection_contributions(
+pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidence(
+    workspace_root: &Path,
+    absolute_manifest_paths: &[PathBuf],
+    path_witness: &[StoredPathWitnessProjection],
+    path_relations: &mut Vec<PathRelationProjection>,
+) {
+    let Some(prepared) =
+        prepare_ast_projection_context(workspace_root, absolute_manifest_paths, path_witness)
+    else {
+        return;
+    };
+    augment_path_relation_projection_records_with_ast_relation_evidence_prepared(
+        &prepared,
+        path_relations,
+    );
+}
+
+pub(super) fn apply_ast_bundle_contributions(
     workspace_root: &Path,
     absolute_manifest_paths: &[PathBuf],
     path_witness: &[StoredPathWitnessProjection],
@@ -230,29 +284,32 @@ pub(super) fn apply_ast_projection_contributions(
     path_anchor_sketches: &mut Vec<PathAnchorSketchProjection>,
     input_modes: &mut super::bundle::RetrievalProjectionInputModes,
 ) {
-    let extracted = extract_symbols_for_paths(absolute_manifest_paths);
-    if extracted.symbols.is_empty() {
+    let Some(prepared) =
+        prepare_ast_projection_context(workspace_root, absolute_manifest_paths, path_witness)
+    else {
         return;
-    }
+    };
+    augment_path_relation_projection_records_with_ast_relation_evidence_prepared(
+        &prepared,
+        path_relations,
+    );
+    apply_ast_projection_contributions_prepared(
+        &prepared,
+        path_relations,
+        path_surface_terms,
+        path_anchor_sketches,
+        input_modes,
+    );
+}
 
-    let witness_by_path = path_witness
-        .iter()
-        .map(|projection| (projection.path.clone(), projection))
-        .collect::<BTreeMap<_, _>>();
-    let mut relative_symbols = extracted
-        .symbols
-        .into_iter()
-        .filter_map(|symbol| {
-            let relative_path = normalize_repository_relative_path(workspace_root, &symbol.path);
-            witness_by_path
-                .contains_key(&relative_path)
-                .then_some((relative_path, symbol))
-        })
-        .collect::<Vec<_>>();
-    if relative_symbols.is_empty() {
-        return;
-    }
-
+#[allow(clippy::ptr_arg)]
+fn apply_ast_projection_contributions_prepared(
+    prepared: &PreparedAstProjectionContext<'_>,
+    path_relations: &mut Vec<PathRelationProjection>,
+    path_surface_terms: &mut Vec<PathSurfaceTermProjection>,
+    path_anchor_sketches: &mut Vec<PathAnchorSketchProjection>,
+    input_modes: &mut super::bundle::RetrievalProjectionInputModes,
+) {
     let mut anchor_candidates = path_anchor_sketches
         .drain(..)
         .map(|projection| (projection.path.clone(), projection))
@@ -264,6 +321,8 @@ pub(super) fn apply_ast_projection_contributions(
             },
         );
 
+    let witness_by_path = &prepared.witness_by_path;
+    let mut relative_symbols = prepared.relative_symbols.clone();
     for (relative_path, symbol) in &relative_symbols {
         let Some(witness_projection) = witness_by_path.get(relative_path) else {
             continue;

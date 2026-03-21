@@ -60,6 +60,17 @@ just bench
 just bench native_lexical_search
 ```
 
+## Install The Codex Skill
+
+If you use Codex, run the following from the repository root immediately after installing Frigg to copy the bundled Frigg skill into your local Codex skills directory:
+
+```bash
+mkdir -p ~/.codex/skills
+cp -R skills/frigg-mcp-search-navigation ~/.codex/skills/
+```
+
+That copies the repo-backed `frigg-mcp-search-navigation` skill into `~/.codex/skills/frigg-mcp-search-navigation/`.
+
 ## Quickstart
 
 ### 1) Prepare a repository

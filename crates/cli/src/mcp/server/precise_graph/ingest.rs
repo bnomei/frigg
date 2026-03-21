@@ -1,6 +1,40 @@
+//! Precise graph discovery, ingest, and process-wide cache reuse.
+//!
+//! Parsed precise graphs are reused across requests while their originating SCIP discovery
+//! signatures remain current, and the process-wide caches are capped so optional precise support
+//! does not grow without bound on long-lived servers.
+
 use super::*;
 
+const PRECISE_GRAPH_CACHE_MAX_ENTRIES: usize = 16;
+const LATEST_PRECISE_GRAPH_CACHE_MAX_ENTRIES: usize = 32;
+
 impl FriggMcpServer {
+    fn trim_precise_graph_cache(
+        &self,
+        cache: &mut BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>,
+    ) {
+        while cache.len() > PRECISE_GRAPH_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
+    fn cache_latest_precise_graph(
+        &self,
+        repository_id: String,
+        cached_graph: Arc<CachedPreciseGraph>,
+    ) {
+        let mut cache = self
+            .cache_state
+            .latest_precise_graph_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(repository_id, cached_graph);
+        while cache.len() > LATEST_PRECISE_GRAPH_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
     pub(in crate::mcp::server) fn scip_candidate_directories(root: &Path) -> [PathBuf; 1] {
         [root.join(".frigg/scip")]
     }
@@ -481,11 +515,7 @@ impl FriggMcpServer {
             .get(&cache_key)
             .cloned()
         {
-            self.cache_state
-                .latest_precise_graph_cache
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(corpus.repository_id.clone(), cached.clone());
+            self.cache_latest_precise_graph(corpus.repository_id.clone(), cached.clone());
             return Ok((*cached).clone());
         }
 
@@ -538,11 +568,9 @@ impl FriggMcpServer {
         });
         let cached_graph = Arc::new(cached_graph);
         cache.insert(cache_key, cached_graph.clone());
-        self.cache_state
-            .latest_precise_graph_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(corpus.repository_id.clone(), cached_graph.clone());
+        self.trim_precise_graph_cache(&mut cache);
+        drop(cache);
+        self.cache_latest_precise_graph(corpus.repository_id.clone(), cached_graph.clone());
 
         Ok((*cached_graph).clone())
     }
@@ -585,11 +613,7 @@ impl FriggMcpServer {
             .get(&cache_key)
             .cloned()
         {
-            self.cache_state
-                .latest_precise_graph_cache
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(repository_id.to_owned(), cached.clone());
+            self.cache_latest_precise_graph(repository_id.to_owned(), cached.clone());
             return Ok((*cached).clone());
         }
 
@@ -622,11 +646,9 @@ impl FriggMcpServer {
         });
         let cached_graph = Arc::new(cached_graph);
         cache.insert(cache_key, cached_graph.clone());
-        self.cache_state
-            .latest_precise_graph_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(repository_id.to_owned(), cached_graph.clone());
+        self.trim_precise_graph_cache(&mut cache);
+        drop(cache);
+        self.cache_latest_precise_graph(repository_id.to_owned(), cached_graph.clone());
 
         Ok((*cached_graph).clone())
     }

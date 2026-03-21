@@ -93,10 +93,11 @@ impl ProjectionStoreService {
             let rows = build_path_witness_projection_records_from_paths(&candidate_paths).ok()?;
             let projections = Arc::new(decode_path_witness_projection_records(&rows).ok()?);
             if matches!(mode, ProjectionLoadMode::Repairing) {
-                self.path_witness_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key.clone(), Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.path_witness_cache,
+                    cache_key.clone(),
+                    Arc::clone(&projections),
+                )?;
             }
             Some(projections)
         };
@@ -127,10 +128,11 @@ impl ProjectionStoreService {
                 .ok()?;
             if rows.len() == head.row_count {
                 let projections = Arc::new(decode_path_witness_projection_records(&rows).ok()?);
-                self.path_witness_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.path_witness_cache,
+                    cache_key,
+                    Arc::clone(&projections),
+                )?;
                 return Some(projections);
             }
         }
@@ -168,10 +170,11 @@ impl ProjectionStoreService {
         }
 
         let projections = Arc::new(decode_path_witness_projection_records(&rows).ok()?);
-        self.path_witness_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        self.insert_cached_projection_entry(
+            &self.path_witness_cache,
+            cache_key,
+            Arc::clone(&projections),
+        )?;
         Some(projections)
     }
 
@@ -233,10 +236,11 @@ impl ProjectionStoreService {
             let rows = build_test_subject_projection_records_from_paths(&candidate_paths).ok()?;
             let projections = Arc::new(decode_test_subject_projection_records(&rows).ok()?);
             if matches!(mode, ProjectionLoadMode::Repairing) {
-                self.test_subject_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key.clone(), Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.test_subject_cache,
+                    cache_key.clone(),
+                    Arc::clone(&projections),
+                )?;
             }
             Some(projections)
         };
@@ -271,10 +275,11 @@ impl ProjectionStoreService {
                 .ok()?;
             if rows.len() == head.row_count {
                 let projections = Arc::new(decode_test_subject_projection_records(&rows).ok()?);
-                self.test_subject_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.test_subject_cache,
+                    cache_key,
+                    Arc::clone(&projections),
+                )?;
                 return Some(projections);
             }
         }
@@ -308,10 +313,11 @@ impl ProjectionStoreService {
         }
 
         let projections = Arc::new(decode_test_subject_projection_records(&rows).ok()?);
-        self.test_subject_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        self.insert_cached_projection_entry(
+            &self.test_subject_cache,
+            cache_key,
+            Arc::clone(&projections),
+        )?;
         Some(projections)
     }
 
@@ -374,10 +380,11 @@ impl ProjectionStoreService {
                 build_entrypoint_surface_projection_records_from_paths(&candidate_paths).ok()?;
             let projections = Arc::new(decode_entrypoint_surface_projection_records(&rows).ok()?);
             if matches!(mode, ProjectionLoadMode::Repairing) {
-                self.entrypoint_surface_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key.clone(), Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.entrypoint_surface_cache,
+                    cache_key.clone(),
+                    Arc::clone(&projections),
+                )?;
             }
             Some(projections)
         };
@@ -415,10 +422,11 @@ impl ProjectionStoreService {
             if rows.len() == head.row_count {
                 let projections =
                     Arc::new(decode_entrypoint_surface_projection_records(&rows).ok()?);
-                self.entrypoint_surface_cache
-                    .write()
-                    .ok()?
-                    .insert(cache_key, Arc::clone(&projections));
+                self.insert_cached_projection_entry(
+                    &self.entrypoint_surface_cache,
+                    cache_key,
+                    Arc::clone(&projections),
+                )?;
                 return Some(projections);
             }
         }
@@ -452,10 +460,11 @@ impl ProjectionStoreService {
         }
 
         let projections = Arc::new(decode_entrypoint_surface_projection_records(&rows).ok()?);
-        self.entrypoint_surface_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&projections));
+        self.insert_cached_projection_entry(
+            &self.entrypoint_surface_cache,
+            cache_key,
+            Arc::clone(&projections),
+        )?;
         Some(projections)
     }
 
@@ -528,10 +537,11 @@ impl ProjectionStoreService {
                         .ok()?;
                     if rows.len() == head.row_count {
                         let projections = Arc::new(rows);
-                        self.path_relation_cache
-                            .write()
-                            .ok()?
-                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        self.insert_cached_projection_entry(
+                            &self.path_relation_cache,
+                            cache_key.clone(),
+                            Arc::clone(&projections),
+                        )?;
                         return Some(projections);
                     }
                 }
@@ -576,10 +586,11 @@ impl ProjectionStoreService {
         normalize_path_relation_projection_records(&mut rows);
         let projections = Arc::new(rows);
         if matches!(mode, ProjectionLoadMode::Repairing) {
-            self.path_relation_cache
-                .write()
-                .ok()?
-                .insert(cache_key, Arc::clone(&projections));
+            self.insert_cached_projection_entry(
+                &self.path_relation_cache,
+                cache_key,
+                Arc::clone(&projections),
+            )?;
         }
         Some(projections)
     }
@@ -653,10 +664,11 @@ impl ProjectionStoreService {
                         .ok()?;
                     if rows.len() == head.row_count {
                         let projections = Arc::new(rows);
-                        self.subtree_coverage_cache
-                            .write()
-                            .ok()?
-                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        self.insert_cached_projection_entry(
+                            &self.subtree_coverage_cache,
+                            cache_key.clone(),
+                            Arc::clone(&projections),
+                        )?;
                         return Some(projections);
                     }
                 }
@@ -672,10 +684,11 @@ impl ProjectionStoreService {
             path_witness.as_ref(),
         ));
         if matches!(mode, ProjectionLoadMode::Repairing) {
-            self.subtree_coverage_cache
-                .write()
-                .ok()?
-                .insert(cache_key, Arc::clone(&projections));
+            self.insert_cached_projection_entry(
+                &self.subtree_coverage_cache,
+                cache_key,
+                Arc::clone(&projections),
+            )?;
         }
         Some(projections)
     }
@@ -753,10 +766,11 @@ impl ProjectionStoreService {
                                 .map(|row| (row.path.clone(), row))
                                 .collect::<BTreeMap<_, _>>(),
                         );
-                        self.path_surface_term_cache
-                            .write()
-                            .ok()?
-                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        self.insert_cached_projection_entry(
+                            &self.path_surface_term_cache,
+                            cache_key.clone(),
+                            Arc::clone(&projections),
+                        )?;
                         return Some(projections);
                     }
                 }
@@ -785,10 +799,11 @@ impl ProjectionStoreService {
             .collect::<BTreeMap<_, _>>(),
         );
         if matches!(mode, ProjectionLoadMode::Repairing) {
-            self.path_surface_term_cache
-                .write()
-                .ok()?
-                .insert(cache_key, Arc::clone(&projections));
+            self.insert_cached_projection_entry(
+                &self.path_surface_term_cache,
+                cache_key,
+                Arc::clone(&projections),
+            )?;
         }
         Some(projections)
     }
@@ -862,10 +877,11 @@ impl ProjectionStoreService {
                         .ok()?;
                     if rows.len() == head.row_count {
                         let projections = Arc::new(group_anchor_sketches_by_path(rows));
-                        self.path_anchor_sketch_cache
-                            .write()
-                            .ok()?
-                            .insert(cache_key.clone(), Arc::clone(&projections));
+                        self.insert_cached_projection_entry(
+                            &self.path_anchor_sketch_cache,
+                            cache_key.clone(),
+                            Arc::clone(&projections),
+                        )?;
                         return Some(projections);
                     }
                 }
@@ -891,10 +907,11 @@ impl ProjectionStoreService {
             ),
         ));
         if matches!(mode, ProjectionLoadMode::Repairing) {
-            self.path_anchor_sketch_cache
-                .write()
-                .ok()?
-                .insert(cache_key, Arc::clone(&projections));
+            self.insert_cached_projection_entry(
+                &self.path_anchor_sketch_cache,
+                cache_key,
+                Arc::clone(&projections),
+            )?;
         }
         Some(projections)
     }

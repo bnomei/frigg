@@ -1,4 +1,5 @@
 use super::*;
+use crate::languages::rust_implementation_candidates_from_facts;
 
 #[derive(Debug, Clone)]
 pub(in crate::mcp::server) struct StructuralFollowUpSourceFile {
@@ -158,28 +159,6 @@ impl FriggMcpServer {
             Some(occurrence.range.start_column),
             Some(occurrence.range.end_line),
             Some(occurrence.range.end_column),
-        )
-    }
-
-    pub(in crate::mcp::server) fn is_precise_callable_kind(kind: &str) -> bool {
-        let normalized = kind.trim().to_ascii_lowercase();
-        matches!(
-            normalized.as_str(),
-            "function"
-                | "method"
-                | "constructor"
-                | "abstract_method"
-                | "method_alias"
-                | "method_specification"
-                | "protocol_method"
-                | "pure_virtual_method"
-                | "singleton_method"
-                | "static_method"
-                | "trait_method"
-                | "type_class_method"
-        ) || matches!(
-            Self::precise_kind_numeric_value(&normalized),
-            Some(9 | 17 | 26 | 66 | 67 | 68 | 69 | 70 | 74 | 76 | 80)
         )
     }
 
@@ -422,22 +401,35 @@ impl FriggMcpServer {
         target_corpus: &RepositorySymbolCorpus,
         target_root: &Path,
     ) -> Vec<ImplementationMatch> {
-        let matches =
+        let candidates = if target_corpus.rust_implementation_facts.is_empty() {
             heuristic_rust_implementation_candidates(target_symbol, &target_corpus.symbols)
-                .into_iter()
-                .map(|candidate| ImplementationMatch {
-                    symbol: candidate.symbol,
-                    kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
-                    repository_id: target_corpus.repository_id.clone(),
-                    path: Self::relative_display_path(target_root, &candidate.source_symbol.path),
-                    line: candidate.source_symbol.line,
-                    column: 1,
-                    relation: Some(candidate.relation.to_owned()),
-                    precision: Some("heuristic".to_owned()),
-                    fallback_reason: Some("precise_absent".to_owned()),
-                    follow_up_structural: Vec::new(),
-                })
-                .collect::<Vec<_>>();
+        } else {
+            let indexed = rust_implementation_candidates_from_facts(
+                target_symbol,
+                &target_corpus.symbols,
+                &target_corpus.rust_implementation_facts,
+            );
+            if indexed.is_empty() {
+                heuristic_rust_implementation_candidates(target_symbol, &target_corpus.symbols)
+            } else {
+                indexed
+            }
+        };
+        let matches = candidates
+            .into_iter()
+            .map(|candidate| ImplementationMatch {
+                symbol: candidate.symbol,
+                kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
+                repository_id: target_corpus.repository_id.clone(),
+                path: Self::relative_display_path(target_root, &candidate.source_symbol.path),
+                line: candidate.source_symbol.line,
+                column: 1,
+                relation: Some(candidate.relation.to_owned()),
+                precision: Some("heuristic".to_owned()),
+                fallback_reason: Some(candidate.fallback_reason.to_owned()),
+                follow_up_structural: Vec::new(),
+            })
+            .collect::<Vec<_>>();
 
         Self::dedup_sorted_implementation_matches(matches)
     }

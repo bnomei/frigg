@@ -1,3 +1,9 @@
+//! Shared language registry and parser pooling for Tree-sitter-backed features.
+//!
+//! Parsers are reused per thread and language key to reduce repeated setup cost on indexing and
+//! structural navigation hot paths, while the pool stays bounded so long-lived servers do not
+//! retain unbounded idle parser state.
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
@@ -134,6 +140,8 @@ thread_local! {
     static PARSER_POOL: RefCell<BTreeMap<ParserPoolKey, Vec<Parser>>> = const { RefCell::new(BTreeMap::new()) };
 }
 
+const PARSER_POOL_MAX_IDLE_PER_KEY: usize = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ParserPoolKey {
     Rust,
@@ -219,7 +227,11 @@ impl Drop for PooledParser {
         };
         parser.reset();
         PARSER_POOL.with(|pool| {
-            pool.borrow_mut().entry(self.key).or_default().push(parser);
+            let mut pool = pool.borrow_mut();
+            let entry = pool.entry(self.key).or_default();
+            if entry.len() < PARSER_POOL_MAX_IDLE_PER_KEY {
+                entry.push(parser);
+            }
         });
     }
 }

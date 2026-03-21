@@ -20,6 +20,15 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 4. Use a shell slice or `read_file` for the high-risk sites depending on whether repository-aware evidence matters
 5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; shell `rg` or `git grep` is still fine for nearby throwaway pattern checks
 
+## Technical Review
+
+1. `search_text` for the contract phrase, API name, or narrative anchor you want to prove
+2. `go_to_definition` or `find_declarations` for the concrete implementation anchor
+3. `find_references` to show how the contract propagates into callers, tests, or helpers
+4. `incoming_calls` if you need believable entry paths
+5. `search_structural` for cross-cutting proof that is too awkward or noisy in plain text search
+6. Treat `outgoing_calls` as provisional until another tool confirms the edge
+
 ## Onboarding And Architecture
 
 1. `search_hybrid` with the feature or subsystem question

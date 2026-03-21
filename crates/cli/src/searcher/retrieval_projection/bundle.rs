@@ -12,7 +12,6 @@ use super::{
     RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE, RETRIEVAL_PROJECTION_FAMILY_TEST_SUBJECT,
     RETRIEVAL_PROJECTION_INPUT_MODE_AST, RETRIEVAL_PROJECTION_INPUT_MODE_PATH,
     SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION, TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
-    augment_path_relation_projection_records_with_ast_relation_evidence,
     build_path_anchor_sketch_projection_records, build_path_relation_projection_records,
     build_path_surface_term_projection_records, build_subtree_coverage_projection_records,
     normalize_path_anchor_sketch_projection_records, normalize_path_relation_projection_records,
@@ -87,19 +86,7 @@ pub(crate) fn build_retrieval_projection_bundle(
     let mut path_anchor_sketches = path_anchor_sketches;
 
     let ast_relation_count_before = path_relations.len();
-    augment_path_relation_projection_records_with_ast_relation_evidence(
-        workspace_root,
-        &absolute_manifest_paths,
-        &stored_path_witness,
-        &mut path_relations,
-    );
-    if path_relations.len() > ast_relation_count_before {
-        input_modes
-            .path_relation
-            .insert(RETRIEVAL_PROJECTION_INPUT_MODE_AST.to_owned());
-    }
-
-    super::ast::apply_ast_projection_contributions(
+    super::ast::apply_ast_bundle_contributions(
         workspace_root,
         &absolute_manifest_paths,
         &stored_path_witness,
@@ -108,6 +95,11 @@ pub(crate) fn build_retrieval_projection_bundle(
         &mut path_anchor_sketches,
         &mut input_modes,
     );
+    if path_relations.len() > ast_relation_count_before {
+        input_modes
+            .path_relation
+            .insert(RETRIEVAL_PROJECTION_INPUT_MODE_AST.to_owned());
+    }
     super::scip::apply_scip_projection_contributions(
         repository_id,
         workspace_root,

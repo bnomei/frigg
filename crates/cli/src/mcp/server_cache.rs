@@ -1,6 +1,13 @@
+//! Runtime cache contracts and shared cache value types for the MCP server.
+//!
+//! The hot-path caches here are process-wide but explicitly budgeted. File content snapshots are
+//! stored once per canonical file/freshness key with a compact normalized text buffer plus line
+//! ranges so repeated reads and explore windows can share the same underlying content.
+
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -497,9 +504,14 @@ pub(crate) struct FileContentWindowCacheKey {
 }
 
 #[derive(Debug, Clone)]
+/// Cached file snapshot used by both `read_file` and `explore`.
+///
+/// Raw bytes are preserved for exact full-file reads, while a single normalized text buffer plus
+/// per-line ranges supports bounded line windows without allocating one `String` per line.
 pub(crate) struct FileContentSnapshot {
-    raw_bytes: Arc<Vec<u8>>,
-    normalized_lines: Arc<Vec<String>>,
+    raw_bytes: Arc<[u8]>,
+    normalized_content: Arc<str>,
+    line_ranges: Arc<Vec<Range<usize>>>,
     line_lossy_utf8: Arc<Vec<bool>>,
     total_lines: usize,
     estimated_bytes: usize,
@@ -512,6 +524,7 @@ pub(crate) struct CachedFileContentWindow {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Byte-bounded LRU-style cache for file content windows keyed by repository freshness scopes.
 pub(crate) struct FileContentWindowCache {
     entries: BTreeMap<FileContentWindowCacheKey, CachedFileContentWindow>,
     insertion_order: VecDeque<FileContentWindowCacheKey>,
@@ -524,14 +537,17 @@ impl FileContentSnapshot {
     }
 
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
-        let mut normalized_lines = Vec::new();
+        let mut normalized_content = String::new();
+        let mut line_ranges = Vec::new();
         let mut line_lossy_utf8 = Vec::new();
         let mut line_start = 0usize;
 
         for index in memchr_iter(b'\n', &bytes) {
             let raw_line = &bytes[line_start..=index];
             let (normalized_line, had_lossy_utf8) = normalize_lossy_line_bytes(raw_line);
-            normalized_lines.push(normalized_line);
+            let start = normalized_content.len();
+            normalized_content.push_str(&normalized_line);
+            line_ranges.push(start..normalized_content.len());
             line_lossy_utf8.push(had_lossy_utf8);
             line_start = index.saturating_add(1);
         }
@@ -539,21 +555,27 @@ impl FileContentSnapshot {
         if line_start < bytes.len() {
             let raw_line = &bytes[line_start..];
             let (normalized_line, had_lossy_utf8) = normalize_lossy_line_bytes(raw_line);
-            normalized_lines.push(normalized_line);
+            let start = normalized_content.len();
+            normalized_content.push_str(&normalized_line);
+            line_ranges.push(start..normalized_content.len());
             line_lossy_utf8.push(had_lossy_utf8);
         }
 
-        let total_lines = normalized_lines.len();
-        let estimated_bytes = bytes.len().saturating_add(
-            normalized_lines
-                .iter()
-                .map(|line| line.len())
-                .sum::<usize>(),
-        );
+        let total_lines = line_ranges.len();
+        let estimated_bytes = bytes
+            .len()
+            .saturating_add(normalized_content.len())
+            .saturating_add(
+                line_ranges
+                    .len()
+                    .saturating_mul(std::mem::size_of::<Range<usize>>()),
+            )
+            .saturating_add(line_lossy_utf8.len());
 
         Self {
-            raw_bytes: Arc::new(bytes),
-            normalized_lines: Arc::new(normalized_lines),
+            raw_bytes: Arc::<[u8]>::from(bytes),
+            normalized_content: Arc::<str>::from(normalized_content),
+            line_ranges: Arc::new(line_ranges),
             line_lossy_utf8: Arc::new(line_lossy_utf8),
             total_lines,
             estimated_bytes,
@@ -569,7 +591,7 @@ impl FileContentSnapshot {
     }
 
     pub(crate) fn read_file_content(&self) -> String {
-        String::from_utf8_lossy(self.raw_bytes.as_slice()).to_string()
+        String::from_utf8_lossy(&self.raw_bytes).to_string()
     }
 
     pub(crate) fn read_line_slice_lossy(
@@ -595,7 +617,11 @@ impl FileContentSnapshot {
         let mut first_selected_line = true;
 
         for line_index in start_index..end_index {
-            let line = &self.normalized_lines[line_index];
+            let line = self
+                .line_ranges
+                .get(line_index)
+                .map(|range| &self.normalized_content[range.start..range.end])
+                .unwrap_or("");
             lossy_utf8 |= self.line_lossy_utf8[line_index];
             if !first_selected_line {
                 sliced_bytes = sliced_bytes.saturating_add(1);
@@ -639,7 +665,8 @@ impl FileContentSnapshot {
         let mut scope_within_budget = true;
         let mut first_scope_line = true;
 
-        for (line_index, line) in self.normalized_lines.iter().enumerate() {
+        for (line_index, range) in self.line_ranges.iter().enumerate() {
+            let line = &self.normalized_content[range.start..range.end];
             let line_number = line_index.saturating_add(1);
             let in_scope = line_number >= scope.start_line
                 && scope
@@ -692,7 +719,7 @@ impl FileContentSnapshot {
                             start_column,
                             end_line: line_number,
                             end_column: end.saturating_add(1),
-                            excerpt: line.clone(),
+                            excerpt: line.to_owned(),
                             anchor,
                         });
                     } else if resume_cursor.is_none() {

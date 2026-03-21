@@ -212,6 +212,10 @@ impl FriggMcpServer {
                 }
                 .map_err(Self::map_frigg_error)?;
 
+                let focus_normalized = inspection
+                    .raw_focus
+                    .as_ref()
+                    .is_some_and(|raw_focus| raw_focus.span != inspection.focus.span);
                 let metadata = json!({
                     "source": "tree_sitter",
                     "language": inspection.language.as_str(),
@@ -222,6 +226,11 @@ impl FriggMcpServer {
                     },
                     "max_ancestors": max_ancestors,
                     "max_children": max_children,
+                    "focus_normalized": focus_normalized,
+                    "raw_focus_kind": inspection
+                        .raw_focus
+                        .as_ref()
+                        .map(|raw_focus| raw_focus.kind.clone()),
                 });
                 let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(InspectSyntaxTreeResponse {

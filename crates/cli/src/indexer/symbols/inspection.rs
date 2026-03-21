@@ -380,7 +380,7 @@ fn inspect_syntax_tree_internal(
 
     let tree = parse_tree_for_source(language, path, source, "syntax inspection")?;
     let root = tree.root_node();
-    let focus_node = match (line, column) {
+    let (raw_focus_node, focus_node) = match (line, column) {
         (Some(line), Some(column)) => {
             let offset = byte_offset_for_line_column(source, line, column).ok_or_else(|| {
                 FriggError::InvalidInput(format!(
@@ -388,20 +388,28 @@ fn inspect_syntax_tree_internal(
                     path.display()
                 ))
             })?;
-            focus_node_for_offset(root, offset)
+            let raw_focus = focus_node_for_offset(root, offset);
+            let normalized_focus = first_useful_named_node(raw_focus).unwrap_or(raw_focus);
+            (Some(raw_focus), normalized_focus)
         }
-        _ => root,
+        _ => (None, root),
     };
 
-    let inspection =
-        build_syntax_tree_inspection(language, source, focus_node, max_ancestors, max_children);
+    let inspection = build_syntax_tree_inspection(
+        language,
+        source,
+        focus_node,
+        raw_focus_node,
+        max_ancestors,
+        max_children,
+    );
     let follow_up_structural = follow_up_context
         .map(|context| {
             structural_follow_up_queries_for_node(
                 language,
                 context.display_path,
                 context.repository_id,
-                focus_node,
+                raw_focus_node.unwrap_or(focus_node),
             )
         })
         .unwrap_or_default();
@@ -463,6 +471,7 @@ fn build_syntax_tree_inspection(
     language: SymbolLanguage,
     source: &str,
     focus_node: Node<'_>,
+    raw_focus_node: Option<Node<'_>>,
     max_ancestors: usize,
     max_children: usize,
 ) -> SyntaxTreeInspection {
@@ -488,6 +497,7 @@ fn build_syntax_tree_inspection(
     SyntaxTreeInspection {
         language,
         focus: syntax_tree_inspection_node(source, focus_node),
+        raw_focus: raw_focus_node.map(|node| syntax_tree_inspection_node(source, node)),
         ancestors: ancestors.into_vec(),
         children: children.into_vec(),
     }

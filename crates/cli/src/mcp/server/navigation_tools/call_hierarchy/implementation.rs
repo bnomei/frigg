@@ -110,7 +110,10 @@ impl FriggMcpServer {
                         &target.root,
                     );
                     resolution_precision = Some("heuristic".to_owned());
-                    fallback_reason = Some("precise_absent".to_owned());
+                    fallback_reason = precise_matches
+                        .iter()
+                        .find_map(|implementation_match| implementation_match.fallback_reason.clone())
+                        .or_else(|| Some("precise_absent".to_owned()));
                     for implementation_match in &mut precise_matches {
                         if implementation_match.fallback_reason.is_none() {
                             implementation_match.fallback_reason = fallback_reason.clone();
@@ -529,80 +532,19 @@ impl FriggMcpServer {
                     &target.symbol,
                 );
                 for precise_target in &precise_targets {
-                    let mut matches = graph
-                        .precise_relationships_from_symbol(
-                            &target_corpus.repository_id,
-                            &precise_target.symbol,
-                        )
-                        .into_iter()
-                        .filter(|relationship| {
-                            relationship.kind == PreciseRelationshipKind::Reference
-                        })
-                        .filter_map(|relationship| {
-                            let callee_symbol = graph
-                                .precise_symbol(
-                                    &target_corpus.repository_id,
-                                    &relationship.to_symbol,
-                                )?
-                                .clone();
-                            if !Self::is_precise_callable_kind(&callee_symbol.kind) {
-                                return None;
-                            }
-                            let callee_definition = Self::precise_definition_occurrence_for_symbol(
-                                graph.as_ref(),
-                                &target_corpus.repository_id,
-                                &relationship.to_symbol,
-                            )?;
-                            Some(CallHierarchyMatch {
-                                source_symbol: if precise_target.display_name.is_empty() {
-                                    target.symbol.name.clone()
-                                } else {
-                                    precise_target.display_name.clone()
-                                },
-                                target_symbol: Self::precise_symbol_label(&callee_symbol),
-                                repository_id: target_corpus.repository_id.clone(),
-                                path: Self::canonicalize_navigation_path(
-                                    &target.root,
-                                    &callee_definition.path,
-                                ),
-                                line: callee_definition.range.start_line,
-                                column: callee_definition.range.start_column,
-                                relation: "calls".to_owned(),
-                                precision: Some(
-                                    Self::precise_match_precision(precise_coverage).to_owned(),
-                                ),
-                                call_path: None,
-                                call_line: None,
-                                call_column: None,
-                                call_end_line: None,
-                                call_end_column: None,
-                                follow_up_structural: Vec::new(),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    Self::sort_call_hierarchy_matches(&mut matches);
+                    let matches = Self::precise_outgoing_matches_from_occurrences(
+                        graph.as_ref(),
+                        target_corpus.as_ref(),
+                        &target.root,
+                        &target.symbol.name,
+                        precise_coverage,
+                        precise_target,
+                        &target.symbol.stable_id,
+                    );
                     if !matches.is_empty() {
                         selected_precise_symbol = Some(precise_target.symbol.clone());
                         precise_matches = matches;
                         break;
-                    }
-                }
-                if precise_matches.is_empty() {
-                    for precise_target in &precise_targets {
-                        let matches = Self::precise_outgoing_matches_from_occurrences(
-                            graph.as_ref(),
-                            target_corpus.as_ref(),
-                            &target.root,
-                            &target.symbol.name,
-                            precise_coverage,
-                            precise_target,
-                            &target.symbol.stable_id,
-                        );
-                        if !matches.is_empty() {
-                            selected_precise_symbol = Some(precise_target.symbol.clone());
-                            precise_matches = matches;
-                            break;
-                        }
                     }
                 }
 
@@ -703,12 +645,20 @@ impl FriggMcpServer {
                     }));
                 }
 
+                let mut source_cache: std::collections::BTreeMap<String, Option<String>> =
+                    std::collections::BTreeMap::new();
                 let mut matches = graph
                     .outgoing_adjacency(&target.symbol.stable_id)
                     .into_iter()
                     .filter(|adjacent| {
                         Self::is_heuristic_call_relation(adjacent.relation)
                             && Self::is_heuristic_callable_kind(&adjacent.symbol.kind)
+                            && Self::heuristic_symbol_body_has_call_like_reference(
+                                &target.root,
+                                &target.symbol,
+                                adjacent.symbol.display_name.as_str(),
+                                &mut source_cache,
+                            )
                     })
                     .map(|adjacent| CallHierarchyMatch {
                         source_symbol: target.symbol.name.clone(),
@@ -797,5 +747,39 @@ impl FriggMcpServer {
             })()
         });
         execution.await?
+    }
+
+    fn heuristic_symbol_body_has_call_like_reference(
+        root: &Path,
+        source_symbol: &SymbolDefinition,
+        target_name: &str,
+        source_cache: &mut std::collections::BTreeMap<String, Option<String>>,
+    ) -> bool {
+        if target_name.trim().is_empty() {
+            return false;
+        }
+        let relative_path = Self::relative_display_path(root, &source_symbol.path);
+        let source = source_cache
+            .entry(relative_path)
+            .or_insert_with(|| fs::read_to_string(&source_symbol.path).ok())
+            .as_deref();
+        let Some(source) = source else {
+            return false;
+        };
+
+        let start = source_symbol.span.start_byte.min(source.len());
+        let end = source_symbol.span.end_byte.min(source.len());
+        let Some(body) = source.get(start..end) else {
+            return false;
+        };
+
+        body.match_indices(target_name).any(|(index, _)| {
+            let suffix_start = index.saturating_add(target_name.len()).min(body.len());
+            let suffix = body.get(suffix_start..).unwrap_or_default();
+            match source_symbol.language {
+                SymbolLanguage::Rust => rust_source_suffix_looks_like_call(suffix),
+                _ => suffix.trim_start().starts_with('('),
+            }
+        })
     }
 }

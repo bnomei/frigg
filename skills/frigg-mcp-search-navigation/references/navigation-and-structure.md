@@ -73,6 +73,8 @@ If a location-based jump underfills, try:
 - `find_references`
 - a tighter source location on the actual token
 
+For `find_implementations`, be more cautious on generic traits or blanket impl patterns. `heuristic_no_precise` can still be useful, but it is weaker evidence than a concrete precise implementation edge.
+
 ## `incoming_calls` and `outgoing_calls`
 
 Call hierarchy is the most precise-data-sensitive part of Frigg.
@@ -87,6 +89,10 @@ Important outputs:
 When opted in, each match may also include `follow_up_structural`.
 
 Read `availability` before treating empty matches as meaningful. If `availability.status` says the result is unavailable without precise data, say that explicitly.
+
+Trust guidance:
+- `incoming_calls` is often good enough to map believable entry paths
+- `outgoing_calls` is currently the more error-prone side of the stack, so confirm suspicious callees with `read_file`, `find_references`, or `search_structural` before asserting the edge
 
 ## `document_symbols`
 
@@ -121,6 +127,10 @@ Important outputs:
 
 This is the safest way to learn the real Tree-sitter node kinds before writing a structural query.
 
+Practical caution:
+- it is cursor-sensitive
+- if the focus lands on punctuation or an unexpected wrapper node, move the cursor onto the identifier or call token and retry
+
 ## `search_structural`
 
 Use `search_structural` when syntax shape matters more than ranking or symbol metadata.
@@ -150,6 +160,7 @@ Practical rules:
 - the query must be a valid Tree-sitter query for the target language grammar
 - if Frigg reports an impossible pattern or invalid query, inspect the AST first
 - use `path_regex` to keep structural scans bounded
+- for complex proof queries, `search_structural` is often more reliable than call-graph inference
 
 Example flow:
 - Query: `(function_item name: (identifier) @name) @match`

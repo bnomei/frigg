@@ -378,6 +378,87 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
 }
 
 #[tokio::test]
+async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
+    let workspace_root = temp_workspace_root("search-symbol-inline-rust-tests");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::write(
+        workspace_root.join("src/simulator.rs"),
+        "pub struct Simulator;\n\
+         impl Simulator { pub fn run(&self) {} }\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             fn simulator_smoke() {}\n\
+         }\n",
+    )
+    .expect("failed to write rust fixture");
+
+    let server = server_for_workspace_root(&workspace_root);
+    let runtime_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "simulator".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: Some(SearchSymbolPathClass::Runtime),
+            path_regex: Some("^src/".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("search_symbol should succeed")
+        .0;
+
+    assert!(
+        runtime_response
+            .matches
+            .iter()
+            .all(|matched| matched.symbol != "simulator_smoke"),
+        "runtime-filtered symbol search should exclude inline test symbols: {:?}",
+        runtime_response
+            .matches
+            .iter()
+            .map(|matched| matched.symbol.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        runtime_response
+            .matches
+            .iter()
+            .any(|matched| matched.symbol == "Simulator" && matched.kind == "struct")
+    );
+
+    let broad_response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "simulator".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: Some("^src/".to_owned()),
+            limit: Some(20),
+        }))
+        .await
+        .expect("broad search_symbol should succeed")
+        .0;
+
+    let symbols = broad_response
+        .matches
+        .iter()
+        .map(|matched| matched.symbol.as_str())
+        .collect::<Vec<_>>();
+    let simulator_index = symbols
+        .iter()
+        .position(|symbol| *symbol == "Simulator")
+        .expect("runtime symbol should be present");
+    let smoke_index = symbols
+        .iter()
+        .position(|symbol| *symbol == "simulator_smoke")
+        .expect("inline test symbol should still be present in broad results");
+    assert!(
+        simulator_index < smoke_index,
+        "runtime symbols should outrank inline test symbols: {:?}",
+        symbols
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn search_symbol_filters_by_path_class_and_path_regex() {
     let workspace_root = temp_workspace_root("search-symbol-filters");
     fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");

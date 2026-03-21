@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use tree_sitter::Node;
@@ -11,6 +12,7 @@ pub(crate) struct RustImplementationMatchCandidate<'a> {
     pub(crate) source_symbol: &'a SymbolDefinition,
     pub(crate) symbol: String,
     pub(crate) relation: &'static str,
+    pub(crate) fallback_reason: &'static str,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,6 +30,40 @@ pub(crate) struct RustEnclosingSymbolContext {
     pub(crate) trait_name: Option<String>,
     pub(crate) impl_type: Option<String>,
     pub(crate) impl_trait: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RustSymbolContext {
+    pub(crate) inside_test_module: bool,
+    pub(crate) inside_cfg_test: bool,
+    pub(crate) inside_test_fn: bool,
+}
+
+impl RustSymbolContext {
+    pub(crate) fn is_test_context(&self) -> bool {
+        self.inside_test_module || self.inside_cfg_test || self.inside_test_fn
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustImplementationKind {
+    ConcreteTrait,
+    BlanketTrait,
+    Inherent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RustImplementationFact {
+    pub(crate) source_symbol_id: String,
+    pub(crate) trait_name: Option<String>,
+    pub(crate) self_type: String,
+    pub(crate) kind: RustImplementationKind,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RustSourceAnalysis {
+    pub(crate) symbol_contexts_by_stable_id: BTreeMap<String, RustSymbolContext>,
+    pub(crate) implementation_facts: Vec<RustImplementationFact>,
 }
 
 pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {
@@ -163,6 +199,93 @@ pub(crate) fn heuristic_implementation_candidates<'a>(
             source_symbol: symbol,
             symbol: matched_display_name,
             relation,
+            fallback_reason: "precise_absent",
+        });
+    }
+
+    matches
+}
+
+pub(crate) fn analyze_source(source: &str, symbols: &[SymbolDefinition]) -> RustSourceAnalysis {
+    let mut symbol_contexts_by_stable_id = BTreeMap::new();
+    let mut implementation_facts = Vec::new();
+
+    for symbol in symbols {
+        symbol_contexts_by_stable_id.insert(
+            symbol.stable_id.clone(),
+            rust_symbol_context_for_symbol(source, symbol, symbols),
+        );
+
+        if symbol.kind != SymbolKind::Impl {
+            continue;
+        }
+        if let Some(fact) = rust_implementation_fact_for_symbol(source, symbol) {
+            implementation_facts.push(fact);
+        }
+    }
+
+    RustSourceAnalysis {
+        symbol_contexts_by_stable_id,
+        implementation_facts,
+    }
+}
+
+pub(crate) fn implementation_candidates_from_facts<'a>(
+    target_symbol: &'a SymbolDefinition,
+    symbols: &'a [SymbolDefinition],
+    facts: &'a [RustImplementationFact],
+) -> Vec<RustImplementationMatchCandidate<'a>> {
+    let target_name = target_symbol.name.trim();
+    if target_name.is_empty() {
+        return Vec::new();
+    }
+
+    let symbol_lookup = symbols
+        .iter()
+        .map(|symbol| (symbol.stable_id.as_str(), symbol))
+        .collect::<BTreeMap<_, _>>();
+    let mut matches = Vec::new();
+    let target_is_trait = target_symbol.kind == SymbolKind::Trait;
+
+    for fact in facts {
+        let Some(source_symbol) = symbol_lookup.get(fact.source_symbol_id.as_str()).copied() else {
+            continue;
+        };
+
+        if target_is_trait {
+            let Some(implemented_trait) = fact.trait_name.as_deref() else {
+                continue;
+            };
+            if !implemented_trait.eq_ignore_ascii_case(target_name) {
+                continue;
+            }
+
+            matches.push(RustImplementationMatchCandidate {
+                source_symbol,
+                symbol: fact.self_type.clone(),
+                relation: match fact.kind {
+                    RustImplementationKind::ConcreteTrait => "implements",
+                    RustImplementationKind::BlanketTrait => "implements_blanket",
+                    RustImplementationKind::Inherent => "implements",
+                },
+                fallback_reason: "precise_absent_rust_impl_index",
+            });
+            continue;
+        }
+
+        if !rust_type_matches_target(&fact.self_type, target_name) {
+            continue;
+        }
+
+        matches.push(RustImplementationMatchCandidate {
+            source_symbol,
+            symbol: source_symbol.name.clone(),
+            relation: match fact.kind {
+                RustImplementationKind::ConcreteTrait => "implementation",
+                RustImplementationKind::BlanketTrait => "implementation_blanket",
+                RustImplementationKind::Inherent => "inherent_impl",
+            },
+            fallback_reason: "precise_absent_rust_impl_index",
         });
     }
 
@@ -490,6 +613,188 @@ fn rust_focus_node_for_offset(root: Node<'_>, offset: usize) -> Node<'_> {
     current
 }
 
+fn rust_symbol_context_for_symbol(
+    source: &str,
+    symbol: &SymbolDefinition,
+    symbols: &[SymbolDefinition],
+) -> RustSymbolContext {
+    let mut context = RustSymbolContext::default();
+
+    for candidate in symbols {
+        if candidate.path != symbol.path {
+            continue;
+        }
+        if candidate.span.start_byte > symbol.span.start_byte
+            || candidate.span.end_byte < symbol.span.end_byte
+        {
+            continue;
+        }
+
+        let snippet = source_for_symbol_span(source, candidate);
+        let leading = source_before_symbol(source, candidate);
+        if snippet.contains("#[cfg(test") || leading.contains("#[cfg(test") {
+            context.inside_cfg_test = true;
+        }
+        if candidate.kind == SymbolKind::Module
+            && rust_module_looks_like_test(candidate.name.as_str(), snippet, leading)
+        {
+            context.inside_test_module = true;
+        }
+        if matches!(candidate.kind, SymbolKind::Function | SymbolKind::Method)
+            && rust_function_looks_like_test(candidate.name.as_str(), snippet, leading)
+        {
+            context.inside_test_fn = true;
+        }
+    }
+
+    context
+}
+
+fn rust_implementation_fact_for_symbol(
+    source: &str,
+    symbol: &SymbolDefinition,
+) -> Option<RustImplementationFact> {
+    let (trait_name, self_type) = parse_impl_signature(symbol.name.as_str())?;
+    let header = rust_impl_header(source_for_symbol_span(source, symbol));
+    let kind = if trait_name.is_none() {
+        RustImplementationKind::Inherent
+    } else {
+        let generic_params = rust_impl_generic_parameters(header);
+        if self_type_mentions_generic_params(self_type, &generic_params) {
+            RustImplementationKind::BlanketTrait
+        } else {
+            RustImplementationKind::ConcreteTrait
+        }
+    };
+
+    Some(RustImplementationFact {
+        source_symbol_id: symbol.stable_id.clone(),
+        trait_name: trait_name.map(str::to_owned),
+        self_type: self_type.to_owned(),
+        kind,
+    })
+}
+
+fn source_for_symbol_span<'a>(source: &'a str, symbol: &SymbolDefinition) -> &'a str {
+    let start = symbol.span.start_byte.min(source.len());
+    let end = symbol.span.end_byte.min(source.len());
+    if start >= end {
+        return "";
+    }
+    source.get(start..end).unwrap_or("")
+}
+
+fn source_before_symbol<'a>(source: &'a str, symbol: &SymbolDefinition) -> &'a str {
+    let start = symbol.span.start_byte.min(source.len());
+    let leading_start = start.saturating_sub(128);
+    source.get(leading_start..start).unwrap_or("")
+}
+
+fn rust_module_looks_like_test(name: &str, snippet: &str, leading: &str) -> bool {
+    name == "tests"
+        || name.ends_with("_tests")
+        || snippet.contains("#[cfg(test")
+        || leading.contains("#[cfg(test")
+}
+
+fn rust_function_looks_like_test(name: &str, snippet: &str, leading: &str) -> bool {
+    name.starts_with("test_")
+        || name.ends_with("_test")
+        || snippet.contains("#[test")
+        || snippet.contains("::test]")
+        || leading.contains("#[test")
+        || leading.contains("::test]")
+}
+
+fn rust_impl_header(snippet: &str) -> &str {
+    snippet.split('{').next().unwrap_or(snippet).trim()
+}
+
+fn rust_impl_generic_parameters(header: &str) -> BTreeSet<String> {
+    let mut generics = BTreeSet::new();
+    let Some(after_impl) = header.strip_prefix("impl") else {
+        return generics;
+    };
+    let after_impl = after_impl.trim_start();
+    if !after_impl.starts_with('<') {
+        return generics;
+    }
+
+    let mut depth = 0usize;
+    let mut body = String::new();
+    for ch in after_impl.chars() {
+        match ch {
+            '<' => {
+                depth = depth.saturating_add(1);
+                if depth > 1 {
+                    body.push(ch);
+                }
+            }
+            '>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+                body.push(ch);
+            }
+            _ if depth > 0 => body.push(ch),
+            _ => break,
+        }
+    }
+
+    let mut token = String::new();
+    for ch in body.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+        rust_push_generic_param_token(&mut generics, &mut token);
+    }
+    rust_push_generic_param_token(&mut generics, &mut token);
+    generics
+}
+
+fn rust_push_generic_param_token(generics: &mut BTreeSet<String>, token: &mut String) {
+    if token
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
+    {
+        generics.insert(token.clone());
+    }
+    token.clear();
+}
+
+fn self_type_mentions_generic_params(self_type: &str, generic_params: &BTreeSet<String>) -> bool {
+    if generic_params.is_empty() {
+        return false;
+    }
+    let mut token = String::new();
+    for ch in self_type.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+        if generic_params.contains(&token) {
+            return true;
+        }
+        token.clear();
+    }
+    generic_params.contains(&token)
+}
+
+fn rust_type_matches_target(self_type: &str, target_name: &str) -> bool {
+    let normalized = self_type
+        .split("::")
+        .last()
+        .unwrap_or(self_type)
+        .split('<')
+        .next()
+        .unwrap_or(self_type)
+        .trim();
+    normalized.eq_ignore_ascii_case(target_name)
+}
+
 fn rust_has_ancestor_kind(node: Node<'_>, expected_kinds: &[&str]) -> bool {
     let mut cursor = node.parent();
     while let Some(parent) = cursor {
@@ -508,9 +813,11 @@ mod tests {
     use crate::languages::SymbolLanguage;
 
     use super::{
-        RustEnclosingSymbolContext, RustImplementationMatchCandidate, enclosing_symbol_context,
-        heuristic_implementation_candidates, navigation_query_hint_from_source,
-        parse_impl_signature, relative_path_module_segments, source_suffix_looks_like_call,
+        RustEnclosingSymbolContext, RustImplementationFact, RustImplementationKind,
+        RustImplementationMatchCandidate, analyze_source, enclosing_symbol_context,
+        heuristic_implementation_candidates, implementation_candidates_from_facts,
+        navigation_query_hint_from_source, parse_impl_signature, relative_path_module_segments,
+        source_suffix_looks_like_call,
     };
     use crate::indexer::{SourceSpan, SymbolDefinition, SymbolKind};
 
@@ -548,7 +855,13 @@ mod tests {
         ];
         let trait_matches = heuristic_implementation_candidates(&target_trait, &trait_symbols);
         assert_eq!(trait_matches.len(), 1);
-        assert_match(&trait_matches[0], &trait_impl, "App", "implements");
+        assert_match(
+            &trait_matches[0],
+            &trait_impl,
+            "App",
+            "implements",
+            "precise_absent",
+        );
 
         let type_symbols = [trait_impl.clone(), inherent_impl.clone(), unrelated_impl];
         let type_matches = heuristic_implementation_candidates(&target_type, &type_symbols);
@@ -558,12 +871,111 @@ mod tests {
             &trait_impl,
             "impl Display for App",
             "implementation",
+            "precise_absent",
         );
         assert_match(
             &type_matches[1],
             &inherent_impl,
             "impl App",
             "implementation",
+            "precise_absent",
+        );
+    }
+
+    #[test]
+    fn rust_source_analysis_marks_test_context_and_blanket_impls() {
+        let source = "pub trait Service {}\n\
+                      pub struct App;\n\
+                      impl<T> Service for Wrapper<T> {}\n\
+                      #[cfg(test)] mod tests {\n\
+                          fn helper() {}\n\
+                      }\n";
+        let symbols = crate::indexer::extract_symbols_from_source(
+            SymbolLanguage::Rust,
+            Path::new("src/lib.rs"),
+            source,
+        )
+        .expect("rust source should extract symbols");
+        let analysis = analyze_source(source, &symbols);
+        let tests_module = symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Module && symbol.name == "tests")
+            .expect("tests module symbol");
+        let helper = symbols
+            .iter()
+            .find(|symbol| symbol.kind == SymbolKind::Function && symbol.name == "helper")
+            .expect("helper symbol");
+        let impl_fact = analysis
+            .implementation_facts
+            .iter()
+            .find(|fact| fact.trait_name.as_deref() == Some("Service"))
+            .expect("trait impl fact");
+
+        assert!(
+            analysis
+                .symbol_contexts_by_stable_id
+                .get(helper.stable_id.as_str())
+                .expect("helper context")
+                .is_test_context()
+        );
+        assert!(
+            analysis
+                .symbol_contexts_by_stable_id
+                .get(tests_module.stable_id.as_str())
+                .expect("tests module context")
+                .inside_cfg_test
+        );
+        assert_eq!(impl_fact.self_type, "Wrapper<T>");
+        assert_eq!(impl_fact.kind, RustImplementationKind::BlanketTrait);
+    }
+
+    #[test]
+    fn rust_impl_index_candidates_distinguish_blanket_and_inherent_impls() {
+        let target_trait = symbol("Service", SymbolKind::Trait, 1);
+        let target_type = symbol("Wrapper", SymbolKind::Struct, 2);
+        let blanket_impl = symbol("impl Service for Wrapper<T>", SymbolKind::Impl, 8);
+        let inherent_impl = symbol("impl Wrapper<T>", SymbolKind::Impl, 12);
+        let facts = vec![
+            RustImplementationFact {
+                source_symbol_id: blanket_impl.stable_id.clone(),
+                trait_name: Some("Service".to_owned()),
+                self_type: "Wrapper<T>".to_owned(),
+                kind: RustImplementationKind::BlanketTrait,
+            },
+            RustImplementationFact {
+                source_symbol_id: inherent_impl.stable_id.clone(),
+                trait_name: None,
+                self_type: "Wrapper<T>".to_owned(),
+                kind: RustImplementationKind::Inherent,
+            },
+        ];
+        let symbols = vec![blanket_impl.clone(), inherent_impl.clone()];
+
+        let trait_matches = implementation_candidates_from_facts(&target_trait, &symbols, &facts);
+        assert_eq!(trait_matches.len(), 1);
+        assert_match(
+            &trait_matches[0],
+            &blanket_impl,
+            "Wrapper<T>",
+            "implements_blanket",
+            "precise_absent_rust_impl_index",
+        );
+
+        let type_matches = implementation_candidates_from_facts(&target_type, &symbols, &facts);
+        assert_eq!(type_matches.len(), 2);
+        assert_match(
+            &type_matches[0],
+            &blanket_impl,
+            "impl Service for Wrapper<T>",
+            "implementation_blanket",
+            "precise_absent_rust_impl_index",
+        );
+        assert_match(
+            &type_matches[1],
+            &inherent_impl,
+            "impl Wrapper<T>",
+            "inherent_impl",
+            "precise_absent_rust_impl_index",
         );
     }
 
@@ -680,10 +1092,12 @@ mod tests {
         source_symbol: &SymbolDefinition,
         symbol: &str,
         relation: &str,
+        fallback_reason: &str,
     ) {
         assert_eq!(candidate.source_symbol, source_symbol);
         assert_eq!(candidate.symbol, symbol);
         assert_eq!(candidate.relation, relation);
+        assert_eq!(candidate.fallback_reason, fallback_reason);
     }
 
     fn symbol(name: &str, kind: SymbolKind, line: usize) -> SymbolDefinition {

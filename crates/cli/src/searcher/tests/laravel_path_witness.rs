@@ -793,7 +793,7 @@ fn hybrid_path_witness_recall_treats_partial_snapshot_rows_as_read_only_fallback
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &crate::storage::RetrievalProjectionBundle {
+        crate::storage::RetrievalProjectionBundle {
             heads: vec![crate::storage::RetrievalProjectionHeadRecord {
                 family: "path_witness".to_owned(),
                 heuristic_version: PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
@@ -864,7 +864,7 @@ fn hybrid_path_witness_recall_uses_authoritative_current_snapshot_projection_row
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &crate::storage::RetrievalProjectionBundle {
+        crate::storage::RetrievalProjectionBundle {
             heads: vec![crate::storage::RetrievalProjectionHeadRecord {
                 family: "path_witness".to_owned(),
                 heuristic_version: 1,
@@ -942,7 +942,7 @@ fn hybrid_path_witness_recall_prefers_authoritative_anchor_sketch_excerpt() -> F
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &crate::storage::RetrievalProjectionBundle {
+        crate::storage::RetrievalProjectionBundle {
             heads: vec![
                 crate::storage::RetrievalProjectionHeadRecord {
                     family: "path_witness".to_owned(),

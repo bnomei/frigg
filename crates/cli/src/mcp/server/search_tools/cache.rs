@@ -1,4 +1,5 @@
 use super::*;
+use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 
 impl FriggMcpServer {
     pub(crate) fn invalidate_repository_search_response_caches(&self, repository_id: &str) {
@@ -114,7 +115,11 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(RuntimeCacheFamily::CompiledSafeRegex, &mut cache);
+        self.trim_runtime_cache_to_budget(
+            RuntimeCacheFamily::CompiledSafeRegex,
+            &mut cache,
+            |pattern, _| pattern.len().saturating_add(256),
+        );
         Ok(compiled)
     }
 
@@ -168,7 +173,14 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(RuntimeCacheFamily::SearchTextResponse, &mut cache);
+        self.trim_runtime_cache_to_budget(
+            RuntimeCacheFamily::SearchTextResponse,
+            &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(&entry.response)
+                    .saturating_add(serialized_value_estimated_bytes(&entry.source_refs))
+            },
+        );
     }
 
     pub(crate) fn cached_search_hybrid_response(
@@ -221,9 +233,13 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(
+        self.trim_runtime_cache_to_budget(
             RuntimeCacheFamily::SearchHybridResponse,
             &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(&entry.response)
+                    .saturating_add(serialized_value_estimated_bytes(&entry.source_refs))
+            },
         );
     }
 
@@ -288,9 +304,18 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(
+        self.trim_runtime_cache_to_budget(
             RuntimeCacheFamily::SearchSymbolResponse,
             &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(&entry.response).saturating_add(
+                    entry
+                        .scoped_repository_ids
+                        .iter()
+                        .map(String::len)
+                        .sum::<usize>(),
+                )
+            },
         );
     }
 }

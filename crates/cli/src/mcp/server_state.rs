@@ -7,7 +7,9 @@ use crate::domain::ChannelHealthStatus;
 use crate::domain::model::SymbolMatch;
 use crate::graph::SymbolGraph;
 use crate::indexer::SymbolDefinition;
-use crate::languages::{BladeSourceEvidence, PhpSourceEvidence};
+use crate::languages::{
+    BladeSourceEvidence, PhpSourceEvidence, RustImplementationFact, RustSymbolContext,
+};
 use crate::mcp::types::{
     ExploreLineWindow, ExploreResponse, FindReferencesResponse, ReadFileResponse, RuntimeTaskKind,
     RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelMetadata,
@@ -33,6 +35,8 @@ pub(crate) struct RepositorySymbolCorpus {
     pub canonical_symbol_name_by_stable_id: BTreeMap<String, String>,
     pub symbol_indices_by_canonical_name: BTreeMap<String, Vec<usize>>,
     pub symbol_indices_by_lower_canonical_name: BTreeMap<String, Vec<usize>>,
+    pub rust_symbol_context_by_stable_id: BTreeMap<String, RustSymbolContext>,
+    pub rust_implementation_facts: Vec<RustImplementationFact>,
     pub php_evidence_by_relative_path: BTreeMap<String, PhpSourceEvidence>,
     pub blade_evidence_by_relative_path: BTreeMap<String, BladeSourceEvidence>,
     pub diagnostics: RepositoryDiagnosticsSummary,
@@ -337,6 +341,7 @@ pub(crate) struct SearchSymbolExecution {
 pub(crate) struct RankedSymbolMatch {
     pub rank: u8,
     pub path_class_rank: u8,
+    pub context_rank: u8,
     pub matched: SymbolMatch,
 }
 

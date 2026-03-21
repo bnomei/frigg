@@ -695,7 +695,7 @@ fn retrieval_projection_bundle_replace_and_load_roundtrip() -> FriggResult<()> {
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-1",
         "snapshot-001",
-        &bundle,
+        bundle,
     )?;
 
     let head = storage
@@ -749,7 +749,7 @@ fn delete_snapshot_removes_retrieval_projection_bundle_rows() -> FriggResult<()>
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-1",
         "snapshot-001",
-        &RetrievalProjectionBundle {
+        RetrievalProjectionBundle {
             heads: vec![RetrievalProjectionHeadRecord {
                 family: "path_anchor_sketch".to_owned(),
                 heuristic_version: 1,

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -6,7 +7,8 @@ use crate::workspace_ignores::hard_excluded_runtime_path;
 use ignore::{WalkBuilder, WalkState};
 
 use super::surfaces::{
-    is_ci_workflow_path, is_entrypoint_build_workflow_path, is_root_scoped_runtime_config_path,
+    NESTED_ROOT_SCOPED_RUNTIME_CONFIG_PATHS, is_ci_workflow_path,
+    is_entrypoint_build_workflow_path, is_root_scoped_runtime_config_path,
 };
 use super::{
     HybridRankingIntent, NormalizedSearchFilters, SearchDiagnostic, SearchDiagnosticKind,
@@ -122,21 +124,44 @@ pub(super) fn root_scoped_runtime_config_candidates_for_repository(
     if !intent.wants_entrypoint_build_flow && !intent.wants_runtime_config_artifacts {
         return Vec::new();
     }
+    collect_root_scoped_runtime_config_candidates(
+        repository_id,
+        root,
+        diagnostics,
+        |_path, rel_path| is_root_scoped_runtime_config_path(rel_path),
+    )
+}
 
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .standard_filters(true)
-        .hidden(false)
-        .require_git(false)
-        // Root-scoped runtime config may live one tool directory below the root, for example
-        // `gradle/wrapper/gradle-wrapper.properties`.
-        .max_depth(Some(3));
-    let (file_candidates, mut walk_diagnostics) =
-        collect_candidate_files_parallel(repository_id, root, builder, None, |_path, rel_path| {
-            is_root_scoped_runtime_config_path(rel_path)
-        });
-    diagnostics.entries.append(&mut walk_diagnostics);
-    file_candidates
+pub(super) fn search_root_scoped_runtime_config_candidates_for_repository(
+    repository_id: &str,
+    root: &Path,
+    query: &SearchTextQuery,
+    filters: &NormalizedSearchFilters,
+    diagnostics: &mut SearchExecutionDiagnostics,
+) -> Vec<(String, PathBuf)> {
+    let path_regex = query.path_regex.clone();
+    let language = filters.language;
+    collect_root_scoped_runtime_config_candidates(
+        repository_id,
+        root,
+        diagnostics,
+        move |path, rel_path| {
+            if !is_root_scoped_runtime_config_path(rel_path) {
+                return false;
+            }
+            if let Some(language) = language
+                && !language.matches_path(path)
+            {
+                return false;
+            }
+            if let Some(path_regex) = &path_regex
+                && !path_regex.is_match(rel_path)
+            {
+                return false;
+            }
+            true
+        },
+    )
 }
 
 pub(super) fn normalize_repository_relative_path(root: &Path, path: &Path) -> String {
@@ -226,6 +251,61 @@ fn collect_candidate_files_parallel(
     candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
     sort_search_diagnostics(&mut diagnostics);
     (candidates, diagnostics)
+}
+
+fn collect_root_scoped_runtime_config_candidates(
+    repository_id: &str,
+    root: &Path,
+    diagnostics: &mut SearchExecutionDiagnostics,
+    should_include: impl Fn(&Path, &str) -> bool,
+) -> Vec<(String, PathBuf)> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    match fs::read_dir(root) {
+        Ok(entries) => {
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    continue;
+                };
+                let path = entry.path();
+                if hard_excluded_runtime_path(root, &path) || !path.is_file() {
+                    continue;
+                }
+                let relative_path = normalize_repository_relative_path(root, &path);
+                if !is_root_scoped_runtime_config_path(&relative_path)
+                    || !should_include(&path, &relative_path)
+                {
+                    continue;
+                }
+                if seen.insert((relative_path.clone(), path.clone())) {
+                    candidates.push((relative_path, path));
+                }
+            }
+        }
+        Err(error) => diagnostics.entries.push(SearchDiagnostic {
+            repository_id: repository_id.to_owned(),
+            path: Some(root.display().to_string()),
+            kind: SearchDiagnosticKind::Read,
+            message: format!("failed to enumerate root-scoped runtime config candidates: {error}"),
+        }),
+    }
+
+    for relative_path in NESTED_ROOT_SCOPED_RUNTIME_CONFIG_PATHS {
+        let path = root.join(relative_path);
+        if hard_excluded_runtime_path(root, &path) || !path.is_file() {
+            continue;
+        }
+        let normalized_relative_path = normalize_repository_relative_path(root, &path);
+        if !should_include(&path, &normalized_relative_path) {
+            continue;
+        }
+        if seen.insert((normalized_relative_path.clone(), path.clone())) {
+            candidates.push((normalized_relative_path, path));
+        }
+    }
+
+    candidates
 }
 
 fn sort_search_diagnostics(diagnostics: &mut [SearchDiagnostic]) {

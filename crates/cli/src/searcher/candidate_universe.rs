@@ -9,6 +9,7 @@ use super::attribution::elapsed_us;
 use super::candidates::{
     hidden_workflow_candidates_for_repository, merge_candidate_files,
     normalize_repository_relative_path, root_scoped_runtime_config_candidates_for_repository,
+    search_root_scoped_runtime_config_candidates_for_repository,
     walk_candidate_files_for_repository,
 };
 use super::ordering::sort_search_diagnostics_deterministically;
@@ -55,7 +56,7 @@ impl TextSearcher {
             .map(|repository| {
                 let repository_id = repository.repository_id.0;
                 let root = PathBuf::from(repository.root_path);
-                let (snapshot_id, candidates) = self
+                let (snapshot_id, mut candidates) = self
                     .manifest_candidate_files_for_repository_with_attribution(
                         &repository_id,
                         &root,
@@ -84,6 +85,19 @@ impl TextSearcher {
                             candidate_intake_elapsed_us.saturating_add(elapsed_us(walk_started_at));
                         (None, walked)
                     });
+                let root_config_started_at = Instant::now();
+                merge_candidate_files(
+                    &mut candidates,
+                    search_root_scoped_runtime_config_candidates_for_repository(
+                        &repository_id,
+                        &root,
+                        query,
+                        filters,
+                        &mut diagnostics,
+                    ),
+                );
+                candidate_intake_elapsed_us =
+                    candidate_intake_elapsed_us.saturating_add(elapsed_us(root_config_started_at));
                 let candidates = candidates
                     .into_iter()
                     .map(|(relative_path, absolute_path)| SearchCandidateFile {

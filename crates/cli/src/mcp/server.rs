@@ -269,7 +269,7 @@ pub fn benchmark_precise_graph_for_server(
 }
 
 #[derive(Debug, Clone)]
-struct NavigationLocationTokenHint {
+pub(in crate::mcp::server) struct NavigationLocationTokenHint {
     symbol_query: String,
     relative_path: String,
     resolution_source: &'static str,

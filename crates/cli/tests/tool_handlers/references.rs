@@ -330,6 +330,209 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
 }
 
 #[tokio::test]
+async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_is_missing() {
+    let workspace_root = temp_workspace_root("find-references-direct-precise-fallback");
+    let views_root = workspace_root.join("resources/views");
+    let lang_root = workspace_root.join("lang");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&lang_root).expect("failed to create lang fixture root");
+    fs::write(
+        views_root.join("welcome.blade.php"),
+        "{{ __('Settings') }}\n",
+    )
+    .expect("failed to seed blade fixture");
+    fs::write(
+        lang_root.join("en.json"),
+        "{\n  \"Settings\": \"Settings\"\n}\n",
+    )
+    .expect("failed to seed lang fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "translations.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "lang/en.json",
+              "occurrences": [
+                { "symbol": "trans/`json:Settings`.", "range": [1, 3, 11], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "trans/`json:Settings`.",
+                  "display_name": "Settings",
+                  "kind": "string",
+                  "relationships": []
+                }
+              ]
+            },
+            {
+              "relative_path": "resources/views/welcome.blade.php",
+              "occurrences": [
+                { "symbol": "trans/`json:Settings`.", "range": [0, 6, 16], "symbol_roles": 8 }
+              ],
+              "symbols": []
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("Settings".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should fall back to direct precise symbols")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].symbol, "Settings");
+    assert_eq!(
+        response.matches[0].path,
+        "resources/views/welcome.blade.php"
+    );
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, 7);
+    assert_eq!(
+        response.matches[0].match_kind,
+        ReferenceMatchKind::Reference
+    );
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["resolution_source"], "symbol_precise_direct");
+    assert_eq!(note_json["target_precise_symbol"], "trans/`json:Settings`.");
+    assert_eq!(note_json["precise"]["reference_count"], 1);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_symbol_is_missing()
+{
+    let workspace_root = temp_workspace_root("find-references-direct-precise-config");
+    let config_root = workspace_root.join("config");
+    let controller_root = workspace_root.join("app/Http/Controllers");
+    fs::create_dir_all(&config_root).expect("failed to create config fixture root");
+    fs::create_dir_all(&controller_root).expect("failed to create controller fixture root");
+    let config_source =
+        "return [\n    'registration_enabled' => env('REGISTRATION_ENABLED', true),\n];\n";
+    let controller_source = "if (config('features.registration_enabled')) { return true; }\n";
+    fs::write(config_root.join("features.php"), config_source)
+        .expect("failed to seed config fixture");
+    fs::write(
+        controller_root.join("RegisterController.php"),
+        controller_source,
+    )
+    .expect("failed to seed controller fixture");
+    let config_definition_column = config_source
+        .find("registration_enabled")
+        .expect("config key should exist in definition");
+    let controller_reference_column = controller_source
+        .find("features.registration_enabled")
+        .expect("config lookup should exist in reference");
+    write_scip_fixture(
+        &workspace_root,
+        "config_references.json",
+        &format!(
+            r#"{{
+          "documents": [
+            {{
+              "relative_path": "config/features.php",
+              "occurrences": [
+                {{ "symbol": "config/`key:features.registration_enabled`.", "range": [1, {config_definition_column}, {config_definition_column_end}], "symbol_roles": 1 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "config/`key:features.registration_enabled`.",
+                  "display_name": "features.registration_enabled",
+                  "kind": "property",
+                  "relationships": []
+                }}
+              ]
+            }},
+            {{
+              "relative_path": "app/Http/Controllers/RegisterController.php",
+              "occurrences": [
+                {{ "symbol": "config/`key:features.registration_enabled`.", "range": [0, {controller_reference_column}, {controller_reference_column_end}], "symbol_roles": 8 }}
+              ],
+              "symbols": []
+            }}
+          ]
+        }}"#,
+            config_definition_column = config_definition_column,
+            config_definition_column_end = config_definition_column + "registration_enabled".len(),
+            controller_reference_column = controller_reference_column,
+            controller_reference_column_end =
+                controller_reference_column + "features.registration_enabled".len(),
+        ),
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("features.registration_enabled".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should fall back to direct precise config symbols")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].repository_id, "repo-001");
+    assert_eq!(response.matches[0].symbol, "features.registration_enabled");
+    assert_eq!(
+        response.matches[0].path,
+        "app/Http/Controllers/RegisterController.php"
+    );
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, controller_reference_column + 1);
+    assert_eq!(
+        response.matches[0].match_kind,
+        ReferenceMatchKind::Reference
+    );
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["resolution_source"], "symbol_precise_direct");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "config/`key:features.registration_enabled`."
+    );
+    assert_eq!(note_json["precise"]["reference_count"], 1);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn precision_precedence_find_references_falls_back_to_heuristic_when_precise_absent() {
     let workspace_root = temp_workspace_root("precision-precedence-heuristic");
     let src_root = workspace_root.join("src");

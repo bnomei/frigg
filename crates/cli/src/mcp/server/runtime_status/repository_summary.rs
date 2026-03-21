@@ -1,4 +1,5 @@
 use super::*;
+use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 
 impl FriggMcpServer {
     pub(in crate::mcp::server) fn workspace_storage_summary(
@@ -97,6 +98,11 @@ impl FriggMcpServer {
                 summary: summary.clone(),
                 generated_at: Instant::now(),
             },
+        );
+        self.trim_runtime_cache_to_budget(
+            RuntimeCacheFamily::RepositorySummary,
+            &mut cache,
+            |_, entry| serialized_value_estimated_bytes(&entry.summary),
         );
     }
 

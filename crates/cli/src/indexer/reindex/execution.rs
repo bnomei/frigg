@@ -127,7 +127,7 @@ fn execute_retrieval_projection_phase(
                     .replace_retrieval_projection_bundle_for_repository_snapshot(
                         repository_id,
                         snapshot_id,
-                        &bundle,
+                        bundle,
                     )
                     .map_err(|err| {
                         wrap_reindex_phase_error(

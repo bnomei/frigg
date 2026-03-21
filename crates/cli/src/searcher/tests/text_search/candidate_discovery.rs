@@ -206,6 +206,45 @@ fn candidate_discovery_rebuilds_after_stale_manifest_snapshot() -> FriggResult<(
 }
 
 #[test]
+fn candidate_discovery_supplements_root_scoped_env_files_outside_manifest_snapshot()
+-> FriggResult<()> {
+    let root = temp_workspace_root("candidate-discovery-root-env");
+    prepare_workspace(
+        &root,
+        &[
+            ("config/app.php", "return ['name' => env('APP_NAME')];\n"),
+            (".env.example", "APP_NAME=Frigg\n"),
+        ],
+    )?;
+    seed_manifest_snapshot(&root, "repo-001", "snapshot-001", &["config/app.php"])?;
+
+    let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    let searcher = TextSearcher::new(config);
+
+    let literal = searcher.search_literal_with_filters(
+        SearchTextQuery {
+            query: "APP_NAME=".to_owned(),
+            path_regex: None,
+            limit: 20,
+        },
+        SearchFilters::default(),
+    )?;
+    assert_eq!(
+        literal,
+        vec![text_match(
+            "repo-001",
+            ".env.example",
+            1,
+            1,
+            "APP_NAME=Frigg"
+        )]
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn candidate_discovery_falls_back_to_repository_walk_without_manifest() -> FriggResult<()> {
     let root = temp_workspace_root("candidate-discovery-fallback-walk");
     prepare_workspace(

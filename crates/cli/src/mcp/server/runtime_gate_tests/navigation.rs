@@ -138,17 +138,74 @@ async fn inspect_syntax_tree_returns_focus_and_ancestor_stack() {
     assert_eq!(response.path, "src/lib.rs");
     assert_eq!(response.focus.line, 2);
     assert!(
-        response
-            .ancestors
-            .iter()
-            .any(|node| node.kind == "call_expression"),
-        "expected call_expression in ancestor stack, got {:?}",
+        response.focus.kind == "call_expression"
+            || response
+                .ancestors
+                .iter()
+                .any(|node| node.kind == "call_expression"),
+        "expected call_expression in focus or ancestor stack, got focus={:?}, ancestors={:?}",
+        response.focus.kind,
         response
             .ancestors
             .iter()
             .map(|node| node.kind.clone())
             .collect::<Vec<_>>()
     );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn inspect_syntax_tree_normalizes_punctuation_focus_to_useful_named_node() {
+    let workspace_root = temp_workspace_root("inspect-syntax-tree-punctuation");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn greet() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let repository_id = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace")
+        .repository_id;
+    let response = server
+        .inspect_syntax_tree(rmcp::handler::server::wrapper::Parameters(
+            InspectSyntaxTreeParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some(repository_id),
+                line: Some(2),
+                column: Some(13),
+                max_ancestors: Some(4),
+                max_children: Some(6),
+                include_follow_up_structural: None,
+            },
+        ))
+        .await
+        .expect("inspect_syntax_tree should normalize punctuation focus")
+        .0;
+
+    assert_eq!(response.focus.kind, "call_expression");
+    let note_json: serde_json::Value = serde_json::from_str(
+        response
+            .note
+            .as_ref()
+            .expect("inspect_syntax_tree should emit metadata note"),
+    )
+    .expect("inspect note should be valid JSON");
+    assert_eq!(note_json["focus_normalized"], true);
+    assert_eq!(note_json["raw_focus_kind"], ")");
 
     let _ = fs::remove_dir_all(workspace_root);
 }

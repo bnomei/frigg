@@ -46,6 +46,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
     let prefer_graph_over_path_witness = prefers_graph_over_path_witness(&ranking_intent);
     let wants_path_witness_recall = ranking_intent.wants_path_witness_recall();
     let exact_terms = lexical_query_features.exact_terms();
+    let prefers_compact_seed_set = prefers_compact_lexical_seed_set(&ranking_intent, exact_terms);
     if query_text.is_empty() {
         return Err(FriggError::InvalidInput(
             "hybrid search query must not be empty".to_owned(),
@@ -61,7 +62,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
         } else {
             query.limit.saturating_mul(2).max(16)
         }
-    } else if prefers_compact_lexical_seed_set(&ranking_intent, exact_terms) {
+    } else if prefers_compact_seed_set {
         query.limit.saturating_add(7).max(12)
     } else {
         query
@@ -127,6 +128,8 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
     let mut witness_scoring_elapsed_us = 0_u64;
     let mut witness_output = SearchExecutionOutput::default();
     let lexical_seeded_with_terms = !lexical_seed_terms.is_empty();
+    let initial_lexical_seed_is_full_literal =
+        !lexical_seeded_with_terms && !prefers_compact_seed_set;
     let scan_started_at = Instant::now();
     let mut lexical_output = if lexical_seeded_with_terms {
         search_case_insensitive_recall_terms_with_universe(
@@ -136,7 +139,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
             lexical_candidate_universe,
             true,
         )?
-    } else if prefers_compact_lexical_seed_set(&ranking_intent, exact_terms) {
+    } else if prefers_compact_seed_set {
         searcher.search_literal_prefix_with_candidate_universe(
             &SearchTextQuery {
                 query: query_text.clone(),
@@ -310,7 +313,8 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
             }
 
             let should_run_literal_phrase_expansion = lexical_output.matches.len() < query.limit
-                && (!wants_path_witness_recall || lexical_output.matches.is_empty());
+                && (!wants_path_witness_recall || lexical_output.matches.is_empty())
+                && !initial_lexical_seed_is_full_literal;
             if should_run_literal_phrase_expansion {
                 let expanded = searcher.search_literal_with_candidate_universe(
                     &SearchTextQuery {

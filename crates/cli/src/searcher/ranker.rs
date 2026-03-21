@@ -51,7 +51,11 @@ pub fn rank_hybrid_evidence(
     }
 
     let ranked_anchors = blend_hybrid_evidence(lexical_hits, graph_hits, semantic_hits, weights)?;
-    Ok(group_hybrid_ranked_evidence(ranked_anchors, weights, limit))
+    Ok(group_hybrid_ranked_evidence(
+        &ranked_anchors,
+        weights,
+        limit,
+    ))
 }
 
 pub(super) fn rank_lexical_hybrid_hits(
@@ -152,7 +156,7 @@ pub(super) fn blend_hybrid_evidence(
 }
 
 pub(super) fn group_hybrid_ranked_evidence(
-    ranked_anchors: Vec<HybridRankedEvidence>,
+    ranked_anchors: &[HybridRankedEvidence],
     weights: HybridChannelWeights,
     limit: usize,
 ) -> Vec<HybridRankedEvidence> {
@@ -162,7 +166,7 @@ pub(super) fn group_hybrid_ranked_evidence(
 }
 
 pub(super) fn group_all_hybrid_ranked_evidence(
-    ranked_anchors: Vec<HybridRankedEvidence>,
+    ranked_anchors: &[HybridRankedEvidence],
     weights: HybridChannelWeights,
 ) -> Vec<HybridRankedEvidence> {
     #[derive(Clone)]
@@ -172,7 +176,7 @@ pub(super) fn group_all_hybrid_ranked_evidence(
     }
 
     let mut grouped_by_document = BTreeMap::<(String, String), GroupedEvidence>::new();
-    for anchor in ranked_anchors {
+    for anchor in ranked_anchors.iter().cloned() {
         let key = (
             anchor.document.repository_id.clone(),
             anchor.document.path.clone(),
@@ -510,7 +514,7 @@ mod tests {
         };
 
         let grouped = group_hybrid_ranked_evidence(
-            vec![
+            &[
                 competing.clone(),
                 corroborated.clone(),
                 corroborating.clone(),
@@ -618,7 +622,7 @@ mod tests {
         let corroborating = ranked_evidence_with_channels("src/a.rs", 30, 0.65, 0.55, 0.35);
 
         let grouped = group_hybrid_ranked_evidence(
-            vec![corroborated.clone(), corroborating.clone()],
+            &[corroborated.clone(), corroborating.clone()],
             weights,
             10,
         );

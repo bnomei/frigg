@@ -251,8 +251,10 @@ fn rank_hybrid_evidence_for_query_with_witness(
         query_text,
     )?;
     let grouped =
-        group_hybrid_ranked_evidence(ranked_anchors, weights, limit.saturating_mul(4).max(32));
-    Ok(diversify_hybrid_ranked_evidence(grouped, limit, query_text))
+        group_hybrid_ranked_evidence(&ranked_anchors, weights, limit.saturating_mul(4).max(32));
+    Ok(diversify_hybrid_ranked_evidence(
+        &grouped, limit, query_text,
+    ))
 }
 
 /// Coordinates Frigg's retrieval pipeline for a configured workspace set, blending lexical,

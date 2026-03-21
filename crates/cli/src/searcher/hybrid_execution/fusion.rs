@@ -52,7 +52,7 @@ pub(super) fn run_hybrid_fusion(
             ranked_anchors.len(),
         );
         let aggregation_started_at = Instant::now();
-        let grouped_matches = group_all_hybrid_ranked_evidence(ranked_anchors.clone(), weights);
+        let grouped_matches = group_all_hybrid_ranked_evidence(&ranked_anchors, weights);
         let document_aggregation_sample = SearchStageSample::new(
             aggregation_started_at
                 .elapsed()
@@ -63,10 +63,9 @@ pub(super) fn run_hybrid_fusion(
             grouped_matches.len(),
         );
         let coverage_grouped_pool =
-            build_coverage_grouped_pool(grouped_matches.clone(), limit, limit, coverage_hints);
+            build_coverage_grouped_pool(&grouped_matches, limit, limit, coverage_hints);
         let diversification_started_at = Instant::now();
-        let matches =
-            diversify_hybrid_ranked_evidence(coverage_grouped_pool.clone(), limit, query_text);
+        let matches = diversify_hybrid_ranked_evidence(&coverage_grouped_pool, limit, query_text);
         let final_diversification_sample = SearchStageSample::new(
             diversification_started_at
                 .elapsed()
@@ -107,7 +106,7 @@ pub(super) fn run_hybrid_fusion(
         ranked_anchors.len(),
     );
     let aggregation_started_at = Instant::now();
-    let grouped_matches = group_all_hybrid_ranked_evidence(ranked_anchors.clone(), weights);
+    let grouped_matches = group_all_hybrid_ranked_evidence(&ranked_anchors, weights);
     let document_aggregation_sample = SearchStageSample::new(
         aggregation_started_at
             .elapsed()
@@ -118,10 +117,9 @@ pub(super) fn run_hybrid_fusion(
         grouped_matches.len(),
     );
     let coverage_grouped_pool =
-        build_coverage_grouped_pool(grouped_matches.clone(), limit, rank_limit, coverage_hints);
+        build_coverage_grouped_pool(&grouped_matches, limit, rank_limit, coverage_hints);
     let diversification_started_at = Instant::now();
-    let matches =
-        diversify_hybrid_ranked_evidence(coverage_grouped_pool.clone(), limit, query_text);
+    let matches = diversify_hybrid_ranked_evidence(&coverage_grouped_pool, limit, query_text);
     let final_diversification_sample = SearchStageSample::new(
         diversification_started_at
             .elapsed()

@@ -1,15 +1,12 @@
+//! Runtime cache helpers used by the MCP server.
+//!
+//! These helpers make the declared cache budgets operational by trimming process-wide response
+//! caches with approximate serialized-size accounting instead of entry count alone.
+
 use super::*;
+use serde::Serialize;
 
 impl FriggMcpServer {
-    pub(super) fn runtime_cache_max_entries(&self, family: RuntimeCacheFamily) -> Option<usize> {
-        self.runtime_state
-            .runtime_cache_registry
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .policy(family)
-            .and_then(|policy| policy.budget.max_entries)
-    }
-
     pub(super) fn runtime_text_searcher(&self, config: FriggConfig) -> TextSearcher {
         TextSearcher::with_runtime_projection_store_service(
             config,
@@ -35,19 +32,45 @@ impl FriggMcpServer {
         telemetry.entry(family).or_default().record(event, count);
     }
 
-    pub(super) fn trim_runtime_cache_to_entry_limit<K, V>(
+    /// Trims a process-wide cache against its configured entry and byte budget.
+    ///
+    /// The byte estimator is intentionally approximate; the goal is bounded residency for
+    /// long-lived servers rather than exact heap accounting.
+    pub(super) fn trim_runtime_cache_to_budget<K, V, F>(
         &self,
         family: RuntimeCacheFamily,
         cache: &mut BTreeMap<K, V>,
+        estimate_entry_bytes: F,
     ) where
         K: Ord,
+        F: Fn(&K, &V) -> usize,
     {
-        let Some(limit) = self.runtime_cache_max_entries(family) else {
-            return;
-        };
-        while cache.len() > limit {
-            let _ = cache.pop_first();
-            self.record_runtime_cache_event(family, RuntimeCacheEvent::Eviction, 1);
+        let budget = self.runtime_cache_budget(family);
+        let mut evictions = 0usize;
+
+        if let Some(limit) = budget.max_entries {
+            while cache.len() > limit {
+                let _ = cache.pop_first();
+                evictions = evictions.saturating_add(1);
+            }
+        }
+
+        if let Some(max_bytes) = budget.max_bytes {
+            let mut total_bytes = cache
+                .iter()
+                .map(|(key, value)| estimate_entry_bytes(key, value))
+                .sum::<usize>();
+            while total_bytes > max_bytes {
+                let Some((key, value)) = cache.pop_first() else {
+                    break;
+                };
+                total_bytes = total_bytes.saturating_sub(estimate_entry_bytes(&key, &value));
+                evictions = evictions.saturating_add(1);
+            }
+        }
+
+        if evictions > 0 {
+            self.record_runtime_cache_event(family, RuntimeCacheEvent::Eviction, evictions);
         }
     }
 
@@ -368,4 +391,14 @@ impl FriggMcpServer {
             recent_provenance: self.runtime_recent_provenance_summaries(),
         }
     }
+}
+
+/// Best-effort serialized size estimator for cached response values.
+pub(super) fn serialized_value_estimated_bytes<T>(value: &T) -> usize
+where
+    T: Serialize,
+{
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
 }

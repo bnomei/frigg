@@ -1293,7 +1293,7 @@ fn hybrid_graph_target_evidence_listener_survives_fusion_and_post_selection() ->
     );
 
     let diversified = super::super::diversify_hybrid_ranked_evidence(
-        output.coverage_grouped_pool.clone(),
+        &output.coverage_grouped_pool,
         5,
         "OrderHandler handle listener",
     );

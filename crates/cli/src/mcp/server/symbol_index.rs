@@ -1,7 +1,25 @@
+//! Symbol corpus construction and caching for navigation-oriented MCP tools.
+//!
+//! Repository corpora are expensive enough to cache across requests, but they are now bounded by
+//! manifest token and global entry count so long-running servers do not retain every historical
+//! snapshot forever.
+
 use super::*;
+use crate::languages::analyze_rust_source;
 use rayon::prelude::*;
 
+const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
+
 impl FriggMcpServer {
+    fn trim_symbol_corpus_cache(
+        &self,
+        cache: &mut BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>,
+    ) {
+        while cache.len() > SYMBOL_CORPUS_CACHE_MAX_ENTRIES {
+            let _ = cache.pop_first();
+        }
+    }
+
     pub(super) fn collect_repository_symbol_corpus(
         &self,
         repository_id: String,
@@ -88,6 +106,8 @@ impl FriggMcpServer {
         let symbol_index_by_stable_id = Self::symbol_index_by_stable_id(&symbols);
         let symbol_indices_by_name = Self::symbol_indices_by_name(&symbols);
         let symbol_indices_by_lower_name = Self::symbol_indices_by_lower_name(&symbols);
+        let mut rust_symbol_context_by_stable_id = BTreeMap::new();
+        let mut rust_implementation_facts = Vec::new();
         let mut php_evidence_by_relative_path = BTreeMap::new();
         let mut blade_evidence_by_relative_path = BTreeMap::new();
         let mut canonical_symbol_name_by_stable_id = BTreeMap::new();
@@ -107,6 +127,11 @@ impl FriggMcpServer {
                 continue;
             };
             match supported_language_for_path(path, LanguageCapability::SymbolCorpus) {
+                Some(SymbolLanguage::Rust) => {
+                    let analysis = analyze_rust_source(&source, &file_symbols);
+                    rust_symbol_context_by_stable_id.extend(analysis.symbol_contexts_by_stable_id);
+                    rust_implementation_facts.extend(analysis.implementation_facts);
+                }
                 Some(SymbolLanguage::Php) => {
                     let Ok(evidence) =
                         extract_php_source_evidence_from_source(path, &source, &file_symbols)
@@ -148,6 +173,8 @@ impl FriggMcpServer {
             canonical_symbol_name_by_stable_id,
             symbol_indices_by_canonical_name,
             symbol_indices_by_lower_canonical_name,
+            rust_symbol_context_by_stable_id,
+            rust_implementation_facts,
             php_evidence_by_relative_path,
             blade_evidence_by_relative_path,
             diagnostics,
@@ -162,6 +189,7 @@ impl FriggMcpServer {
             key.repository_id != repository_id || key.manifest_token == manifest_token
         });
         cache.insert(cache_key, corpus.clone());
+        self.trim_symbol_corpus_cache(&mut cache);
 
         Ok(corpus)
     }

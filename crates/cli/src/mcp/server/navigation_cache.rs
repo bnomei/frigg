@@ -1,4 +1,5 @@
 use super::*;
+use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 
 impl FriggMcpServer {
     pub(super) fn invalidate_repository_navigation_response_caches(&self, repository_id: &str) {
@@ -121,9 +122,26 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(
+        self.trim_runtime_cache_to_budget(
             RuntimeCacheFamily::GoToDefinitionResponse,
             &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(&entry.response)
+                    .saturating_add(
+                        entry
+                            .scoped_repository_ids
+                            .iter()
+                            .map(String::len)
+                            .sum::<usize>(),
+                    )
+                    .saturating_add(entry.selected_symbol_id.as_ref().map_or(0, String::len))
+                    .saturating_add(
+                        entry
+                            .selected_precise_symbol
+                            .as_ref()
+                            .map_or(0, String::len),
+                    )
+            },
         );
     }
 
@@ -194,9 +212,26 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(
+        self.trim_runtime_cache_to_budget(
             RuntimeCacheFamily::FindDeclarationsResponse,
             &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(&entry.response)
+                    .saturating_add(
+                        entry
+                            .scoped_repository_ids
+                            .iter()
+                            .map(String::len)
+                            .sum::<usize>(),
+                    )
+                    .saturating_add(entry.selected_symbol_id.as_ref().map_or(0, String::len))
+                    .saturating_add(
+                        entry
+                            .selected_precise_symbol
+                            .as_ref()
+                            .map_or(0, String::len),
+                    )
+            },
         );
     }
 
@@ -254,6 +289,13 @@ impl FriggMcpServer {
                 1,
             );
         }
-        self.trim_runtime_cache_to_entry_limit(RuntimeCacheFamily::HeuristicReference, &mut cache);
+        self.trim_runtime_cache_to_budget(
+            RuntimeCacheFamily::HeuristicReference,
+            &mut cache,
+            |_, entry| {
+                serialized_value_estimated_bytes(entry.references.as_ref())
+                    .saturating_add(entry.source_files_loaded.saturating_mul(32))
+            },
+        );
     }
 }

@@ -29,6 +29,13 @@ Treat `search_hybrid` as discovery-first. If `metadata.warning` is present, `sem
 
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups derived from the resolved AST focus rather than from the user's original query. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 extends the same typed `follow_up_structural` payloads to `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. Do not expect this on `search_hybrid` or `search_symbol`.
 
+For technical reviews or blog-style investigations, use this trust order:
+- `search_text` for framing and exact narrative anchors
+- `read_file` plus defs/refs (`go_to_definition`, `find_declarations`, `find_references`) for proof
+- `search_structural` for complex AST-shaped evidence
+- `incoming_calls` as a useful call-flow hint
+- `outgoing_calls` only as provisional until confirmed elsewhere
+
 ## Decision Table
 
 - Simple local file read, file listing, or one-off literal scan with no need for repository-aware semantics: shell tools

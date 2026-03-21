@@ -1,4 +1,6 @@
 use super::*;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
 impl FriggMcpServer {
     pub(in crate::mcp::server) fn relative_display_path(root: &Path, path: &Path) -> String {
@@ -71,10 +73,25 @@ impl FriggMcpServer {
                 return None;
             }
         }
+        let rust_context = corpus
+            .rust_symbol_context_by_stable_id
+            .get(symbol.stable_id.as_str());
+        if path_class_filter == Some(SearchSymbolPathClass::Runtime)
+            && rust_context.is_some_and(crate::languages::RustSymbolContext::is_test_context)
+        {
+            return None;
+        }
         let path_class = Self::navigation_path_class(&path);
         Some(RankedSymbolMatch {
             rank,
             path_class_rank: Self::navigation_path_class_rank(path_class),
+            context_rank: if rust_context
+                .is_some_and(crate::languages::RustSymbolContext::is_test_context)
+            {
+                1
+            } else {
+                0
+            },
             matched: SymbolMatch {
                 repository_id: corpus.repository_id.clone(),
                 symbol: symbol.name.clone(),
@@ -92,6 +109,7 @@ impl FriggMcpServer {
             left.rank
                 .cmp(&right.rank)
                 .then(left.path_class_rank.cmp(&right.path_class_rank))
+                .then(left.context_rank.cmp(&right.context_rank))
                 .then(left.matched.repository_id.cmp(&right.matched.repository_id))
                 .then(left.matched.path.cmp(&right.matched.path))
                 .then(left.matched.line.cmp(&right.matched.line))
@@ -271,7 +289,7 @@ impl FriggMcpServer {
             .to_owned()
     }
 
-    fn requested_location_path_for_corpus(
+    pub(in crate::mcp::server) fn requested_location_path_for_corpus(
         corpus: &RepositorySymbolCorpus,
         raw_path: &str,
     ) -> String {
@@ -485,7 +503,7 @@ impl FriggMcpServer {
             })
     }
 
-    fn navigation_symbol_query_token_from_location(
+    pub(in crate::mcp::server) fn navigation_symbol_query_token_from_location(
         corpora: &[Arc<RepositorySymbolCorpus>],
         raw_path: &str,
         line: usize,
@@ -494,26 +512,59 @@ impl FriggMcpServer {
         for corpus in corpora {
             let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
             let absolute_path = corpus.root.join(&requested_path);
-            let Ok(source) = fs::read_to_string(&absolute_path) else {
+            let language =
+                supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch);
+            if language == Some(SymbolLanguage::Rust) {
+                let Ok(source) = fs::read_to_string(&absolute_path) else {
+                    continue;
+                };
+                if let Some(rust_hint) =
+                    rust_navigation_query_hint_from_source(&absolute_path, &source, line, column)
+                    && !rust_hint.symbol_query.is_empty()
+                {
+                    return Some(NavigationLocationTokenHint {
+                        symbol_query: rust_hint.symbol_query.clone(),
+                        relative_path: requested_path,
+                        resolution_source: "location_token_rust",
+                        rust_hint: Some(rust_hint),
+                    });
+                }
+                let Some(offset) = byte_offset_for_line_column(&source, line, column) else {
+                    continue;
+                };
+                let Some(token) = Self::identifier_token_around_offset(&source, offset) else {
+                    continue;
+                };
+                if !token.is_empty() {
+                    return Some(NavigationLocationTokenHint {
+                        symbol_query: token,
+                        relative_path: requested_path,
+                        resolution_source: "location_token",
+                        rust_hint: None,
+                    });
+                }
+                continue;
+            }
+
+            let Ok(line_source) = Self::read_source_line_for_navigation(&absolute_path, line)
+            else {
                 continue;
             };
-            if supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch)
-                == Some(SymbolLanguage::Rust)
-                && let Some(rust_hint) =
-                    rust_navigation_query_hint_from_source(&absolute_path, &source, line, column)
-                && !rust_hint.symbol_query.is_empty()
+            let Some(offset) = byte_offset_for_line_column(&line_source, 1, column) else {
+                continue;
+            };
+            if matches!(language, Some(SymbolLanguage::Php | SymbolLanguage::Blade))
+                && let Some(token) =
+                    Self::php_helper_string_token_around_offset(&line_source, offset)
             {
                 return Some(NavigationLocationTokenHint {
-                    symbol_query: rust_hint.symbol_query.clone(),
+                    symbol_query: token,
                     relative_path: requested_path,
-                    resolution_source: "location_token_rust",
-                    rust_hint: Some(rust_hint),
+                    resolution_source: "location_token_php_helper",
+                    rust_hint: None,
                 });
             }
-            let Some(offset) = byte_offset_for_line_column(&source, line, column) else {
-                continue;
-            };
-            let Some(token) = Self::identifier_token_around_offset(&source, offset) else {
+            let Some(token) = Self::identifier_token_around_offset(&line_source, offset) else {
                 continue;
             };
             if !token.is_empty() {
@@ -526,6 +577,127 @@ impl FriggMcpServer {
             }
         }
         None
+    }
+
+    fn read_source_line_for_navigation(path: &Path, line: usize) -> std::io::Result<String> {
+        if line == 0 {
+            return Ok(String::new());
+        }
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut buffer = String::new();
+        for current_line in 1..=line {
+            buffer.clear();
+            let bytes_read = reader.read_line(&mut buffer)?;
+            if bytes_read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "line out of range",
+                ));
+            }
+            if current_line == line {
+                while buffer.ends_with('\n') || buffer.ends_with('\r') {
+                    buffer.pop();
+                }
+                return Ok(buffer);
+            }
+        }
+        Ok(String::new())
+    }
+
+    pub(in crate::mcp::server) fn php_helper_string_token_around_offset(
+        source: &str,
+        offset: usize,
+    ) -> Option<String> {
+        let bytes = source.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+        let offset = offset.min(bytes.len().saturating_sub(1));
+        let line_start = source[..offset]
+            .rfind('\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let line_end = source[offset..]
+            .find('\n')
+            .map(|delta| offset + delta)
+            .unwrap_or(source.len());
+        let (quote_start, quote_end) =
+            Self::enclosing_simple_quoted_span_in_line(source, line_start, line_end, offset)?;
+        let literal = source[quote_start + 1..quote_end].trim();
+        if literal.is_empty() || literal.contains('\n') || literal.contains('\r') {
+            return None;
+        }
+
+        let prefix = source[line_start..quote_start].trim_end();
+        let helper_prefixes = [
+            "__(",
+            "trans(",
+            "route(",
+            "to_route(",
+            "config(",
+            "env(",
+            "Lang::get(",
+            "->route(",
+            "routeIs(",
+            "->routeIs(",
+        ];
+        helper_prefixes
+            .iter()
+            .any(|suffix| prefix.ends_with(suffix))
+            .then(|| literal.to_owned())
+    }
+
+    fn enclosing_simple_quoted_span_in_line(
+        source: &str,
+        line_start: usize,
+        line_end: usize,
+        offset: usize,
+    ) -> Option<(usize, usize)> {
+        let bytes = source.as_bytes();
+        let mut best_span: Option<(usize, usize)> = None;
+        for start in line_start..line_end {
+            let quote = bytes[start];
+            if quote != b'\'' && quote != b'"' {
+                continue;
+            }
+            if Self::is_escaped_byte(bytes, start) {
+                continue;
+            }
+
+            let mut end = start + 1;
+            while end < line_end {
+                if bytes[end] == quote && !Self::is_escaped_byte(bytes, end) {
+                    if offset > start
+                        && offset < end
+                        && best_span.as_ref().is_none_or(|(best_start, best_end)| {
+                            end.saturating_sub(start) < best_end.saturating_sub(*best_start)
+                        })
+                    {
+                        best_span = Some((start, end));
+                    }
+                    break;
+                }
+                end += 1;
+            }
+        }
+        best_span
+    }
+
+    fn is_escaped_byte(bytes: &[u8], index: usize) -> bool {
+        if index == 0 {
+            return false;
+        }
+        let mut backslash_count = 0usize;
+        let mut probe = index;
+        while probe > 0 {
+            probe -= 1;
+            if bytes[probe] != b'\\' {
+                break;
+            }
+            backslash_count += 1;
+        }
+        backslash_count % 2 == 1
     }
 
     fn identifier_token_around_offset(source: &str, offset: usize) -> Option<String> {
@@ -605,9 +777,28 @@ impl FriggMcpServer {
         }
         let line = line
             .ok_or_else(|| Self::invalid_params("line is required when resolving by path", None))?;
-        if let Some(column) = column
-            && let Some(location_hint) =
-                Self::navigation_symbol_query_token_from_location(corpora, raw_path, line, column)
+        let location_hint = column.and_then(|column| {
+            Self::navigation_symbol_query_token_from_location(corpora, raw_path, line, column)
+        });
+        Self::resolve_navigation_target_from_location_hint(
+            corpora,
+            raw_path,
+            line,
+            column,
+            repository_id_hint,
+            location_hint,
+        )
+    }
+
+    pub(in crate::mcp::server) fn resolve_navigation_target_from_location_hint(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        line: usize,
+        column: Option<usize>,
+        repository_id_hint: Option<&str>,
+        location_hint: Option<NavigationLocationTokenHint>,
+    ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        if let Some(location_hint) = location_hint
             && let Ok(target) = Self::resolve_navigation_symbol_target(
                 corpora,
                 &location_hint.symbol_query,
@@ -641,5 +832,31 @@ impl FriggMcpServer {
             target,
             resolution_source: "location_enclosing_symbol",
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FriggMcpServer;
+    use crate::indexer::byte_offset_for_line_column;
+
+    #[test]
+    fn php_helper_string_token_extracts_laravel_translation_literal() {
+        let source = "{{ __('Settings') }}\n";
+        let offset = byte_offset_for_line_column(source, 1, 10).expect("offset should resolve");
+        assert_eq!(
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset).as_deref(),
+            Some("Settings")
+        );
+    }
+
+    #[test]
+    fn php_helper_string_token_extracts_blade_attribute_route_literal() {
+        let source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
+        let offset = byte_offset_for_line_column(source, 1, 31).expect("offset should resolve");
+        assert_eq!(
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset).as_deref(),
+            Some("dashboard")
+        );
     }
 }

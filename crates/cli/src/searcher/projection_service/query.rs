@@ -69,10 +69,11 @@ impl ProjectionStoreService {
         }
 
         let adjacency = Arc::new(build_projected_graph_adjacency_index(relations));
-        self.projected_graph_adjacency_cache
-            .write()
-            .ok()?
-            .insert(cache_key, Arc::clone(&adjacency));
+        self.insert_cached_projection_entry(
+            &self.projected_graph_adjacency_cache,
+            cache_key,
+            Arc::clone(&adjacency),
+        )?;
         Some(adjacency)
     }
 

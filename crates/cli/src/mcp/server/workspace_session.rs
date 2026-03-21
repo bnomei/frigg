@@ -23,6 +23,10 @@ impl FriggMcpServer {
         Arc::new(move |repository_id: &str| {
             server.invalidate_repository_summary_cache(repository_id);
             server.invalidate_repository_file_content_cache(repository_id);
+            server
+                .runtime_state
+                .searcher_projection_store_service
+                .invalidate_repository(repository_id);
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
             server.invalidate_repository_search_response_caches(repository_id);
@@ -128,6 +132,9 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
+        self.runtime_state
+            .searcher_projection_store_service
+            .invalidate_repository(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);

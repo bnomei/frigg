@@ -1,5 +1,13 @@
 use super::*;
 
+fn error_code_tag(error: &ErrorData) -> Option<&str> {
+    error
+        .data
+        .as_ref()
+        .and_then(|value| value.get("error_code"))
+        .and_then(|value| value.as_str())
+}
+
 impl FriggMcpServer {
     pub(in crate::mcp::server) async fn find_references_impl(
         &self,
@@ -81,14 +89,153 @@ impl FriggMcpServer {
                         params_for_blocking.repository_id.as_deref(),
                     )?
                 } else {
-                    Self::resolve_navigation_target(
+                    match Self::resolve_navigation_target(
                         &corpora,
                         params_for_blocking.symbol.as_deref(),
                         None,
                         None,
                         None,
                         params_for_blocking.repository_id.as_deref(),
-                    )?
+                    ) {
+                        Ok(resolved_target) => resolved_target,
+                        Err(error) if error_code_tag(&error) == Some("resource_not_found") => {
+                            let symbol_query = params_for_blocking
+                                .symbol
+                                .as_deref()
+                                .unwrap_or_default()
+                                .trim()
+                                .to_owned();
+                            if let Some(direct_precise_target) = server
+                                .select_direct_precise_navigation_target(
+                                    &corpora,
+                                    &symbol_query,
+                                    resource_budgets,
+                                )?
+                            {
+                                resolution_source = Some("symbol_precise_direct".to_owned());
+                                selected_precise_symbol =
+                                    Some(direct_precise_target.precise_target.symbol.clone());
+                                precise_artifacts_discovered =
+                                    direct_precise_target.ingest_stats.artifacts_discovered;
+                                precise_artifacts_discovered_bytes =
+                                    direct_precise_target.ingest_stats.artifacts_discovered_bytes;
+                                precise_artifacts_ingested =
+                                    direct_precise_target.ingest_stats.artifacts_ingested;
+                                precise_artifacts_ingested_bytes =
+                                    direct_precise_target.ingest_stats.artifacts_ingested_bytes;
+                                precise_artifacts_failed =
+                                    direct_precise_target.ingest_stats.artifacts_failed;
+                                precise_artifacts_failed_bytes =
+                                    direct_precise_target.ingest_stats.artifacts_failed_bytes;
+                                source_files_discovered =
+                                    direct_precise_target.source_files_discovered;
+
+                                let precise_references = if include_definition {
+                                    direct_precise_target.graph.precise_occurrences_for_symbol(
+                                        &direct_precise_target.repository_id,
+                                        &direct_precise_target.precise_target.symbol,
+                                    )
+                                } else {
+                                    direct_precise_target.graph.precise_references_for_symbol(
+                                        &direct_precise_target.repository_id,
+                                        &direct_precise_target.precise_target.symbol,
+                                    )
+                                };
+                                precise_reference_count = precise_references.len();
+                                total_matches = precise_reference_count;
+
+                                let display_symbol = if direct_precise_target
+                                    .precise_target
+                                    .display_name
+                                    .is_empty()
+                                {
+                                    symbol_query.clone()
+                                } else {
+                                    direct_precise_target.precise_target.display_name.clone()
+                                };
+                                let mut matches = precise_references
+                                    .into_iter()
+                                    .take(limit)
+                                    .map(|reference| ReferenceMatch {
+                                        repository_id: direct_precise_target.repository_id.clone(),
+                                        symbol: display_symbol.clone(),
+                                        path: Self::canonicalize_navigation_path(
+                                            &direct_precise_target.root,
+                                            &reference.path,
+                                        ),
+                                        line: reference.range.start_line,
+                                        column: reference.range.start_column,
+                                        match_kind: if reference.is_definition() {
+                                            ReferenceMatchKind::Definition
+                                        } else {
+                                            ReferenceMatchKind::Reference
+                                        },
+                                        follow_up_structural: Vec::new(),
+                                    })
+                                    .collect::<Vec<_>>();
+                                if params_for_blocking.include_follow_up_structural == Some(true) {
+                                    Self::populate_reference_match_follow_up_structural(
+                                        &direct_precise_target.root,
+                                        &mut matches,
+                                    );
+                                }
+
+                                let precision = Self::precise_resolution_precision(
+                                    direct_precise_target.coverage_mode,
+                                );
+                                resolution_precision = Some(precision.to_owned());
+                                let metadata = json!({
+                                    "precision": precision,
+                                    "heuristic": false,
+                                    "target_precise_symbol": direct_precise_target.precise_target.symbol,
+                                    "resolution_source": resolution_source.clone(),
+                                    "diagnostics_count": diagnostics_count,
+                                    "diagnostics": {
+                                        "manifest_walk": manifest_walk_diagnostics_count,
+                                        "manifest_read": manifest_read_diagnostics_count,
+                                        "symbol_extraction": symbol_extraction_diagnostics_count,
+                                        "source_read": source_read_diagnostics_count,
+                                        "total": diagnostics_count,
+                                    },
+                                    "precise": Self::precise_note_with_count(
+                                        direct_precise_target.coverage_mode,
+                                        &direct_precise_target.ingest_stats,
+                                        "reference_count",
+                                        precise_reference_count,
+                                    ),
+                                    "resource_budgets": resource_budget_metadata_for_blocking.clone(),
+                                    "resource_usage": {
+                                        "scip": {
+                                            "artifacts_discovered": direct_precise_target.ingest_stats.artifacts_discovered,
+                                            "artifacts_discovered_bytes": direct_precise_target.ingest_stats.artifacts_discovered_bytes,
+                                            "artifacts_ingested": direct_precise_target.ingest_stats.artifacts_ingested,
+                                            "artifacts_ingested_bytes": direct_precise_target.ingest_stats.artifacts_ingested_bytes,
+                                            "artifacts_failed": direct_precise_target.ingest_stats.artifacts_failed,
+                                            "artifacts_failed_bytes": direct_precise_target.ingest_stats.artifacts_failed_bytes,
+                                        },
+                                        "source": {
+                                            "files_discovered": source_files_discovered,
+                                            "files_loaded": source_files_loaded,
+                                            "bytes_loaded": source_bytes_loaded,
+                                        },
+                                    },
+                                });
+                                let (metadata, note) = Self::metadata_note_pair(metadata);
+
+                                return Ok(Json(FindReferencesResponse {
+                                    total_matches,
+                                    matches,
+                                    mode: FriggMcpServer::navigation_mode_from_precision_label(
+                                        Some(precision),
+                                    ),
+                                    metadata,
+                                    note,
+                                }));
+                            }
+                            return Err(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
                 };
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;

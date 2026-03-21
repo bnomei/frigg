@@ -289,7 +289,11 @@ fn generated_follow_up_structural_prefers_useful_ancestors_deterministically() -
         first[0].params.path_regex.as_deref(),
         Some("^src/lib\\.rs$")
     );
-    assert_eq!(inspection.focus.kind, "identifier");
+    assert_eq!(inspection.focus.kind, "call_expression");
+    assert_eq!(
+        inspection.raw_focus.as_ref().map(|node| node.kind.as_str()),
+        Some("identifier")
+    );
     assert_eq!(first[0].basis.raw_focus_kind.as_deref(), Some("identifier"));
 
     Ok(())

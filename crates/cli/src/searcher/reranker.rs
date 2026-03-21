@@ -61,7 +61,7 @@ fn hybrid_ranked_evidence_order(
 }
 
 pub(super) fn diversify_hybrid_ranked_evidence(
-    ranked: Vec<HybridRankedEvidence>,
+    ranked: &[HybridRankedEvidence],
     limit: usize,
     query_text: &str,
 ) -> Vec<HybridRankedEvidence> {
@@ -73,7 +73,8 @@ pub(super) fn diversify_hybrid_ranked_evidence(
     let query_context = PolicyQueryContext::new(&intent, query_text);
     let mut state = SelectionState::default();
     let mut candidates = ranked
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|evidence| Some(SelectionCandidate::new(evidence, &intent, &query_context)))
         .collect::<Vec<_>>();
     let evidence_ranks = evidence_ranks_for_candidates(&candidates);
@@ -284,18 +285,18 @@ fn coverage_keys(
 }
 
 pub(super) fn build_coverage_grouped_pool(
-    grouped: Vec<HybridRankedEvidence>,
+    grouped: &[HybridRankedEvidence],
     selection_limit: usize,
     rank_limit: usize,
     coverage_hints: &CoverageProjectionHintMap,
 ) -> Vec<HybridRankedEvidence> {
     if grouped.len() <= rank_limit {
-        return grouped;
+        return grouped.to_vec();
     }
 
     let reserve = usize::min(8, usize::max(4, selection_limit)).min(rank_limit);
     if reserve == 0 {
-        return grouped.into_iter().take(rank_limit).collect();
+        return grouped.iter().take(rank_limit).cloned().collect();
     }
 
     let base_take = rank_limit.saturating_sub(reserve);
@@ -334,7 +335,7 @@ pub(super) fn build_coverage_grouped_pool(
             break;
         }
         if included_paths.insert(entry.document.path.clone()) {
-            baseline.push(entry);
+            baseline.push(entry.clone());
         }
     }
 
@@ -426,7 +427,7 @@ mod tests {
             ranked("packages/worker/package.json", 0.92, 0.65),
         ];
 
-        let pool = build_coverage_grouped_pool(grouped, 1, 5, &CoverageProjectionHintMap::new());
+        let pool = build_coverage_grouped_pool(&grouped, 1, 5, &CoverageProjectionHintMap::new());
         let paths = pool
             .iter()
             .map(|entry| entry.document.path.as_str())
@@ -451,9 +452,8 @@ mod tests {
             ranked("packages/editor-ui/src/secondary.ts", 0.91, 0.6),
         ];
 
-        let left =
-            build_coverage_grouped_pool(grouped.clone(), 2, 4, &CoverageProjectionHintMap::new());
-        let right = build_coverage_grouped_pool(grouped, 2, 4, &CoverageProjectionHintMap::new());
+        let left = build_coverage_grouped_pool(&grouped, 2, 4, &CoverageProjectionHintMap::new());
+        let right = build_coverage_grouped_pool(&grouped, 2, 4, &CoverageProjectionHintMap::new());
 
         assert_eq!(left.len(), 4);
         assert_eq!(
@@ -486,7 +486,7 @@ mod tests {
             )],
         );
 
-        let pool = build_coverage_grouped_pool(grouped, 1, 3, &hints);
+        let pool = build_coverage_grouped_pool(&grouped, 1, 3, &hints);
         let paths = pool
             .iter()
             .map(|entry| entry.document.path.as_str())
@@ -514,7 +514,7 @@ mod tests {
             4,
             "build pipeline runtime tests",
         );
-        let actual = diversify_hybrid_ranked_evidence(ranked, 4, "build pipeline runtime tests");
+        let actual = diversify_hybrid_ranked_evidence(&ranked, 4, "build pipeline runtime tests");
 
         assert_eq!(
             actual
@@ -538,8 +538,8 @@ mod tests {
             ranked(".github/workflows/ci.yml", 1.0, 0.0),
         ];
 
-        let left = diversify_hybrid_ranked_evidence(ranked.clone(), 3, "build notes");
-        let right = diversify_hybrid_ranked_evidence(ranked.clone(), 3, "build notes");
+        let left = diversify_hybrid_ranked_evidence(&ranked, 3, "build notes");
+        let right = diversify_hybrid_ranked_evidence(&ranked, 3, "build notes");
         let baseline = diversify_hybrid_ranked_evidence_full_rescan(ranked, 3, "build notes");
 
         let left_paths = left

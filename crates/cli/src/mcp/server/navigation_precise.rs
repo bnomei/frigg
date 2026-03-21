@@ -1,5 +1,15 @@
 use super::*;
 
+pub(in crate::mcp::server) struct DirectPreciseNavigationTarget {
+    pub repository_id: String,
+    pub root: PathBuf,
+    pub precise_target: crate::graph::PreciseSymbolRecord,
+    pub coverage_mode: PreciseCoverageMode,
+    pub ingest_stats: PreciseIngestStats,
+    pub graph: Arc<SymbolGraph>,
+    pub source_files_discovered: usize,
+}
+
 impl FriggMcpServer {
     #[allow(clippy::type_complexity)]
     pub(in crate::mcp::server) fn try_precise_definition_fast_path(
@@ -216,6 +226,99 @@ impl FriggMcpServer {
         )
         .into_iter()
         .next()
+    }
+
+    pub(in crate::mcp::server) fn select_direct_precise_navigation_target(
+        &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol_query: &str,
+        resource_budgets: FindReferencesResourceBudgets,
+    ) -> Result<Option<DirectPreciseNavigationTarget>, ErrorData> {
+        let mut best_rank: Option<(usize, usize, String, usize, usize, String, String)> = None;
+        let mut best_target: Option<DirectPreciseNavigationTarget> = None;
+        for corpus in corpora {
+            let cached_precise_graph =
+                self.precise_graph_for_corpus(corpus.as_ref(), resource_budgets)?;
+            let graph = cached_precise_graph.graph;
+            for (symbol_rank, precise_target) in graph
+                .matching_precise_symbols_for_navigation(
+                    &corpus.repository_id,
+                    symbol_query,
+                    symbol_query,
+                )
+                .into_iter()
+                .enumerate()
+            {
+                let definition = graph.precise_definition_occurrence_for_symbol(
+                    &corpus.repository_id,
+                    &precise_target.symbol,
+                );
+                let candidate_rank = (
+                    symbol_rank,
+                    usize::from(definition.is_none()),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.path.clone())
+                        .unwrap_or_default(),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.range.start_line)
+                        .unwrap_or(usize::MAX),
+                    definition
+                        .as_ref()
+                        .map(|occurrence| occurrence.range.start_column)
+                        .unwrap_or(usize::MAX),
+                    corpus.repository_id.clone(),
+                    precise_target.symbol.clone(),
+                );
+                let candidate_target = DirectPreciseNavigationTarget {
+                    repository_id: corpus.repository_id.clone(),
+                    root: corpus.root.clone(),
+                    precise_target,
+                    coverage_mode: cached_precise_graph.coverage_mode,
+                    ingest_stats: cached_precise_graph.ingest_stats.clone(),
+                    graph: Arc::clone(&graph),
+                    source_files_discovered: corpus.source_paths.len(),
+                };
+                if best_rank
+                    .as_ref()
+                    .is_none_or(|current_best| candidate_rank < *current_best)
+                {
+                    best_rank = Some(candidate_rank);
+                    best_target = Some(candidate_target);
+                }
+            }
+        }
+
+        Ok(best_target)
+    }
+
+    pub(in crate::mcp::server) fn direct_precise_definition_matches_for_target(
+        target: &DirectPreciseNavigationTarget,
+        symbol_fallback: &str,
+    ) -> Vec<NavigationLocation> {
+        let mut matches = target
+            .graph
+            .precise_occurrences_for_symbol(&target.repository_id, &target.precise_target.symbol)
+            .into_iter()
+            .filter(|occurrence| occurrence.is_definition())
+            .map(|occurrence| NavigationLocation {
+                symbol: if target.precise_target.display_name.is_empty() {
+                    symbol_fallback.to_owned()
+                } else {
+                    target.precise_target.display_name.clone()
+                },
+                repository_id: target.repository_id.clone(),
+                path: Self::canonicalize_navigation_path(&target.root, &occurrence.path),
+                line: occurrence.range.start_line,
+                column: occurrence.range.start_column,
+                kind: Self::display_symbol_kind(&target.precise_target.kind),
+                precision: Some(Self::precise_match_precision(target.coverage_mode).to_owned()),
+                follow_up_structural: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        Self::sort_navigation_locations(&mut matches);
+        matches
     }
 
     fn precise_relationships_to_symbol_by_kind(
@@ -694,14 +797,12 @@ impl FriggMcpServer {
                 let callee_symbol = graph
                     .precise_symbol(&target_corpus.repository_id, &occurrence.symbol)?
                     .clone();
-                if !Self::is_precise_callable_kind(&callee_symbol.kind)
-                    && !Self::precise_occurrence_has_call_like_source(
-                        root,
-                        &callee_symbol,
-                        &occurrence,
-                        &mut source_cache,
-                    )
-                {
+                if !Self::precise_occurrence_has_call_like_source(
+                    root,
+                    &callee_symbol,
+                    &occurrence,
+                    &mut source_cache,
+                ) {
                     return None;
                 }
                 let callee_definition = Self::precise_definition_occurrence_for_symbol(

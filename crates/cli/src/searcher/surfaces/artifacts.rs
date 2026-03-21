@@ -1,5 +1,12 @@
 use std::path::Path;
 
+pub(in crate::searcher) const NESTED_ROOT_SCOPED_RUNTIME_CONFIG_PATHS: &[&str] = &[
+    ".cargo/config.toml",
+    "gradle/init.gradle",
+    "gradle/init.gradle.kts",
+    "gradle/wrapper/gradle-wrapper.properties",
+];
+
 fn path_has_segment(path: &str, segments: &[&str]) -> bool {
     path.split('/').any(|segment| segments.contains(&segment))
 }
@@ -51,8 +58,10 @@ pub(in crate::searcher) fn is_runtime_config_artifact_path(path: &str) -> bool {
         .file_name()
         .and_then(|name| name.to_str());
     if file_name.is_some_and(|name| {
-        matches!(name, ".luarc.json" | ".luarc.jsonc" | ".luarc.doc.json")
-            || name.ends_with(".rockspec")
+        matches!(
+            name,
+            ".env" | ".env.example" | ".luarc.json" | ".luarc.jsonc" | ".luarc.doc.json"
+        ) || name.ends_with(".rockspec")
             || name.ends_with(".nimble")
     }) {
         return true;

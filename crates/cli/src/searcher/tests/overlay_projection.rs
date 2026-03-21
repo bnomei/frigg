@@ -477,7 +477,7 @@ fn projected_path_witness_candidates_treat_partial_test_subject_rows_as_read_onl
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &crate::storage::RetrievalProjectionBundle {
+        crate::storage::RetrievalProjectionBundle {
             heads: vec![crate::storage::RetrievalProjectionHeadRecord {
                 family: "test_subject".to_owned(),
                 heuristic_version: TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
@@ -824,7 +824,7 @@ fn projected_path_witness_candidates_apply_relation_overlay_boosts_from_snapshot
     storage.replace_retrieval_projection_bundle_for_repository_snapshot(
         "repo-001",
         "snapshot-001",
-        &crate::storage::RetrievalProjectionBundle {
+        crate::storage::RetrievalProjectionBundle {
             heads: vec![
                 crate::storage::RetrievalProjectionHeadRecord {
                     family: "path_witness".to_owned(),

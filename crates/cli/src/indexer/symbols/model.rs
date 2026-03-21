@@ -134,6 +134,8 @@ pub struct SyntaxTreeInspectionNode {
 pub struct SyntaxTreeInspection {
     pub language: SymbolLanguage,
     pub focus: SyntaxTreeInspectionNode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_focus: Option<SyntaxTreeInspectionNode>,
     pub ancestors: Vec<SyntaxTreeInspectionNode>,
     pub children: Vec<SyntaxTreeInspectionNode>,
 }

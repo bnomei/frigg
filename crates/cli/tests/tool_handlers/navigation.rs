@@ -79,6 +79,330 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
 }
 
 #[tokio::test]
+async fn navigation_go_to_definition_falls_back_to_direct_precise_symbol_when_corpus_symbol_is_missing()
+ {
+    let workspace_root = temp_workspace_root("go-to-definition-direct-precise-symbol");
+    let views_root = workspace_root.join("resources/views");
+    let lang_root = workspace_root.join("lang");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&lang_root).expect("failed to create lang fixture root");
+    fs::write(
+        views_root.join("welcome.blade.php"),
+        "{{ __('Settings') }}\n",
+    )
+    .expect("failed to seed blade fixture");
+    fs::write(
+        lang_root.join("en.json"),
+        "{\n  \"Settings\": \"Settings\"\n}\n",
+    )
+    .expect("failed to seed lang fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_translations.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "lang/en.json",
+              "occurrences": [
+                { "symbol": "trans/`json:Settings`.", "range": [1, 3, 11], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "trans/`json:Settings`.",
+                  "display_name": "Settings",
+                  "kind": "string",
+                  "relationships": []
+                }
+              ]
+            },
+            {
+              "relative_path": "resources/views/welcome.blade.php",
+              "occurrences": [
+                { "symbol": "trans/`json:Settings`.", "range": [0, 6, 16], "symbol_roles": 8 }
+              ],
+              "symbols": []
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("Settings".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should fall back to direct precise symbols")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "Settings");
+    assert_eq!(response.matches[0].path, "lang/en.json");
+    assert_eq!(response.matches[0].line, 2);
+    assert_eq!(response.matches[0].column, 4);
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "symbol_precise_direct");
+    assert_eq!(note_json["target_precise_symbol"], "trans/`json:Settings`.");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_uses_php_helper_literal_for_direct_precise_lookup() {
+    let workspace_root = temp_workspace_root("go-to-definition-php-helper-precise");
+    let views_root = workspace_root.join("resources/views");
+    let lang_root = workspace_root.join("lang");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&lang_root).expect("failed to create lang fixture root");
+    let blade_source = "{{ __('Settings') }}\n";
+    fs::write(views_root.join("welcome.blade.php"), blade_source)
+        .expect("failed to seed blade fixture");
+    fs::write(
+        lang_root.join("en.json"),
+        "{\n  \"Settings\": \"Settings\"\n}\n",
+    )
+    .expect("failed to seed lang fixture");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_php_helper.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "lang/en.json",
+              "occurrences": [
+                { "symbol": "trans/`json:Settings`.", "range": [1, 3, 11], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "trans/`json:Settings`.",
+                  "display_name": "Settings",
+                  "kind": "string",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("resources/views/welcome.blade.php".to_owned()),
+            line: Some(1),
+            column: Some(blade_source.find("Settings").expect("literal should exist") + 4),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should use the helper literal for precise lookup")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "Settings");
+    assert_eq!(response.matches[0].path, "lang/en.json");
+    assert_eq!(response.matches[0].line, 2);
+    assert_eq!(response.matches[0].column, 4);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_php_helper");
+    assert_eq!(note_json["target_precise_symbol"], "trans/`json:Settings`.");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_uses_route_helper_literal_for_direct_precise_lookup() {
+    let workspace_root = temp_workspace_root("go-to-definition-route-helper-precise");
+    let views_root = workspace_root.join("resources/views");
+    let routes_root = workspace_root.join("routes");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&routes_root).expect("failed to create routes fixture root");
+    let blade_source = "{{ route('dashboard') }}\n";
+    let route_source = "Route::get('/dashboard', fn () => view('welcome'))->name('dashboard');\n";
+    fs::write(views_root.join("welcome.blade.php"), blade_source)
+        .expect("failed to seed blade fixture");
+    fs::write(routes_root.join("web.php"), route_source).expect("failed to seed route fixture");
+    let route_definition_column = route_source
+        .rfind("dashboard")
+        .expect("route name should exist in definition");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_route_helper.json",
+        &format!(
+            r#"{{
+          "documents": [
+            {{
+              "relative_path": "routes/web.php",
+              "occurrences": [
+                {{ "symbol": "route/`name:dashboard`.", "range": [0, {route_definition_column}, {route_definition_column_end}], "symbol_roles": 1 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "route/`name:dashboard`.",
+                  "display_name": "dashboard",
+                  "kind": "route",
+                  "relationships": []
+                }}
+              ]
+            }}
+          ]
+        }}"#,
+            route_definition_column = route_definition_column,
+            route_definition_column_end = route_definition_column + "dashboard".len(),
+        ),
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("resources/views/welcome.blade.php".to_owned()),
+            line: Some(1),
+            column: Some(
+                blade_source
+                    .find("dashboard")
+                    .expect("literal should exist")
+                    + 4,
+            ),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should use the route helper literal for precise lookup")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "dashboard");
+    assert_eq!(response.matches[0].path, "routes/web.php");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, route_definition_column + 1);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_php_helper");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "route/`name:dashboard`."
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_for_direct_precise_lookup()
+ {
+    let workspace_root = temp_workspace_root("go-to-definition-blade-attribute-route-helper");
+    let views_root = workspace_root.join("resources/views/partials/sidebar");
+    let routes_root = workspace_root.join("routes");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&routes_root).expect("failed to create routes fixture root");
+    let blade_source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
+    let route_source = "Route::get('/dashboard', fn () => view('welcome'))->name('dashboard');\n";
+    fs::write(views_root.join("primary-nav.blade.php"), blade_source)
+        .expect("failed to seed blade fixture");
+    fs::write(routes_root.join("web.php"), route_source).expect("failed to seed route fixture");
+    let route_definition_column = route_source
+        .rfind("dashboard")
+        .expect("route name should exist in definition");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_blade_attribute_route_helper.json",
+        &format!(
+            r#"{{
+          "documents": [
+            {{
+              "relative_path": "routes/web.php",
+              "occurrences": [
+                {{ "symbol": "route/`name:dashboard`.", "range": [0, {route_definition_column}, {route_definition_column_end}], "symbol_roles": 1 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "route/`name:dashboard`.",
+                  "display_name": "dashboard",
+                  "kind": "route",
+                  "relationships": []
+                }}
+              ]
+            }}
+          ]
+        }}"#,
+            route_definition_column = route_definition_column,
+            route_definition_column_end = route_definition_column + "dashboard".len(),
+        ),
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
+            line: Some(1),
+            column: Some(
+                blade_source
+                    .find("dashboard")
+                    .expect("literal should exist")
+                    + 4,
+            ),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should use the Blade attribute route helper literal")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "dashboard");
+    assert_eq!(response.matches[0].path, "routes/web.php");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, route_definition_column + 1);
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "location_token_php_helper");
+    assert_eq!(
+        note_json["target_precise_symbol"],
+        "route/`name:dashboard`."
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     let workspace_root = temp_workspace_root("go-to-definition-stale-manifest-edit");
     let src_root = workspace_root.join("src");
@@ -860,7 +1184,10 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
     assert_eq!(first.symbol, "Impl");
     assert_eq!(first.relation.as_deref(), Some("implements"));
     assert_eq!(first.precision.as_deref(), Some("heuristic"));
-    assert_eq!(first.fallback_reason.as_deref(), Some("precise_absent"));
+    assert_eq!(
+        first.fallback_reason.as_deref(),
+        Some("precise_absent_rust_impl_index")
+    );
 
     let note = response
         .note
@@ -869,10 +1196,55 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("find_implementations note should be valid JSON");
     assert_eq!(note_json["precision"], "heuristic");
-    assert_eq!(note_json["fallback_reason"], "precise_absent");
+    assert_eq!(
+        note_json["fallback_reason"],
+        "precise_absent_rust_impl_index"
+    );
     assert_eq!(
         note_json["precise"]["implementation_count"].as_u64(),
         Some(response.matches.len() as u64)
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_find_implementations_classifies_blanket_rust_impls_without_precise_graph() {
+    let workspace_root = temp_workspace_root("navigation-implementations-rust-blanket");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub trait DeterministicDrawExt {}\n\
+         pub struct Wrapper<T>(pub T);\n\
+         impl<T> DeterministicDrawExt for Wrapper<T> {}\n",
+    )
+    .expect("failed to seed blanket impl fixture");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_implementations(Parameters(FindImplementationsParams {
+            symbol: Some("DeterministicDrawExt".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_implementations should classify blanket impl fallback")
+        .0;
+
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "Wrapper<T>");
+    assert_eq!(
+        response.matches[0].relation.as_deref(),
+        Some("implements_blanket")
+    );
+    assert_eq!(
+        response.matches[0].fallback_reason.as_deref(),
+        Some("precise_absent_rust_impl_index")
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -1001,7 +1373,8 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
                 { "symbol": "scip-rust pkg repo#Service", "range": [0, 10, 17], "symbol_roles": 1 },
                 { "symbol": "scip-rust pkg repo#Impl", "range": [1, 11, 15], "symbol_roles": 1 },
                 { "symbol": "scip-rust pkg repo#serve", "range": [3, 7, 12], "symbol_roles": 1 },
-                { "symbol": "scip-rust pkg repo#consumer", "range": [4, 7, 15], "symbol_roles": 1 }
+                { "symbol": "scip-rust pkg repo#consumer", "range": [4, 7, 15], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#serve", "range": [4, 28, 33] }
               ],
               "symbols": [
                 {
@@ -2003,6 +2376,83 @@ async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_k
     );
     assert_eq!(response.matches[0].call_line, Some(3));
     assert_eq!(response.matches[0].call_column, Some(5));
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_outgoing_calls_ignores_precise_callable_references_without_call_syntax() {
+    let workspace_root = temp_workspace_root("navigation-outgoing-precise-non-call-reference");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary rust fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn alpha() {}\n\
+         pub fn caller() {\n\
+             let _ = alpha;\n\
+         }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "rust-outgoing-non-call-reference.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                {
+                  "symbol": "scip-rust pkg repo#alpha",
+                  "range": [0, 7, 12],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-rust pkg repo#caller",
+                  "range": [1, 7, 13],
+                  "symbol_roles": 1
+                },
+                {
+                  "symbol": "scip-rust pkg repo#alpha",
+                  "range": [2, 12, 17],
+                  "symbol_roles": 8
+                }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#alpha",
+                  "display_name": "alpha",
+                  "kind": "function",
+                  "relationships": []
+                },
+                {
+                  "symbol": "scip-rust pkg repo#caller",
+                  "display_name": "caller",
+                  "kind": "function",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+
+    let server = server_for_workspace_root(&workspace_root);
+    let response = server
+        .outgoing_calls(Parameters(OutgoingCallsParams {
+            symbol: Some("caller".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("outgoing_calls should reject non-call precise references")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert!(response.matches.is_empty());
 
     cleanup_workspace_root(&workspace_root);
 }

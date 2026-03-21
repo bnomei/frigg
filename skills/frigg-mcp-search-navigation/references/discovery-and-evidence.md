@@ -68,6 +68,10 @@ Important inputs:
 
 Use `path_class` or `path_regex` when overloaded names are noisy.
 
+Practical caution:
+- inline test modules can still overmatch inside runtime files, even under `path_regex:"^src/"` or `path_class:"runtime"`
+- treat `search_symbol` as a candidate locator, then confirm the specific runtime anchor with `go_to_definition`, `document_symbols`, or `read_file`
+
 ## `search_text`
 
 Use `search_text` when you need exact or regex search plus Frigg semantics:
@@ -80,6 +84,7 @@ Use `search_text` when you need exact or regex search plus Frigg semantics:
 Notes:
 - on macOS and Linux, Frigg may use `rg` internally as a lexical accelerator when it is available
 - that does not change the public flow: Frigg still owns candidate scope, ordering, metadata, and fallback behavior
+- for review-style work, `search_text` is often the best first proof surface when the repo has stable narrative terms, API names, or deterministic contract phrases
 
 Important inputs:
 - `query`
