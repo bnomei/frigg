@@ -403,6 +403,74 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
 }
 
 #[tokio::test]
+async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_attribute_helpers() {
+    let workspace_root = temp_workspace_root("go-to-definition-blade-route-helper-source-fallback");
+    let views_root = workspace_root.join("resources/views/partials/sidebar");
+    let general_views_root = workspace_root.join("resources/views");
+    let routes_root = workspace_root.join("routes");
+    fs::create_dir_all(&views_root).expect("failed to create blade fixture root");
+    fs::create_dir_all(&general_views_root).expect("failed to create general blade fixture root");
+    fs::create_dir_all(&routes_root).expect("failed to create routes fixture root");
+    let blade_source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
+    let route_source = "Route::get('/dashboard', fn () => view('welcome'))->name('dashboard');\n";
+    fs::write(views_root.join("primary-nav.blade.php"), blade_source)
+        .expect("failed to seed blade fixture");
+    fs::write(
+        general_views_root.join("dashboard.blade.php"),
+        "<div>dashboard view</div>\n",
+    )
+    .expect("failed to seed same-named blade view fixture");
+    fs::write(routes_root.join("web.php"), route_source).expect("failed to seed route fixture");
+    let route_definition_column = route_source
+        .rfind("dashboard")
+        .expect("route name should exist in definition");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some("repo-001".to_owned()),
+            path: Some("resources/views/partials/sidebar/primary-nav.blade.php".to_owned()),
+            line: Some(1),
+            column: Some(
+                blade_source
+                    .find("dashboard")
+                    .expect("literal should exist")
+                    + 4,
+            ),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("go_to_definition should prefer route source fallback")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::HeuristicNoPrecise);
+    assert_eq!(response.matches.len(), 1);
+    assert_eq!(response.matches[0].symbol, "dashboard");
+    assert_eq!(response.matches[0].path, "routes/web.php");
+    assert_eq!(response.matches[0].line, 1);
+    assert_eq!(response.matches[0].column, route_definition_column + 1);
+    assert_eq!(response.matches[0].kind.as_deref(), Some("route"));
+    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("go_to_definition should emit fallback metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(
+        note_json["resolution_source"],
+        "location_token_php_helper_route_source"
+    );
+    assert_eq!(note_json["fallback_reason"], "route_helper_source");
+    assert_eq!(note_json["target_route_name"], "dashboard");
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     let workspace_root = temp_workspace_root("go-to-definition-stale-manifest-edit");
     let src_root = workspace_root.join("src");

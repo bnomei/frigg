@@ -96,6 +96,10 @@ pub struct ReferenceMatch {
     pub line: usize,
     pub column: usize,
     pub match_kind: ReferenceMatchKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }

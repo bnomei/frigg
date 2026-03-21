@@ -8,7 +8,200 @@ fn error_code_tag(error: &ErrorData) -> Option<&str> {
         .and_then(|value| value.as_str())
 }
 
+struct LoadedHeuristicReferences {
+    references: Vec<HeuristicReference>,
+    source_read_diagnostics_count: usize,
+    source_files_loaded: usize,
+    source_bytes_loaded: u64,
+}
+
 impl FriggMcpServer {
+    fn load_heuristic_references(
+        &self,
+        target_corpus: &RepositorySymbolCorpus,
+        target_symbol: &SymbolDefinition,
+        graph: &SymbolGraph,
+        heuristic_scip_signature: String,
+        resource_budgets: FindReferencesResourceBudgets,
+    ) -> Result<LoadedHeuristicReferences, ErrorData> {
+        let mut resolver = HeuristicReferenceResolver::new(
+            &target_corpus.repository_id,
+            &target_symbol.stable_id,
+            &target_corpus.symbols,
+            graph,
+        )
+        .ok_or_else(|| {
+            Self::internal(
+                "failed to initialize heuristic resolver for selected symbol",
+                Some(json!({
+                    "repository_id": target_corpus.repository_id,
+                    "symbol_id": target_symbol.stable_id,
+                })),
+            )
+        })?;
+        let heuristic_cache_key = HeuristicReferenceCacheKey {
+            repository_id: target_corpus.repository_id.clone(),
+            symbol_id: target_symbol.stable_id.clone(),
+            corpus_signature: target_corpus.root_signature.clone(),
+            scip_signature: heuristic_scip_signature,
+        };
+
+        if let Some(cached) = self.cached_heuristic_references(&heuristic_cache_key) {
+            return Ok(LoadedHeuristicReferences {
+                references: (*cached.references).clone(),
+                source_read_diagnostics_count: cached.source_read_diagnostics_count,
+                source_files_loaded: cached.source_files_loaded,
+                source_bytes_loaded: cached.source_bytes_loaded,
+            });
+        }
+
+        let mut source_read_diagnostics_count = 0usize;
+        let mut source_files_loaded = 0usize;
+        let mut source_bytes_loaded = 0u64;
+        let source_started_at = Instant::now();
+        let source_max_elapsed = Duration::from_millis(resource_budgets.source_max_elapsed_ms);
+        let source_max_file_bytes = Self::usize_to_u64(resource_budgets.source_max_file_bytes);
+        let source_max_total_bytes = Self::usize_to_u64(resource_budgets.source_max_total_bytes);
+
+        for (index, path) in target_corpus.source_paths.iter().enumerate() {
+            if source_started_at.elapsed() > source_max_elapsed {
+                let elapsed_ms =
+                    u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                return Err(Self::find_references_resource_budget_error(
+                    "source",
+                    "source_elapsed_ms",
+                    "find_references source processing exceeded time budget",
+                    json!({
+                        "repository_id": target_corpus.repository_id,
+                        "actual": elapsed_ms,
+                        "limit": resource_budgets.source_max_elapsed_ms,
+                        "files_loaded": Self::usize_to_u64(source_files_loaded),
+                        "bytes_loaded": source_bytes_loaded,
+                    }),
+                ));
+            }
+
+            if index >= resource_budgets.source_max_files {
+                return Err(Self::find_references_resource_budget_error(
+                    "source",
+                    "source_file_count",
+                    "find_references source file count exceeds configured budget",
+                    json!({
+                        "repository_id": target_corpus.repository_id,
+                        "actual": Self::usize_to_u64(index.saturating_add(1)),
+                        "limit": Self::usize_to_u64(resource_budgets.source_max_files),
+                    }),
+                ));
+            }
+
+            let metadata = match fs::metadata(path) {
+                Ok(metadata) => Some(metadata),
+                Err(err) => {
+                    source_read_diagnostics_count += 1;
+                    warn!(
+                        repository_id = target_corpus.repository_id,
+                        path = %path.display(),
+                        error = %err,
+                        "skipping source file while resolving heuristic references"
+                    );
+                    None
+                }
+            };
+
+            if let Some(metadata) = metadata {
+                let pre_read_bytes = metadata.len();
+                if pre_read_bytes > source_max_file_bytes {
+                    return Err(Self::find_references_resource_budget_error(
+                        "source",
+                        "source_file_bytes",
+                        "find_references source file exceeds per-file byte budget",
+                        json!({
+                            "repository_id": target_corpus.repository_id,
+                            "path": path.display().to_string(),
+                            "actual": pre_read_bytes,
+                            "limit": source_max_file_bytes,
+                        }),
+                    ));
+                }
+                let projected_total = source_bytes_loaded.saturating_add(pre_read_bytes);
+                if projected_total > source_max_total_bytes {
+                    return Err(Self::find_references_resource_budget_error(
+                        "source",
+                        "source_total_bytes",
+                        "find_references source bytes exceed configured budget",
+                        json!({
+                            "repository_id": target_corpus.repository_id,
+                            "path": path.display().to_string(),
+                            "actual": projected_total,
+                            "limit": source_max_total_bytes,
+                        }),
+                    ));
+                }
+            }
+
+            match fs::read_to_string(path) {
+                Ok(source) => {
+                    let source_bytes = Self::usize_to_u64(source.len());
+                    if source_bytes > source_max_file_bytes {
+                        return Err(Self::find_references_resource_budget_error(
+                            "source",
+                            "source_file_bytes",
+                            "find_references source file exceeds per-file byte budget",
+                            json!({
+                                "repository_id": target_corpus.repository_id,
+                                "path": path.display().to_string(),
+                                "actual": source_bytes,
+                                "limit": source_max_file_bytes,
+                            }),
+                        ));
+                    }
+                    let projected_total = source_bytes_loaded.saturating_add(source_bytes);
+                    if projected_total > source_max_total_bytes {
+                        return Err(Self::find_references_resource_budget_error(
+                            "source",
+                            "source_total_bytes",
+                            "find_references source bytes exceed configured budget",
+                            json!({
+                                "repository_id": target_corpus.repository_id,
+                                "path": path.display().to_string(),
+                                "actual": projected_total,
+                                "limit": source_max_total_bytes,
+                            }),
+                        ));
+                    }
+
+                    resolver.ingest_source(path, &source);
+                    source_files_loaded = source_files_loaded.saturating_add(1);
+                    source_bytes_loaded = projected_total;
+                }
+                Err(err) => {
+                    source_read_diagnostics_count += 1;
+                    warn!(
+                        repository_id = target_corpus.repository_id,
+                        path = %path.display(),
+                        error = %err,
+                        "skipping source file while resolving heuristic references"
+                    );
+                }
+            }
+        }
+
+        let references = resolver.finish();
+        self.cache_heuristic_references(
+            heuristic_cache_key,
+            references.clone(),
+            source_read_diagnostics_count,
+            source_files_loaded,
+            source_bytes_loaded,
+        );
+        Ok(LoadedHeuristicReferences {
+            references,
+            source_read_diagnostics_count,
+            source_files_loaded,
+            source_bytes_loaded,
+        })
+    }
+
     pub(in crate::mcp::server) async fn find_references_impl(
         &self,
         params: FindReferencesParams,
@@ -170,6 +363,13 @@ impl FriggMcpServer {
                                         } else {
                                             ReferenceMatchKind::Reference
                                         },
+                                        precision: Some(
+                                            Self::precise_match_precision(
+                                                direct_precise_target.coverage_mode,
+                                            )
+                                            .to_owned(),
+                                        ),
+                                        fallback_reason: None,
                                         follow_up_structural: Vec::new(),
                                     })
                                     .collect::<Vec<_>>();
@@ -318,19 +518,116 @@ impl FriggMcpServer {
                                 } else {
                                     ReferenceMatchKind::Reference
                                 },
+                                precision: Some(
+                                    Self::precise_match_precision(precise_coverage).to_owned(),
+                                ),
+                                fallback_reason: None,
                                 follow_up_structural: Vec::new(),
                             }
                         })
                         .collect::<Vec<_>>();
+                    let should_supplement_php_method_references =
+                        target.symbol.language == SymbolLanguage::Php
+                            && target.symbol.kind.as_str() == "method";
+                    let mut heuristic_supplement_match_count = 0usize;
+                    let mut heuristic_supplement_error: Option<Value> = None;
+                    if should_supplement_php_method_references {
+                        match server.load_heuristic_references(
+                            target_corpus.as_ref(),
+                            &target.symbol,
+                            graph.as_ref(),
+                            heuristic_scip_signature.clone(),
+                            resource_budgets,
+                        ) {
+                            Ok(loaded) => {
+                                source_read_diagnostics_count =
+                                    loaded.source_read_diagnostics_count;
+                                source_files_loaded = loaded.source_files_loaded;
+                                source_bytes_loaded = loaded.source_bytes_loaded;
+                                diagnostics_count += source_read_diagnostics_count;
+
+                                let mut existing_match_locations = matches
+                                    .iter()
+                                    .map(|matched| {
+                                        (
+                                            matched.repository_id.clone(),
+                                            matched.path.clone(),
+                                            matched.line,
+                                            matched.column,
+                                        )
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                let mut supplemental_matches = loaded
+                                    .references
+                                    .into_iter()
+                                    .filter(|reference| {
+                                        matches!(
+                                            supported_language_for_path(
+                                                &reference.path,
+                                                LanguageCapability::StructuralSearch,
+                                            ),
+                                            Some(SymbolLanguage::Php | SymbolLanguage::Blade)
+                                        )
+                                    })
+                                    .filter_map(|reference| {
+                                        let relative_path = Self::relative_display_path(
+                                            &target.root,
+                                            &reference.path,
+                                        );
+                                        let key = (
+                                            reference.repository_id.clone(),
+                                            relative_path.clone(),
+                                            reference.line,
+                                            reference.column,
+                                        );
+                                        if !existing_match_locations.insert(key) {
+                                            return None;
+                                        }
+
+                                        Some(ReferenceMatch {
+                                            repository_id: reference.repository_id,
+                                            symbol: reference.symbol_name,
+                                            path: relative_path,
+                                            line: reference.line,
+                                            column: reference.column,
+                                            match_kind: ReferenceMatchKind::Reference,
+                                            precision: Some("heuristic".to_owned()),
+                                            fallback_reason: Some(
+                                                "precise_supplemented".to_owned(),
+                                            ),
+                                            follow_up_structural: Vec::new(),
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                heuristic_supplement_match_count = supplemental_matches.len();
+                                let remaining = limit.saturating_sub(matches.len());
+                                if supplemental_matches.len() > remaining {
+                                    supplemental_matches.truncate(remaining);
+                                }
+                                matches.extend(supplemental_matches);
+                            }
+                            Err(error) => {
+                                heuristic_supplement_error = Some(json!({
+                                    "code": error_code_tag(&error),
+                                    "message": error.message,
+                                    "data": error.data,
+                                }));
+                            }
+                        }
+                    }
                     if params_for_blocking.include_follow_up_structural == Some(true) {
                         Self::populate_reference_match_follow_up_structural(
                             &target.root,
                             &mut matches,
                         );
                     }
-                    total_matches = precise_reference_count;
+                    total_matches = precise_reference_count + heuristic_supplement_match_count;
 
-                    let precision = Self::precise_resolution_precision(precise_coverage);
+                    let precision = if heuristic_supplement_match_count > 0 {
+                        "precise_partial"
+                    } else {
+                        Self::precise_resolution_precision(precise_coverage)
+                    };
                     resolution_precision = Some(precision.to_owned());
                     let metadata = json!({
                         "precision": precision,
@@ -376,6 +673,16 @@ impl FriggMcpServer {
                                 "bytes_loaded": source_bytes_loaded,
                             },
                         },
+                        "heuristic_supplement": if should_supplement_php_method_references {
+                            Some(json!({
+                                "eligible": true,
+                                "applied": heuristic_supplement_match_count > 0,
+                                "match_count": heuristic_supplement_match_count,
+                                "error": heuristic_supplement_error,
+                            }))
+                        } else {
+                            None
+                        },
                     });
                     let (metadata, note) = Self::metadata_note_pair(metadata);
 
@@ -390,179 +697,17 @@ impl FriggMcpServer {
                     }));
                 }
 
-                let mut resolver = HeuristicReferenceResolver::new(
-                    &target_corpus.repository_id,
-                    &target.symbol.stable_id,
-                    &target_corpus.symbols,
+                let loaded = server.load_heuristic_references(
+                    target_corpus.as_ref(),
+                    &target.symbol,
                     graph.as_ref(),
-                )
-                .ok_or_else(|| {
-                    Self::internal(
-                        "failed to initialize heuristic resolver for selected symbol",
-                        Some(json!({
-                            "repository_id": target_corpus.repository_id,
-                            "symbol_id": target.symbol.stable_id,
-                        })),
-                    )
-                })?;
-                let heuristic_cache_key = HeuristicReferenceCacheKey {
-                    repository_id: target_corpus.repository_id.clone(),
-                    symbol_id: target.symbol.stable_id.clone(),
-                    corpus_signature: target_corpus.root_signature.clone(),
-                    scip_signature: heuristic_scip_signature,
-                };
-
-                let all_references = if let Some(cached) =
-                    server.cached_heuristic_references(&heuristic_cache_key)
-                {
-                    source_read_diagnostics_count = cached.source_read_diagnostics_count;
-                    source_files_loaded = cached.source_files_loaded;
-                    source_bytes_loaded = cached.source_bytes_loaded;
-                    (*cached.references).clone()
-                } else {
-                    let source_started_at = Instant::now();
-                    let source_max_elapsed =
-                        Duration::from_millis(resource_budgets.source_max_elapsed_ms);
-                    let source_max_file_bytes =
-                        Self::usize_to_u64(resource_budgets.source_max_file_bytes);
-                    let source_max_total_bytes =
-                        Self::usize_to_u64(resource_budgets.source_max_total_bytes);
-
-                    for (index, path) in target_corpus.source_paths.iter().enumerate() {
-                        if source_started_at.elapsed() > source_max_elapsed {
-                            let elapsed_ms =
-                                u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                            return Err(Self::find_references_resource_budget_error(
-                                "source",
-                                "source_elapsed_ms",
-                                "find_references source processing exceeded time budget",
-                                json!({
-                                    "repository_id": target_corpus.repository_id,
-                                    "actual": elapsed_ms,
-                                    "limit": resource_budgets.source_max_elapsed_ms,
-                                    "files_loaded": Self::usize_to_u64(source_files_loaded),
-                                    "bytes_loaded": source_bytes_loaded,
-                                }),
-                            ));
-                        }
-
-                        if index >= resource_budgets.source_max_files {
-                            return Err(Self::find_references_resource_budget_error(
-                                "source",
-                                "source_file_count",
-                                "find_references source file count exceeds configured budget",
-                                json!({
-                                    "repository_id": target_corpus.repository_id,
-                                    "actual": Self::usize_to_u64(index.saturating_add(1)),
-                                    "limit": Self::usize_to_u64(resource_budgets.source_max_files),
-                                }),
-                            ));
-                        }
-
-                        let metadata = match fs::metadata(path) {
-                            Ok(metadata) => Some(metadata),
-                            Err(err) => {
-                                source_read_diagnostics_count += 1;
-                                warn!(
-                                    repository_id = target_corpus.repository_id,
-                                    path = %path.display(),
-                                    error = %err,
-                                    "skipping source file while resolving heuristic references"
-                                );
-                                None
-                            }
-                        };
-
-                        if let Some(metadata) = metadata {
-                            let pre_read_bytes = metadata.len();
-                            if pre_read_bytes > source_max_file_bytes {
-                                return Err(Self::find_references_resource_budget_error(
-                                    "source",
-                                    "source_file_bytes",
-                                    "find_references source file exceeds per-file byte budget",
-                                    json!({
-                                        "repository_id": target_corpus.repository_id,
-                                        "path": path.display().to_string(),
-                                        "actual": pre_read_bytes,
-                                        "limit": source_max_file_bytes,
-                                    }),
-                                ));
-                            }
-                            let projected_total =
-                                source_bytes_loaded.saturating_add(pre_read_bytes);
-                            if projected_total > source_max_total_bytes {
-                                return Err(Self::find_references_resource_budget_error(
-                                    "source",
-                                    "source_total_bytes",
-                                    "find_references source bytes exceed configured budget",
-                                    json!({
-                                        "repository_id": target_corpus.repository_id,
-                                        "path": path.display().to_string(),
-                                        "actual": projected_total,
-                                        "limit": source_max_total_bytes,
-                                    }),
-                                ));
-                            }
-                        }
-
-                        match fs::read_to_string(path) {
-                            Ok(source) => {
-                                let source_bytes = Self::usize_to_u64(source.len());
-                                if source_bytes > source_max_file_bytes {
-                                    return Err(Self::find_references_resource_budget_error(
-                                        "source",
-                                        "source_file_bytes",
-                                        "find_references source file exceeds per-file byte budget",
-                                        json!({
-                                            "repository_id": target_corpus.repository_id,
-                                            "path": path.display().to_string(),
-                                            "actual": source_bytes,
-                                            "limit": source_max_file_bytes,
-                                        }),
-                                    ));
-                                }
-                                let projected_total =
-                                    source_bytes_loaded.saturating_add(source_bytes);
-                                if projected_total > source_max_total_bytes {
-                                    return Err(Self::find_references_resource_budget_error(
-                                        "source",
-                                        "source_total_bytes",
-                                        "find_references source bytes exceed configured budget",
-                                        json!({
-                                            "repository_id": target_corpus.repository_id,
-                                            "path": path.display().to_string(),
-                                            "actual": projected_total,
-                                            "limit": source_max_total_bytes,
-                                        }),
-                                    ));
-                                }
-
-                                resolver.ingest_source(path, &source);
-                                source_files_loaded = source_files_loaded.saturating_add(1);
-                                source_bytes_loaded = projected_total;
-                            }
-                            Err(err) => {
-                                source_read_diagnostics_count += 1;
-                                warn!(
-                                    repository_id = target_corpus.repository_id,
-                                    path = %path.display(),
-                                    error = %err,
-                                    "skipping source file while resolving heuristic references"
-                                );
-                            }
-                        }
-                    }
-
-                    let all_references = resolver.finish();
-                    server.cache_heuristic_references(
-                        heuristic_cache_key,
-                        all_references.clone(),
-                        source_read_diagnostics_count,
-                        source_files_loaded,
-                        source_bytes_loaded,
-                    );
-                    all_references
-                };
+                    heuristic_scip_signature,
+                    resource_budgets,
+                )?;
+                source_read_diagnostics_count = loaded.source_read_diagnostics_count;
+                source_files_loaded = loaded.source_files_loaded;
+                source_bytes_loaded = loaded.source_bytes_loaded;
+                let all_references = loaded.references;
                 total_matches = all_references.len() + usize::from(include_definition);
                 let references = all_references.into_iter().take(limit).collect::<Vec<_>>();
 
@@ -581,6 +726,8 @@ impl FriggMcpServer {
                         line: target.symbol.line,
                         column: 1,
                         match_kind: ReferenceMatchKind::Definition,
+                        precision: Some("heuristic".to_owned()),
+                        fallback_reason: Some("precise_absent".to_owned()),
                         follow_up_structural: Vec::new(),
                     });
                 }
@@ -603,6 +750,8 @@ impl FriggMcpServer {
                             line: reference.line,
                             column: reference.column,
                             match_kind: ReferenceMatchKind::Reference,
+                            precision: Some("heuristic".to_owned()),
+                            fallback_reason: Some("precise_absent".to_owned()),
                             follow_up_structural: Vec::new(),
                         }
                     }));

@@ -268,11 +268,20 @@ pub fn benchmark_precise_graph_for_server(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::mcp::server) enum NavigationPhpHelperKind {
+    Translation,
+    Route,
+    Config,
+    Env,
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::mcp::server) struct NavigationLocationTokenHint {
     symbol_query: String,
     relative_path: String,
     resolution_source: &'static str,
+    helper_kind: Option<NavigationPhpHelperKind>,
     rust_hint: Option<crate::languages::RustNavigationQueryHint>,
 }
 /// Concrete streamable HTTP service type used when Frigg is exposed over MCP transport.

@@ -533,6 +533,126 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
 }
 
 #[tokio::test]
+async fn find_references_supplements_precise_php_method_results_with_blade_hits() {
+    let workspace_root = temp_workspace_root("find-references-php-method-supplement");
+    let models_root = workspace_root.join("app/Models");
+    let views_root = workspace_root.join("resources/views/components/courses");
+    fs::create_dir_all(&models_root).expect("failed to create models fixture root");
+    fs::create_dir_all(&views_root).expect("failed to create views fixture root");
+    let course_source = "<?php\n\
+namespace App\\Models;\n\
+\n\
+class Course\n\
+{\n\
+    public function submissionsOpen(): bool\n\
+    {\n\
+        return true;\n\
+    }\n\
+\n\
+    public function phpReference(): bool\n\
+    {\n\
+        return $this->submissionsOpen();\n\
+    }\n\
+}\n";
+    let blade_source = "@if ($course->submissionsOpen()) open @endif\n";
+    fs::write(models_root.join("Course.php"), course_source).expect("failed to seed model fixture");
+    fs::write(views_root.join("documents-panel.blade.php"), blade_source)
+        .expect("failed to seed blade fixture");
+    let definition_line = 6usize;
+    let definition_column = course_source
+        .lines()
+        .nth(definition_line - 1)
+        .and_then(|line| line.find("submissionsOpen"))
+        .expect("method definition should exist");
+    let php_reference_line = 13usize;
+    let php_reference_column = course_source
+        .lines()
+        .nth(php_reference_line - 1)
+        .and_then(|line| line.find("submissionsOpen"))
+        .expect("php method reference should exist");
+    write_scip_fixture(
+        &workspace_root,
+        "php_method_references.json",
+        &format!(
+            r#"{{
+          "documents": [
+            {{
+              "relative_path": "app/Models/Course.php",
+              "occurrences": [
+                {{ "symbol": "scip-php composer app#App\\Models\\Course::submissionsOpen", "range": [{definition_line_zero}, {definition_column}, {definition_column_end}], "symbol_roles": 1 }},
+                {{ "symbol": "scip-php composer app#App\\Models\\Course::submissionsOpen", "range": [{php_reference_line_zero}, {php_reference_column}, {php_reference_column_end}], "symbol_roles": 8 }}
+              ],
+              "symbols": [
+                {{
+                  "symbol": "scip-php composer app#App\\Models\\Course::submissionsOpen",
+                  "display_name": "submissionsOpen",
+                  "kind": "method",
+                  "relationships": []
+                }}
+              ]
+            }}
+          ]
+        }}"#,
+            definition_line_zero = definition_line - 1,
+            definition_column = definition_column,
+            definition_column_end = definition_column + "submissionsOpen".len(),
+            php_reference_line_zero = php_reference_line - 1,
+            php_reference_column = php_reference_column,
+            php_reference_column_end = php_reference_column + "submissionsOpen".len(),
+        ),
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("submissionsOpen".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            include_follow_up_structural: None,
+            limit: Some(20),
+        }))
+        .await
+        .expect("find_references should supplement precise PHP method references")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::PrecisePartial);
+    assert_eq!(response.total_matches, 2);
+    assert_eq!(response.matches.len(), 2);
+    assert_eq!(response.matches[0].path, "app/Models/Course.php");
+    assert_eq!(response.matches[0].line, php_reference_line);
+    assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+    assert_eq!(response.matches[0].fallback_reason, None);
+    assert_eq!(
+        response.matches[1].path,
+        "resources/views/components/courses/documents-panel.blade.php"
+    );
+    assert_eq!(response.matches[1].line, 1);
+    assert_eq!(response.matches[1].precision.as_deref(), Some("heuristic"));
+    assert_eq!(
+        response.matches[1].fallback_reason.as_deref(),
+        Some("precise_supplemented")
+    );
+
+    let note = response
+        .note
+        .as_ref()
+        .expect("find_references should emit mixed precision metadata");
+    let note_json: serde_json::Value =
+        serde_json::from_str(note).expect("find_references note should be valid JSON");
+    assert_eq!(note_json["precision"], "precise_partial");
+    assert_eq!(note_json["heuristic"], false);
+    assert_eq!(note_json["precise"]["reference_count"], 1);
+    assert_eq!(note_json["heuristic_supplement"]["eligible"], true);
+    assert_eq!(note_json["heuristic_supplement"]["applied"], true);
+    assert_eq!(note_json["heuristic_supplement"]["match_count"], 1);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn precision_precedence_find_references_falls_back_to_heuristic_when_precise_absent() {
     let workspace_root = temp_workspace_root("precision-precedence-heuristic");
     let src_root = workspace_root.join("src");

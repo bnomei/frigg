@@ -526,6 +526,7 @@ impl FriggMcpServer {
                         symbol_query: rust_hint.symbol_query.clone(),
                         relative_path: requested_path,
                         resolution_source: "location_token_rust",
+                        helper_kind: None,
                         rust_hint: Some(rust_hint),
                     });
                 }
@@ -540,6 +541,7 @@ impl FriggMcpServer {
                         symbol_query: token,
                         relative_path: requested_path,
                         resolution_source: "location_token",
+                        helper_kind: None,
                         rust_hint: None,
                     });
                 }
@@ -554,13 +556,14 @@ impl FriggMcpServer {
                 continue;
             };
             if matches!(language, Some(SymbolLanguage::Php | SymbolLanguage::Blade))
-                && let Some(token) =
+                && let Some((token, helper_kind)) =
                     Self::php_helper_string_token_around_offset(&line_source, offset)
             {
                 return Some(NavigationLocationTokenHint {
                     symbol_query: token,
                     relative_path: requested_path,
                     resolution_source: "location_token_php_helper",
+                    helper_kind: Some(helper_kind),
                     rust_hint: None,
                 });
             }
@@ -572,6 +575,7 @@ impl FriggMcpServer {
                     symbol_query: token,
                     relative_path: requested_path,
                     resolution_source: "location_token",
+                    helper_kind: None,
                     rust_hint: None,
                 });
             }
@@ -608,7 +612,7 @@ impl FriggMcpServer {
     pub(in crate::mcp::server) fn php_helper_string_token_around_offset(
         source: &str,
         offset: usize,
-    ) -> Option<String> {
+    ) -> Option<(String, NavigationPhpHelperKind)> {
         let bytes = source.as_bytes();
         if bytes.is_empty() {
             return None;
@@ -631,21 +635,22 @@ impl FriggMcpServer {
 
         let prefix = source[line_start..quote_start].trim_end();
         let helper_prefixes = [
-            "__(",
-            "trans(",
-            "route(",
-            "to_route(",
-            "config(",
-            "env(",
-            "Lang::get(",
-            "->route(",
-            "routeIs(",
-            "->routeIs(",
+            ("__(", NavigationPhpHelperKind::Translation),
+            ("trans(", NavigationPhpHelperKind::Translation),
+            ("route(", NavigationPhpHelperKind::Route),
+            ("to_route(", NavigationPhpHelperKind::Route),
+            ("config(", NavigationPhpHelperKind::Config),
+            ("env(", NavigationPhpHelperKind::Env),
+            ("Lang::get(", NavigationPhpHelperKind::Translation),
+            ("->route(", NavigationPhpHelperKind::Route),
+            ("routeIs(", NavigationPhpHelperKind::Route),
+            ("->routeIs(", NavigationPhpHelperKind::Route),
         ];
-        helper_prefixes
-            .iter()
-            .any(|suffix| prefix.ends_with(suffix))
-            .then(|| literal.to_owned())
+        helper_prefixes.iter().find_map(|(suffix, kind)| {
+            prefix
+                .ends_with(suffix)
+                .then(|| (literal.to_owned(), *kind))
+        })
     }
 
     fn enclosing_simple_quoted_span_in_line(
@@ -837,7 +842,7 @@ impl FriggMcpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::FriggMcpServer;
+    use super::{FriggMcpServer, NavigationPhpHelperKind};
     use crate::indexer::byte_offset_for_line_column;
 
     #[test]
@@ -845,8 +850,8 @@ mod tests {
         let source = "{{ __('Settings') }}\n";
         let offset = byte_offset_for_line_column(source, 1, 10).expect("offset should resolve");
         assert_eq!(
-            FriggMcpServer::php_helper_string_token_around_offset(source, offset).as_deref(),
-            Some("Settings")
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset),
+            Some(("Settings".to_owned(), NavigationPhpHelperKind::Translation))
         );
     }
 
@@ -855,8 +860,8 @@ mod tests {
         let source = r#"<x-nav-link href="{{ route('dashboard') }}">Dashboard</x-nav-link>"#;
         let offset = byte_offset_for_line_column(source, 1, 31).expect("offset should resolve");
         assert_eq!(
-            FriggMcpServer::php_helper_string_token_around_offset(source, offset).as_deref(),
-            Some("dashboard")
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset),
+            Some(("dashboard".to_owned(), NavigationPhpHelperKind::Route))
         );
     }
 }

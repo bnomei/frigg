@@ -38,7 +38,98 @@ fn precise_absence_reason(
     "precise_unavailable"
 }
 
+fn route_definition_name_regex(route_name: &str) -> Option<regex::Regex> {
+    if route_name.is_empty()
+        || route_name.contains('\n')
+        || route_name.contains('\r')
+        || route_name.contains('*')
+    {
+        return None;
+    }
+
+    let escaped = regex::escape(route_name);
+    regex::Regex::new(&format!(
+        r#"->\s*name\s*\(\s*(?:"(?P<double>{escaped})"|'(?P<single>{escaped})')\s*\)"#
+    ))
+    .ok()
+}
+
 impl FriggMcpServer {
+    fn route_helper_definition_matches(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        route_name: &str,
+        include_follow_up_structural: bool,
+        limit: usize,
+    ) -> Vec<NavigationLocation> {
+        let Some(route_name_regex) = route_definition_name_regex(route_name) else {
+            return Vec::new();
+        };
+
+        let mut matches = Vec::new();
+        for corpus in corpora {
+            let mut corpus_matches = Vec::new();
+            for path in &corpus.source_paths {
+                if supported_language_for_path(path, LanguageCapability::StructuralSearch)
+                    != Some(SymbolLanguage::Php)
+                {
+                    continue;
+                }
+
+                let relative_path = Self::relative_display_path(&corpus.root, path);
+                if !relative_path.starts_with("routes/") {
+                    continue;
+                }
+
+                let Ok(source) = fs::read_to_string(path) else {
+                    continue;
+                };
+
+                for capture in route_name_regex.captures_iter(&source) {
+                    let Some(route_literal) =
+                        capture.name("single").or_else(|| capture.name("double"))
+                    else {
+                        continue;
+                    };
+                    let (line, column) =
+                        crate::indexer::line_column_for_offset(&source, route_literal.start());
+                    corpus_matches.push(NavigationLocation {
+                        symbol: route_name.to_owned(),
+                        repository_id: corpus.repository_id.clone(),
+                        path: relative_path.clone(),
+                        line,
+                        column,
+                        kind: Some("route".to_owned()),
+                        precision: Some("heuristic".to_owned()),
+                        follow_up_structural: Vec::new(),
+                    });
+                }
+            }
+
+            if include_follow_up_structural {
+                Self::populate_navigation_location_follow_up_structural(
+                    &corpus.root,
+                    &mut corpus_matches,
+                );
+            }
+            matches.extend(corpus_matches);
+        }
+
+        Self::sort_navigation_locations(&mut matches);
+        matches.dedup_by(|left, right| {
+            left.repository_id == right.repository_id
+                && left.path == right.path
+                && left.line == right.line
+                && left.column == right.column
+                && left.symbol == right.symbol
+                && left.kind == right.kind
+                && left.precision == right.precision
+        });
+        if matches.len() > limit {
+            matches.truncate(limit);
+        }
+        matches
+    }
+
     pub(in crate::mcp::server) async fn go_to_definition_impl(
         &self,
         params: GoToDefinitionParams,
@@ -156,66 +247,109 @@ impl FriggMcpServer {
 
                                 if let Some(token_hint) = location_hint.as_ref()
                                     && token_hint.resolution_source == "location_token_php_helper"
-                                    && let Some(direct_precise_target) = server
+                                {
+                                    if let Some(direct_precise_target) = server
                                         .select_direct_precise_navigation_target(
                                             &corpora,
                                             &token_hint.symbol_query,
                                             resource_budgets,
                                         )?
-                                {
-                                    resolution_source =
-                                        Some(token_hint.resolution_source.to_owned());
-                                    selected_precise_symbol =
-                                        Some(direct_precise_target.precise_target.symbol.clone());
-                                    precise_artifacts_ingested =
-                                        direct_precise_target.ingest_stats.artifacts_ingested;
-                                    precise_artifacts_failed =
-                                        direct_precise_target.ingest_stats.artifacts_failed;
-                                    let mut precise_matches =
-                                        Self::direct_precise_definition_matches_for_target(
-                                            &direct_precise_target,
-                                            &token_hint.symbol_query,
+                                    {
+                                        resolution_source =
+                                            Some(token_hint.resolution_source.to_owned());
+                                        selected_precise_symbol = Some(
+                                            direct_precise_target.precise_target.symbol.clone(),
                                         );
-                                    if precise_matches.len() > limit {
-                                        precise_matches.truncate(limit);
-                                    }
-                                    if include_follow_up_structural {
-                                        Self::populate_navigation_location_follow_up_structural(
-                                            &direct_precise_target.root,
-                                            &mut precise_matches,
-                                        );
-                                    }
-                                    if !precise_matches.is_empty() {
-                                        let precision = Self::precise_resolution_precision(
-                                            direct_precise_target.coverage_mode,
-                                        );
-                                        resolution_precision = Some(precision.to_owned());
-                                        match_count = precise_matches.len();
-                                        let metadata = json!({
-                                            "precision": precision,
-                                            "heuristic": false,
-                                            "target_precise_symbol": selected_precise_symbol.clone(),
-                                            "resolution_source": resolution_source.clone(),
-                                            "precise": Self::precise_note_with_count(
+                                        precise_artifacts_ingested =
+                                            direct_precise_target.ingest_stats.artifacts_ingested;
+                                        precise_artifacts_failed =
+                                            direct_precise_target.ingest_stats.artifacts_failed;
+                                        let mut precise_matches =
+                                            Self::direct_precise_definition_matches_for_target(
+                                                &direct_precise_target,
+                                                &token_hint.symbol_query,
+                                            );
+                                        if precise_matches.len() > limit {
+                                            precise_matches.truncate(limit);
+                                        }
+                                        if include_follow_up_structural {
+                                            Self::populate_navigation_location_follow_up_structural(
+                                                &direct_precise_target.root,
+                                                &mut precise_matches,
+                                            );
+                                        }
+                                        if !precise_matches.is_empty() {
+                                            let precision = Self::precise_resolution_precision(
                                                 direct_precise_target.coverage_mode,
-                                                &direct_precise_target.ingest_stats,
-                                                "definition_count",
-                                                precise_matches.len(),
-                                            )
-                                        });
-                                        let metadata = Self::metadata_with_freshness_basis(
-                                            metadata,
-                                            &cache_freshness.basis,
+                                            );
+                                            resolution_precision = Some(precision.to_owned());
+                                            match_count = precise_matches.len();
+                                            let metadata = json!({
+                                                "precision": precision,
+                                                "heuristic": false,
+                                                "target_precise_symbol": selected_precise_symbol.clone(),
+                                                "resolution_source": resolution_source.clone(),
+                                                "precise": Self::precise_note_with_count(
+                                                    direct_precise_target.coverage_mode,
+                                                    &direct_precise_target.ingest_stats,
+                                                    "definition_count",
+                                                    precise_matches.len(),
+                                                )
+                                            });
+                                            let metadata = Self::metadata_with_freshness_basis(
+                                                metadata,
+                                                &cache_freshness.basis,
+                                            );
+                                            let (metadata, note) =
+                                                Self::metadata_note_pair(metadata);
+                                            return Ok(Json(GoToDefinitionResponse {
+                                                matches: precise_matches,
+                                                mode: FriggMcpServer::navigation_mode_from_precision_label(
+                                                    Some(precision),
+                                                ),
+                                                metadata,
+                                                note,
+                                            }));
+                                        }
+                                    }
+
+                                    if token_hint.helper_kind
+                                        == Some(NavigationPhpHelperKind::Route)
+                                    {
+                                        let route_matches = Self::route_helper_definition_matches(
+                                            &corpora,
+                                            &token_hint.symbol_query,
+                                            include_follow_up_structural,
+                                            limit,
                                         );
-                                        let (metadata, note) = Self::metadata_note_pair(metadata);
-                                        return Ok(Json(GoToDefinitionResponse {
-                                            matches: precise_matches,
-                                            mode: FriggMcpServer::navigation_mode_from_precision_label(
-                                                Some(precision),
-                                            ),
-                                            metadata,
-                                            note,
-                                        }));
+                                        if !route_matches.is_empty() {
+                                            resolution_source = Some(
+                                                "location_token_php_helper_route_source"
+                                                    .to_owned(),
+                                            );
+                                            resolution_precision = Some("heuristic".to_owned());
+                                            match_count = route_matches.len();
+                                            let metadata = json!({
+                                                "precision": "heuristic",
+                                                "heuristic": true,
+                                                "fallback_reason": "route_helper_source",
+                                                "resolution_source": resolution_source.clone(),
+                                                "helper_kind": "route",
+                                                "target_route_name": token_hint.symbol_query,
+                                            });
+                                            let metadata = Self::metadata_with_freshness_basis(
+                                                metadata,
+                                                &cache_freshness.basis,
+                                            );
+                                            let (metadata, note) =
+                                                Self::metadata_note_pair(metadata);
+                                            return Ok(Json(GoToDefinitionResponse {
+                                                matches: route_matches,
+                                                mode: NavigationMode::HeuristicNoPrecise,
+                                                metadata,
+                                                note,
+                                            }));
+                                        }
                                     }
                                 }
 
