@@ -33,7 +33,10 @@ impl FriggMcpServer {
                             usize::MAX
                         };
                         let right_column_span = if right_span == 0 {
-                            right.span.end_column.saturating_sub(right.span.start_column)
+                            right
+                                .span
+                                .end_column
+                                .saturating_sub(right.span.start_column)
                         } else {
                             usize::MAX
                         };

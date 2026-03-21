@@ -221,22 +221,23 @@ impl FriggMcpServer {
                             found.repository_id = actual_repository_id.clone();
                         }
                     }
-                    let exact_pivot_assist = if Self::search_hybrid_should_run_exact_pivot_assistance(
-                        &matches,
-                        search_output.note.lexical_only_mode,
-                        detected_query_shape,
-                    ) {
-                        Self::search_hybrid_exact_pivot_assistance(
-                            &server,
-                            &query,
-                            params_for_blocking.repository_id.as_deref(),
-                            params_for_blocking.language.as_deref(),
-                            &searcher,
+                    let exact_pivot_assist =
+                        if Self::search_hybrid_should_run_exact_pivot_assistance(
                             &matches,
-                        )?
-                    } else {
-                        None
-                    };
+                            search_output.note.lexical_only_mode,
+                            detected_query_shape,
+                        ) {
+                            Self::search_hybrid_exact_pivot_assistance(
+                                &server,
+                                &query,
+                                params_for_blocking.repository_id.as_deref(),
+                                params_for_blocking.language.as_deref(),
+                                &searcher,
+                                &matches,
+                            )?
+                        } else {
+                            None
+                        };
                     let (boosted_match_count, witness_demotion_was_applied) =
                         Self::search_hybrid_apply_guardrails(
                             &mut matches,
@@ -810,10 +811,7 @@ impl FriggMcpServer {
                 if !relevant_paths.contains(&key) {
                     continue;
                 }
-                let lines = assistance
-                    .symbol_hit_lines
-                    .entry(key)
-                    .or_default();
+                let lines = assistance.symbol_hit_lines.entry(key).or_default();
                 if lines.insert(symbol.line) {
                     assistance.exact_symbol_hit_count =
                         assistance.exact_symbol_hit_count.saturating_add(1);
@@ -872,8 +870,7 @@ impl FriggMcpServer {
         lexical_only_mode: bool,
         query_shape: SearchHybridQueryShape,
     ) -> bool {
-        lexical_only_mode
-            && query_shape == SearchHybridQueryShape::CodeShaped
+        lexical_only_mode && query_shape == SearchHybridQueryShape::CodeShaped
     }
 
     fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {

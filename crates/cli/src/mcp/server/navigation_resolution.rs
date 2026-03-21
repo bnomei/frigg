@@ -96,7 +96,8 @@ impl FriggMcpServer {
             .container_symbol_index_by_index
             .get(symbol_index)
             .and_then(|container_index| {
-                container_index.and_then(|index| corpus.symbols.get(index).map(|symbol| symbol.name.clone()))
+                container_index
+                    .and_then(|index| corpus.symbols.get(index).map(|symbol| symbol.name.clone()))
             });
         let signature = corpus
             .canonical_symbol_name_by_stable_id

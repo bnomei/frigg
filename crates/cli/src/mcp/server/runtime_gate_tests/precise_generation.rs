@@ -748,9 +748,6 @@ if [ "${{7:-}}" = "--target-only" ] && [ -n "${{8:-}}" ]; then
   target_only="${{8}}"
 fi
 case "$target_only" in
-  "")
-    printf '%s' "0123456789" > "$output_path"
-    ;;
   "src")
     printf '%s' "0123456789" > "$output_path"
     ;;
@@ -760,9 +757,13 @@ case "$target_only" in
   "src/pkg_b")
     printf '%s' "bbb" > "$output_path"
     ;;
+  "")
+    printf '%s\n' "unexpected python monolith invocation" >&2
+    exit 72
+    ;;
   *)
     printf '%s\n' "unexpected python shard target: $target_only" >&2
-    exit 72
+    exit 73
     ;;
 esac
 "#
@@ -830,6 +831,151 @@ esac
                 .artifact_sample_paths
                 .iter()
                 .all(|path| path.contains("python--"))
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
+fn workspace_index_health_reports_python_precise_generation_reuses_existing_sharded_strategy() {
+    let workspace_root = temp_workspace_root("python-precise-generator-reuses-shards");
+    let bin_dir = temp_workspace_root("python-precise-generator-reuses-shards-bin");
+    fs::create_dir_all(workspace_root.join("src/pkg_a"))
+        .expect("failed to create python pkg_a fixture");
+    fs::create_dir_all(workspace_root.join("src/pkg_b"))
+        .expect("failed to create python pkg_b fixture");
+    fs::create_dir_all(workspace_root.join("node_modules/.bin"))
+        .expect("failed to create local node bin directory");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\n",
+    )
+    .expect("failed to write pyproject fixture");
+    fs::write(
+        workspace_root.join("src/pkg_a/app.py"),
+        "def alpha():\n    return 1\n",
+    )
+    .expect("failed to write python source fixture");
+    fs::write(
+        workspace_root.join("src/pkg_b/app.py"),
+        "def beta():\n    return 2\n",
+    )
+    .expect("failed to write python source fixture");
+    let scip_dir = workspace_root.join(".frigg/scip");
+    fs::create_dir_all(&scip_dir).expect("failed to prepare stale python artifact directory");
+    let stale_shard_a = scip_dir.join("python--seed-a.scip");
+    let stale_shard_b = scip_dir.join("python--seed-b.scip");
+    fs::write(&stale_shard_a, "stale-a").expect("failed to seed stale python shard");
+    fs::write(&stale_shard_b, "stale-b").expect("failed to seed stale python shard");
+
+    let _global_scip_python = write_fake_precise_generator_script(
+        &bin_dir,
+        "scip-python",
+        "scip-python 9.9.9",
+        "wrong-python-scip",
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config");
+        config.max_file_bytes = 20;
+        let server = FriggMcpServer::new(config);
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        let expected_project_name = FriggMcpServer::derived_python_precise_project_name(&workspace);
+        let _local_scip_python = write_fake_precise_generator_script_with_body(
+            &workspace_root.join("node_modules/.bin"),
+            "scip-python",
+            &format!(
+                r#"#!/bin/sh
+if [ "${{1:-}}" = "--version" ] || [ "${{1:-}}" = "version" ]; then
+  printf '%s\n' "scip-python 0.6.6"
+  exit 0
+fi
+if [ "${{1:-}}" = "index" ] && [ "${{2:-}}" = "--help" ]; then
+  printf '%s\n' "usage: scip-python index"
+  exit 0
+fi
+if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ]; then
+  printf '%s\n' "unexpected python args: $*" >&2
+  exit 81
+fi
+output_path="${{6}}"
+if [ "${{7:-}}" != "--target-only" ] || [ "${{8:-}}" != "src" ] || [ -n "${{9:-}}" ]; then
+  printf '%s\n' "unexpected python regeneration args: $*" >&2
+  exit 82
+fi
+printf '%s' "root" > "$output_path"
+"#
+            ),
+        );
+
+        server.maybe_spawn_workspace_precise_generation_for_paths(
+            &workspace,
+            &[String::from("pyproject.toml")],
+            &[],
+        );
+
+        let mut shard_paths = Vec::new();
+        for _ in 0..200 {
+            let discovered = fs::read_dir(&scip_dir)
+                .ok()
+                .into_iter()
+                .flat_map(|entries| entries.filter_map(Result::ok))
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("python--") && name.ends_with(".scip"))
+                })
+                .collect::<Vec<_>>();
+            if discovered.len() == 1 && !stale_shard_a.exists() && !stale_shard_b.exists() {
+                shard_paths = discovered;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        shard_paths.sort();
+        assert_eq!(shard_paths.len(), 1);
+        assert!(
+            !workspace.root.join(".frigg/scip/python.scip").exists(),
+            "sharded regeneration should not publish a monolithic python.scip artifact"
+        );
+        assert!(
+            !stale_shard_a.exists() && !stale_shard_b.exists(),
+            "stale shard artifacts should be replaced during regeneration"
+        );
+
+        let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+        let refreshed_health = server.workspace_index_health_summary(&workspace, &storage);
+        let refreshed_python_generator = refreshed_health
+            .precise_generators
+            .iter()
+            .find(|generator| generator.language.as_deref() == Some("python"))
+            .expect("python generator should still be reported");
+        let generation = refreshed_python_generator
+            .last_generation
+            .as_ref()
+            .expect("python generation should be cached");
+        assert_eq!(
+            generation.status,
+            crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
+        );
+        assert_eq!(generation.artifact_count, None);
+        assert_eq!(generation.artifact_sample_paths.len(), 0);
+        assert!(
+            generation
+                .artifact_path
+                .as_deref()
+                .is_some_and(|path| path.contains("python--")),
+            "sharded regeneration should report the shard artifact path"
         );
     });
 

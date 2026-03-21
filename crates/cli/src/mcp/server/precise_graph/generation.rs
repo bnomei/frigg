@@ -784,6 +784,47 @@ impl FriggMcpServer {
         targets.into_iter().collect()
     }
 
+    fn python_source_inventory_bytes(root: &Path, source_paths: &[PathBuf]) -> u64 {
+        source_paths.iter().fold(0_u64, |total, relative_path| {
+            let source_bytes = fs::metadata(root.join(relative_path))
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            total.saturating_add(source_bytes)
+        })
+    }
+
+    fn python_generation_previously_sharded(
+        &self,
+        workspace: &AttachedWorkspace,
+        spec: &PreciseGeneratorSpec,
+        output_dir: &Path,
+    ) -> Result<bool, String> {
+        let managed_artifacts = Self::python_managed_artifact_paths(output_dir, spec)?;
+        if managed_artifacts.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("python--") && name.ends_with(".scip"))
+        }) {
+            return Ok(true);
+        }
+
+        let cached_generation = self
+            .scip_cached_workspace_precise_generation(&workspace.repository_id, spec.generator_id);
+        Ok(cached_generation
+            .as_ref()
+            .and_then(|summary| summary.artifact_path.as_deref())
+            .is_some_and(|artifact_path| {
+                Path::new(artifact_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("python--") && name.ends_with(".scip"))
+            })
+            || cached_generation
+                .as_ref()
+                .and_then(|summary| summary.artifact_count)
+                .is_some_and(|count| count > 1))
+    }
+
     fn python_managed_artifact_paths(
         output_dir: &Path,
         spec: &PreciseGeneratorSpec,
@@ -1092,6 +1133,16 @@ impl FriggMcpServer {
         ));
         let result =
             (|| -> Result<WorkspacePreciseGenerationSummary, WorkspacePreciseGenerationSummary> {
+                let source_paths =
+                    Self::collect_python_source_relative_paths(generator_workspace_root);
+                let source_inventory_bytes =
+                    Self::python_source_inventory_bytes(generator_workspace_root, &source_paths);
+                let prefer_shards = self
+                    .python_generation_previously_sharded(workspace, spec, output_dir)
+                    .map_err(|detail| {
+                        Self::precise_failed_summary(generated_at_ms, None, detail)
+                    })?
+                    || (source_paths.len() > 1 && source_inventory_bytes > budget_bytes);
                 fs::create_dir_all(&staging_dir).map_err(|err| {
                     Self::precise_failed_summary(
                         generated_at_ms,
@@ -1106,56 +1157,68 @@ impl FriggMcpServer {
                     Self::precise_failed_summary(generated_at_ms, None, detail)
                 })?;
 
-                let monolith_output_path = staging_dir.join(spec.output_artifact_name);
-                let monolith_path = Self::run_precise_generator_command(
-                    workspace,
-                    spec,
-                    tool,
-                    version,
-                    generator_workspace_root,
-                    &monolith_output_path,
-                    generator_extra_args,
-                    &[],
-                    generated_at_ms,
-                )?;
-                let monolith_bytes = fs::metadata(&monolith_path)
-                    .map_err(|err| {
-                        Self::precise_failed_summary(
-                            generated_at_ms,
-                            None,
-                            format!(
-                                "failed to inspect generated python artifact {}: {err}",
-                                monolith_path.display()
-                            ),
-                        )
-                    })?
-                    .len();
-                if monolith_bytes <= budget_bytes {
-                    let final_path = output_dir.join(spec.output_artifact_name);
-                    Self::publish_precise_artifact(&monolith_path, &final_path).map_err(
-                        |detail| Self::precise_failed_summary(generated_at_ms, None, detail),
-                    )?;
-                    return Ok(Self::precise_generation_succeeded_summary(
+                if !prefer_shards {
+                    let monolith_output_path = staging_dir.join(spec.output_artifact_name);
+                    let monolith_path = Self::run_precise_generator_command(
+                        workspace,
+                        spec,
+                        tool,
+                        version,
+                        generator_workspace_root,
+                        &monolith_output_path,
+                        generator_extra_args,
+                        &[],
                         generated_at_ms,
-                        &[final_path],
-                        format!(
-                            "generator={} tool={} version={version}",
-                            spec.generator_id, tool.display
-                        ),
-                    ));
+                    )?;
+                    let monolith_bytes = fs::metadata(&monolith_path)
+                        .map_err(|err| {
+                            Self::precise_failed_summary(
+                                generated_at_ms,
+                                None,
+                                format!(
+                                    "failed to inspect generated python artifact {}: {err}",
+                                    monolith_path.display()
+                                ),
+                            )
+                        })?
+                        .len();
+                    if monolith_bytes <= budget_bytes {
+                        let final_path = output_dir.join(spec.output_artifact_name);
+                        Self::publish_precise_artifact(&monolith_path, &final_path).map_err(
+                            |detail| Self::precise_failed_summary(generated_at_ms, None, detail),
+                        )?;
+                        return Ok(Self::precise_generation_succeeded_summary(
+                            generated_at_ms,
+                            &[final_path],
+                            format!(
+                                "generator={} tool={} version={version}",
+                                spec.generator_id, tool.display
+                            ),
+                        ));
+                    }
+
+                    let _ = Self::remove_file_if_exists(&monolith_path);
+                } else {
+                    tracing::info!(
+                        repository_id = %workspace.repository_id,
+                        generator = spec.generator_id,
+                        source_paths = source_paths.len(),
+                        source_inventory_bytes,
+                        budget_bytes,
+                        "skipping monolithic python precise generation and starting with shard targets"
+                    );
                 }
 
-                let _ = Self::remove_file_if_exists(&monolith_path);
-                let source_paths =
-                    Self::collect_python_source_relative_paths(generator_workspace_root);
                 let shard_targets = Self::python_shard_targets(&source_paths, None);
                 if shard_targets.is_empty() {
                     return Err(Self::precise_failed_summary(
                         generated_at_ms,
                         None,
                         format!(
-                            "python artifact bytes {} exceed configured per-file limit {} and no shard targets were available",
-                            monolith_bytes, budget_bytes
+                            "python precise generation requires shard targets but none were available (source_paths={} source_inventory_bytes={} budget_bytes={})",
+                            source_paths.len(),
+                            source_inventory_bytes,
+                            budget_bytes
                         ),
                     ));
                 }
