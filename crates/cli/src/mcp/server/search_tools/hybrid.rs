@@ -214,14 +214,29 @@ impl FriggMcpServer {
                         .into_iter()
                         .map(Self::search_hybrid_match_from_evidence)
                         .collect::<Vec<_>>();
-                    let exact_pivot_assist = Self::search_hybrid_exact_pivot_assistance(
-                        &server,
-                        &query,
-                        params_for_blocking.repository_id.as_deref(),
-                        params_for_blocking.language.as_deref(),
-                        &searcher,
+                    for found in &mut matches {
+                        if let Some(actual_repository_id) =
+                            repository_id_map.get(&found.repository_id)
+                        {
+                            found.repository_id = actual_repository_id.clone();
+                        }
+                    }
+                    let exact_pivot_assist = if Self::search_hybrid_should_run_exact_pivot_assistance(
+                        &matches,
+                        search_output.note.lexical_only_mode,
                         detected_query_shape,
-                    )?;
+                    ) {
+                        Self::search_hybrid_exact_pivot_assistance(
+                            &server,
+                            &query,
+                            params_for_blocking.repository_id.as_deref(),
+                            params_for_blocking.language.as_deref(),
+                            &searcher,
+                            &matches,
+                        )?
+                    } else {
+                        None
+                    };
                     let (boosted_match_count, witness_demotion_was_applied) =
                         Self::search_hybrid_apply_guardrails(
                             &mut matches,
@@ -243,13 +258,6 @@ impl FriggMcpServer {
                         exact_pivot_assistance.as_ref(),
                         witness_demotion_was_applied,
                     );
-                    for found in &mut matches {
-                        if let Some(actual_repository_id) =
-                            repository_id_map.get(&found.repository_id)
-                        {
-                            found.repository_id = actual_repository_id.clone();
-                        }
-                    }
                     match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
 
                     let metadata = Some(SearchHybridMetadata {
@@ -740,10 +748,21 @@ impl FriggMcpServer {
         repository_id: Option<&str>,
         language: Option<&str>,
         searcher: &TextSearcher,
-        query_shape: SearchHybridQueryShape,
+        matches: &[SearchHybridMatch],
     ) -> Result<Option<SearchHybridExactPivotAssistInternal>, ErrorData> {
-        if query_shape != SearchHybridQueryShape::CodeShaped {
+        let relevant_paths = matches
+            .iter()
+            .map(|matched| (matched.repository_id.clone(), matched.path.clone()))
+            .collect::<BTreeSet<_>>();
+        if relevant_paths.is_empty() {
             return Ok(None);
+        }
+        let mut relevant_paths_by_path: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for key in &relevant_paths {
+            relevant_paths_by_path
+                .entry(key.1.clone())
+                .or_default()
+                .push(key.clone());
         }
 
         let mut assistance = SearchHybridExactPivotAssistInternal {
@@ -787,9 +806,13 @@ impl FriggMcpServer {
                     continue;
                 }
                 let path = Self::relative_display_path(&corpus.root, &symbol.path);
+                let key = (corpus.repository_id.clone(), path);
+                if !relevant_paths.contains(&key) {
+                    continue;
+                }
                 let lines = assistance
                     .symbol_hit_lines
-                    .entry((corpus.repository_id.clone(), path))
+                    .entry(key)
                     .or_default();
                 if lines.insert(symbol.line) {
                     assistance.exact_symbol_hit_count =
@@ -812,12 +835,15 @@ impl FriggMcpServer {
             )
             .map_err(Self::map_frigg_error)?;
         for text_match in text_hits.matches {
-            let lines = assistance
-                .text_hit_lines
-                .entry((text_match.repository_id, text_match.path))
-                .or_default();
-            if lines.insert(text_match.line) {
-                assistance.exact_text_hit_count = assistance.exact_text_hit_count.saturating_add(1);
+            let Some(relevant_keys) = relevant_paths_by_path.get(&text_match.path) else {
+                continue;
+            };
+            for key in relevant_keys {
+                let lines = assistance.text_hit_lines.entry(key.clone()).or_default();
+                if lines.insert(text_match.line) {
+                    assistance.exact_text_hit_count =
+                        assistance.exact_text_hit_count.saturating_add(1);
+                }
             }
         }
 
@@ -839,6 +865,15 @@ impl FriggMcpServer {
         source.starts_with("path_witness:")
             || source.starts_with("path_surface_witness:")
             || source.starts_with("witness:")
+    }
+
+    fn search_hybrid_should_run_exact_pivot_assistance(
+        _matches: &[SearchHybridMatch],
+        lexical_only_mode: bool,
+        query_shape: SearchHybridQueryShape,
+    ) -> bool {
+        lexical_only_mode
+            && query_shape == SearchHybridQueryShape::CodeShaped
     }
 
     fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {
