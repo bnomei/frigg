@@ -202,7 +202,3 @@ Default behavior:
 - `presentation_mode=text` is rejected for `probe` and `refine`
 
 Prefer `explore` over repeated `read_file` calls when you are iterating inside one large file.
-
-Default behavior:
-- `zoom` is text-first by default, with compact metadata and `presentation_mode=json` as the structured compatibility escape hatch
-- `probe` and `refine` remain structured by default
