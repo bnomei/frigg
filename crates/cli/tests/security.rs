@@ -10,13 +10,14 @@ use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
     PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
-    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, SearchPatternType, SearchSymbolParams,
-    SearchTextParams, WRITE_CONFIRM_PARAM,
+    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
+    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorCode;
+use serde_json::from_value;
 
 fn temp_workspace_root(test_name: &str) -> PathBuf {
     let nanos_since_epoch = SystemTime::now()
@@ -271,6 +272,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await;
     if let Err(error) = &read_result {
@@ -363,6 +365,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            presentation_mode: None,
         }))
         .await;
     if let Err(error) = &explore_result {
@@ -430,6 +433,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            presentation_mode: None,
         }))
         .await
         .err()
@@ -472,6 +476,7 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
             context_lines: Some(1),
             max_matches: Some(5),
             resume_from: None,
+            presentation_mode: None,
         }))
         .await
         .err()
@@ -518,6 +523,7 @@ async fn security_read_file_rejects_relative_path_traversal_outside_workspace() 
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -563,6 +569,7 @@ async fn security_read_file_rejects_symlink_escape_outside_workspace() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -603,6 +610,7 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -643,10 +651,14 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
         .expect("absolute path under second root should resolve")
-        .0;
+        .structured_content
+        .expect("read_file json mode should return structured_content");
+    let response: ReadFileResponse =
+        from_value(response).expect("structured read_file response should deserialize");
 
     assert_eq!(response.repository_id, repository_ids[1]);
     assert_eq!(response.path, "src/lib.rs");
@@ -685,6 +697,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -698,6 +711,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -742,6 +756,7 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {

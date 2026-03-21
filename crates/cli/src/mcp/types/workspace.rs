@@ -2,6 +2,7 @@ use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::ReadPresentationMode;
 use super::repository::{
     RepositorySummary, WorkspacePreciseIngestSummary, WorkspaceResolveMode, WorkspaceStorageSummary,
 };
@@ -274,6 +275,7 @@ pub struct ReadFileParams {
     pub max_bytes: Option<usize>,
     pub line_start: Option<usize>,
     pub line_end: Option<usize>,
+    pub presentation_mode: Option<ReadPresentationMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -290,6 +292,7 @@ pub struct ReadMatchParams {
     pub match_id: String,
     pub before: Option<usize>,
     pub after: Option<usize>,
+    pub presentation_mode: Option<ReadPresentationMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

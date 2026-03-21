@@ -159,9 +159,11 @@ Once Frigg is running, the normal workflow is:
 
 1. Let your agent adopt repositories session-locally with `workspace_attach`.
    `workspace_attach` reports whether the session attached a fresh workspace or reused an already-adopted one, and it returns a compact precise-index summary for the selected repo. That summary now exposes `state`, `failure_tool`, `failure_class`, `failure_summary`, `recommended_action`, and `generation_action` so clients do not need to parse nested generator detail first.
-2. Use `search_hybrid` as the discovery surface for broad questions, then pivot into `read_file`, `document_symbols`, `go_to_definition`, or `search_symbol` when you need precise anchors and deeper navigation.
+2. Use `search_hybrid` as the discovery surface for broad questions, then pivot into `read_match`, `read_file`, `document_symbols`, `go_to_definition`, or `search_symbol` when you need precise anchors and deeper navigation.
 3. Use `workspace_prepare` or `workspace_reindex` only when you intentionally want to initialize or refresh repository state from inside the client.
 4. Use `inspect_syntax_tree` before `search_structural` whenever the tree-sitter node shape is unclear.
+
+`read_file` and `read_match` now default to text-first output: the main MCP content block is the bounded source slice, and `structured_content` only keeps compact identity metadata such as repository, path, and effective line window. When a caller needs the older structured JSON payload with `content`, pass `presentation_mode=json`. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `explore(operation=probe|refine)` stays structured by default.
 
 `inspect_syntax_tree` and `search_structural` accept `include_follow_up_structural=true` as an opt-in. When enabled, Frigg returns typed `follow_up_structural` suggestions that are replayable `search_structural` invocations derived from the resolved AST focus, not from the user's original query. Omitting the flag keeps the normal response shape unchanged. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 extends the same contract to `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. The phase 2 surfaces require stable `path`, `line`, and `column` anchors, and they omit suggestions when no usable AST focus can be resolved. `search_hybrid` and `search_symbol` remain deferred.
 
@@ -309,7 +311,8 @@ Frigg works best when your agent is told to prefer Frigg for repo-aware search a
 - `workspace_prepare`: confirm-gated workspace/index preparation for an adopted repository.
 - `workspace_reindex`: confirm-gated full or changed reindex for an adopted repository.
 - `workspace_current`: inspect session-local repository adoption, defaults, compact precise status, health, and runtime status.
-- `read_file`: read a file safely inside an adopted repository.
+- `read_file`: read a file safely inside an adopted repository. Defaults to text-first output; use `presentation_mode=json` for the structured compatibility payload.
+- `read_match`: reopen a prior search or navigation hit by `result_handle` plus `match_id`. Defaults to text-first output; use `presentation_mode=json` for the structured compatibility payload.
 - `search_text`: run literal or regex text search across repository files.
 - `search_hybrid`: broad natural-language search that blends lexical, graph, witness, and optional semantic evidence.
 - `search_symbol`: search for symbols such as functions, classes, methods, traits, or modules.
@@ -328,7 +331,7 @@ Frigg works best when your agent is told to prefer Frigg for repo-aware search a
 
 Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended` to expose these additional tools:
 
-- `explore`: bounded follow-up exploration for a single artifact after discovery.
+- `explore`: bounded follow-up exploration for a single artifact after discovery. `zoom` defaults to text-first output; `probe` and `refine` remain structured by default.
 - `deep_search_run`: run a deeper multi-step search workflow.
 - `deep_search_replay`: replay a prior deep-search trace.
 - `deep_search_compose_citations`: build citation payloads from deep-search output.

@@ -118,9 +118,9 @@ impl FriggMcpServer {
     pub(super) fn finalize_read_only_tool<T>(
         &self,
         context: &ReadOnlyToolExecutionContext,
-        result: Result<Json<T>, ErrorData>,
+        result: Result<T, ErrorData>,
         provenance_result: Result<(), ErrorData>,
-    ) -> Result<Json<T>, ErrorData> {
+    ) -> Result<T, ErrorData> {
         self.finalize_with_provenance(context.tool_name, result, provenance_result)
     }
 

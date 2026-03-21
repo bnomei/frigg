@@ -69,6 +69,13 @@ pub enum ResponseMode {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadPresentationMode {
+    Text,
+    Json,
+}
+
 #[path = "types/deep_search.rs"]
 mod deep_search;
 #[path = "types/navigation.rs"]

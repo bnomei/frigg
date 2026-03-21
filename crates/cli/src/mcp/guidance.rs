@@ -143,6 +143,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "guidance": [
             "Use shell tools for trivial local literal scans and one-off file reads in the checked-out workspace.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
+            "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
             "Treat extended tools as advanced consumers of the stable runtime surface, not the product center."
         ]
@@ -152,7 +153,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
 
 fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
     let explore_guidance = if active_profile == ToolSurfaceProfile::Extended {
-        "`explore` is available for bounded single-artifact follow-up after discovery."
+        "`explore` is available for bounded single-artifact follow-up after discovery. `explore(operation=zoom)` defaults to the same text-first read rendering as `read_file` and `read_match`, while `probe` and `refine` stay structured by default."
     } else {
         "`explore` is intentionally absent from the active `core` profile."
     };
@@ -167,6 +168,7 @@ Use Frigg when the task needs repository-aware evidence.\n\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
 - provenance-backed answers or replayable evidence\n\
 - attached multi-repo context instead of one current shell directory\n\n\
+`read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\
 If semantic status is disabled, degraded, or unavailable, treat the answer as lexical/graph/witness-only.\n\n\
@@ -257,8 +259,9 @@ pub(crate) fn read_guidance_prompt(
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
 4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
-5. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
-6. Use `explore` only after discovery and only when the active profile includes it.\n\n",
+5. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
+6. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
+7. Use `explore` only after discovery and only when the active profile includes it.\n\n",
     );
     text.push_str(profile_note);
 

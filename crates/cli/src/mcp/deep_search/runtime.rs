@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::mcp::types::{
-    FindReferencesParams, ListRepositoriesParams, ReadFileParams, SearchSymbolParams,
-    SearchTextParams,
+    FindReferencesParams, ListRepositoriesParams, ReadFileParams, ReadPresentationMode,
+    SearchSymbolParams, SearchTextParams,
 };
 
 use super::*;
@@ -213,10 +213,23 @@ impl DeepSearchHarness {
             DeepSearchStepTool::ReadFile => {
                 let params = decode_params::<ReadFileParams>(&step.step.params);
                 match params {
-                    Ok(params) => match self.server.read_file(Parameters(params)).await {
-                        Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
-                        Err(error) => Err(map_error_data(error)),
-                    },
+                    Ok(mut params) => {
+                        params.presentation_mode = Some(ReadPresentationMode::Json);
+                        match self.server.read_file(Parameters(params)).await {
+                            Ok(response) => {
+                                response
+                                    .structured_content
+                                    .ok_or_else(|| DeepSearchStepError {
+                                        code: "INTERNAL_ERROR".to_owned(),
+                                        message:
+                                            "read_file JSON mode did not return structured_content"
+                                                .to_owned(),
+                                        error_code: Some("internal".to_owned()),
+                                    })
+                            }
+                            Err(error) => Err(map_error_data(error)),
+                        }
+                    }
                     Err(err) => Err(err),
                 }
             }

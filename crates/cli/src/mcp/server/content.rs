@@ -1,10 +1,11 @@
 use super::*;
+use serde::Serialize;
 
 impl FriggMcpServer {
     pub(super) async fn read_file_impl(
         &self,
         params: ReadFileParams,
-    ) -> Result<Json<ReadFileResponse>, ErrorData> {
+    ) -> Result<ReadFileResponse, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("read_file", params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
@@ -18,7 +19,7 @@ impl FriggMcpServer {
                 let mut effective_max_bytes: Option<usize> = None;
                 let mut effective_line_start: Option<usize> = None;
                 let mut effective_line_end: Option<usize> = None;
-                let result = (|| -> Result<Json<ReadFileResponse>, ErrorData> {
+                let result = (|| -> Result<ReadFileResponse, ErrorData> {
                     let requested_max_bytes = params_for_blocking
                         .max_bytes
                         .unwrap_or(server.config.max_file_bytes);
@@ -105,12 +106,12 @@ impl FriggMcpServer {
                     let pre_read_bytes = pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
                     if !has_line_range {
                         let content = snapshot.read_file_content();
-                        return Ok(Json(ReadFileResponse {
+                        return Ok(ReadFileResponse {
                             repository_id,
                             path: display_path,
                             bytes: pre_read_bytes,
                             content,
-                        }));
+                        });
                     }
 
                     let line_start = params_for_blocking.line_start.unwrap_or(1);
@@ -148,12 +149,12 @@ impl FriggMcpServer {
                         ));
                     }
 
-                    Ok(Json(ReadFileResponse {
+                    Ok(ReadFileResponse {
                         repository_id,
                         path: display_path,
                         bytes: sliced_bytes,
                         content: sliced_content,
-                    }))
+                    })
                 })();
                 let repository_ids = resolved_repository_id
                     .clone()
@@ -208,7 +209,7 @@ impl FriggMcpServer {
     pub(super) async fn read_match_impl(
         &self,
         params: ReadMatchParams,
-    ) -> Result<Json<ReadMatchResponse>, ErrorData> {
+    ) -> Result<ReadMatchResponse, ErrorData> {
         let anchor = self
             .session_result_handle_match(&params.result_handle, &params.match_id)
             .ok_or_else(|| {
@@ -230,9 +231,10 @@ impl FriggMcpServer {
             max_bytes: None,
             line_start: Some(line_start),
             line_end: Some(line_end),
+            presentation_mode: Some(ReadPresentationMode::Json),
         };
-        let read = self.read_file_impl(read_params).await?.0;
-        Ok(Json(ReadMatchResponse {
+        let read = self.read_file_impl(read_params).await?;
+        Ok(ReadMatchResponse {
             repository_id: read.repository_id,
             path: read.path,
             line: anchor.line,
@@ -241,13 +243,13 @@ impl FriggMcpServer {
             line_end,
             bytes: read.bytes,
             content: read.content,
-        }))
+        })
     }
 
     pub(super) async fn explore_impl(
         &self,
         params: ExploreParams,
-    ) -> Result<Json<ExploreResponse>, ErrorData> {
+    ) -> Result<ExploreResponse, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("explore", params.repository_id.clone());
         let params_for_blocking = params.clone();
@@ -263,7 +265,7 @@ impl FriggMcpServer {
                 let mut total_matches = 0usize;
                 let mut truncated = false;
 
-                let result = (|| -> Result<Json<ExploreResponse>, ErrorData> {
+                let result = (|| -> Result<ExploreResponse, ErrorData> {
                     let requested_context_lines = params_for_blocking
                         .context_lines
                         .unwrap_or(DEFAULT_CONTEXT_LINES);
@@ -482,6 +484,7 @@ impl FriggMcpServer {
                         max_bytes: None,
                         line_start: None,
                         line_end: None,
+                        presentation_mode: Some(ReadPresentationMode::Json),
                     };
                     let (repository_id, path, display_path) =
                         server.resolve_file_path(&read_params)?;
@@ -604,7 +607,7 @@ impl FriggMcpServer {
                     total_matches = scan.total_matches;
                     truncated = scan.truncated;
 
-                    Ok(Json(ExploreResponse {
+                    Ok(ExploreResponse {
                         repository_id,
                         path: display_path,
                         operation,
@@ -622,7 +625,7 @@ impl FriggMcpServer {
                             effective_context_lines: context_lines,
                             effective_max_matches: max_matches,
                         },
-                    }))
+                    })
                 })();
 
                 ExploreExecution {
@@ -681,6 +684,164 @@ impl FriggMcpServer {
             )
             .await;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    pub(super) fn read_presentation_mode(
+        mode: Option<ReadPresentationMode>,
+    ) -> ReadPresentationMode {
+        mode.unwrap_or(ReadPresentationMode::Text)
+    }
+
+    pub(super) fn explore_presentation_mode(
+        params: &ExploreParams,
+    ) -> Result<ReadPresentationMode, ErrorData> {
+        match params.presentation_mode {
+            Some(ReadPresentationMode::Json) => Ok(ReadPresentationMode::Json),
+            Some(ReadPresentationMode::Text)
+                if matches!(
+                    params.operation,
+                    ExploreOperation::Probe | ExploreOperation::Refine
+                ) =>
+            {
+                Err(Self::invalid_params(
+                    "presentation_mode=text is only supported for zoom",
+                    Some(json!({
+                        "operation": params.operation,
+                        "presentation_mode": ReadPresentationMode::Text,
+                    })),
+                ))
+            }
+            Some(ReadPresentationMode::Text) => Ok(ReadPresentationMode::Text),
+            None if params.operation == ExploreOperation::Zoom => Ok(ReadPresentationMode::Text),
+            None => Ok(ReadPresentationMode::Json),
+        }
+    }
+
+    pub(super) fn present_read_file_result(
+        &self,
+        params: &ReadFileParams,
+        response: ReadFileResponse,
+    ) -> Result<CallToolResult, ErrorData> {
+        match Self::read_presentation_mode(params.presentation_mode) {
+            ReadPresentationMode::Json => Self::structured_tool_result(&response),
+            ReadPresentationMode::Text => {
+                let (line_start, line_end) =
+                    Self::read_file_effective_line_window(params, &response.content);
+                Ok(Self::text_read_surface_result(
+                    &response.repository_id,
+                    &response.path,
+                    line_start,
+                    line_end,
+                    response.bytes,
+                    response.content,
+                ))
+            }
+        }
+    }
+
+    pub(super) fn present_read_match_result(
+        &self,
+        params: &ReadMatchParams,
+        response: ReadMatchResponse,
+    ) -> Result<CallToolResult, ErrorData> {
+        match Self::read_presentation_mode(params.presentation_mode) {
+            ReadPresentationMode::Json => Self::structured_tool_result(&response),
+            ReadPresentationMode::Text => {
+                let (line_start, line_end) =
+                    Self::effective_line_window(response.line_start, &response.content);
+                Ok(Self::text_read_surface_result(
+                    &response.repository_id,
+                    &response.path,
+                    line_start,
+                    line_end,
+                    response.bytes,
+                    response.content,
+                ))
+            }
+        }
+    }
+
+    pub(super) fn present_explore_result(
+        &self,
+        params: &ExploreParams,
+        response: ExploreResponse,
+    ) -> Result<CallToolResult, ErrorData> {
+        match Self::explore_presentation_mode(params)? {
+            ReadPresentationMode::Json => Self::structured_tool_result(&response),
+            ReadPresentationMode::Text => {
+                let Some(window) = response.window else {
+                    return Err(Self::internal(
+                        "explore zoom response missing window",
+                        Some(json!({
+                            "operation": response.operation,
+                            "path": response.path,
+                        })),
+                    ));
+                };
+                Ok(Self::text_read_surface_result(
+                    &response.repository_id,
+                    &response.path,
+                    window.start_line,
+                    window.end_line,
+                    window.bytes,
+                    window.content,
+                ))
+            }
+        }
+    }
+
+    fn structured_tool_result<T: Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
+        serde_json::to_value(value)
+            .map(CallToolResult::structured)
+            .map_err(|err| {
+                Self::internal(
+                    format!("failed to serialize structured tool result: {err}"),
+                    None,
+                )
+            })
+    }
+
+    fn read_file_effective_line_window(params: &ReadFileParams, content: &str) -> (usize, usize) {
+        Self::effective_line_window(params.line_start.unwrap_or(1), content)
+    }
+
+    fn effective_line_window(line_start: usize, content: &str) -> (usize, usize) {
+        let line_count = content.lines().count().max(1);
+        let line_end = line_start.saturating_add(line_count.saturating_sub(1));
+        (line_start, line_end)
+    }
+
+    fn text_read_surface_result(
+        repository_id: &str,
+        path: &str,
+        line_start: usize,
+        line_end: usize,
+        bytes: usize,
+        content: String,
+    ) -> CallToolResult {
+        let mut result = CallToolResult::success(vec![Content::text(
+            Self::format_text_read_surface(repository_id, path, line_start, line_end, &content),
+        )]);
+        result.structured_content = Some(json!({
+            "repository_id": repository_id,
+            "path": path,
+            "line_start": line_start,
+            "line_end": line_end,
+            "bytes": bytes,
+        }));
+        result
+    }
+
+    fn format_text_read_surface(
+        repository_id: &str,
+        path: &str,
+        line_start: usize,
+        line_end: usize,
+        content: &str,
+    ) -> String {
+        format!(
+            "repository_id: {repository_id}\npath: {path}\nline_window: {line_start}-{line_end}\n\n{content}"
+        )
     }
 
     pub(super) fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {

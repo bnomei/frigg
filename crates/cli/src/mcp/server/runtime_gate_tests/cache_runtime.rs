@@ -280,12 +280,13 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
         max_bytes: None,
         line_start: None,
         line_end: None,
+        presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
     };
     let first_read = server
         .read_file_impl(read_params.clone())
         .await
         .expect("first read_file call should succeed");
-    assert!(first_read.0.content.contains("pub fn alpha"));
+    assert!(first_read.content.contains("pub fn alpha"));
     assert_eq!(
         server
             .cache_state
@@ -318,10 +319,11 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
             context_lines: None,
             max_matches: Some(4),
             resume_from: None,
+            presentation_mode: None,
         })
         .await
         .expect("explore should reuse the shared file content cache");
-    assert_eq!(first_explore.0.total_matches, 1);
+    assert_eq!(first_explore.total_matches, 1);
     assert!(
         server
             .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
@@ -342,7 +344,7 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
         .read_file_impl(read_params)
         .await
         .expect("second read_file call should reuse the shared file content cache");
-    assert_eq!(first_read.0.content, second_read.0.content);
+    assert_eq!(first_read.content, second_read.content);
     assert!(
         server
             .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)

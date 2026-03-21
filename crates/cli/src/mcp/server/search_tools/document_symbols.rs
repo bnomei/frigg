@@ -21,6 +21,7 @@ impl FriggMcpServer {
                     max_bytes: None,
                     line_start: None,
                     line_end: None,
+                    presentation_mode: None,
                 };
                 let (repository_id, absolute_path, display_path) =
                     server.resolve_file_path(&read_params)?;

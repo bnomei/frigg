@@ -140,6 +140,8 @@ Important outputs:
 Default behavior:
 - 10 lines of context before the hit
 - 10 lines of context after the hit
+- text-first output by default, with compact `structured_content` metadata for repository, path, and effective line window
+- `presentation_mode=json` restores the structured compatibility payload with `content`
 - typed `resource_not_found` if the handle or match has expired
 
 ## `read_file`
@@ -163,6 +165,8 @@ Notes:
 - paths are canonical repository-relative paths
 - line numbers are 1-based
 - reads reflect live disk state
+- default output is text-first, with compact `structured_content` metadata for repository, path, and effective line window
+- use `presentation_mode=json` when a downstream step needs the structured compatibility payload with `content`
 
 ## `explore` (extended profile)
 
@@ -193,3 +197,7 @@ Important outputs:
 - `metadata`
 
 Prefer `explore` over repeated `read_file` calls when you are iterating inside one large file.
+
+Default behavior:
+- `zoom` is text-first by default, with compact metadata and `presentation_mode=json` as the structured compatibility escape hatch
+- `probe` and `refine` remain structured by default

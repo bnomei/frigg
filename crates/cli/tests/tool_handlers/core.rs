@@ -1,4 +1,5 @@
 use super::*;
+use frigg::mcp::types::{ExploreResponse, ReadFileResponse, ReadMatchResponse};
 
 #[tokio::test]
 async fn core_read_file_returns_typed_not_found_error() {
@@ -10,6 +11,7 @@ async fn core_read_file_returns_typed_not_found_error() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -35,10 +37,11 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("absolute read_file path under workspace root should resolve")
-        .0;
+        .map(structured_tool_result::<ReadFileResponse>)
+        .expect("absolute read_file path under workspace root should resolve");
     assert_eq!(absolute_response.repository_id, repository_id);
     assert_eq!(absolute_response.path, "src/lib.rs");
     assert!(
@@ -53,10 +56,11 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("relative read_file path under workspace root should resolve")
-        .0;
+        .map(structured_tool_result::<ReadFileResponse>)
+        .expect("relative read_file path under workspace root should resolve");
     assert_eq!(
         relative_response.repository_id,
         public_repository_id(&server).await
@@ -76,15 +80,79 @@ async fn core_read_file_supports_line_range_slicing() {
             max_bytes: Some(128),
             line_start: Some(2),
             line_end: Some(2),
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("line-range slice should succeed")
-        .0;
+        .map(structured_tool_result::<ReadFileResponse>)
+        .expect("line-range slice should succeed");
 
     assert_eq!(response.repository_id, repository_id);
     assert_eq!(response.path, "src/lib.rs");
     assert_eq!(response.content, "    \"hello from fixture\"");
     assert_eq!(response.bytes, response.content.len());
+}
+
+#[tokio::test]
+async fn core_read_file_defaults_to_text_first_output() {
+    let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
+    let result = server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            max_bytes: Some(128),
+            line_start: Some(2),
+            line_end: Some(2),
+            presentation_mode: None,
+        }))
+        .await
+        .expect("default read_file should succeed");
+
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("repository_id"))
+            .and_then(|value| value.as_str()),
+        Some(repository_id.as_str())
+    );
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("path"))
+            .and_then(|value| value.as_str()),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_start"))
+            .and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_end"))
+            .and_then(|value| value.as_u64()),
+        Some(2)
+    );
+    assert!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("content"))
+            .is_none(),
+        "default text-first read_file should not duplicate the file body in structured_content"
+    );
+    let text = tool_result_text(&result);
+    assert!(text.contains(&format!("repository_id: {repository_id}")));
+    assert!(text.contains("path: src/lib.rs"));
+    assert!(text.contains("line_window: 2-2"));
+    assert!(text.ends_with("    \"hello from fixture\""));
 }
 
 #[tokio::test]
@@ -106,10 +174,11 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
             max_bytes: Some(8),
             line_start: Some(2),
             line_end: Some(2),
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("line-range slice should apply max_bytes to returned slice content")
-        .0;
+        .map(structured_tool_result::<ReadFileResponse>)
+        .expect("line-range slice should apply max_bytes to returned slice content");
 
     assert_eq!(response.content, "ok");
     assert_eq!(response.bytes, 2);
@@ -135,10 +204,11 @@ async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
             max_bytes: Some(64),
             line_start: Some(2),
             line_end: Some(2),
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("lossy utf8 line-range slice should succeed")
-        .0;
+        .map(structured_tool_result::<ReadFileResponse>)
+        .expect("lossy utf8 line-range slice should succeed");
 
     assert_eq!(response.content, "beta \u{fffd}");
     assert_eq!(response.bytes, response.content.len());
@@ -155,6 +225,7 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
             max_bytes: Some(128),
             line_start: Some(3),
             line_end: Some(2),
+            presentation_mode: None,
         }))
         .await
     {
@@ -249,10 +320,11 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
             match_id,
             before: None,
             after: None,
+            presentation_mode: Some(ReadPresentationMode::Json),
         }))
         .await
-        .expect("read_match should reopen a search hit")
-        .0;
+        .map(structured_tool_result::<ReadMatchResponse>)
+        .expect("read_match should reopen a search hit");
 
     assert_eq!(opened.repository_id, repository_id);
     assert_eq!(opened.path, "src/lib.rs");
@@ -261,6 +333,79 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
     assert_eq!(opened.line_start, 1);
     assert!(opened.content.contains("pub fn greeting()"));
     assert!(opened.content.contains("\"hello from fixture\""));
+}
+
+#[tokio::test]
+async fn core_read_match_defaults_to_text_first_output() {
+    let server = server_for_fixture();
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "hello from fixture".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            ..Default::default()
+        }))
+        .await
+        .expect("compact search_text should succeed")
+        .0;
+    let handle = response
+        .result_handle
+        .clone()
+        .expect("compact search_text should return a result handle");
+    let match_id = response.matches[0]
+        .match_id
+        .clone()
+        .expect("compact search_text matches should expose match ids");
+
+    let opened = server
+        .read_match(Parameters(ReadMatchParams {
+            result_handle: handle,
+            match_id,
+            before: None,
+            after: None,
+            presentation_mode: None,
+        }))
+        .await
+        .expect("default read_match should succeed");
+
+    assert_eq!(
+        opened
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("path"))
+            .and_then(|value| value.as_str()),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        opened
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_start"))
+            .and_then(|value| value.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        opened
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_end"))
+            .and_then(|value| value.as_u64()),
+        Some(3)
+    );
+    assert!(
+        opened
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("content"))
+            .is_none()
+    );
+    let text = tool_result_text(&opened);
+    assert!(text.contains("path: src/lib.rs"));
+    assert!(text.contains("line_window: 1-3"));
+    assert!(text.contains("pub fn greeting()"));
+    assert!(text.contains("\"hello from fixture\""));
 }
 
 #[tokio::test]
@@ -1098,6 +1243,7 @@ async fn core_read_file_enforces_effective_max_bytes_clamp() {
             max_bytes: Some(1024),
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
     {
@@ -1156,18 +1302,21 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
         context_lines: Some(1),
         max_matches: Some(2),
         resume_from: None,
+        presentation_mode: None,
     };
 
-    let first = server
-        .explore(Parameters(probe_params.clone()))
-        .await
-        .expect("explore probe should succeed")
-        .0;
-    let second = server
-        .explore(Parameters(probe_params))
-        .await
-        .expect("explore probe should be deterministic")
-        .0;
+    let first: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(probe_params.clone()))
+            .await
+            .expect("explore probe should succeed"),
+    );
+    let second: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(probe_params))
+            .await
+            .expect("explore probe should be deterministic"),
+    );
     assert_eq!(first, second);
     assert_eq!(first.total_lines, 7);
     assert_eq!(first.total_matches, 3);
@@ -1186,42 +1335,46 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
     assert_eq!(first.matches[1].window.start_line, 3);
     assert_eq!(first.matches[1].window.end_line, 5);
 
-    let resumed = server
-        .explore(Parameters(ExploreParams {
-            path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
-            operation: ExploreOperation::Probe,
-            query: Some("let needle_".to_owned()),
-            pattern_type: Some(SearchPatternType::Literal),
-            anchor: None,
-            context_lines: Some(1),
-            max_matches: Some(2),
-            resume_from: first.resume_from.clone(),
-        }))
-        .await
-        .expect("explore probe resume should succeed")
-        .0;
+    let resumed: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                operation: ExploreOperation::Probe,
+                query: Some("let needle_".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: None,
+                context_lines: Some(1),
+                max_matches: Some(2),
+                resume_from: first.resume_from.clone(),
+                presentation_mode: None,
+            }))
+            .await
+            .expect("explore probe resume should succeed"),
+    );
     assert_eq!(resumed.total_matches, 1);
     assert_eq!(resumed.matches.len(), 1);
     assert!(!resumed.truncated);
     assert_eq!(resumed.matches[0].start_line, 6);
 
     let anchor = first.matches[1].anchor.clone();
-    let zoom = server
-        .explore(Parameters(ExploreParams {
-            path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
-            operation: ExploreOperation::Zoom,
-            query: None,
-            pattern_type: None,
-            anchor: Some(anchor.clone()),
-            context_lines: Some(1),
-            max_matches: None,
-            resume_from: None,
-        }))
-        .await
-        .expect("explore zoom should succeed")
-        .0;
+    let zoom: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                operation: ExploreOperation::Zoom,
+                query: None,
+                pattern_type: None,
+                anchor: Some(anchor.clone()),
+                context_lines: Some(1),
+                max_matches: None,
+                resume_from: None,
+                presentation_mode: Some(ReadPresentationMode::Json),
+            }))
+            .await
+            .expect("explore zoom should succeed"),
+    );
     assert_eq!(zoom.total_matches, 0);
     assert!(zoom.matches.is_empty());
     assert!(!zoom.truncated);
@@ -1231,27 +1384,102 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
     );
     assert_eq!(zoom.window.as_ref().map(|window| window.end_line), Some(5));
 
-    let refine = server
-        .explore(Parameters(ExploreParams {
-            path: "src/lib.rs".to_owned(),
-            repository_id: Some("repo-001".to_owned()),
-            operation: ExploreOperation::Refine,
-            query: Some("helper_".to_owned()),
-            pattern_type: Some(SearchPatternType::Literal),
-            anchor: Some(anchor),
-            context_lines: Some(1),
-            max_matches: Some(5),
-            resume_from: None,
-        }))
-        .await
-        .expect("explore refine should succeed")
-        .0;
+    let refine: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                operation: ExploreOperation::Refine,
+                query: Some("helper_".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: Some(anchor),
+                context_lines: Some(1),
+                max_matches: Some(5),
+                resume_from: None,
+                presentation_mode: None,
+            }))
+            .await
+            .expect("explore refine should succeed"),
+    );
     assert_eq!(refine.scan_scope.start_line, 3);
     assert_eq!(refine.scan_scope.end_line, 5);
     assert_eq!(refine.total_matches, 2);
     assert_eq!(refine.matches.len(), 2);
     assert_eq!(refine.matches[0].start_line, 3);
     assert_eq!(refine.matches[1].start_line, 5);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn extended_explore_zoom_defaults_to_text_first_output() {
+    let workspace_root = temp_workspace_root("explore-zoom-text-default");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create explorer fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn demo() {\n    let alpha = 1;\n    let beta = alpha;\n}\n",
+    )
+    .expect("failed to seed explorer fixture");
+
+    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let response = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Zoom,
+            query: None,
+            pattern_type: None,
+            anchor: Some(ExploreAnchor {
+                start_line: 2,
+                start_column: 9,
+                end_line: 2,
+                end_column: 14,
+            }),
+            context_lines: Some(1),
+            max_matches: None,
+            resume_from: None,
+            presentation_mode: None,
+        }))
+        .await
+        .expect("default explore zoom should succeed");
+
+    assert_eq!(
+        response
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("path"))
+            .and_then(|value| value.as_str()),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        response
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_start"))
+            .and_then(|value| value.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        response
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("line_end"))
+            .and_then(|value| value.as_u64()),
+        Some(3)
+    );
+    assert!(
+        response
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("content"))
+            .is_none()
+    );
+    let text = tool_result_text(&response);
+    assert!(text.contains("path: src/lib.rs"));
+    assert!(text.contains("line_window: 1-3"));
+    assert!(text.contains("let alpha = 1;"));
+    assert!(text.contains("let beta = alpha;"));
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -1276,6 +1504,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: None,
             max_matches: None,
             resume_from: None,
+            presentation_mode: None,
         }))
         .await
         .err()
@@ -1295,6 +1524,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: None,
             max_matches: None,
             resume_from: None,
+            presentation_mode: None,
         }))
         .await
         .err()
@@ -1319,6 +1549,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             context_lines: Some(0),
             max_matches: Some(1),
             resume_from: Some(ExploreCursor { line: 2, column: 1 }),
+            presentation_mode: None,
         }))
         .await
         .err()
@@ -1328,6 +1559,29 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
     assert_eq!(
         refine_error.message,
         "resume_from must stay within the refine scan scope"
+    );
+
+    let text_probe_error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            operation: ExploreOperation::Probe,
+            query: Some("demo".to_owned()),
+            pattern_type: Some(SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(1),
+            resume_from: None,
+            presentation_mode: Some(ReadPresentationMode::Text),
+        }))
+        .await
+        .err()
+        .expect("probe text mode should fail");
+    assert_eq!(text_probe_error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&text_probe_error), Some("invalid_params"));
+    assert_eq!(
+        text_probe_error.message,
+        "presentation_mode=text is only supported for zoom"
     );
 
     cleanup_workspace_root(&workspace_root);

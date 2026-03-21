@@ -285,7 +285,7 @@ impl FriggMcpServer {
             .to_owned()
     }
 
-    pub(super) fn provenance_outcome<T>(result: &Result<Json<T>, ErrorData>) -> Value {
+    pub(super) fn provenance_outcome<T>(result: &Result<T, ErrorData>) -> Value {
         match result {
             Ok(_) => json!({
                 "status": "ok",
@@ -447,7 +447,7 @@ impl FriggMcpServer {
         repository_hint: Option<&str>,
         params: Value,
         source_refs: Value,
-        result: &Result<Json<T>, ErrorData>,
+        result: &Result<T, ErrorData>,
     ) -> Result<(), ErrorData> {
         if !self.provenance_state.enabled {
             return Ok(());
@@ -475,7 +475,7 @@ impl FriggMcpServer {
         params: Value,
         source_refs: Value,
         normalized_workload_metadata: Option<NormalizedWorkloadMetadata>,
-        result: &Result<Json<T>, ErrorData>,
+        result: &Result<T, ErrorData>,
     ) -> Result<(), ErrorData> {
         if !self.provenance_state.enabled {
             return Ok(());
@@ -499,9 +499,9 @@ impl FriggMcpServer {
     pub(super) fn finalize_with_provenance<T>(
         &self,
         tool_name: &str,
-        result: Result<Json<T>, ErrorData>,
+        result: Result<T, ErrorData>,
         provenance_result: Result<(), ErrorData>,
-    ) -> Result<Json<T>, ErrorData> {
+    ) -> Result<T, ErrorData> {
         match provenance_result {
             Ok(_) => result,
             Err(provenance_error) if self.provenance_state.best_effort => {

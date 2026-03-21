@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::ResponseMode;
+use super::{ReadPresentationMode, ResponseMode};
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
     model::TextMatch,
@@ -91,6 +91,8 @@ pub struct ExploreParams {
     pub max_matches: Option<usize>,
     /// Explicit continuation cursor for `probe` or `refine`.
     pub resume_from: Option<ExploreCursor>,
+    /// Read-surface presentation mode. Defaults to `text` for `zoom` and `json` for `probe`/`refine`.
+    pub presentation_mode: Option<ReadPresentationMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

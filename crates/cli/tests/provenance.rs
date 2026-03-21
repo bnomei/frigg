@@ -146,6 +146,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             max_bytes: None,
             line_start: None,
             line_end: None,
+            presentation_mode: None,
         }))
         .await
         .expect("read_file should succeed");
@@ -539,6 +540,7 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
             context_lines: Some(1),
             max_matches: Some(1),
             resume_from: None,
+            presentation_mode: None,
         }))
         .await
         .expect("explore should succeed");

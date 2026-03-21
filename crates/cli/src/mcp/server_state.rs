@@ -94,7 +94,7 @@ pub(crate) struct ResolvedNavigationTarget {
 }
 
 pub(crate) struct ReadFileExecution {
-    pub result: Result<Json<ReadFileResponse>, ErrorData>,
+    pub result: Result<ReadFileResponse, ErrorData>,
     pub provenance_result: Result<(), ErrorData>,
 }
 
@@ -112,7 +112,7 @@ pub(crate) struct SearchTextExecution {
 }
 
 pub(crate) struct ExploreExecution {
-    pub result: Result<Json<ExploreResponse>, ErrorData>,
+    pub result: Result<ExploreResponse, ErrorData>,
     pub resolved_repository_id: Option<String>,
     pub resolved_path: Option<String>,
     pub resolved_absolute_path: Option<String>,

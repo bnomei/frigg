@@ -9,6 +9,10 @@ These tools are only available when the Frigg runtime exposes the extended tool 
 - continuation cursors
 - anchored windows instead of repeated full reads
 
+Presentation defaults:
+- `zoom` is text-first by default, with compact metadata and `presentation_mode=json` as the structured compatibility escape hatch
+- `probe` and `refine` stay structured by default
+
 See [discovery-and-evidence.md](discovery-and-evidence.md) for the detailed input and output shape.
 
 ## Deep Search Tools

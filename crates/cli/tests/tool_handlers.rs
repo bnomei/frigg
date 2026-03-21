@@ -10,11 +10,11 @@ use frigg::mcp::types::{
     DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
     FindDeclarationsParams, FindImplementationsParams, FindReferencesParams, GoToDefinitionParams,
     IncomingCallsParams, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
-    ReadFileParams, ReadMatchParams, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
-    SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchSymbolParams,
-    SearchSymbolPathClass, SearchTextParams, WorkspaceAttachAction, WorkspaceAttachParams,
-    WorkspaceCurrentParams, WorkspaceIndexComponentState, WorkspacePreciseState,
-    WorkspaceResolveMode, WorkspaceStorageIndexState,
+    ReadFileParams, ReadMatchParams, ReadPresentationMode, ResponseMode, SearchHybridParams,
+    SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType, SearchStructuralParams,
+    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceAttachAction,
+    WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceIndexComponentState,
+    WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{
     FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
@@ -25,11 +25,12 @@ use frigg::storage::{
 };
 use protobuf::{EnumOrUnknown, Message};
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::ErrorCode;
+use rmcp::model::{CallToolResult, ErrorCode};
 use scip::types::{
     Document as ScipDocumentProto, Index as ScipIndexProto, Occurrence as ScipOccurrenceProto,
     SymbolInformation as ScipSymbolInformationProto,
 };
+use serde::de::DeserializeOwned;
 
 fn write_fixture_workspace(root: &Path) {
     fs::create_dir_all(root.join("src/nested")).expect("failed to create fixture source tree");
@@ -110,6 +111,23 @@ fn error_data_field<'a>(error: &'a rmcp::ErrorData, key: &str) -> &'a serde_json
         .as_ref()
         .and_then(|value| value.get(key))
         .unwrap_or_else(|| panic!("expected structured error data field `{key}`"))
+}
+
+fn structured_tool_result<T: DeserializeOwned>(result: CallToolResult) -> T {
+    let structured = result
+        .structured_content
+        .unwrap_or_else(|| panic!("expected structured_content in tool result"));
+    serde_json::from_value(structured)
+        .unwrap_or_else(|err| panic!("structured_content should deserialize: {err}"))
+}
+
+fn tool_result_text(result: &CallToolResult) -> &str {
+    result
+        .content
+        .first()
+        .and_then(|content| content.as_text())
+        .map(|text| text.text.as_str())
+        .unwrap_or_else(|| panic!("expected first tool result content item to be text"))
 }
 
 fn temp_workspace_root(test_name: &str) -> PathBuf {
