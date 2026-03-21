@@ -126,6 +126,7 @@ Important inputs:
 - `match_id`
 - `before`
 - `after`
+- `presentation_mode`
 
 Important outputs:
 - `repository_id`
@@ -154,6 +155,7 @@ Important inputs:
 - `max_bytes`
 - `line_start`
 - `line_end`
+- `presentation_mode`
 
 Important outputs:
 - `repository_id`
@@ -187,14 +189,17 @@ Important inputs:
 - `context_lines`
 - `max_matches`
 - `resume_from`
+- `presentation_mode`
 
 Important outputs:
-- `scan_scope`
-- `window`
-- `matches`
-- `truncated`
-- `resume_from`
-- `metadata`
+- `probe` and `refine`: structured `scan_scope`, `window`, `matches`, `truncated`, `resume_from`, and `metadata`
+- `zoom` default: text-first MCP content plus compact `structured_content` metadata for the resolved file window
+- `zoom` with `presentation_mode=json`: the structured compatibility payload
+
+Default behavior:
+- `probe` and `refine` remain structured by default
+- `zoom` is text-first by default
+- `presentation_mode=text` is rejected for `probe` and `refine`
 
 Prefer `explore` over repeated `read_file` calls when you are iterating inside one large file.
 
