@@ -69,10 +69,12 @@ fn response_caches_respect_registry_entry_limits_and_track_evictions() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::new(),
+        result_handle: None,
         metadata: None,
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
@@ -541,10 +543,12 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::<TextMatch>::new(),
+        result_handle: None,
         metadata: None,
     };
     let empty_hybrid_response = SearchHybridResponse {
         matches: Vec::new(),
+        result_handle: None,
         semantic_requested: None,
         semantic_enabled: None,
         semantic_status: None,
@@ -557,17 +561,20 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     };
     let empty_symbol_response = SearchSymbolResponse {
         matches: Vec::new(),
+        result_handle: None,
         metadata: None,
         note: None,
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
     let empty_declarations_response = FindDeclarationsResponse {
         matches: Vec::new(),
+        result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
@@ -1056,10 +1063,12 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     let empty_text_response = SearchTextResponse {
         total_matches: 0,
         matches: Vec::<TextMatch>::new(),
+        result_handle: None,
         metadata: None,
     };
     let empty_hybrid_response = SearchHybridResponse {
         matches: Vec::new(),
+        result_handle: None,
         semantic_requested: None,
         semantic_enabled: None,
         semantic_status: None,
@@ -1072,17 +1081,20 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     };
     let empty_symbol_response = SearchSymbolResponse {
         matches: Vec::new(),
+        result_handle: None,
         metadata: None,
         note: None,
     };
     let empty_navigation_response = GoToDefinitionResponse {
         matches: Vec::new(),
+        result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,
     };
     let empty_declarations_response = FindDeclarationsResponse {
         matches: Vec::new(),
+        result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
         metadata: None,
         note: None,

@@ -922,6 +922,7 @@ fn graph_channel_falls_back_to_exact_stem_candidates_when_lexical_paths_have_no_
         "OrderHandler handle listener",
         &candidate_universe,
         &[TextMatch {
+            match_id: None,
             repository_id: "repo-001".to_owned(),
             path: "docs/handlers.md".to_owned(),
             line: 1,

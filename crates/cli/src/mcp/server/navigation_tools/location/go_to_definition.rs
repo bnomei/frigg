@@ -93,6 +93,7 @@ impl FriggMcpServer {
                     let (line, column) =
                         crate::indexer::line_column_for_offset(&source, route_literal.start());
                     corpus_matches.push(NavigationLocation {
+                        match_id: None,
                         symbol: route_name.to_owned(),
                         repository_id: corpus.repository_id.clone(),
                         path: relative_path.clone(),
@@ -289,6 +290,7 @@ impl FriggMcpServer {
                                             Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: precise_matches,
+                                            result_handle: None,
                                             mode: FriggMcpServer::navigation_mode_from_precision_label(
                                                 Some(precision),
                                             ),
@@ -327,6 +329,7 @@ impl FriggMcpServer {
                                             Self::metadata_note_pair(metadata);
                                         return Ok(Json(GoToDefinitionResponse {
                                             matches: route_matches,
+                                            result_handle: None,
                                             mode: NavigationMode::HeuristicNoPrecise,
                                             metadata,
                                             note,
@@ -406,6 +409,7 @@ impl FriggMcpServer {
                                             .into_iter()
                                             .filter(|occurrence| occurrence.is_definition())
                                             .map(|occurrence| NavigationLocation {
+                                                match_id: None,
                                                 symbol: if precise_target.display_name.is_empty() {
                                                     target.symbol.name.clone()
                                                 } else {
@@ -472,6 +476,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
+                                        result_handle: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
@@ -480,6 +485,7 @@ impl FriggMcpServer {
                                     })
                                 } else {
                                     let mut matches = vec![NavigationLocation {
+                                        match_id: None,
                                         symbol: target.symbol.name.clone(),
                                         repository_id: target_corpus.repository_id.clone(),
                                         path: Self::relative_display_path(
@@ -538,6 +544,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches,
+                                        result_handle: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
                                         metadata,
                                         note,
@@ -603,6 +610,7 @@ impl FriggMcpServer {
                                         .into_iter()
                                         .filter(|occurrence| occurrence.is_definition())
                                         .map(|occurrence| NavigationLocation {
+                                            match_id: None,
                                             symbol: if precise_target.display_name.is_empty() {
                                                 target.symbol.name.clone()
                                             } else {
@@ -667,6 +675,7 @@ impl FriggMcpServer {
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
                                     matches: precise_matches,
+                                    result_handle: None,
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
@@ -675,6 +684,7 @@ impl FriggMcpServer {
                                 })
                             } else {
                                 let mut matches = vec![NavigationLocation {
+                                    match_id: None,
                                     symbol: target.symbol.name.clone(),
                                     repository_id: target_corpus.repository_id.clone(),
                                     path: Self::relative_display_path(
@@ -731,6 +741,7 @@ impl FriggMcpServer {
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
                                 Json(GoToDefinitionResponse {
                                     matches,
+                                    result_handle: None,
                                     mode: NavigationMode::HeuristicNoPrecise,
                                     metadata,
                                     note,
@@ -796,6 +807,7 @@ impl FriggMcpServer {
                                             .into_iter()
                                             .filter(|occurrence| occurrence.is_definition())
                                             .map(|occurrence| NavigationLocation {
+                                                match_id: None,
                                                 symbol: if precise_target.display_name.is_empty() {
                                                     target.symbol.name.clone()
                                                 } else {
@@ -859,6 +871,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
+                                        result_handle: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                                             precision,
                                         )),
@@ -867,6 +880,7 @@ impl FriggMcpServer {
                                     })
                                 } else {
                                     let mut matches = vec![NavigationLocation {
+                                        match_id: None,
                                         symbol: target.symbol.name.clone(),
                                         repository_id: target_corpus.repository_id.clone(),
                                         path: Self::relative_display_path(
@@ -923,6 +937,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches,
+                                        result_handle: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
                                         metadata,
                                         note,
@@ -988,6 +1003,7 @@ impl FriggMcpServer {
                                     let (metadata, note) = Self::metadata_note_pair(metadata);
                                     Json(GoToDefinitionResponse {
                                         matches: precise_matches,
+                                        result_handle: None,
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
@@ -1075,7 +1091,9 @@ impl FriggMcpServer {
             })
             .await?;
 
-        let result = execution.result;
+        let result = execution.result.map(|Json(response)| {
+            Json(self.present_go_to_definition_response(response, params.response_mode))
+        });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
@@ -1213,6 +1231,7 @@ impl FriggMcpServer {
                                 .into_iter()
                                 .filter(|occurrence| occurrence.is_definition())
                                 .map(|occurrence| NavigationLocation {
+                                    match_id: None,
                                     symbol: if precise_target.display_name.is_empty() {
                                         target.symbol.name.clone()
                                     } else {
@@ -1274,6 +1293,7 @@ impl FriggMcpServer {
                         let (metadata, note) = Self::metadata_note_pair(metadata);
                         let response = FindDeclarationsResponse {
                             matches: precise_matches,
+                            result_handle: None,
                             mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                                 precision,
                             )),
@@ -1299,6 +1319,7 @@ impl FriggMcpServer {
                     }
 
                     let mut matches = vec![NavigationLocation {
+                        match_id: None,
                         symbol: target.symbol.name.clone(),
                         repository_id: target_corpus.repository_id.clone(),
                         path: Self::relative_display_path(&target.root, &target.symbol.path),
@@ -1351,6 +1372,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = FindDeclarationsResponse {
                         matches,
+                        result_handle: None,
                         mode: NavigationMode::HeuristicNoPrecise,
                         metadata,
                         note,
@@ -1431,7 +1453,9 @@ impl FriggMcpServer {
             })
             .await?;
 
-        let result = execution.result;
+        let result = execution.result.map(|Json(response)| {
+            Json(self.present_find_declarations_response(response, params.response_mode))
+        });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 }

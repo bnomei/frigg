@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::ResponseMode;
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
     model::TextMatch,
@@ -113,7 +114,7 @@ pub struct ExploreResponse {
     pub metadata: ExploreMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
     /// Text or regex pattern to search for. Leading and trailing whitespace is trimmed.
     pub query: String,
@@ -126,12 +127,22 @@ pub struct SearchTextParams {
     pub path_regex: Option<String>,
     /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
+    /// Optional inline excerpt window expansion for simple review flows. Omit to keep one-line excerpts.
+    pub context_lines: Option<usize>,
+    /// Optional bound on returned hits per file after lexical matching.
+    pub max_matches_per_file: Option<usize>,
+    /// Optional repeated-path collapse mode for noisy lexical result sets.
+    pub collapse_by_file: Option<bool>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
     pub matches: Vec<TextMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchTextMetadata>,
 }
@@ -158,7 +169,7 @@ pub struct SearchHybridChannelWeightsParams {
     pub semantic: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
     /// Broad natural-language or exact-phrase repository query.
     pub query: String,
@@ -172,10 +183,14 @@ pub struct SearchHybridParams {
     pub weights: Option<SearchHybridChannelWeightsParams>,
     /// Optional semantic-channel toggle.
     pub semantic: Option<bool>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -387,6 +402,8 @@ pub struct SearchHybridMetadata {
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_requested: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_enabled: Option<bool>,
@@ -408,7 +425,7 @@ pub struct SearchHybridResponse {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolParams {
     /// API, type, or function name to search in indexed symbols.
     pub query: String,
@@ -420,11 +437,15 @@ pub struct SearchSymbolParams {
     pub path_regex: Option<String>,
     /// Optional max matches.
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }

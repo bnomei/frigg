@@ -439,6 +439,7 @@ impl FriggMcpServer {
                                     .into_iter()
                                     .take(limit)
                                     .map(|reference| ReferenceMatch {
+                                        match_id: None,
                                         repository_id: direct_precise_target.repository_id.clone(),
                                         symbol: display_symbol.clone(),
                                         path: Self::canonicalize_navigation_path(
@@ -514,6 +515,7 @@ impl FriggMcpServer {
                                 return Ok(Json(FindReferencesResponse {
                                     total_matches,
                                     matches,
+                                    result_handle: None,
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
@@ -593,6 +595,7 @@ impl FriggMcpServer {
                             };
 
                             ReferenceMatch {
+                                match_id: None,
                                 repository_id: target_corpus.repository_id.clone(),
                                 symbol: precise_target
                                     .as_ref()
@@ -675,6 +678,7 @@ impl FriggMcpServer {
                                         }
 
                                         Some(ReferenceMatch {
+                                            match_id: None,
                                             repository_id: reference.repository_id,
                                             symbol: reference.symbol_name,
                                             path: relative_path,
@@ -779,6 +783,7 @@ impl FriggMcpServer {
                     return Ok(Json(FindReferencesResponse {
                         total_matches,
                         matches,
+                        result_handle: None,
                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                             precision,
                         )),
@@ -811,6 +816,7 @@ impl FriggMcpServer {
                 let mut matches = Vec::new();
                 if include_definition {
                     matches.push(ReferenceMatch {
+                        match_id: None,
                         repository_id: target_corpus.repository_id.clone(),
                         symbol: target.symbol.name.clone(),
                         path: Self::relative_display_path(&target.root, &target.symbol.path),
@@ -835,6 +841,7 @@ impl FriggMcpServer {
                         }
 
                         ReferenceMatch {
+                            match_id: None,
                             repository_id: reference.repository_id.clone(),
                             symbol: reference.symbol_name.clone(),
                             path: Self::relative_display_path(&target.root, &reference.path),
@@ -917,6 +924,7 @@ impl FriggMcpServer {
                 Ok(Json(FindReferencesResponse {
                     total_matches,
                     matches,
+                    result_handle: None,
                     mode: NavigationMode::HeuristicNoPrecise,
                     metadata,
                     note,
@@ -1015,7 +1023,9 @@ impl FriggMcpServer {
         })
         .await?;
 
-        let result = execution.result;
+        let result = execution.result.map(|Json(response)| {
+            Json(self.present_find_references_response(response, params.response_mode))
+        });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 }

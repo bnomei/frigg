@@ -156,6 +156,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             repository_id: Some(repository_id.clone()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("search_text should succeed");
@@ -167,6 +168,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("search_symbol should succeed");
@@ -181,6 +183,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("find_references should return heuristic response");
@@ -245,6 +248,7 @@ async fn provenance_bounded_text_fields_are_truncated() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("search_symbol should succeed even when query does not match any symbol");
@@ -286,6 +290,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("typescript search_symbol should succeed");
@@ -296,6 +301,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("python search_symbol should succeed");
@@ -306,6 +312,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("go search_symbol should succeed");
@@ -316,6 +323,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("kotlin search_symbol should succeed");
@@ -326,6 +334,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("lua search_symbol should succeed");
@@ -336,6 +345,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("nim search_symbol should succeed");
@@ -346,6 +356,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .expect("roc search_symbol should succeed");
@@ -418,6 +429,7 @@ async fn provenance_invalid_repository_hint_is_not_attributed_to_default_reposit
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await
         .err()
@@ -569,6 +581,7 @@ async fn provenance_search_hybrid_invocations_include_winning_anchor_metadata() 
             limit: Some(5),
             weights: None,
             semantic: Some(false),
+            ..Default::default()
         }))
         .await
         .expect("search_hybrid should succeed");

@@ -132,11 +132,15 @@ impl FriggMcpServer {
                     })
                 };
                 let (metadata, note) = Self::metadata_note_pair(metadata);
-                Ok(Json(DocumentSymbolsResponse {
-                    symbols: outline,
-                    metadata,
-                    note,
-                }))
+                Ok(Json(server.present_document_symbols_response(
+                    DocumentSymbolsResponse {
+                        symbols: outline,
+                        result_handle: None,
+                        metadata,
+                        note,
+                    },
+                    &params_for_blocking,
+                )))
             })();
 
             (result, resolved_repository_id, resolved_path, symbol_count)
@@ -213,6 +217,7 @@ impl FriggMcpServer {
             let node_index = nodes.len();
             nodes.push(PendingDocumentSymbolNode {
                 item: crate::mcp::types::DocumentSymbolItem {
+                    match_id: None,
                     symbol: symbol.name.clone(),
                     kind: symbol.kind.as_str().to_owned(),
                     repository_id: repository_id.to_owned(),

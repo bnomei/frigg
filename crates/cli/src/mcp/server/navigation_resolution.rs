@@ -109,6 +109,7 @@ impl FriggMcpServer {
                 0
             },
             matched: SymbolMatch {
+                match_id: None,
                 repository_id: corpus.repository_id.clone(),
                 symbol: symbol.name.clone(),
                 kind: symbol.kind.as_str().to_owned(),

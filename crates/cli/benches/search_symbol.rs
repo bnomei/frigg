@@ -24,6 +24,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                             path_class: Some(SearchSymbolPathClass::Runtime),
                             path_regex: None,
                             limit: Some(16),
+                            response_mode: None,
                         })),
                 )
                 .expect("warm search_symbol benchmark should succeed")
@@ -48,6 +49,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                     path_class: Some(SearchSymbolPathClass::Runtime),
                     path_regex: None,
                     limit: Some(8),
+                    response_mode: None,
                 })),
         )
         .expect("initial stale benchmark warmup should succeed");
@@ -76,6 +78,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                             path_class: Some(SearchSymbolPathClass::Runtime),
                             path_regex: None,
                             limit: Some(8),
+                            response_mode: None,
                         })),
                 )
                 .expect("stale search_symbol benchmark should succeed")

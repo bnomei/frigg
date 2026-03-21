@@ -25,6 +25,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should return heuristic references")
@@ -103,6 +104,7 @@ async fn find_references_includes_definition_when_requested_by_default() {
             include_definition: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should return heuristic references with a definition row")
@@ -151,6 +153,7 @@ async fn find_references_opt_in_returns_follow_up_structural() {
             include_definition: Some(false),
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should return follow-up structural suggestions when opted in")
@@ -224,6 +227,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should resolve precise references first")
@@ -297,6 +301,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should resolve precise references from protobuf scip")
@@ -392,6 +397,7 @@ async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should fall back to direct precise symbols")
@@ -500,6 +506,7 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should fall back to direct precise config symbols")
@@ -643,6 +650,7 @@ it('keeps course submissions open state deterministic', function (): void {\n\
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should supplement precise PHP method references")
@@ -718,6 +726,7 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should fall back to heuristic references")
@@ -788,6 +797,7 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should fall back to heuristic references")
@@ -849,6 +859,7 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should succeed with ambiguous symbol names")
@@ -965,6 +976,7 @@ async fn find_references_precise_results_stay_pinned_to_runtime_target_selection
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should pin precise results to the selected runtime target")
@@ -1059,6 +1071,7 @@ async fn find_references_matches_precise_typescript_symbols_without_display_name
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should resolve precise TypeScript references")
@@ -1141,6 +1154,7 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("oversized SCIP artifact should retain partial precise references")
@@ -1207,6 +1221,7 @@ async fn find_references_falls_back_when_partial_precise_absence_is_non_authorit
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("partial precise absence should fall back heuristically")
@@ -1261,6 +1276,7 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -1313,6 +1329,7 @@ async fn find_references_prefers_location_resolution_when_symbol_and_location_ar
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should prefer location resolution")
@@ -1357,6 +1374,7 @@ async fn find_references_resolves_location_only_requests() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_references should resolve location-only requests")
@@ -1392,6 +1410,7 @@ async fn find_references_rejects_requests_without_symbol_or_location() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {

@@ -14,8 +14,14 @@ Important inputs:
 
 Important output shape:
 - `matches[]`
+- `result_handle`
 - optional top-level compatibility mirrors such as `semantic_status` and `warning`
-- `metadata`
+- `metadata` only when `response_mode=full`
+
+Compact-first rule:
+- read-only search tools default to compact responses
+- ask for `response_mode=full` only when you need diagnostics, freshness detail, or channel-level reasoning
+- in compact mode, use `result_handle` plus per-row `match_id` values to continue with `read_match`
 
 What to inspect on each match:
 - `path`
@@ -50,7 +56,8 @@ Typical next move:
 - `search_symbol` when you now know the symbol
 - `search_text` when you need exact strings or path scoping
 - navigation tools when you need defs/refs/calls
-- `read_file` when you need repository-backed proof
+- `read_match` when you already have a concrete hit row
+- `read_file` when you need repository-backed proof and already know the canonical path
 
 ## `search_symbol`
 
@@ -67,6 +74,11 @@ Important inputs:
 - `limit`
 
 Use `path_class` or `path_regex` when overloaded names are noisy.
+
+Compact-first rule:
+- default responses omit `metadata` and `note`
+- use `response_mode=full` when you need ranking or freshness detail
+- compact responses still return `result_handle` and row `match_id` values for `read_match`
 
 Practical caution:
 - inline test modules can still overmatch inside runtime files, even under `path_regex:"^src/"` or `path_class:"runtime"`
@@ -94,6 +106,41 @@ Important inputs:
 - `repository_id`
 - `path_regex`
 - `limit`
+- `context_lines`
+- `max_matches_per_file`
+- `collapse_by_file`
+- `response_mode`
+
+Shaping guidance:
+- `context_lines` is the cheap first-pass alternative to a separate read for small review windows
+- `max_matches_per_file` keeps one noisy file from dominating the result set
+- `collapse_by_file=true` is the quickest way to reduce repeated-path spam
+- compact responses still return `result_handle` and row `match_id` values so you can reopen one hit with `read_match`
+
+## `read_match`
+
+Use `read_match` when a prior search or navigation response already returned a `result_handle` plus `match_id` and you want a bounded source window without manually repeating path and line data.
+
+Important inputs:
+- `result_handle`
+- `match_id`
+- `before`
+- `after`
+
+Important outputs:
+- `repository_id`
+- `path`
+- `line`
+- `column`
+- `line_start`
+- `line_end`
+- `bytes`
+- `content`
+
+Default behavior:
+- 10 lines of context before the hit
+- 10 lines of context after the hit
+- typed `resource_not_found` if the handle or match has expired
 
 ## `read_file`
 

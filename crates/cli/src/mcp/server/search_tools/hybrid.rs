@@ -98,7 +98,10 @@ impl FriggMcpServer {
                         && let Some(cached) = server.cached_search_hybrid_response(cache_key)
                     {
                         response_source_refs = cached.source_refs.clone();
-                        return Ok(Json(cached.response));
+                        return Ok(Json(server.present_search_hybrid_response(
+                            cached.response,
+                            params_for_blocking.response_mode,
+                        )));
                     }
 
                     let searcher = server.runtime_text_searcher(scoped_config);
@@ -210,6 +213,7 @@ impl FriggMcpServer {
 
                     let response = SearchHybridResponse {
                         matches,
+                        result_handle: None,
                         semantic_requested: None,
                         semantic_enabled: None,
                         semantic_status: None,
@@ -250,7 +254,10 @@ impl FriggMcpServer {
                         );
                     }
 
-                    Ok(Json(response))
+                    Ok(Json(server.present_search_hybrid_response(
+                        response,
+                        params_for_blocking.response_mode,
+                    )))
                 })();
                 let fallback_reason =
                     if matches!(semantic_status, Some(ChannelHealthStatus::Unavailable)) {
@@ -582,6 +589,7 @@ impl FriggMcpServer {
     ) -> SearchHybridMatch {
         let path = evidence.document.path.clone();
         SearchHybridMatch {
+            match_id: None,
             repository_id: evidence.document.repository_id,
             path: path.clone(),
             line: evidence.anchor.start_line,

@@ -12,6 +12,12 @@
 
 Treat `heuristic_no_precise` as useful but weaker. Treat `unavailable_no_precise` as an honest “not enough precise data” signal, not as proof that nothing exists.
 
+Compact-first rule:
+- navigation and outline tools default to compact responses
+- compact mode keeps the important top-level contract fields such as `mode`, `availability`, and the result rows themselves
+- ask for `response_mode=full` only when you need `metadata` or `note`
+- compact responses still return `result_handle` plus per-row `match_id` values so you can reopen one hit with `read_match`
+
 `include_follow_up_structural=true` is an opt-in across the structure-aware surfaces below. When enabled, Frigg attaches typed `follow_up_structural` suggestions that replay into `search_structural`. These are best-effort AST follow-ups, not echoes of the original query. Phase 1 is `inspect_syntax_tree` plus `search_structural`; phase 2 is `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. `search_hybrid` and `search_symbol` do not expose this payload.
 
 ## `find_references`
@@ -29,9 +35,9 @@ Important inputs:
 Important outputs:
 - `total_matches`
 - `matches`
+- `result_handle`
 - `mode`
-- `metadata`
-- `note`
+- `metadata` and `note` only when `response_mode=full`
 
 Each reference hit carries `match_kind`, so distinguish:
 - `definition`
@@ -57,9 +63,9 @@ Common inputs:
 
 Common outputs:
 - `matches`
+- `result_handle`
 - `mode`
-- `metadata`
-- `note`
+- `metadata` and `note` only when `response_mode=full`
 
 Inspect per-match precision hints when present:
 - `precision`
@@ -81,10 +87,10 @@ Call hierarchy is the most precise-data-sensitive part of Frigg.
 
 Important outputs:
 - `matches`
+- `result_handle`
 - `mode`
 - `availability`
-- `metadata`
-- `note`
+- `metadata` and `note` only when `response_mode=full`
 
 When opted in, each match may also include `follow_up_structural`.
 
@@ -102,6 +108,20 @@ Best use cases:
 - overloaded names
 - large files
 - finding the enclosing class / impl / function before a follow-up jump
+
+Important inputs:
+- `path`
+- `repository_id`
+- `top_level_only`
+- `include_follow_up_structural`
+- `response_mode`
+
+Important outputs:
+- `symbols`
+- `result_handle`
+- `metadata` and `note` only when `response_mode=full`
+
+Use `top_level_only=true` for a cheap first outline when you only need the file’s main entrypoints before deciding whether deeper navigation is worth the extra tokens.
 
 When opted in, each returned symbol item may include `follow_up_structural` suggestions you can replay with `search_structural`.
 

@@ -521,6 +521,7 @@ mod tests {
     fn path_witness_hits_preserve_score_hints_and_overlay_provenance() {
         let hits = build_hybrid_path_witness_hits_with_intent(
             &[TextMatch {
+                match_id: None,
                 repository_id: "repo-001".to_owned(),
                 path: "tests/unit/user_service_test.rs".to_owned(),
                 line: 7,

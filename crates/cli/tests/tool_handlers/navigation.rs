@@ -46,6 +46,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should resolve precise definition")
@@ -75,6 +76,75 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
     );
     assert_eq!(note_json["precision"], "precise");
     assert_eq!(note_json["heuristic"], false);
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn navigation_go_to_definition_defaults_to_compact_but_keeps_mode_and_handles() {
+    let workspace_root = temp_workspace_root("go-to-definition-compact-default");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub struct User;\n\
+         pub fn caller() { let _ = User; }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    write_scip_fixture(
+        &workspace_root,
+        "go_to_definition_compact.json",
+        r#"{
+          "documents": [
+            {
+              "relative_path": "src/lib.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg repo#User", "range": [0, 11, 15], "symbol_roles": 1 },
+                { "symbol": "scip-rust pkg repo#User", "range": [1, 33, 37], "symbol_roles": 8 }
+              ],
+              "symbols": [
+                {
+                  "symbol": "scip-rust pkg repo#User",
+                  "display_name": "User",
+                  "kind": "struct",
+                  "relationships": []
+                }
+              ]
+            }
+          ]
+        }"#,
+    );
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: Some("User".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_follow_up_structural: None,
+            limit: Some(20),
+            response_mode: None,
+        }))
+        .await
+        .expect("compact go_to_definition should resolve")
+        .0;
+
+    assert_eq!(response.mode, NavigationMode::Precise);
+    assert!(response.metadata.is_none());
+    assert!(response.note.is_none());
+    assert!(
+        response.result_handle.is_some(),
+        "compact go_to_definition should return a result handle"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.match_id.is_some()),
+        "compact go_to_definition matches should expose match ids"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -137,6 +207,7 @@ async fn navigation_go_to_definition_falls_back_to_direct_precise_symbol_when_co
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should fall back to direct precise symbols")
@@ -210,6 +281,7 @@ async fn navigation_go_to_definition_uses_php_helper_literal_for_direct_precise_
             column: Some(blade_source.find("Settings").expect("literal should exist") + 4),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should use the helper literal for precise lookup")
@@ -291,6 +363,7 @@ async fn navigation_go_to_definition_uses_route_helper_literal_for_direct_precis
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should use the route helper literal for precise lookup")
@@ -376,6 +449,7 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should use the Blade attribute route helper literal")
@@ -527,6 +601,7 @@ async fn navigation_go_to_definition_prefers_route_helper_precise_match_when_cur
             column: Some(route_helper_column),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should prefer route helper precise match")
@@ -592,6 +667,7 @@ async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_att
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should prefer route source fallback")
@@ -641,6 +717,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("initial go_to_definition call should succeed")
@@ -660,6 +737,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should bypass stale cache after edit")
@@ -687,6 +765,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -720,6 +799,7 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
             column: Some(35),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should resolve by location")
@@ -764,6 +844,7 @@ async fn navigation_go_to_definition_rust_use_path_prefers_imported_symbol_over_
             column: Some(use_line.find("helper").expect("import token present") + 1),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should prefer the imported Rust symbol at use sites")
@@ -815,6 +896,7 @@ async fn navigation_go_to_definition_rust_reexport_alias_resolves_underlying_sym
             ),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should resolve the underlying re-exported Rust symbol")
@@ -867,6 +949,7 @@ async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_f
             column: Some(call_line.rfind("render").expect("method token present") + 1),
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should prefer the impl method at a Rust field call site")
@@ -915,6 +998,7 @@ async fn navigation_go_to_definition_prefers_runtime_paths_for_ambiguous_exact_n
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should prefer runtime code for ambiguous exact-name queries")
@@ -1007,6 +1091,7 @@ async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_targ
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should keep precise definitions pinned to the selected runtime target")
@@ -1086,6 +1171,7 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should retain partial precise definitions")
@@ -1168,6 +1254,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should fall back when partial precise data lacks the target")
@@ -1207,6 +1294,7 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_declarations should return deterministic fallback")
@@ -1248,6 +1336,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("initial find_declarations call should succeed")
@@ -1267,6 +1356,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_declarations should bypass stale cache after edit")
@@ -1294,6 +1384,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
             column: None,
             include_follow_up_structural: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -1328,6 +1419,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("go_to_definition should return follow-up structural suggestions when opted in")
@@ -1350,6 +1442,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_declarations should return follow-up structural suggestions when opted in")
@@ -1391,6 +1484,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should return deterministic heuristic fallback")
@@ -1511,6 +1605,7 @@ class NullAnalyticsRecorder implements AnalyticsRecorder\n\
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should report missing precise matches when relationships are absent")
@@ -1558,6 +1653,7 @@ async fn navigation_find_implementations_classifies_blanket_rust_impls_without_p
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should classify blanket impl fallback")
@@ -1640,6 +1736,7 @@ async fn navigation_find_implementations_degrades_when_scip_artifact_exceeds_bud
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should retain partial precise implementations")
@@ -1749,6 +1846,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should resolve precise relationships")
@@ -1773,6 +1871,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should resolve precise relationships")
@@ -1792,6 +1891,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should resolve precise relationships")
@@ -1904,6 +2004,7 @@ async fn navigation_find_implementations_prefers_relationship_bearing_precise_ca
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should resolve precise overlay relationships")
@@ -2009,6 +2110,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should return follow-up structural suggestions when opted in")
@@ -2025,6 +2127,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should return follow-up structural suggestions when opted in")
@@ -2041,6 +2144,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
             column: None,
             include_follow_up_structural: Some(true),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should return follow-up structural suggestions when opted in")
@@ -2104,6 +2208,7 @@ async fn navigation_find_implementations_uses_precise_occurrences_when_relations
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("find_implementations should derive precise implementations from occurrences")
@@ -2196,6 +2301,7 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should derive precise callers from precise references")
@@ -2284,6 +2390,7 @@ async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls()
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should classify callable precise references as calls")
@@ -2369,6 +2476,7 @@ async fn navigation_incoming_calls_matches_precise_typescript_symbols_without_di
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should resolve precise TypeScript callers")
@@ -2469,6 +2577,7 @@ async fn navigation_incoming_calls_marks_unspecified_typescript_occurrences_as_c
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("incoming_calls should classify explicit TypeScript call sites as calls")
@@ -2573,6 +2682,7 @@ async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_a
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should derive precise callees from precise references")
@@ -2684,6 +2794,7 @@ async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_k
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should keep explicit TypeScript call sites when kind data is weak")
@@ -2773,6 +2884,7 @@ async fn navigation_outgoing_calls_ignores_precise_callable_references_without_c
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should reject non-call precise references")
@@ -2813,6 +2925,7 @@ async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of
             column: None,
             include_follow_up_structural: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("outgoing_calls should keep an empty heuristic result instead of widening")

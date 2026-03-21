@@ -9,6 +9,8 @@ async fn document_symbols_returns_outline_for_supported_files() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return outline")
@@ -98,6 +100,8 @@ async fn document_symbols_returns_php_metadata_evidence_counts() {
             path: "src/OrderListener.php".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return php outline metadata")
@@ -145,6 +149,8 @@ async fn document_symbols_opt_in_returns_follow_up_structural() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: Some(true),
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return outline with follow-up structural suggestions")
@@ -186,6 +192,8 @@ async fn document_symbols_returns_typescript_outline_for_tsx_files() {
             path: "src/App.tsx".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return typescript outline")
@@ -239,6 +247,8 @@ async fn document_symbols_returns_python_outline() {
             path: "src/app.py".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return python outline")
@@ -324,6 +334,8 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             path: "src/main.go".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return go outline")
@@ -347,6 +359,8 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             path: "src/App.kt".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return kotlin outline")
@@ -377,6 +391,8 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             path: "src/init.lua".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return lua outline")
@@ -400,6 +416,8 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             path: "src/main.roc".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return roc outline")
@@ -429,6 +447,8 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             path: "src/main.nim".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return nim outline")
@@ -473,6 +493,8 @@ async fn document_symbols_returns_hierarchy_for_nested_symbols() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return nested outline")
@@ -485,6 +507,50 @@ async fn document_symbols_returns_hierarchy_for_nested_symbols() {
     assert_eq!(
         response.symbols[0].children[0].container.as_deref(),
         Some("inner")
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children() {
+    let workspace_root = temp_workspace_root("document-symbols-top-level-only");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "mod inner {\n    pub fn nested() {}\n}\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            include_follow_up_structural: None,
+            top_level_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("compact document_symbols should return a top-level outline")
+        .0;
+
+    assert_eq!(response.symbols.len(), 1);
+    assert_eq!(response.symbols[0].symbol, "inner");
+    assert!(
+        response.symbols[0].children.is_empty(),
+        "top_level_only should suppress child symbol trees"
+    );
+    assert!(response.metadata.is_none());
+    assert!(response.note.is_none());
+    assert!(
+        response.result_handle.is_some(),
+        "compact document_symbols should return a result handle"
+    );
+    assert!(
+        response.symbols[0].match_id.is_some(),
+        "compact document_symbols should expose match ids"
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -513,6 +579,8 @@ async fn document_symbols_returns_blade_outline() {
             path: "resources/views/components/dashboard/panel.blade.php".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
         .expect("document_symbols should return blade outline")
@@ -577,6 +645,8 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
             path: "README.md".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
     {
@@ -621,6 +691,8 @@ async fn document_symbols_rejects_over_budget_source_with_typed_error() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
         }))
         .await
     {

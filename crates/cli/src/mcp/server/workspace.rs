@@ -11,6 +11,7 @@ impl FriggMcpSessionState {
                 watch_runtime,
                 adopted_repository_ids: RwLock::new(BTreeSet::new()),
                 session_default_repository_id: RwLock::new(None),
+                result_handles: RwLock::new(SessionResultHandleCache::default()),
             }),
         }
     }

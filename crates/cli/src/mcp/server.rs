@@ -83,7 +83,8 @@ use crate::mcp::server_cache::{
     RepositoryResponseCacheFreshness, RepositoryResponseCacheFreshnessMode,
     RepositoryResponseFreshnessCacheKey, RuntimeCacheBudget, RuntimeCacheEvent, RuntimeCacheFamily,
     RuntimeCacheRegistry, RuntimeCacheTelemetry, SearchHybridResponseCacheKey,
-    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, WorkspaceSemanticRefreshPlan,
+    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, SessionResultHandleCache,
+    SessionResultHandleEntry, WorkspaceSemanticRefreshPlan,
     response_cache_scopes_include_repository,
 };
 use crate::mcp::server_state::{
@@ -110,19 +111,20 @@ use crate::mcp::types::{
     ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, InspectSyntaxTreeParams,
     InspectSyntaxTreeResponse, ListRepositoriesParams, ListRepositoriesResponse,
     NavigationAvailability, NavigationLocation, NavigationMode, OutgoingCallsParams,
-    OutgoingCallsResponse, ReadFileParams, ReadFileResponse, RecentProvenanceSummary,
-    RepositorySummary, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus,
-    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
-    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
-    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
-    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
-    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceAttachResponse, WorkspaceCurrentParams,
-    WorkspaceCurrentResponse, WorkspaceDetachParams, WorkspaceDetachResponse,
-    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
-    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePrepareParams,
-    WorkspacePrepareResponse, WorkspaceReindexParams, WorkspaceReindexResponse,
-    WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams, ReadMatchResponse,
+    RecentProvenanceSummary, RepositorySummary, ResponseMode, RuntimeStatusSummary,
+    RuntimeTaskKind, RuntimeTaskStatus, SearchHybridChannelWeightsParams, SearchHybridMatch,
+    SearchHybridParams, SearchHybridResponse, SearchPatternType, SearchStructuralParams,
+    SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse,
+    SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM,
+    WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction, WorkspaceAttachParams,
+    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
+    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexComponentState,
+    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspacePreciseGenerationStatus,
+    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
+    WorkspacePreciseGeneratorSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
+    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -137,6 +139,7 @@ mod navigation_precise;
 mod navigation_resolution;
 mod navigation_tools;
 mod precise_graph;
+mod presentation;
 mod provenance;
 mod runtime_cache;
 mod runtime_status;
@@ -327,6 +330,7 @@ struct FriggMcpSessionStateInner {
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     adopted_repository_ids: RwLock<BTreeSet<String>>,
     session_default_repository_id: RwLock<Option<String>>,
+    result_handles: RwLock<SessionResultHandleCache>,
 }
 
 #[derive(Clone)]
@@ -402,6 +406,8 @@ impl FriggMcpServer {
     const PRECISE_GENERATOR_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
     const PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES: usize = 128;
     const PROVENANCE_STORAGE_CACHE_MAX_ENTRIES: usize = 32;
+    const SESSION_RESULT_HANDLE_TTL: Duration = Duration::from_secs(300);
+    const SESSION_RESULT_HANDLE_MAX_ENTRIES: usize = 64;
     pub fn new(config: FriggConfig) -> Self {
         Self::new_with_provenance_best_effort(config, Self::provenance_best_effort_from_env())
     }
@@ -1273,7 +1279,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_file",
-        description = "Read a bounded slice of a repository file when you need canonical-path evidence after discovery.",
+        description = "Read a bounded slice of a repository file when you already know the canonical path. Use read_match to reopen a prior search or navigation hit by handle.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1285,6 +1291,22 @@ impl FriggMcpServer {
         params: Parameters<ReadFileParams>,
     ) -> Result<Json<ReadFileResponse>, ErrorData> {
         self.read_file_impl(params.0).await
+    }
+
+    #[tool(
+        name = "read_match",
+        description = "Open a bounded source window around a prior search or navigation hit using its session result_handle and match_id.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn read_match(
+        &self,
+        params: Parameters<ReadMatchParams>,
+    ) -> Result<Json<ReadMatchResponse>, ErrorData> {
+        self.read_match_impl(params.0).await
     }
 
     #[tool(
@@ -1305,7 +1327,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Use exact literal or regex search when you know the text and need repository scoping or path_regex narrowing.",
+        description = "Use exact literal or regex search when you know the text and need repository scoping or path_regex narrowing. Use context_lines, max_matches_per_file, or collapse_by_file to keep first-pass review compact.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1449,7 +1471,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "document_symbols",
-        description = "Return a hierarchical symbol outline for one supported source file. Use this before deeper navigation when names are overloaded or the file is large; set include_follow_up_structural=true for replayable structural follow-ups on anchored symbols.",
+        description = "Return a symbol outline for one supported source file. Use top_level_only=true for a cheap first pass, or include_follow_up_structural=true for replayable structural follow-ups on anchored symbols.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1565,7 +1587,7 @@ impl ServerHandler for FriggMcpServer {
             )
             .with_instructions(
                 format!(
-                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. If the extended profile is enabled, use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows. Runtime tool-surface profile is `{tool_surface_profile}`; set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose explore and deep-search tools. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. If the extended profile is enabled, use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows. Runtime tool-surface profile is `{tool_surface_profile}`; set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose explore and deep-search tools. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
                 ),
             )
     }

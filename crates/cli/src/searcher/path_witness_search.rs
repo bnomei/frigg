@@ -178,6 +178,7 @@ impl TextSearcher {
                 .or(file_anchor)
                 .unwrap_or_else(|| (1, rel_path.clone()));
             matches.push(TextMatch {
+                match_id: None,
                 repository_id,
                 path: rel_path,
                 line,

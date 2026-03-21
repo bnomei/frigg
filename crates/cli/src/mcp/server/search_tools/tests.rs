@@ -9,6 +9,7 @@ fn match_fixture(
     go_to_definition: bool,
 ) -> SearchHybridMatch {
     SearchHybridMatch {
+        match_id: None,
         repository_id: "repo-001".to_string(),
         path: path.to_string(),
         line: 1,

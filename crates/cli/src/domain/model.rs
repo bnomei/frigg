@@ -26,6 +26,8 @@ pub struct SnapshotId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TextMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
@@ -82,6 +84,8 @@ pub struct GeneratedStructuralFollowUp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SymbolMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub repository_id: String,
     pub symbol: String,
     pub kind: String,
@@ -99,6 +103,8 @@ pub enum ReferenceMatchKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReferenceMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub repository_id: String,
     pub symbol: String,
     pub path: String,

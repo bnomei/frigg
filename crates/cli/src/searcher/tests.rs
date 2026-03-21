@@ -347,6 +347,7 @@ fn text_match(
     excerpt: &str,
 ) -> TextMatch {
     TextMatch {
+        match_id: None,
         repository_id: repository_id.to_owned(),
         path: path.to_owned(),
         line,

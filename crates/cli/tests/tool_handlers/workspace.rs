@@ -414,6 +414,7 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
             repository_id: None,
             path_regex: None,
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("search_text should honor session default")

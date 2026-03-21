@@ -21,11 +21,14 @@ Frigg is not the default replacement for every terminal read, but it also no lon
 3. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly. Use `workspace_current` when you need health, precise, or runtime task status.
 4. Start with `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor.
 5. Pivot to `search_symbol` when you know an API, type, or function name, or to `search_text` when exact strings, canonical paths, `path_regex` scoping, or MCP-backed follow-up matter.
-6. Use navigation tools for impact and code flow: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
-7. Use `read_file` for bounded repository-backed confirmation. Use `explore` when the extended tool profile is enabled and you need probe/zoom/refine follow-up inside one artifact.
-8. Use `document_symbols` or `inspect_syntax_tree` before `search_structural` when syntax shape matters more than ranking.
+6. Frigg read-only tools default to compact responses. Ask for `response_mode=full` only when you need diagnostics, freshness detail, or selection notes.
+7. Use navigation tools for impact and code flow: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
+8. Prefer `read_match` when a prior Frigg result already returned `result_handle` plus `match_id`; use `read_file` when you already know the canonical path. Use `explore` when the extended tool profile is enabled and you need probe/zoom/refine follow-up inside one artifact.
+9. Use `document_symbols(top_level_only=true)` or `inspect_syntax_tree` before `search_structural` when syntax shape matters more than ranking.
 
-Treat `search_hybrid` as discovery-first. If `metadata.warning` is present, `semantic_status != ok`, or `metadata.lexical_only_mode = true`, treat the ranking as weaker evidence and pivot to more concrete tools before making claims. In lexical-only mode, broad natural-language ranking is noticeably less trustworthy than explicit `search_symbol` or `search_text` queries.
+Treat `search_hybrid` as discovery-first. If top-level `warning` is present, top-level `semantic_status != ok`, or `response_mode=full` shows `metadata.lexical_only_mode = true`, treat the ranking as weaker evidence and pivot to more concrete tools before making claims. In lexical-only mode, broad natural-language ranking is noticeably less trustworthy than explicit `search_symbol` or `search_text` queries.
+
+Compact responses still keep the main contract fields, but they intentionally omit bulky `metadata` and `note` payloads. When a tool returns `result_handle` and per-row `match_id` values, prefer `read_match` over manually repeating `path`, `line`, and `column`.
 
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups derived from the resolved AST focus rather than from the user's original query. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 extends the same typed `follow_up_structural` payloads to `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. Do not expect this on `search_hybrid` or `search_symbol`.
 

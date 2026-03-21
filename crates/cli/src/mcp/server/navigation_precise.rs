@@ -74,6 +74,7 @@ impl FriggMcpServer {
                 .into_iter()
                 .filter(|occurrence| occurrence.is_definition())
                 .map(|occurrence| NavigationLocation {
+                    match_id: None,
                     symbol: if precise_target.display_name.is_empty() {
                         precise_target.symbol.clone()
                     } else {
@@ -123,6 +124,7 @@ impl FriggMcpServer {
             return Ok(Some((
                 Json(GoToDefinitionResponse {
                     matches: precise_matches,
+                    result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(Some(&precision)),
                     metadata,
                     note,
@@ -393,6 +395,7 @@ impl FriggMcpServer {
             .into_iter()
             .filter(|occurrence| occurrence.is_definition())
             .map(|occurrence| NavigationLocation {
+                match_id: None,
                 symbol: if target.precise_target.display_name.is_empty() {
                     symbol_fallback.to_owned()
                 } else {
@@ -476,6 +479,7 @@ impl FriggMcpServer {
                 &relationship.from_symbol,
             )?;
             Some(ImplementationMatch {
+                match_id: None,
                 symbol: if implementation_symbol.display_name.is_empty() {
                     implementation_symbol.symbol
                 } else {
@@ -579,6 +583,7 @@ impl FriggMcpServer {
                     };
 
                 Some(ImplementationMatch {
+                    match_id: None,
                     symbol,
                     kind,
                     repository_id: target_corpus.repository_id.clone(),
@@ -633,6 +638,7 @@ impl FriggMcpServer {
                 &relationship.from_symbol,
             )?;
             Some(CallHierarchyMatch {
+                match_id: None,
                 source_symbol: if caller_symbol.display_name.is_empty() {
                     caller_symbol.symbol
                 } else {
@@ -738,6 +744,7 @@ impl FriggMcpServer {
                 let (call_path, call_line, call_column, call_end_line, call_end_column) =
                     Self::precise_call_site_fields(root, &occurrence);
                 Some(CallHierarchyMatch {
+                    match_id: None,
                     source_symbol: enclosing_symbol.name.clone(),
                     target_symbol: if precise_target.display_name.is_empty() {
                         target_symbol_name.to_owned()
@@ -909,6 +916,7 @@ impl FriggMcpServer {
                 let (call_path, call_line, call_column, call_end_line, call_end_column) =
                     Self::precise_call_site_fields(root, occurrence);
                 Some(CallHierarchyMatch {
+                    match_id: None,
                     source_symbol: if precise_target.display_name.is_empty() {
                         source_symbol_name.to_owned()
                     } else {

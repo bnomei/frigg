@@ -524,6 +524,27 @@ pub(crate) struct CachedHeuristicReferences {
     pub(crate) source_bytes_loaded: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResultHandleMatchAnchor {
+    pub(crate) repository_id: String,
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) column: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionResultHandleEntry {
+    pub(crate) generated_at: Instant,
+    pub(crate) matches: BTreeMap<String, ResultHandleMatchAnchor>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SessionResultHandleCache {
+    pub(crate) entries: BTreeMap<String, SessionResultHandleEntry>,
+    pub(crate) insertion_order: VecDeque<String>,
+    pub(crate) next_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FileContentWindowCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,

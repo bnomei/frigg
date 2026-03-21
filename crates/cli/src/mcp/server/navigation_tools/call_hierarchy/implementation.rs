@@ -167,6 +167,7 @@ impl FriggMcpServer {
                 let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(FindImplementationsResponse {
                     matches: precise_matches,
+                    result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
                         resolution_precision.as_deref(),
                     ),
@@ -175,7 +176,9 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?
+        execution.await?.map(|Json(response)| {
+            Json(self.present_find_implementations_response(response, params.response_mode))
+        })
     }
 
     pub(in crate::mcp::server) async fn incoming_calls_impl(
@@ -321,6 +324,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(IncomingCallsResponse {
                         matches: precise_matches,
+                        result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
                             resolution_precision.as_deref(),
                         ),
@@ -364,6 +368,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(IncomingCallsResponse {
                         matches: Vec::new(),
+                        result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
                             resolution_precision.as_deref(),
                         ),
@@ -378,6 +383,7 @@ impl FriggMcpServer {
                     .into_iter()
                     .filter(|adjacent| Self::is_heuristic_call_relation(adjacent.relation))
                     .map(|adjacent| CallHierarchyMatch {
+                        match_id: None,
                         source_symbol: adjacent.symbol.display_name,
                         target_symbol: target.symbol.name.clone(),
                         repository_id: target_corpus.repository_id.clone(),
@@ -453,6 +459,7 @@ impl FriggMcpServer {
                 let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(IncomingCallsResponse {
                     matches,
+                    result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
                         resolution_precision.as_deref(),
                     ),
@@ -462,7 +469,9 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?
+        execution.await?.map(|Json(response)| {
+            Json(self.present_incoming_calls_response(response, params.response_mode))
+        })
     }
 
     pub(in crate::mcp::server) async fn outgoing_calls_impl(
@@ -600,6 +609,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(OutgoingCallsResponse {
                         matches: precise_matches,
+                        result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
                             resolution_precision.as_deref(),
                         ),
@@ -644,6 +654,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     return Ok(Json(OutgoingCallsResponse {
                         matches: Vec::new(),
+                        result_handle: None,
                         mode: Self::navigation_mode_from_precision_label(
                             resolution_precision.as_deref(),
                         ),
@@ -674,6 +685,7 @@ impl FriggMcpServer {
                             )
                     })
                     .map(|adjacent| CallHierarchyMatch {
+                        match_id: None,
                         source_symbol: target.symbol.name.clone(),
                         target_symbol: adjacent.symbol.display_name,
                         repository_id: target_corpus.repository_id.clone(),
@@ -750,6 +762,7 @@ impl FriggMcpServer {
                 let (metadata, note) = Self::metadata_note_pair(metadata);
                 Ok(Json(OutgoingCallsResponse {
                     matches,
+                    result_handle: None,
                     mode: Self::navigation_mode_from_precision_label(
                         resolution_precision.as_deref(),
                     ),
@@ -759,7 +772,9 @@ impl FriggMcpServer {
                 }))
             })()
         });
-        execution.await?
+        execution.await?.map(|Json(response)| {
+            Json(self.present_outgoing_calls_response(response, params.response_mode))
+        })
     }
 
     fn heuristic_symbol_body_has_call_like_reference(

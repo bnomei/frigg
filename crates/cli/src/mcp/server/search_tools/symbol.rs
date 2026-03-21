@@ -83,7 +83,10 @@ impl FriggMcpServer {
                         symbol_extraction_diagnostics_count =
                             cached.symbol_extraction_diagnostics_count;
                         effective_limit = Some(cached.effective_limit);
-                        return Ok(Json(cached.response));
+                        return Ok(Json(server.present_search_symbol_response(
+                            cached.response,
+                            params_for_blocking.response_mode,
+                        )));
                     }
 
                     let corpora = server.collect_repository_symbol_corpora(
@@ -289,6 +292,7 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
                     let response = SearchSymbolResponse {
                         matches,
+                        result_handle: None,
                         metadata,
                         note,
                     };
@@ -304,7 +308,10 @@ impl FriggMcpServer {
                             limit,
                         );
                     }
-                    Ok(Json(response))
+                    Ok(Json(server.present_search_symbol_response(
+                        response,
+                        params_for_blocking.response_mode,
+                    )))
                 })();
 
                 SearchSymbolExecution {

@@ -290,6 +290,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             repository_id: Some(repository_id.clone()),
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await;
     if let Err(error) = &search_text_result {
@@ -309,6 +310,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             path_class: None,
             path_regex: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await;
     if let Err(error) = &search_symbol_result {
@@ -331,6 +333,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             include_definition: Some(false),
             include_follow_up_structural: None,
             limit: Some(5),
+            ..Default::default()
         }))
         .await;
     if let Err(error) = &find_references_result {

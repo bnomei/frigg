@@ -241,6 +241,27 @@ pub struct ReadFileResponse {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadMatchParams {
+    pub result_handle: String,
+    pub match_id: String,
+    pub before: Option<usize>,
+    pub after: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReadMatchResponse {
+    pub repository_id: String,
+    pub path: String,
+    pub line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub bytes: usize,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskKind {

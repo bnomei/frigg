@@ -182,6 +182,7 @@ async fn core_search_text_literal_scoped_to_repository() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(r"src/lib\.rs$".to_owned()),
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("literal search should succeed")
@@ -204,6 +205,7 @@ async fn core_search_text_regex_mode_executes_regex_search() {
             repository_id: Some("repo-001".to_owned()),
             path_regex: None,
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("regex mode should execute search")
@@ -212,6 +214,150 @@ async fn core_search_text_regex_mode_executes_regex_search() {
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.matches[0].repository_id, repository_id);
     assert_eq!(response.matches[0].path, "src/lib.rs");
+}
+
+#[tokio::test]
+async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() {
+    let server = server_for_fixture();
+    let repository_id = public_repository_id(&server).await;
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "hello from fixture".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            ..Default::default()
+        }))
+        .await
+        .expect("compact search_text should succeed")
+        .0;
+
+    assert!(response.metadata.is_none());
+    let handle = response
+        .result_handle
+        .clone()
+        .expect("compact search_text should return a result handle");
+    let match_id = response.matches[0]
+        .match_id
+        .clone()
+        .expect("compact search_text matches should expose match ids");
+
+    let opened = server
+        .read_match(Parameters(ReadMatchParams {
+            result_handle: handle,
+            match_id,
+            before: None,
+            after: None,
+        }))
+        .await
+        .expect("read_match should reopen a search hit")
+        .0;
+
+    assert_eq!(opened.repository_id, repository_id);
+    assert_eq!(opened.path, "src/lib.rs");
+    assert_eq!(opened.line, 2);
+    assert_eq!(opened.column, Some(6));
+    assert_eq!(opened.line_start, 1);
+    assert!(opened.content.contains("pub fn greeting()"));
+    assert!(opened.content.contains("\"hello from fixture\""));
+}
+
+#[tokio::test]
+async fn core_search_text_context_lines_and_per_file_limits_shape_results() {
+    let workspace_root = temp_workspace_root("search-text-context-and-per-file-limit");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "fn alpha() {\n    target();\n}\n\nfn beta() {\n    target();\n}\n",
+    )
+    .expect("failed to seed first source file");
+    fs::write(
+        src_root.join("other.rs"),
+        "fn gamma() {\n    target();\n}\n\nfn delta() {\n    target();\n}\n",
+    )
+    .expect("failed to seed second source file");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "target".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"^src/.*\.rs$".to_owned()),
+            limit: Some(10),
+            context_lines: Some(1),
+            max_matches_per_file: Some(1),
+            collapse_by_file: Some(false),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text shaping should succeed")
+        .0;
+
+    assert_eq!(response.total_matches, 4);
+    assert_eq!(response.matches.len(), 2);
+    assert!(response.metadata.is_none());
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.match_id.is_some()),
+        "shaped compact results should still expose match ids"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.excerpt.contains('\n')),
+        "context_lines should expand inline excerpts beyond a single line"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
+async fn core_search_text_collapse_by_file_returns_one_hit_per_path() {
+    let workspace_root = temp_workspace_root("search-text-collapse-by-file");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "fn alpha() { target(); }\nfn beta() { target(); }\n",
+    )
+    .expect("failed to seed first source file");
+    fs::write(
+        src_root.join("other.rs"),
+        "fn gamma() { target(); }\nfn delta() { target(); }\n",
+    )
+    .expect("failed to seed second source file");
+    let server = server_for_workspace_root(&workspace_root);
+
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "target".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"^src/.*\.rs$".to_owned()),
+            limit: Some(10),
+            collapse_by_file: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("collapse-by-file search_text should succeed")
+        .0;
+
+    assert_eq!(response.total_matches, 4);
+    assert_eq!(response.matches.len(), 2);
+    let unique_paths = response
+        .matches
+        .iter()
+        .map(|matched| matched.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique_paths.len(), 2);
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
@@ -226,6 +372,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             limit: Some(10),
             weights: None,
             semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_hybrid should succeed")
@@ -238,6 +385,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             limit: Some(10),
             weights: None,
             semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_hybrid should be deterministic")
@@ -495,6 +643,38 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
 }
 
 #[tokio::test]
+async fn core_search_hybrid_defaults_to_compact_with_handles() {
+    let server = server_for_fixture();
+    let response = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: None,
+        }))
+        .await
+        .expect("compact search_hybrid should succeed")
+        .0;
+
+    assert!(response.metadata.is_none());
+    assert!(response.note.is_none());
+    assert!(
+        response.result_handle.is_some(),
+        "compact search_hybrid should return a result handle"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.match_id.is_some()),
+        "compact search_hybrid matches should expose match ids"
+    );
+}
+
+#[tokio::test]
 async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
     let server = server_for_fixture();
     let error = match server
@@ -505,6 +685,7 @@ async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
             limit: Some(10),
             weights: None,
             semantic: None,
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -542,6 +723,7 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
             limit: Some(10),
             weights: None,
             semantic: Some(true),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("non-strict semantic startup failure should degrade, not hard-fail")
@@ -666,6 +848,7 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
             limit: Some(10),
             weights: None,
             semantic: Some(true),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("unsupported semantic language filters should degrade to metadata, not fail")
@@ -751,6 +934,7 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
             limit: Some(10),
             weights: None,
             semantic: Some(true),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -782,6 +966,7 @@ async fn core_search_text_rejects_abusive_path_regex_with_typed_invalid_params()
             repository_id: Some("repo-001".to_owned()),
             path_regex: Some(abusive_path_regex.clone()),
             limit: Some(10),
+            ..Default::default()
         }))
         .await
     {

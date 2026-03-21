@@ -205,6 +205,45 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
     }
 
+    pub(super) async fn read_match_impl(
+        &self,
+        params: ReadMatchParams,
+    ) -> Result<Json<ReadMatchResponse>, ErrorData> {
+        let anchor = self
+            .session_result_handle_match(&params.result_handle, &params.match_id)
+            .ok_or_else(|| {
+                Self::resource_not_found(
+                    "result_handle or match_id not found",
+                    Some(json!({
+                        "result_handle": params.result_handle,
+                        "match_id": params.match_id,
+                    })),
+                )
+            })?;
+        let before = params.before.unwrap_or(10).min(MAX_CONTEXT_LINES);
+        let after = params.after.unwrap_or(10).min(MAX_CONTEXT_LINES);
+        let line_start = anchor.line.saturating_sub(before).max(1);
+        let line_end = anchor.line.saturating_add(after);
+        let read_params = ReadFileParams {
+            path: anchor.path.clone(),
+            repository_id: Some(anchor.repository_id.clone()),
+            max_bytes: None,
+            line_start: Some(line_start),
+            line_end: Some(line_end),
+        };
+        let read = self.read_file_impl(read_params).await?.0;
+        Ok(Json(ReadMatchResponse {
+            repository_id: read.repository_id,
+            path: read.path,
+            line: anchor.line,
+            column: anchor.column,
+            line_start,
+            line_end,
+            bytes: read.bytes,
+            content: read.content,
+        }))
+    }
+
     pub(super) async fn explore_impl(
         &self,
         params: ExploreParams,
@@ -644,7 +683,7 @@ impl FriggMcpServer {
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
     }
 
-    fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {
+    pub(super) fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {
         match error {
             LossyLineSliceError::Io(err) => Self::internal(
                 format!("failed to read file {}: {err}", path.display()),

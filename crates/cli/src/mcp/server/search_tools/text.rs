@@ -24,6 +24,12 @@ impl FriggMcpServer {
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
                     }
+                    if params_for_blocking.max_matches_per_file == Some(0) {
+                        return Err(Self::invalid_params(
+                            "max_matches_per_file must be greater than zero when provided",
+                            None,
+                        ));
+                    }
 
                     let path_regex = match params_for_blocking.path_regex.clone() {
                         Some(raw) => {
@@ -46,10 +52,18 @@ impl FriggMcpServer {
                         .unwrap_or(SearchPatternType::Literal);
                     effective_pattern_type = Some(pattern_type.clone());
 
-                    let limit = params_for_blocking
+                    let requested_limit = params_for_blocking
                         .limit
                         .unwrap_or(server.config.max_search_results)
                         .min(server.config.max_search_results.max(1));
+                    let limit = if params_for_blocking.context_lines.unwrap_or(0) > 0
+                        || params_for_blocking.max_matches_per_file.is_some()
+                        || params_for_blocking.collapse_by_file == Some(true)
+                    {
+                        server.config.max_search_results.max(requested_limit)
+                    } else {
+                        requested_limit
+                    };
                     effective_limit = Some(limit);
 
                     let scoped_execution_context = server.scoped_read_only_tool_execution_context(
@@ -98,7 +112,10 @@ impl FriggMcpServer {
                             .and_then(|value| value.get("read"))
                             .and_then(Value::as_u64)
                             .unwrap_or(0) as usize;
-                        return Ok(Json(cached.response));
+                        return Ok(Json(server.present_search_text_response(
+                            cached.response,
+                            &params_for_blocking,
+                        )?));
                     }
                     let (scoped_config, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
@@ -147,6 +164,7 @@ impl FriggMcpServer {
                     let response = SearchTextResponse {
                         total_matches,
                         matches,
+                        result_handle: None,
                         metadata,
                     };
                     response_source_refs = json!({
@@ -176,7 +194,10 @@ impl FriggMcpServer {
                         );
                     }
 
-                    Ok(Json(response))
+                    Ok(Json(server.present_search_text_response(
+                        response,
+                        &params_for_blocking,
+                    )?))
                 })();
 
                 let total_matches = result

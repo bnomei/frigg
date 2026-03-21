@@ -11,6 +11,7 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should succeed")
@@ -31,6 +32,37 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
         serde_json::from_str(note).expect("search_symbol note should be valid JSON");
     assert_eq!(note_json["source"], "tree_sitter");
     assert_eq!(note_json["heuristic"], false);
+}
+
+#[tokio::test]
+async fn core_search_symbol_defaults_to_compact_with_handles() {
+    let server = server_for_fixture();
+    let response = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "greeting".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+            response_mode: None,
+        }))
+        .await
+        .expect("compact search_symbol should succeed")
+        .0;
+
+    assert!(response.metadata.is_none());
+    assert!(response.note.is_none());
+    assert!(
+        response.result_handle.is_some(),
+        "compact search_symbol should return a result handle"
+    );
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.match_id.is_some()),
+        "compact search_symbol matches should expose match ids"
+    );
 }
 
 #[tokio::test]
@@ -55,6 +87,7 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should succeed")
@@ -95,6 +128,7 @@ async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should return blade component matches")
@@ -139,6 +173,7 @@ async fn search_symbol_returns_typescript_symbols_from_runtime_corpus() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should return typescript matches")
@@ -184,6 +219,7 @@ async fn search_symbol_returns_python_symbols_from_runtime_corpus() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should return python matches")
@@ -258,6 +294,7 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
                 path_class: None,
                 path_regex: None,
                 limit: Some(20),
+                response_mode: Some(ResponseMode::Full),
             }))
             .await
             .expect("search_symbol should return baseline-language matches")
@@ -304,6 +341,7 @@ async fn search_symbol_resolves_php_canonical_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should resolve canonical php class queries")
@@ -324,6 +362,7 @@ async fn search_symbol_resolves_php_canonical_queries() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should resolve canonical php member queries")
@@ -361,6 +400,7 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should succeed")
@@ -401,6 +441,7 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
             path_class: Some(SearchSymbolPathClass::Runtime),
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should succeed")
@@ -432,6 +473,7 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
             path_class: None,
             path_regex: Some("^src/".to_owned()),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("broad search_symbol should succeed")
@@ -481,6 +523,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
             path_class: Some(SearchSymbolPathClass::Support),
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should respect path_class filter")
@@ -495,6 +538,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
             path_class: None,
             path_regex: Some(r"^src/.*\.rs$".to_owned()),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should respect path_regex filter")
@@ -517,6 +561,7 @@ async fn core_search_symbol_rejects_abusive_path_regex_with_typed_invalid_params
             path_class: None,
             path_regex: Some(abusive_path_regex.clone()),
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
     {
@@ -557,6 +602,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should succeed for warm snapshot")
@@ -573,6 +619,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should rebuild stale snapshot")
@@ -587,6 +634,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
             path_class: None,
             path_regex: None,
             limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should not keep stale symbol results")
@@ -613,6 +661,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("initial search_symbol call should succeed")
@@ -629,6 +678,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should rebuild stale corpus after edit")
@@ -643,6 +693,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
             path_class: None,
             path_regex: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_symbol should not reuse stale corpus matches")
@@ -669,6 +720,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             pattern_type: Some(SearchPatternType::Literal),
             path_regex: None,
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("initial search_text call should succeed")
@@ -685,6 +737,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             pattern_type: Some(SearchPatternType::Literal),
             path_regex: None,
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("search_text should bypass stale cache after edit")
@@ -700,6 +753,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             pattern_type: Some(SearchPatternType::Literal),
             path_regex: None,
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("search_text should not reuse stale cached matches")
@@ -728,6 +782,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             limit: Some(10),
             weights: None,
             semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("initial search_hybrid call should succeed")
@@ -745,6 +800,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             limit: Some(10),
             weights: None,
             semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_hybrid should bypass stale cache after edit")
@@ -773,6 +829,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             limit: Some(10),
             weights: None,
             semantic: Some(false),
+            response_mode: Some(ResponseMode::Full),
         }))
         .await
         .expect("search_hybrid should not reuse stale cached matches")

@@ -418,6 +418,7 @@ impl FriggMcpServer {
         let matches = candidates
             .into_iter()
             .map(|candidate| ImplementationMatch {
+                match_id: None,
                 symbol: candidate.symbol,
                 kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
                 repository_id: target_corpus.repository_id.clone(),
@@ -459,6 +460,7 @@ impl FriggMcpServer {
             }
 
             matches.push(ImplementationMatch {
+                match_id: None,
                 symbol: source_symbol.name.clone(),
                 kind: Self::display_symbol_kind(source_symbol.kind.as_str()),
                 repository_id: target_corpus.repository_id.clone(),

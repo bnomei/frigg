@@ -9,15 +9,16 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 3. `search_hybrid` for the failure symptom
 4. `search_symbol` for the central API or type
 5. `find_references` or call hierarchy for impact
-6. `read_file` on the strongest witnesses only when you need repository-backed evidence; otherwise a shell slice is still fine
-7. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace_current.precise` before assuming the code path is absent
+6. Use compact responses first; only ask for `response_mode=full` when you need diagnostics or selection detail
+7. `read_match` on the strongest witnesses when a prior Frigg result already gave you `result_handle` plus `match_id`; otherwise `read_file` or a shell slice is still fine
+8. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace_current.precise` before assuming the code path is absent
 
 ## Refactor Impact
 
 1. `search_symbol` for the API to change
 2. `find_references` for call sites
 3. `find_implementations` when the change hits an interface or trait boundary
-4. Use a shell slice or `read_file` for the high-risk sites depending on whether repository-aware evidence matters
+4. Use `read_match` for bounded follow-up on the most relevant hits, or `read_file` when you already know the canonical path
 5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; shell `rg` or `git grep` is still fine for nearby throwaway pattern checks
 
 ## Technical Review
@@ -27,14 +28,15 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 3. `find_references` to show how the contract propagates into callers, tests, or helpers
 4. `incoming_calls` if you need believable entry paths
 5. `search_structural` for cross-cutting proof that is too awkward or noisy in plain text search
-6. Treat `outgoing_calls` as provisional until another tool confirms the edge
+6. `read_match` or `read_file` for the final source proof
+7. Treat `outgoing_calls` as provisional until another tool confirms the edge
 
 ## Onboarding And Architecture
 
 1. `search_hybrid` with the feature or subsystem question
 2. Treat mixed docs, tests, and runtime hits as expected
 3. Pivot to `search_symbol` once the likely runtime anchor is visible
-4. Use `go_to_definition` or `document_symbols` to pin the actual implementation entrypoints
+4. Use `go_to_definition` or `document_symbols(top_level_only=true)` to pin the actual implementation entrypoints
 
 ## Multi-Repository Investigation
 

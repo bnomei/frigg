@@ -2,7 +2,10 @@
 //! search, navigation, and health-reporting semantics explicit so server code, tests, and schema
 //! generation all describe the same external API.
 
-pub const PUBLIC_TOOL_NAMES: [&str; 23] = [
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+pub const PUBLIC_TOOL_NAMES: [&str; 24] = [
     "list_repositories",
     "workspace_attach",
     "workspace_detach",
@@ -10,6 +13,7 @@ pub const PUBLIC_TOOL_NAMES: [&str; 23] = [
     "workspace_reindex",
     "workspace_current",
     "read_file",
+    "read_match",
     "explore",
     "search_text",
     "search_hybrid",
@@ -28,10 +32,11 @@ pub const PUBLIC_TOOL_NAMES: [&str; 23] = [
     "deep_search_compose_citations",
 ];
 /// Public tools that are guaranteed not to mutate workspace or repository state.
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 19] = [
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 20] = [
     "list_repositories",
     "workspace_current",
     "read_file",
+    "read_match",
     "explore",
     "search_text",
     "search_hybrid",
@@ -56,6 +61,13 @@ pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 2] = ["workspace_attach", "
 pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_reindex"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseMode {
+    Compact,
+    Full,
+}
 
 #[path = "types/deep_search.rs"]
 mod deep_search;

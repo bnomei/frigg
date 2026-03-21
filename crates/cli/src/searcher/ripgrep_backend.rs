@@ -333,6 +333,7 @@ fn parse_ripgrep_event_line(line: &str, matches: &mut Vec<TextMatch>) -> Result<
             .ok_or_else(|| "ripgrep submatch missing start".to_owned())?
             as usize;
         matches.push(TextMatch {
+            match_id: None,
             repository_id: String::new(),
             path: normalize_ripgrep_path(&path),
             line: line_number,

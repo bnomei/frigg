@@ -1,9 +1,10 @@
+use super::ResponseMode;
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesParams {
     /// Optional symbol query. Omit when resolving the target by source location.
     pub symbol: Option<String>,
@@ -19,6 +20,8 @@ pub struct FindReferencesParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -34,12 +37,14 @@ pub enum NavigationMode {
 pub struct FindReferencesResponse {
     pub total_matches: usize,
     pub matches: Vec<ReferenceMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionParams {
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -49,10 +54,14 @@ pub struct GoToDefinitionParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationLocation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub symbol: String,
     pub repository_id: String,
     pub path: String,
@@ -67,12 +76,14 @@ pub struct NavigationLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -82,17 +93,21 @@ pub struct FindDeclarationsParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsResponse {
     pub matches: Vec<NavigationLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsParams {
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -102,10 +117,14 @@ pub struct FindImplementationsParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImplementationMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub symbol: String,
     pub kind: Option<String>,
     pub repository_id: String,
@@ -122,12 +141,14 @@ pub struct ImplementationMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsResponse {
     pub matches: Vec<ImplementationMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsParams {
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -137,9 +158,11 @@ pub struct IncomingCallsParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsParams {
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
@@ -149,10 +172,14 @@ pub struct OutgoingCallsParams {
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CallHierarchyMatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub source_symbol: String,
     pub target_symbol: String,
     pub repository_id: String,
@@ -173,6 +200,8 @@ pub struct CallHierarchyMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub availability: Option<NavigationAvailability>,
     pub metadata: Option<Value>,
@@ -182,6 +211,8 @@ pub struct IncomingCallsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub availability: Option<NavigationAvailability>,
     pub metadata: Option<Value>,
@@ -195,16 +226,22 @@ pub struct NavigationAvailability {
     pub precise_required_for_complete_results: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsParams {
     pub path: String,
     pub repository_id: Option<String>,
     /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored symbol.
     pub include_follow_up_structural: Option<bool>,
+    /// Return only top-level symbols when true.
+    pub top_level_only: Option<bool>,
+    /// Response detail profile. Omit to default to `compact`.
+    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
     pub symbol: String,
     pub kind: String,
     pub repository_id: String,
@@ -222,6 +259,8 @@ pub struct DocumentSymbolItem {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsResponse {
     pub symbols: Vec<DocumentSymbolItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_handle: Option<String>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
