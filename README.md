@@ -60,16 +60,16 @@ just bench
 just bench native_lexical_search
 ```
 
-## Install The Codex Skill
+## Bundled Skill
 
-If you use Codex, run the following from the repository root immediately after installing Frigg to copy the bundled Frigg skill into your local Codex skills directory:
+Frigg ships a search-and-navigation skill in [skills/frigg-mcp-search-navigation](skills/frigg-mcp-search-navigation/).
 
-```bash
-mkdir -p ~/.codex/skills
-cp -R skills/frigg-mcp-search-navigation ~/.codex/skills/
-```
+Use it as the repo-backed instruction bundle for any assistant that supports local or Git-backed skills. It explains:
 
-That copies the repo-backed `frigg-mcp-search-navigation` skill into `~/.codex/skills/frigg-mcp-search-navigation/`.
+- when to use Frigg instead of plain shell reads or scans
+- how to adopt repositories and move through search, symbol, and navigation flows
+- how to treat lexical-only hybrid results, call-graph answers, and other weaker surfaces
+- how to use `read_match`, structural queries, and bounded follow-up tools efficiently
 
 ## Quickstart
 
@@ -118,6 +118,31 @@ frigg serve \
 Point your MCP client at the loopback HTTP endpoint of the running Frigg service:
 
 `http://127.0.0.1:37444/mcp`
+
+#### Claude Code
+
+```bash
+claude mcp add --transport http frigg http://127.0.0.1:37444/mcp
+```
+
+#### OpenCode
+
+```bash
+opencode mcp add
+```
+
+Then choose a remote MCP server and enter:
+
+- name: `frigg`
+- url: `http://127.0.0.1:37444/mcp`
+
+#### Codex
+
+```bash
+codex mcp add frigg --url http://127.0.0.1:37444/mcp
+```
+
+#### Other JSON-configured clients
 
 Example MCP client config for an HTTP / streamable MCP connection:
 
@@ -209,7 +234,7 @@ After enabling semantic search for an existing repository, run one reindex pass:
 frigg reindex
 ```
 
-### Optional SCIP artifacts
+### Optional SCIP artifacts (Highly Recommended)
 
 Frigg can consume external SCIP artifacts, and if supported generator tools are installed it will **automatically detect and invoke them during workspace attach/reindex flows** for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin. Kotlin auto-generation is intentionally scoped to Gradle/KTS workspaces with Kotlin source files; other Kotlin/JVM layouts should continue to use manual `.frigg/scip/` artifact drops.
 
