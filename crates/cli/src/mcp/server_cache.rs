@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use memchr::memchr_iter;
 use serde_json::Value;
 
 use crate::indexer::HeuristicReference;
@@ -516,15 +519,16 @@ pub(crate) struct FileContentWindowCache {
 }
 
 impl FileContentSnapshot {
+    pub(crate) fn from_path(path: &std::path::Path) -> Result<Self, io::Error> {
+        fs::read(path).map(Self::from_bytes)
+    }
+
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
         let mut normalized_lines = Vec::new();
         let mut line_lossy_utf8 = Vec::new();
         let mut line_start = 0usize;
 
-        for (index, byte) in bytes.iter().enumerate() {
-            if *byte != b'\n' {
-                continue;
-            }
+        for index in memchr_iter(b'\n', &bytes) {
             let raw_line = &bytes[line_start..=index];
             let (normalized_line, had_lossy_utf8) = normalize_lossy_line_bytes(raw_line);
             normalized_lines.push(normalized_line);

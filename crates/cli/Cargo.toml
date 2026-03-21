@@ -25,6 +25,7 @@ blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
 ignore.workspace = true
+memchr.workspace = true
 notify.workspace = true
 petgraph.workspace = true
 protobuf.workspace = true
@@ -37,6 +38,7 @@ schemars.workspace = true
 scip.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+smallvec.workspace = true
 sqlite-vec.workspace = true
 tantivy.workspace = true
 thiserror.workspace = true
@@ -61,6 +63,46 @@ walkdir.workspace = true
 [dev-dependencies]
 criterion = "0.5.1"
 rusqlite.workspace = true
+
+[[bench]]
+name = "manifest_build"
+harness = false
+
+[[bench]]
+name = "symbol_extraction"
+harness = false
+
+[[bench]]
+name = "native_lexical_search"
+harness = false
+
+[[bench]]
+name = "symbol_corpus"
+harness = false
+
+[[bench]]
+name = "hybrid_search"
+harness = false
+
+[[bench]]
+name = "search_symbol"
+harness = false
+
+[[bench]]
+name = "content_cache"
+harness = false
+
+[[bench]]
+name = "precise_graph"
+harness = false
+
+[[bench]]
+name = "reindex"
+harness = false
+
+[[bench]]
+name = "lexical_backend_compare"
+harness = false
 
 [[test]]
 name = "citation_payloads"

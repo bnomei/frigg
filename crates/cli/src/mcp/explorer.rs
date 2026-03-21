@@ -1,6 +1,5 @@
 use std::borrow::Cow;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::path::Path;
 
 use regex::Regex;
@@ -130,20 +129,7 @@ pub(crate) fn read_line_slice_lossy(
     line_end: Option<usize>,
     max_bytes: usize,
 ) -> Result<LossyLineSlice, LossyLineSliceError> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut raw_line = Vec::new();
-    let mut bytes = Vec::new();
-
-    loop {
-        raw_line.clear();
-        let bytes_read = reader.read_until(b'\n', &mut raw_line)?;
-        if bytes_read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&raw_line);
-    }
-    let snapshot = FileContentSnapshot::from_bytes(bytes);
+    let snapshot = FileContentSnapshot::from_path(path)?;
     snapshot.read_line_slice_lossy(line_start, line_end, max_bytes)
 }
 
@@ -157,20 +143,7 @@ pub(crate) fn scan_file_scope_lossy(
     include_scope_content: bool,
     max_scope_bytes: Option<usize>,
 ) -> Result<ExploreScanResult, io::Error> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut raw_line = Vec::new();
-    let mut bytes = Vec::new();
-
-    loop {
-        raw_line.clear();
-        let bytes_read = reader.read_until(b'\n', &mut raw_line)?;
-        if bytes_read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&raw_line);
-    }
-    let snapshot = FileContentSnapshot::from_bytes(bytes);
+    let snapshot = FileContentSnapshot::from_path(path)?;
     Ok(snapshot.scan_file_scope_lossy(
         scope,
         matcher,

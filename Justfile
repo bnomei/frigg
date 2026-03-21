@@ -9,6 +9,13 @@ fmt:
 test:
   CARGO_HOME=.codex-cache/cargo-home cargo test -p frigg
 
+bench target="":
+  if [[ -n "{{target}}" ]]; then \
+    CARGO_HOME=.codex-cache/cargo-home cargo bench -p frigg --bench {{target}}; \
+  else \
+    CARGO_HOME=.codex-cache/cargo-home cargo bench -p frigg; \
+  fi
+
 build:
   CARGO_HOME=.codex-cache/cargo-home cargo build -p frigg
 

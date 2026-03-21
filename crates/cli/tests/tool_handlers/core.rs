@@ -24,8 +24,9 @@ async fn core_read_file_returns_typed_not_found_error() {
 
 #[tokio::test]
 async fn core_read_file_returns_repository_relative_canonical_path() {
-    let server = server_for_fixture();
-    let absolute_path = fixture_root().join("src/lib.rs");
+    let workspace_root = fresh_fixture_root("tool-handlers-core-read-file");
+    let server = server_for_workspace_root(&workspace_root);
+    let absolute_path = workspace_root.join("src/lib.rs");
     let absolute_response = server
         .read_file(Parameters(ReadFileParams {
             path: absolute_path.display().to_string(),
@@ -514,7 +515,8 @@ async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
 
 #[tokio::test]
 async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fails_non_strict() {
-    let mut config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+    let workspace_root = fresh_fixture_root("tool-handlers-core-hybrid-degraded");
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root])
         .expect("fixture root must produce valid config");
     config.semantic_runtime = SemanticRuntimeConfig {
         enabled: true,
@@ -637,7 +639,8 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
 
 #[tokio::test]
 async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unavailable() {
-    let mut config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+    let workspace_root = fresh_fixture_root("tool-handlers-core-hybrid-unavailable");
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root])
         .expect("fixture root must produce valid config");
     config.semantic_runtime = SemanticRuntimeConfig {
         enabled: true,
@@ -721,7 +724,8 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
 
 #[tokio::test]
 async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
-    let mut config = FriggConfig::from_workspace_roots(vec![fixture_root()])
+    let workspace_root = fresh_fixture_root("tool-handlers-core-hybrid-strict");
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root])
         .expect("fixture root must produce valid config");
     config.semantic_runtime = SemanticRuntimeConfig {
         enabled: true,

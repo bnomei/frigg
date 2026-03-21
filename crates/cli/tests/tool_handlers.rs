@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frigg::domain::model::ReferenceMatchKind;
@@ -31,13 +30,7 @@ use scip::types::{
     SymbolInformation as ScipSymbolInformationProto,
 };
 
-fn fixture_root() -> PathBuf {
-    static ROOT: OnceLock<PathBuf> = OnceLock::new();
-    ROOT.get_or_init(materialize_fixture_workspace).clone()
-}
-
-fn materialize_fixture_workspace() -> PathBuf {
-    let root = temp_workspace_root("tool-handlers-fixture");
+fn write_fixture_workspace(root: &Path) {
     fs::create_dir_all(root.join("src/nested")).expect("failed to create fixture source tree");
     fs::create_dir_all(root.join("logs")).expect("failed to create fixture log tree");
     fs::create_dir_all(root.join(".git")).expect("failed to create fixture git root");
@@ -62,12 +55,18 @@ fn materialize_fixture_workspace() -> PathBuf {
     .expect("failed to seed fixture log");
     fs::write(root.join(".gitignore"), "*.tmp\n*.log\n.DS_Store\n")
         .expect("failed to seed fixture ignore file");
+}
+
+fn fresh_fixture_root(test_name: &str) -> PathBuf {
+    let root = temp_workspace_root(test_name);
+    write_fixture_workspace(&root);
     root
 }
 
 fn server_for_fixture() -> FriggMcpServer {
-    let config = FriggConfig::from_workspace_roots(vec![fixture_root()])
-        .expect("fixture root must produce valid config");
+    let config =
+        FriggConfig::from_workspace_roots(vec![fresh_fixture_root("tool-handlers-fixture-server")])
+            .expect("fixture root must produce valid config");
     FriggMcpServer::new(config)
 }
 

@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -126,6 +129,100 @@ const CANONICAL_LANGUAGE_NAMES: &[&str] = &[
     "roc",
     "nim",
 ];
+
+thread_local! {
+    static PARSER_POOL: RefCell<BTreeMap<ParserPoolKey, Vec<Parser>>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ParserPoolKey {
+    Rust,
+    Php,
+    Blade,
+    TypeScript,
+    Tsx,
+    Python,
+    Go,
+    Kotlin,
+    Lua,
+    Roc,
+    Nim,
+}
+
+impl ParserPoolKey {
+    fn for_language(language: SymbolLanguage) -> Self {
+        match language {
+            SymbolLanguage::Rust => Self::Rust,
+            SymbolLanguage::Php => Self::Php,
+            SymbolLanguage::Blade => Self::Blade,
+            SymbolLanguage::TypeScript => Self::TypeScript,
+            SymbolLanguage::Python => Self::Python,
+            SymbolLanguage::Go => Self::Go,
+            SymbolLanguage::Kotlin => Self::Kotlin,
+            SymbolLanguage::Lua => Self::Lua,
+            SymbolLanguage::Roc => Self::Roc,
+            SymbolLanguage::Nim => Self::Nim,
+        }
+    }
+
+    fn for_path(language: SymbolLanguage, path: &Path) -> Self {
+        match language {
+            SymbolLanguage::TypeScript if typescript::is_tsx_path(path) => Self::Tsx,
+            _ => Self::for_language(language),
+        }
+    }
+
+    fn tree_sitter_language(self) -> tree_sitter::Language {
+        match self {
+            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+            Self::Blade => tree_sitter_blade::LANGUAGE.into(),
+            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
+            Self::Kotlin => tree_sitter_kotlin::LANGUAGE.into(),
+            Self::Lua => tree_sitter_lua::LANGUAGE.into(),
+            Self::Roc => tree_sitter_roc::LANGUAGE.into(),
+            Self::Nim => tree_sitter_nim::LANGUAGE.into(),
+        }
+    }
+}
+
+pub(crate) struct PooledParser {
+    key: ParserPoolKey,
+    parser: Option<Parser>,
+}
+
+impl Deref for PooledParser {
+    type Target = Parser;
+
+    fn deref(&self) -> &Self::Target {
+        self.parser
+            .as_ref()
+            .expect("pooled parser should be present while borrowed")
+    }
+}
+
+impl DerefMut for PooledParser {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.parser
+            .as_mut()
+            .expect("pooled parser should be present while mutably borrowed")
+    }
+}
+
+impl Drop for PooledParser {
+    fn drop(&mut self) {
+        let Some(mut parser) = self.parser.take() else {
+            return;
+        };
+        parser.reset();
+        PARSER_POOL.with(|pool| {
+            pool.borrow_mut().entry(self.key).or_default().push(parser);
+        });
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LanguageCapability {
@@ -493,54 +590,55 @@ pub(crate) fn heuristic_implementation_strategy(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn tree_sitter_language(language: SymbolLanguage) -> tree_sitter::Language {
-    match language {
-        SymbolLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
-        SymbolLanguage::Php => tree_sitter_php::LANGUAGE_PHP.into(),
-        SymbolLanguage::Blade => tree_sitter_blade::LANGUAGE.into(),
-        SymbolLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        SymbolLanguage::Python => tree_sitter_python::LANGUAGE.into(),
-        SymbolLanguage::Go => tree_sitter_go::LANGUAGE.into(),
-        SymbolLanguage::Kotlin => tree_sitter_kotlin::LANGUAGE.into(),
-        SymbolLanguage::Lua => tree_sitter_lua::LANGUAGE.into(),
-        SymbolLanguage::Roc => tree_sitter_roc::LANGUAGE.into(),
-        SymbolLanguage::Nim => tree_sitter_nim::LANGUAGE.into(),
-    }
+    ParserPoolKey::for_language(language).tree_sitter_language()
 }
 
 pub(crate) fn tree_sitter_language_for_path(
     language: SymbolLanguage,
     path: &Path,
 ) -> tree_sitter::Language {
-    match language {
-        SymbolLanguage::TypeScript if typescript::is_tsx_path(path) => {
-            tree_sitter_typescript::LANGUAGE_TSX.into()
-        }
-        _ => tree_sitter_language(language),
-    }
+    ParserPoolKey::for_path(language, path).tree_sitter_language()
 }
 
-pub(crate) fn parser_for_language(language: SymbolLanguage) -> FriggResult<Parser> {
-    parser_for_tree_sitter_language(tree_sitter_language(language), language)
+pub(crate) fn parser_for_language(language: SymbolLanguage) -> FriggResult<PooledParser> {
+    parser_for_tree_sitter_language(ParserPoolKey::for_language(language), language)
 }
 
-pub(crate) fn parser_for_path(language: SymbolLanguage, path: &Path) -> FriggResult<Parser> {
-    parser_for_tree_sitter_language(tree_sitter_language_for_path(language, path), language)
+pub(crate) fn parser_for_path(language: SymbolLanguage, path: &Path) -> FriggResult<PooledParser> {
+    parser_for_tree_sitter_language(ParserPoolKey::for_path(language, path), language)
 }
 
 fn parser_for_tree_sitter_language(
-    ts_language: tree_sitter::Language,
+    key: ParserPoolKey,
     language: SymbolLanguage,
-) -> FriggResult<Parser> {
-    let mut parser = Parser::new();
+) -> FriggResult<PooledParser> {
+    if let Some(mut parser) = PARSER_POOL.with(|pool| {
+        pool.borrow_mut()
+            .get_mut(&key)
+            .and_then(|parsers| parsers.pop())
+    }) {
+        parser.reset();
+        return Ok(PooledParser {
+            key,
+            parser: Some(parser),
+        });
+    }
 
-    parser.set_language(&ts_language).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to configure tree-sitter parser for {}: {err}",
-            language.as_str()
-        ))
-    })?;
-    Ok(parser)
+    let mut parser = Parser::new();
+    parser
+        .set_language(&key.tree_sitter_language())
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to configure tree-sitter parser for {}: {err}",
+                language.as_str()
+            ))
+        })?;
+    Ok(PooledParser {
+        key,
+        parser: Some(parser),
+    })
 }
 
 pub(crate) fn symbol_from_node(
@@ -596,4 +694,38 @@ pub(super) fn node_field_text(node: Node<'_>, source: &str, field_name: &str) ->
             .filter(|text| !text.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SymbolLanguage, parser_for_path};
+    use crate::domain::FriggError;
+    use std::path::Path;
+
+    #[test]
+    fn pooled_parser_handles_tsx_path_sensitive_grammar() {
+        let path = Path::new("component.tsx");
+        let source = "export const Button = () => <button>ok</button>;";
+        let mut parser = parser_for_path(SymbolLanguage::TypeScript, path)
+            .expect("tsx pooled parser should resolve");
+        let tree = parser
+            .parse(source, None)
+            .expect("tsx pooled parser should parse jsx");
+        assert_eq!(tree.root_node().kind(), "program");
+    }
+
+    #[test]
+    fn pooled_parser_reuses_language_configuration_across_calls() {
+        let path = Path::new("module.rs");
+        let source = "pub fn handle_checkout_request() {}";
+
+        for _ in 0..3 {
+            let mut parser =
+                parser_for_path(SymbolLanguage::Rust, path).expect("rust parser should resolve");
+            let tree = parser.parse(source, None).ok_or_else(|| {
+                FriggError::Internal("pooled parser should parse repeatedly".to_owned())
+            });
+            assert!(tree.is_ok());
+        }
+    }
 }

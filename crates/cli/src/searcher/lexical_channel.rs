@@ -1,8 +1,8 @@
 use crate::domain::model::TextMatch;
 use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceHit};
+use memchr::memchr_iter;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::fs;
 use std::path::Path;
 
 use super::{
@@ -264,34 +264,23 @@ pub(super) fn best_path_witness_anchor_in_file(
     file_path: &Path,
     query_context: &HybridPathWitnessQueryContext,
 ) -> Option<(usize, String)> {
-    let file = File::open(file_path).ok()?;
-    best_path_witness_anchor_in_reader(path, BufReader::new(file), query_context)
+    let bytes = fs::read(file_path).ok()?;
+    best_path_witness_anchor_in_bytes(path, &bytes, query_context)
 }
 
-fn best_path_witness_anchor_in_reader<R: BufRead>(
+fn best_path_witness_anchor_in_bytes(
     path: &str,
-    mut reader: R,
+    bytes: &[u8],
     query_context: &HybridPathWitnessQueryContext,
 ) -> Option<(usize, String)> {
     let path_terms = hybrid_path_overlap_tokens(path);
     let max_score = max_path_witness_anchor_score(&path_terms, query_context);
-    let mut buffer = String::new();
-    let mut line_number = 0usize;
     let mut first_non_empty: Option<(usize, String)> = None;
     let mut best_excerpt: Option<(usize, String)> = None;
     let mut best_score = 0usize;
-
-    loop {
-        buffer.clear();
-        let bytes_read = reader.read_line(&mut buffer).ok()?;
-        if bytes_read == 0 {
-            break;
-        }
-
-        line_number += 1;
-        let line = buffer.trim();
+    let _ = for_each_trimmed_utf8_line(bytes, |line_number, line| {
         if line.is_empty() {
-            continue;
+            return true;
         }
         if first_non_empty.is_none() {
             first_non_empty = Some((line_number, line.to_owned()));
@@ -302,12 +291,53 @@ fn best_path_witness_anchor_in_reader<R: BufRead>(
             best_score = score;
             best_excerpt = Some((line_number, line.to_owned()));
             if best_score >= max_score {
-                break;
+                return false;
             }
         }
-    }
+        true
+    });
 
     best_excerpt.or(first_non_empty)
+}
+
+#[cfg(test)]
+fn best_path_witness_anchor_in_reader<R: std::io::Read>(
+    path: &str,
+    mut reader: R,
+    query_context: &HybridPathWitnessQueryContext,
+) -> Option<(usize, String)> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).ok()?;
+    best_path_witness_anchor_in_bytes(path, &bytes, query_context)
+}
+
+fn for_each_trimmed_utf8_line<F>(bytes: &[u8], mut visit: F) -> Option<()>
+where
+    F: FnMut(usize, &str) -> bool,
+{
+    let mut line_start = 0usize;
+    let mut line_number = 0usize;
+
+    for newline_index in memchr_iter(b'\n', bytes) {
+        line_number = line_number.saturating_add(1);
+        let mut line_bytes = &bytes[line_start..newline_index];
+        if line_bytes.ends_with(b"\r") {
+            line_bytes = &line_bytes[..line_bytes.len().saturating_sub(1)];
+        }
+        let line = std::str::from_utf8(line_bytes).ok()?.trim();
+        if !visit(line_number, line) {
+            return Some(());
+        }
+        line_start = newline_index.saturating_add(1);
+    }
+
+    if line_start < bytes.len() {
+        line_number = line_number.saturating_add(1);
+        let line = std::str::from_utf8(&bytes[line_start..]).ok()?.trim();
+        let _ = visit(line_number, line);
+    }
+
+    Some(())
 }
 
 pub(super) fn hybrid_path_witness_recall_score(

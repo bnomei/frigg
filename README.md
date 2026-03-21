@@ -53,6 +53,13 @@ cd frigg
 cargo build --release -p frigg
 ```
 
+For local performance work, Frigg also ships a small Criterion harness:
+
+```bash
+just bench
+just bench native_lexical_search
+```
+
 ## Quickstart
 
 ### 1) Prepare a repository

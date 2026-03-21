@@ -4,6 +4,7 @@ use crate::domain::model::{
     GeneratedStructuralFollowUpConfidence, GeneratedStructuralFollowUpStrategy,
     GeneratedStructuralSearchParams,
 };
+use smallvec::SmallVec;
 
 const GENERATED_STRUCTURAL_CAPTURE_NAME: &str = "match";
 const GENERATED_STRUCTURAL_MAX_SUGGESTIONS: usize = 3;
@@ -327,7 +328,7 @@ fn search_structural_matches_in_source(
                             .unwrap_or(GENERATED_STRUCTURAL_CAPTURE_NAME);
                         structural_query_capture_node(source, capture_name, capture.node)
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<SmallVec<[StructuralQueryCaptureNode<'_>; 8]>>();
                 if capture_nodes.is_empty() {
                     continue;
                 }
@@ -465,7 +466,7 @@ fn build_syntax_tree_inspection(
     max_ancestors: usize,
     max_children: usize,
 ) -> SyntaxTreeInspection {
-    let mut ancestors = Vec::new();
+    let mut ancestors = SmallVec::<[SyntaxTreeInspectionNode; 8]>::new();
     let mut cursor = focus_node;
     while let Some(parent) = cursor.parent() {
         ancestors.push(syntax_tree_inspection_node(source, parent));
@@ -475,7 +476,7 @@ fn build_syntax_tree_inspection(
         }
     }
 
-    let mut children = Vec::new();
+    let mut children = SmallVec::<[SyntaxTreeInspectionNode; 8]>::new();
     let mut child_cursor = focus_node.walk();
     for child in focus_node.children(&mut child_cursor) {
         children.push(syntax_tree_inspection_node(source, child));
@@ -487,8 +488,8 @@ fn build_syntax_tree_inspection(
     SyntaxTreeInspection {
         language,
         focus: syntax_tree_inspection_node(source, focus_node),
-        ancestors,
-        children,
+        ancestors: ancestors.into_vec(),
+        children: children.into_vec(),
     }
 }
 

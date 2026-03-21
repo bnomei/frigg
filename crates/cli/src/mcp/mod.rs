@@ -18,5 +18,9 @@ pub use advanced::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchPlaybookStep, DeepSearchReplayCheck,
     DeepSearchTraceArtifact, DeepSearchTraceOutcome, DeepSearchTraceStep,
 };
-pub use server::{FriggMcpServer, FriggMcpService};
+pub use server::{
+    FriggMcpServer, FriggMcpService, PreciseGraphBenchmarkSummary, SymbolCorpusBenchmarkSummary,
+    benchmark_build_symbol_corpora, benchmark_build_symbol_corpora_for_server,
+    benchmark_precise_graph_for_server,
+};
 pub use server_state::RuntimeTaskRegistry;

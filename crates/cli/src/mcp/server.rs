@@ -143,6 +143,131 @@ mod symbol_index;
 mod workspace;
 mod workspace_session;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SymbolCorpusBenchmarkSummary {
+    pub repository_count: usize,
+    pub source_file_count: usize,
+    pub symbol_count: usize,
+    pub php_evidence_files: usize,
+    pub blade_evidence_files: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PreciseGraphBenchmarkSummary {
+    pub artifact_count: usize,
+    pub artifacts_ingested: usize,
+    pub artifacts_failed: usize,
+    pub precise_symbol_count: usize,
+    pub precise_occurrence_count: usize,
+    pub precise_relationship_count: usize,
+    pub reused_cache: bool,
+}
+
+#[doc(hidden)]
+pub fn benchmark_build_symbol_corpora_for_server(
+    server: &FriggMcpServer,
+    repository_id: Option<&str>,
+) -> crate::domain::FriggResult<SymbolCorpusBenchmarkSummary> {
+    let corpora = server
+        .collect_repository_symbol_corpora(repository_id)
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to build symbol corpora for benchmark: {err:?}"
+            ))
+        })?;
+    let mut summary = SymbolCorpusBenchmarkSummary {
+        repository_count: corpora.len(),
+        source_file_count: 0,
+        symbol_count: 0,
+        php_evidence_files: 0,
+        blade_evidence_files: 0,
+    };
+    for corpus in corpora {
+        summary.source_file_count = summary
+            .source_file_count
+            .saturating_add(corpus.source_paths.len());
+        summary.symbol_count = summary.symbol_count.saturating_add(corpus.symbols.len());
+        summary.php_evidence_files = summary
+            .php_evidence_files
+            .saturating_add(corpus.php_evidence_by_relative_path.len());
+        summary.blade_evidence_files = summary
+            .blade_evidence_files
+            .saturating_add(corpus.blade_evidence_by_relative_path.len());
+    }
+    Ok(summary)
+}
+
+#[doc(hidden)]
+pub fn benchmark_build_symbol_corpora(
+    config: FriggConfig,
+    repository_id: Option<&str>,
+) -> crate::domain::FriggResult<SymbolCorpusBenchmarkSummary> {
+    let server = FriggMcpServer::new(config);
+    if server.attached_workspaces().is_empty() {
+        let known = server.known_workspaces();
+        let workspace = if let Some(repository_id) = repository_id {
+            known
+                .into_iter()
+                .find(|workspace| workspace.repository_id == repository_id)
+        } else {
+            known.into_iter().next()
+        }
+        .ok_or_else(|| {
+            FriggError::Internal(
+                "failed to prepare benchmark server: no known workspace roots".to_owned(),
+            )
+        })?;
+        server.adopt_workspace(&workspace, true).map_err(|err| {
+            FriggError::Internal(format!("failed to adopt workspace for benchmark: {err:?}"))
+        })?;
+    }
+    benchmark_build_symbol_corpora_for_server(&server, repository_id)
+}
+
+#[doc(hidden)]
+pub fn benchmark_precise_graph_for_server(
+    server: &FriggMcpServer,
+    repository_id: &str,
+) -> crate::domain::FriggResult<PreciseGraphBenchmarkSummary> {
+    let mut roots = server
+        .roots_for_repository(Some(repository_id))
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to resolve repository roots for precise benchmark: {err:?}"
+            ))
+        })?;
+    roots.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    let (_, root) = roots.into_iter().next().ok_or_else(|| {
+        FriggError::Internal(
+            "no attached workspace roots available for precise benchmark".to_owned(),
+        )
+    })?;
+    let reused_cache = server
+        .try_reuse_latest_precise_graph_for_repository(repository_id, &root)
+        .is_some();
+    let cached = server
+        .precise_graph_for_repository_root(
+            repository_id,
+            &root,
+            server.find_references_resource_budgets(),
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to build precise graph for benchmark: {err:?}"
+            ))
+        })?;
+    let counts = cached.graph.precise_counts();
+    Ok(PreciseGraphBenchmarkSummary {
+        artifact_count: cached.ingest_stats.artifacts_discovered,
+        artifacts_ingested: cached.ingest_stats.artifacts_ingested,
+        artifacts_failed: cached.ingest_stats.artifacts_failed,
+        precise_symbol_count: counts.symbols,
+        precise_occurrence_count: counts.occurrences,
+        precise_relationship_count: counts.relationships,
+        reused_cache,
+    })
+}
+
 #[derive(Debug, Clone)]
 struct NavigationLocationTokenHint {
     symbol_query: String,

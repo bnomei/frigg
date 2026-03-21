@@ -46,11 +46,12 @@ async fn core_list_repositories_is_deterministic() {
 
 #[tokio::test]
 async fn workspace_attach_reuses_git_root_and_sets_session_default() {
+    let workspace_root = fresh_fixture_root("tool-handlers-workspace-attach");
     let server = server_for_config(
         FriggConfig::from_optional_workspace_roots(Vec::new())
             .expect("empty serving config should be valid"),
     );
-    let nested_path = fixture_root().join("src/lib.rs");
+    let nested_path = workspace_root.join("src/lib.rs");
 
     let first = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
@@ -99,7 +100,7 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
 
     let second = server
         .workspace_attach(Parameters(WorkspaceAttachParams {
-            path: Some(fixture_root().display().to_string()),
+            path: Some(workspace_root.display().to_string()),
             repository_id: None,
             set_default: Some(false),
             resolve_mode: None,

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
+use smallvec::SmallVec;
 
 use crate::graph::RelationKind;
 use crate::indexer::{
@@ -347,7 +348,7 @@ pub(super) fn apply_ast_projection_contributions(
             let Some(src_subtree_root) = src_projection.subtree_root.as_deref() else {
                 continue;
             };
-            let mut per_source = Vec::new();
+            let mut per_source = SmallVec::<[PathRelationProjection; 8]>::new();
             for (candidate_path, candidate_symbol) in &symbols {
                 if candidate_path == relative_path {
                     continue;

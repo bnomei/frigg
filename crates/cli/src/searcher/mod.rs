@@ -103,6 +103,7 @@ pub(crate) use ripgrep_backend::clear_ripgrep_availability_cache;
 use ripgrep_backend::{
     RipgrepPatternMode, resolve_ripgrep_executable, search_with_ripgrep_in_universe,
 };
+use scan_engine::MatchColumnsBuffer;
 use semantic::{
     RuntimeSemanticQueryEmbeddingExecutor, SemanticRuntimeQueryEmbeddingExecutor,
     search_semantic_channel_hits,
@@ -650,7 +651,7 @@ impl TextSearcher {
         match_columns: F,
     ) -> FriggResult<SearchExecutionOutput>
     where
-        F: FnMut(&str, &mut Vec<usize>),
+        F: FnMut(&str, &mut MatchColumnsBuffer),
     {
         scan_engine::search_with_streaming_lines_in_universe(
             query,
@@ -666,7 +667,7 @@ impl TextSearcher {
         match_columns: F,
     ) -> FriggResult<SearchExecutionOutput>
     where
-        F: FnMut(&str, &mut Vec<usize>),
+        F: FnMut(&str, &mut MatchColumnsBuffer),
     {
         scan_engine::search_with_streaming_lines_prefix_in_universe(
             query,
@@ -684,7 +685,7 @@ impl TextSearcher {
     ) -> FriggResult<SearchExecutionOutput>
     where
         P: FnMut(&str) -> bool,
-        F: FnMut(&str, &mut Vec<usize>),
+        F: FnMut(&str, &mut MatchColumnsBuffer),
     {
         scan_engine::search_with_matcher_in_universe(
             query,
@@ -704,7 +705,7 @@ impl TextSearcher {
     ) -> FriggResult<SearchExecutionOutput>
     where
         P: FnMut(&str) -> bool,
-        F: FnMut(&str, &mut Vec<usize>),
+        F: FnMut(&str, &mut MatchColumnsBuffer),
     {
         let candidate_universe = self.build_candidate_universe(query, filters);
         self.search_with_matcher_in_universe(
