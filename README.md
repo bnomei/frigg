@@ -301,7 +301,7 @@ Precedence is `CLI flag > env var > default`.
 | `--workspace-root` | utility commands default to current directory; serving mode can start empty | Limits what Frigg can read and index. Repeatable. In serving mode these roots become the global known-repository catalog. |
 | `--max-file-bytes` / `FRIGG_MAX_FILE_BYTES` | `2097152` | Maximum file size Frigg will read. |
 | `--watch-mode` / `FRIGG_WATCH_MODE` | stdio `off`, HTTP `auto` | Controls the built-in watch worker: `auto`, `on`, or `off`. |
-| `--watch-debounce-ms` / `FRIGG_WATCH_DEBOUNCE_MS` | `750` | Debounce delay before a watch-triggered refresh starts. |
+| `--watch-debounce-ms` / `FRIGG_WATCH_DEBOUNCE_MS` | `2000` | Debounce delay before a watch-triggered refresh starts. |
 | `--watch-retry-ms` / `FRIGG_WATCH_RETRY_MS` | `5000` | Retry delay after a failed watch refresh. |
 | `--mcp-http-port` | unset | Enables HTTP transport on the given port. |
 | `--mcp-http-host` | unset | Host bind address for HTTP transport. |
