@@ -685,6 +685,8 @@ pub(crate) const fn path_stem_is_main_leaf() -> PredicateLeaf<PathWitnessFacts> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::super::super::facts::PathWitnessFacts;
     use super::*;
 

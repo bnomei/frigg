@@ -31,6 +31,7 @@ impl ReindexExecutionPhase {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute_reindex_plan(
     manifest_store: &ManifestStore,
     repository_id: &str,
@@ -96,21 +97,15 @@ fn execute_retrieval_projection_phase(
     let snapshot_id = plan.snapshot_plan.snapshot_id();
     let should_refresh = match &plan.snapshot_plan {
         ManifestSnapshotPlan::PersistNew { .. } => true,
-        ManifestSnapshotPlan::ReuseExisting { .. } => {
-            storage
-                .missing_retrieval_projection_families_for_repository_snapshot(
-                    repository_id,
-                    snapshot_id,
-                )
-                .map_err(|err| {
-                    wrap_reindex_phase_error(
-                        ReindexExecutionPhase::RefreshRetrievalProjections,
-                        err,
-                    )
-                })?
-                .is_empty()
-                == false
-        }
+        ManifestSnapshotPlan::ReuseExisting { .. } => !storage
+            .missing_retrieval_projection_families_for_repository_snapshot(
+                repository_id,
+                snapshot_id,
+            )
+            .map_err(|err| {
+                wrap_reindex_phase_error(ReindexExecutionPhase::RefreshRetrievalProjections, err)
+            })?
+            .is_empty(),
     };
     if !should_refresh {
         return Ok(());
@@ -161,6 +156,7 @@ fn execute_retrieval_projection_phase(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_semantic_refresh_phase(
     manifest_store: &ManifestStore,
     repository_id: &str,

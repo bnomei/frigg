@@ -1,6 +1,7 @@
 use super::*;
 
 impl FriggMcpServer {
+    #[allow(clippy::type_complexity)]
     pub(in crate::mcp::server) fn try_precise_definition_fast_path(
         &self,
         repository_id_hint: Option<&str>,

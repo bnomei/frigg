@@ -409,10 +409,9 @@ fn runtime_config_surface_guardrail_priority_for_path(path: &str) -> usize {
         4
     } else if matches!(path_stem.as_str(), "server" | "cli") {
         3
-    } else if surfaces::is_typescript_runtime_module_index_path(path) {
-        2
-    } else if surfaces::is_runtime_config_artifact_path(path)
-        && !surfaces::is_root_scoped_runtime_config_path(path)
+    } else if surfaces::is_typescript_runtime_module_index_path(path)
+        || (surfaces::is_runtime_config_artifact_path(path)
+            && !surfaces::is_root_scoped_runtime_config_path(path))
     {
         2
     } else {

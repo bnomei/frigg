@@ -1,3 +1,5 @@
+#![allow(clippy::panic, clippy::type_complexity)]
+
 use super::*;
 use axum::{Json, Router, body::Bytes, extract::State, http::HeaderMap, routing::post};
 use reqwest::Client;

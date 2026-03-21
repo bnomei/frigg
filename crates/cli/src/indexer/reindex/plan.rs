@@ -142,6 +142,7 @@ impl ReindexDiagnostics {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_reindex_plan(
     repository_id: &str,
     workspace_root: &Path,

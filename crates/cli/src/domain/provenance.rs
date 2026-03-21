@@ -169,7 +169,7 @@ impl WorkloadPrecisionMode {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn from_label(value: &str) -> Self {
         match value {
             "exact" => Self::Exact,
             "precise" => Self::Precise,
@@ -209,7 +209,7 @@ impl WorkloadFallbackReason {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn from_label(value: &str) -> Self {
         match value {
             "none" => Self::None,
             "precise_absent" => Self::PreciseAbsent,
@@ -278,8 +278,7 @@ impl WorkloadRepositoryScope {
                 WorkloadRepositoryScopeKind::Multi,
                 repository_ids
                     .iter()
-                    .cloned()
-                    .map(|id| bounded_text(&id, WORKLOAD_TEXT_LIMIT))
+                    .map(|id| bounded_text(id, WORKLOAD_TEXT_LIMIT))
                     .collect(),
             ),
         }
@@ -585,15 +584,15 @@ mod tests {
     #[test]
     fn normalized_precision_from_str() {
         assert_eq!(
-            WorkloadPrecisionMode::from_str("exact"),
+            WorkloadPrecisionMode::from_label("exact"),
             WorkloadPrecisionMode::Exact
         );
         assert_eq!(
-            WorkloadPrecisionMode::from_str("heuristic"),
+            WorkloadPrecisionMode::from_label("heuristic"),
             WorkloadPrecisionMode::Heuristic
         );
         assert_eq!(
-            WorkloadPrecisionMode::from_str("missing"),
+            WorkloadPrecisionMode::from_label("missing"),
             WorkloadPrecisionMode::Unknown
         );
     }
@@ -601,22 +600,22 @@ mod tests {
     #[test]
     fn fallback_reason_from_str() {
         assert_eq!(
-            WorkloadFallbackReason::from_str("precise_absent"),
+            WorkloadFallbackReason::from_label("precise_absent"),
             WorkloadFallbackReason::PreciseAbsent
         );
         assert_eq!(
-            WorkloadFallbackReason::from_str("resource_budget"),
+            WorkloadFallbackReason::from_label("resource_budget"),
             WorkloadFallbackReason::ResourceBudget
         );
         assert_eq!(
-            WorkloadFallbackReason::from_str("unknown_reason"),
+            WorkloadFallbackReason::from_label("unknown_reason"),
             WorkloadFallbackReason::Unknown
         );
     }
 
     #[test]
     fn scope_from_repository_ids_is_bounded() {
-        let scope = WorkloadRepositoryScope::from_repository_ids(&vec![
+        let scope = WorkloadRepositoryScope::from_repository_ids(&[
             "repo-one".to_owned(),
             "repo-two".to_owned(),
         ]);

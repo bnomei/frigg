@@ -1,3 +1,5 @@
+#![allow(clippy::panic)]
+
 use super::support::*;
 use crate::indexer::{StructuralQueryAnchorSelection, search_structural_grouped_in_source};
 

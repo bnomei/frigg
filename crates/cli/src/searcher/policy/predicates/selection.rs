@@ -17,6 +17,8 @@ pub(crate) use state::*;
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::super::super::facts::SelectionFacts;
     use super::*;
     use crate::searcher::laravel::LaravelUiSurfaceClass;

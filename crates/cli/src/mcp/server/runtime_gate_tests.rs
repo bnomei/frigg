@@ -154,7 +154,7 @@ fn rewrite_fixture_file_with_mtime_tick(path: &Path, contents: &str) {
         }
     }
 
-    panic!("fixture file mtime did not advance after rewrite");
+    unreachable!("fixture file mtime did not advance after rewrite");
 }
 
 fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {

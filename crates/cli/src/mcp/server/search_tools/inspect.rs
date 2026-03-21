@@ -39,6 +39,7 @@ impl FriggMcpServer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn structural_noisy_result_hints(
         result_mode: StructuralResultMode,
         primary_capture: Option<&str>,

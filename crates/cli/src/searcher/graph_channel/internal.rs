@@ -452,9 +452,9 @@ fn select_projected_graph_anchors(
     let mut fallback = non_exact_seed_paths
         .iter()
         .filter(|path| allowed_paths.contains(*path))
-        .filter_map(|path| {
+        .map(|path| {
             let (line, excerpt) = projected_anchor_excerpt_for_path(projected, path);
-            Some(ProjectedGraphAnchor {
+            ProjectedGraphAnchor {
                 path: path.clone(),
                 line,
                 excerpt,
@@ -465,7 +465,7 @@ fn select_projected_graph_anchors(
                     .unwrap_or_default()
                     .trim()
                     .to_ascii_lowercase(),
-            })
+            }
         })
         .collect::<Vec<_>>();
     fallback.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
@@ -673,6 +673,7 @@ fn hybrid_graph_anchor_kind_rank(kind: HybridGraphAnchorKind) -> u8 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_hybrid_graph_channel_hits(
     repository_id: &str,
     root: &Path,

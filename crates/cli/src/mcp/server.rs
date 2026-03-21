@@ -282,6 +282,7 @@ impl FriggMcpServer {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_runtime_context(
         config: FriggConfig,
         provenance_best_effort: bool,

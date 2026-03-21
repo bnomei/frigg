@@ -160,12 +160,12 @@ impl Storage {
                     flags_json,
                     heuristic_version,
                 )| {
-                    let path_class = PathClass::from_str(&path_class).ok_or_else(|| {
+                    let path_class = PathClass::from_label(&path_class).ok_or_else(|| {
                         FriggError::Internal(format!(
                             "invalid path witness projection path_class '{path_class}' for repository '{repository_id}' snapshot '{snapshot_id}' path '{path}'"
                         ))
                     })?;
-                    let source_class = SourceClass::from_str(&source_class).ok_or_else(|| {
+                    let source_class = SourceClass::from_label(&source_class).ok_or_else(|| {
                         FriggError::Internal(format!(
                             "invalid path witness projection source_class '{source_class}' for repository '{repository_id}' snapshot '{snapshot_id}' path '{path}'"
                         ))

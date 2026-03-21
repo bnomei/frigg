@@ -210,7 +210,7 @@ fn repository_response_cache_freshness_returns_ready_manifest_scope() {
 
     let freshness = server
         .repository_response_cache_freshness(
-            &[workspace.clone()],
+            std::slice::from_ref(&workspace),
             RepositoryResponseCacheFreshnessMode::ManifestOnly,
         )
         .expect("manifest freshness should compute");
@@ -483,7 +483,7 @@ fn repository_response_cache_freshness_includes_semantic_scope_metadata() {
 
     let freshness = server
         .repository_response_cache_freshness(
-            &[workspace.clone()],
+            std::slice::from_ref(&workspace),
             RepositoryResponseCacheFreshnessMode::SemanticAware,
         )
         .expect("semantic-aware freshness should compute");

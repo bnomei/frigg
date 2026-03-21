@@ -61,7 +61,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
         } else {
             query.limit.saturating_mul(2).max(16)
         }
-    } else if prefers_compact_lexical_seed_set(&ranking_intent, &exact_terms) {
+    } else if prefers_compact_lexical_seed_set(&ranking_intent, exact_terms) {
         query.limit.saturating_add(7).max(12)
     } else {
         query
@@ -136,7 +136,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
             lexical_candidate_universe,
             true,
         )?
-    } else if prefers_compact_lexical_seed_set(&ranking_intent, &exact_terms) {
+    } else if prefers_compact_lexical_seed_set(&ranking_intent, exact_terms) {
         searcher.search_literal_prefix_with_candidate_universe(
             &SearchTextQuery {
                 query: query_text.clone(),
@@ -410,7 +410,7 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
         matches!(
             SymbolLanguage::from_path(Path::new(&matched.path)),
             Some(SymbolLanguage::Php | SymbolLanguage::Blade)
-        ) && hybrid_path_has_exact_stem_match(&matched.path, &exact_terms)
+        ) && hybrid_path_has_exact_stem_match(&matched.path, exact_terms)
     });
     let skip_graph_for_path_witness_intent = wants_path_witness_recall
         && !(ranking_intent.wants_jobs_listeners_witnesses

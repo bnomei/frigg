@@ -25,6 +25,7 @@ pub(super) struct HybridFusionOutput {
     pub(super) final_diversification_sample: SearchStageSample,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_hybrid_fusion(
     ranking_lexical_hits: &[crate::domain::EvidenceHit],
     witness_hits: &[crate::domain::EvidenceHit],
@@ -140,6 +141,7 @@ pub(super) fn run_hybrid_fusion(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_hybrid_channel_results(
     lexical_output: SearchExecutionOutput,
     witness_output: SearchExecutionOutput,

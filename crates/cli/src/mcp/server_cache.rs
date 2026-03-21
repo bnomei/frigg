@@ -281,14 +281,14 @@ const fn runtime_cache_family_policy(family: RuntimeCacheFamily) -> RuntimeCache
             residency: Residency::ProcessWide,
             reuse_class: Reuse::ProcessMetadata,
             freshness_contract: Freshness::RepositoryId,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(256, 1 * 1024 * 1024),
+            budget: RuntimeCacheBudget::entry_and_byte_bound(256, 1024 * 1024),
             dirty_root_bypass: true,
         },
         Family::CompiledSafeRegex => RuntimeCacheFamilyPolicy {
             residency: Residency::ProcessWide,
             reuse_class: Reuse::ProcessMetadata,
             freshness_contract: Freshness::ExactInput,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(128, 1 * 1024 * 1024),
+            budget: RuntimeCacheBudget::entry_and_byte_bound(128, 1024 * 1024),
             dirty_root_bypass: false,
         },
         Family::SearcherProjectionStore

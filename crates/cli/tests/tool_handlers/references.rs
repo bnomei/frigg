@@ -320,11 +320,10 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
     assert_eq!(note_json["heuristic"], false);
     assert_eq!(note_json["precise"]["reference_count"], 1);
     assert_eq!(note_json["precise"]["artifacts_ingested"], 1);
-    assert_eq!(
+    assert!(
         note_json["precise"]["discovered_artifacts"][0]
             .as_str()
-            .is_some_and(|path| path.ends_with(".frigg/scip/references.scip")),
-        true
+            .is_some_and(|path| path.ends_with(".frigg/scip/references.scip"))
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -447,19 +446,17 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
         note_json["precise"]["failed_artifacts"][0]["stage"],
         "ingest_payload"
     );
-    assert_eq!(
+    assert!(
         note_json["precise"]["failed_artifacts"][0]["artifact_label"]
             .as_str()
             .unwrap_or_default()
-            .ends_with(".frigg/scip/broken.json"),
-        true
+            .ends_with(".frigg/scip/broken.json")
     );
     assert!(
-        note_json["precise"]["failed_artifacts"][0]["detail"]
+        !note_json["precise"]["failed_artifacts"][0]["detail"]
             .as_str()
             .unwrap_or_default()
-            .len()
-            > 0,
+            .is_empty(),
         "expected parse failure detail in failed artifact metadata"
     );
 
@@ -802,12 +799,11 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
         note_json["precise"]["failed_artifacts"][0]["stage"],
         "artifact_budget_bytes"
     );
-    assert_eq!(
+    assert!(
         note_json["precise"]["failed_artifacts"][0]["artifact_label"]
             .as_str()
             .unwrap_or_default()
-            .ends_with(".frigg/scip/oversized.json"),
-        true
+            .ends_with(".frigg/scip/oversized.json")
     );
 
     cleanup_workspace_root(&workspace_root);

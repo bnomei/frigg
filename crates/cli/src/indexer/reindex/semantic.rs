@@ -101,6 +101,7 @@ pub(crate) fn reindex_repository_with_semantic_executor(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reindex_repository_with_semantic_executor_and_dirty_paths(
     repository_id: &str,
     workspace_root: &Path,
@@ -186,6 +187,7 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_semantic_refresh_plan(
     repository_id: &str,
     workspace_root: &Path,
@@ -275,6 +277,7 @@ pub(crate) fn build_semantic_refresh_plan(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_semantic_refresh_plan(
     repository_id: &str,
     workspace_root: &Path,

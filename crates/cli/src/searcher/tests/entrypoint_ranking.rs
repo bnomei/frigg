@@ -567,12 +567,12 @@ fn hybrid_ranking_symbol_plus_entrypoint_queries_keep_runner_family_above_semant
 
     assert_eq!(output.matches[0].document.path, "src/main.rs");
     assert!(
-        replay_position.is_none() || runner_position < replay_position.unwrap(),
+        replay_position.is_none_or(|position| runner_position < position),
         "runner witness should outrank replay semantic tail for mixed symbol-plus-entrypoint queries: {:?}",
         output.matches
     );
     assert!(
-        stt_position.is_none() || runner_position < stt_position.unwrap(),
+        stt_position.is_none_or(|position| runner_position < position),
         "runner witness should outrank unrelated semantic tail for mixed symbol-plus-entrypoint queries: {:?}",
         output.matches
     );

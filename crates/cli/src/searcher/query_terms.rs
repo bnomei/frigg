@@ -263,7 +263,7 @@ pub(super) fn hybrid_path_overlap_count_with_terms(path: &str, query_terms: &[St
         return 0;
     }
 
-    hybrid_overlap_count(&path_tokens, &query_terms)
+    hybrid_overlap_count(&path_tokens, query_terms)
 }
 
 pub(super) fn hybrid_identifier_tokens(raw: &str) -> Vec<String> {
@@ -449,7 +449,7 @@ fn hybrid_terms_overlap(left: &str, right: &str) -> bool {
         TERM_ALIASES
             .iter()
             .find(|(term, _)| *term == candidate)
-            .is_some_and(|(_, aliases)| aliases.iter().any(|alias| *alias == query))
+            .is_some_and(|(_, aliases)| aliases.contains(&query))
     };
     if aliases_overlap(left, right) || aliases_overlap(right, left) {
         return true;

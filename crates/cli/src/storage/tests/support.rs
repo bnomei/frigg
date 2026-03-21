@@ -285,8 +285,8 @@ pub(super) fn path_witness_projection_record(
 ) -> PathWitnessProjection {
     PathWitnessProjection {
         path: path.to_owned(),
-        path_class: PathClass::from_str(path_class).expect("valid path_class"),
-        source_class: SourceClass::from_str(source_class).expect("valid source_class"),
+        path_class: PathClass::from_label(path_class).expect("valid path_class"),
+        source_class: SourceClass::from_label(source_class).expect("valid source_class"),
         file_stem: Path::new(path)
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -318,6 +318,7 @@ pub(super) fn test_subject_projection_record(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn entrypoint_surface_projection_record(
     _repository_id: &str,
     _snapshot_id: &str,
@@ -330,8 +331,8 @@ pub(super) fn entrypoint_surface_projection_record(
 ) -> EntrypointSurfaceProjection {
     EntrypointSurfaceProjection {
         path: path.to_owned(),
-        path_class: PathClass::from_str(path_class).expect("valid path_class"),
-        source_class: SourceClass::from_str(source_class).expect("valid source_class"),
+        path_class: PathClass::from_label(path_class).expect("valid path_class"),
+        source_class: SourceClass::from_label(source_class).expect("valid source_class"),
         path_terms: serde_json::from_str(path_terms_json).expect("valid path terms json"),
         surface_terms: serde_json::from_str(surface_terms_json).expect("valid surface terms json"),
         flags_json: flags_json.to_owned(),

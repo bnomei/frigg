@@ -754,7 +754,7 @@ fn hybrid_ranking_graphite_editor_subtree_companion_retrieval_preserves_editor_r
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
-    let witness_paths = output
+    let _witness_paths = output
         .channel_results
         .iter()
         .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
@@ -766,37 +766,25 @@ fn hybrid_ranking_graphite_editor_subtree_companion_retrieval_preserves_editor_r
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let witness_health = output
+    let _witness_health = output
         .channel_results
         .iter()
         .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
         .map(|result| (&result.health.status, result.health.reason.as_deref()));
-    let trace = output.post_selection_trace.clone();
+    let _trace = output.post_selection_trace.clone();
 
     let editor_runtime_position = ranked_paths
         .iter()
         .position(|path| *path == "editor/src/messages/panels.rs")
-        .unwrap_or_else(|| {
-            panic!(
-                "editor runtime witness should be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
-            )
-        });
+        .expect("editor runtime witness should be ranked");
     let editor_test_position = ranked_paths
         .iter()
         .position(|path| *path == "editor/tests/panels.rs")
-        .unwrap_or_else(|| {
-            panic!(
-                "editor test witness should be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
-            )
-        });
+        .expect("editor test witness should be ranked");
     let desktop_noise_position = ranked_paths
         .iter()
         .position(|path| *path == "desktop/tests/layout.rs")
-        .unwrap_or_else(|| {
-            panic!(
-                "desktop noise witness should still be ranked: ranked={ranked_paths:?} witness={witness_paths:?} witness_health={witness_health:?} trace={trace:?}"
-            )
-        });
+        .expect("desktop noise witness should still be ranked");
 
     assert!(
         editor_runtime_position < desktop_noise_position

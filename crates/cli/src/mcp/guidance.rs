@@ -298,10 +298,10 @@ mod tests {
 
     fn resource_text(uri: &str, profile: ToolSurfaceProfile) -> String {
         let result = read_policy_resource(uri, profile).expect("resource should exist");
-        match &result.contents[0] {
-            ResourceContents::TextResourceContents { text, .. } => text.clone(),
-            other => panic!("expected text resource contents, got {other:?}"),
-        }
+        let ResourceContents::TextResourceContents { text, .. } = &result.contents[0] else {
+            unreachable!("expected text resource contents");
+        };
+        text.clone()
     }
 
     #[test]
@@ -395,7 +395,7 @@ mod tests {
             let entry = languages
                 .iter()
                 .find(|entry| entry["id"] == json!(expected_id))
-                .unwrap_or_else(|| panic!("expected {expected_id} to be listed"));
+                .unwrap_or_else(|| unreachable!("expected {expected_id} to be listed"));
             for capability in LanguageSupportCapability::ALL {
                 let expected = language.capability_tier(capability).as_str();
                 assert_eq!(

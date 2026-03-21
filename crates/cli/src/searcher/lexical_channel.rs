@@ -182,7 +182,7 @@ fn hybrid_excerpt_alignment_multiplier(
     }
 
     let excerpt_terms = hybrid_identifier_tokens(excerpt);
-    let overlap = hybrid_overlap_count(&excerpt_terms, &query_terms);
+    let overlap = hybrid_overlap_count(&excerpt_terms, query_terms);
     let mut multiplier = match overlap {
         0 => 1.0,
         1 => 1.05,
@@ -195,7 +195,7 @@ fn hybrid_excerpt_alignment_multiplier(
     }
 
     if intent.wants_entrypoint_build_flow {
-        if hybrid_excerpt_has_build_flow_anchor(excerpt, &query_terms) {
+        if hybrid_excerpt_has_build_flow_anchor(excerpt, query_terms) {
             multiplier *= 1.24;
         }
         if hybrid_excerpt_has_test_double_anchor(excerpt) {

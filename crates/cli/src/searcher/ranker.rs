@@ -296,7 +296,7 @@ fn representative_anchor_priority(entry: &HybridRankedEvidence) -> (usize, usize
         corroboration_tier,
         excerpt_token_tier.max(0) as usize,
         excerpt_len_tier,
-        channel_tier as i32,
+        channel_tier,
         lexical_family_tier.max(graph_tier),
     )
 }
@@ -466,9 +466,11 @@ mod tests {
             graph_score: 0.0,
             semantic_score: 0.0,
             lexical_sources: vec![format!("lexical:{path}:{line}")],
-            witness_sources: (witness_score > 0.0)
-                .then(|| vec![format!("witness:{path}:{line}")])
-                .unwrap_or_default(),
+            witness_sources: if witness_score > 0.0 {
+                vec![format!("witness:{path}:{line}")]
+            } else {
+                Vec::new()
+            },
             graph_sources: Vec::new(),
             semantic_sources: Vec::new(),
         }

@@ -560,9 +560,7 @@ pub(super) fn search_semantic_channel_hits(
         } else {
             HybridSemanticStatus::Ok
         }
-    } else if !unavailable_reasons.is_empty() {
-        HybridSemanticStatus::Degraded
-    } else if !degraded_reasons.is_empty() {
+    } else if !unavailable_reasons.is_empty() || !degraded_reasons.is_empty() {
         HybridSemanticStatus::Degraded
     } else {
         HybridSemanticStatus::Ok

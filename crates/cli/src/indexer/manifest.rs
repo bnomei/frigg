@@ -3,6 +3,8 @@ use crate::storage::ManifestEntry;
 use crate::workspace_ignores::{
     build_root_ignore_matcher, hard_excluded_runtime_path, should_ignore_runtime_path,
 };
+use ignore::WalkState;
+use std::sync::{Arc, Mutex};
 
 impl ManifestBuilder {
     pub fn build(&self, root: &Path) -> FriggResult<Vec<FileDigest>> {
@@ -13,24 +15,11 @@ impl ManifestBuilder {
             )));
         }
 
+        let (paths, _diagnostics) = collect_manifest_walk_paths(root, self.follow_symlinks);
         let mut out = Vec::new();
-        let root_ignore_matcher = build_root_ignore_matcher(root);
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
-                continue;
-            }
-            let mtime_ns = dent
+        for path in paths {
+            let mtime_ns = path
                 .metadata()
                 .ok()
                 .and_then(|metadata| metadata.modified().ok())
@@ -58,32 +47,11 @@ impl ManifestBuilder {
             )));
         }
 
+        let (paths, mut diagnostics) = collect_manifest_walk_paths(root, self.follow_symlinks);
         let mut entries = Vec::new();
-        let mut diagnostics = Vec::new();
-        let root_ignore_matcher = build_root_ignore_matcher(root);
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: None,
-                        kind: ManifestDiagnosticKind::Walk,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
-                continue;
-            }
-            let mtime_ns = dent
+        for path in paths {
+            let mtime_ns = path
                 .metadata()
                 .ok()
                 .and_then(|metadata| metadata.modified().ok())
@@ -127,32 +95,11 @@ impl ManifestBuilder {
             )));
         }
 
+        let (paths, mut diagnostics) = collect_manifest_walk_paths(root, self.follow_symlinks);
         let mut entries = Vec::new();
-        let mut diagnostics = Vec::new();
-        let root_ignore_matcher = build_root_ignore_matcher(root);
-        let walker = frigg_walk_builder(root, self.follow_symlinks).build();
 
-        for dent in walker {
-            let dent = match dent {
-                Ok(entry) => entry,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: None,
-                        kind: ManifestDiagnosticKind::Walk,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            let path = dent.path().to_path_buf();
-            if should_ignore_runtime_path(root, &path, Some(&root_ignore_matcher)) {
-                continue;
-            }
-            let metadata = match dent.metadata() {
+        for path in paths {
+            let metadata = match path.metadata() {
                 Ok(metadata) => metadata,
                 Err(err) => {
                     diagnostics.push(ManifestBuildDiagnostic {
@@ -240,6 +187,71 @@ impl ManifestBuilder {
             diagnostics,
         })
     }
+}
+
+fn collect_manifest_walk_paths(
+    root: &Path,
+    follow_symlinks: bool,
+) -> (Vec<PathBuf>, Vec<ManifestBuildDiagnostic>) {
+    let root = Arc::new(root.to_path_buf());
+    let root_ignore_matcher = Arc::new(build_root_ignore_matcher(root.as_ref()));
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let diagnostics = Arc::new(Mutex::new(Vec::new()));
+
+    frigg_walk_builder(root.as_ref(), follow_symlinks)
+        .build_parallel()
+        .run(|| {
+            let root = Arc::clone(&root);
+            let root_ignore_matcher = Arc::clone(&root_ignore_matcher);
+            let paths = Arc::clone(&paths);
+            let diagnostics = Arc::clone(&diagnostics);
+            Box::new(move |dent| {
+                match dent {
+                    Ok(entry) => {
+                        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                            return WalkState::Continue;
+                        }
+
+                        let path = entry.path().to_path_buf();
+                        if should_ignore_runtime_path(
+                            root.as_ref(),
+                            &path,
+                            Some(root_ignore_matcher.as_ref()),
+                        ) {
+                            return WalkState::Continue;
+                        }
+                        paths
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(path);
+                    }
+                    Err(err) => {
+                        diagnostics
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(ManifestBuildDiagnostic {
+                                path: None,
+                                kind: ManifestDiagnosticKind::Walk,
+                                message: err.to_string(),
+                            });
+                    }
+                }
+                WalkState::Continue
+            })
+        });
+
+    let mut paths = paths
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut diagnostics = diagnostics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    paths.sort();
+    paths.dedup();
+    diagnostics.sort_by(manifest_build_diagnostic_order);
+    (paths, diagnostics)
 }
 
 pub(super) fn normalize_repository_relative_path(

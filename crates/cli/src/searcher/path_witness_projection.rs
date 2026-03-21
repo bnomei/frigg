@@ -204,8 +204,8 @@ pub(crate) fn build_path_witness_projection_records_from_paths(
 pub(super) fn decode_path_witness_projection(
     record: &PathWitnessProjection,
 ) -> FriggResult<StoredPathWitnessProjection> {
-    let path_class = record.path_class.clone();
-    let source_class = record.source_class.clone();
+    let path_class = record.path_class;
+    let source_class = record.source_class;
     let source_class = match source_class {
         // Legacy rows may still carry the old FRIGG-specific playbook class. Normalize those
         // projections to the generic path-based class so ranking behavior does not depend on

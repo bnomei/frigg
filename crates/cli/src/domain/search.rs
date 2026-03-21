@@ -28,7 +28,7 @@ impl PathClass {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn from_label(value: &str) -> Option<Self> {
         match value {
             "runtime" => Some(Self::Runtime),
             "project" => Some(Self::Project),
@@ -77,7 +77,7 @@ impl SourceClass {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn from_label(value: &str) -> Option<Self> {
         match value {
             "error_contracts" => Some(Self::ErrorContracts),
             "tool_contracts" => Some(Self::ToolContracts),

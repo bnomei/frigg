@@ -186,7 +186,7 @@ impl FriggMcpServer {
                         lexical_backend_note: search_output.note.lexical_backend_note.clone(),
                         semantic_requested,
                         semantic_enabled,
-                        semantic_status: semantic_status.clone(),
+                        semantic_status,
                         semantic_reason: semantic_reason.clone(),
                         semantic_candidate_count,
                         semantic_hit_count,

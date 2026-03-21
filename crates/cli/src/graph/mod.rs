@@ -235,7 +235,7 @@ pub(crate) fn precise_navigation_identifier(raw: &str) -> Option<String> {
     }
 
     let terminal = trimmed
-        .trim_end_matches(|character: char| matches!(character, '.' | '#' | '/' | ':' | '$'))
+        .trim_end_matches(['.', '#', '/', ':', '$'])
         .rsplit(['#', '/', '.', ':', '$'])
         .find(|segment| !segment.is_empty())
         .unwrap_or(trimmed);
@@ -245,7 +245,7 @@ pub(crate) fn precise_navigation_identifier(raw: &str) -> Option<String> {
         .next()
         .unwrap_or(terminal)
         .trim_matches(|character: char| matches!(character, '`' | '\'' | '"'))
-        .trim_end_matches(|character: char| matches!(character, '.' | '#' | ':' | ')' | '>'))
+        .trim_end_matches(['.', '#', ':', ')', '>'])
         .trim();
 
     if identifier.is_empty() {

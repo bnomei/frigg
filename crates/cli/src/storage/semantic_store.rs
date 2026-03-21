@@ -107,6 +107,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn advance_semantic_embeddings_for_repository(
         &self,
         repository_id: &str,

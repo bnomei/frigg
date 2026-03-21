@@ -238,6 +238,7 @@ pub fn maybe_start_watch_runtime(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_supervisor(
     repositories: Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     watch_config: crate::settings::WatchConfig,
@@ -480,6 +481,7 @@ fn handle_notify_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_reindex_completed(
     repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,

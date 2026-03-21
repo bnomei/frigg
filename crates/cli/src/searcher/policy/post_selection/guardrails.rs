@@ -390,9 +390,10 @@ fn companion_test_guardrail_priority(facts: &SelectionFacts) -> usize {
         } else {
             0
         }
-    } else if facts.is_cli_test_support || facts.is_test_harness {
-        2
-    } else if facts.is_runtime_adjacent_python_test {
+    } else if facts.is_cli_test_support
+        || facts.is_test_harness
+        || facts.is_runtime_adjacent_python_test
+    {
         2
     } else if facts.is_runtime_anchor_test_support {
         if facts.is_non_prefix_python_test_module {

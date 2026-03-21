@@ -31,10 +31,12 @@ pub(super) fn runtime_config_artifact_guardrail_cmp(
     let left_depth = left.trim_start_matches("./").split('/').count();
     let right_depth = right.trim_start_matches("./").split('/').count();
 
-    prefer_repo_root
-        .then(|| left_is_root_scoped.cmp(&right_is_root_scoped))
-        .unwrap_or(Ordering::Equal)
-        .then_with(|| right_depth.cmp(&left_depth))
+    (if prefer_repo_root {
+        left_is_root_scoped.cmp(&right_is_root_scoped)
+    } else {
+        Ordering::Equal
+    })
+    .then_with(|| right_depth.cmp(&left_depth))
 }
 
 pub(super) fn query_mentions_cli_command(query_text: &str) -> bool {
@@ -174,52 +176,52 @@ pub(super) fn runtime_config_ordering_cmp(
     let prefer_rust_workspace_config =
         left_facts.wants_rust_workspace_config && !left_facts.wants_python_workspace_config;
 
-    prefer_rust_workspace_config
-        .then(|| {
+    (if prefer_rust_workspace_config {
+        left_facts
+            .is_rust_workspace_config
+            .cmp(&right_facts.is_rust_workspace_config)
+    } else {
+        Ordering::Equal
+    })
+    .then_with(|| {
+        if prefer_python_workspace_config {
             left_facts
-                .is_rust_workspace_config
-                .cmp(&right_facts.is_rust_workspace_config)
-        })
-        .unwrap_or(Ordering::Equal)
-        .then_with(|| {
-            prefer_python_workspace_config
-                .then(|| {
-                    left_facts
-                        .is_python_runtime_config
-                        .cmp(&right_facts.is_python_runtime_config)
-                })
-                .unwrap_or(Ordering::Equal)
-        })
-        .then_with(|| {
-            right_facts
-                .is_frontend_runtime_noise
-                .cmp(&left_facts.is_frontend_runtime_noise)
-        })
-        .then_with(|| {
-            left_facts
-                .specific_witness_path_overlap
-                .cmp(&right_facts.specific_witness_path_overlap)
-        })
-        .then_with(|| {
-            left_facts
-                .runtime_subtree_affinity
-                .cmp(&right_facts.runtime_subtree_affinity)
-        })
-        .then_with(|| {
-            runtime_config_surface_guardrail_priority_for_path(&left.document.path).cmp(
-                &runtime_config_surface_guardrail_priority_for_path(&right.document.path),
-            )
-        })
-        .then_with(|| {
-            left_facts
-                .is_repo_root_runtime_config_artifact
-                .cmp(&right_facts.is_repo_root_runtime_config_artifact)
-        })
-        .then_with(|| selection_guardrail_cmp(left, right, state, ctx))
-        .then_with(|| left_facts.path_overlap.cmp(&right_facts.path_overlap))
-        .then_with(|| {
-            left_facts
-                .has_exact_query_term_match
-                .cmp(&right_facts.has_exact_query_term_match)
-        })
+                .is_python_runtime_config
+                .cmp(&right_facts.is_python_runtime_config)
+        } else {
+            Ordering::Equal
+        }
+    })
+    .then_with(|| {
+        right_facts
+            .is_frontend_runtime_noise
+            .cmp(&left_facts.is_frontend_runtime_noise)
+    })
+    .then_with(|| {
+        left_facts
+            .specific_witness_path_overlap
+            .cmp(&right_facts.specific_witness_path_overlap)
+    })
+    .then_with(|| {
+        left_facts
+            .runtime_subtree_affinity
+            .cmp(&right_facts.runtime_subtree_affinity)
+    })
+    .then_with(|| {
+        runtime_config_surface_guardrail_priority_for_path(&left.document.path).cmp(
+            &runtime_config_surface_guardrail_priority_for_path(&right.document.path),
+        )
+    })
+    .then_with(|| {
+        left_facts
+            .is_repo_root_runtime_config_artifact
+            .cmp(&right_facts.is_repo_root_runtime_config_artifact)
+    })
+    .then_with(|| selection_guardrail_cmp(left, right, state, ctx))
+    .then_with(|| left_facts.path_overlap.cmp(&right_facts.path_overlap))
+    .then_with(|| {
+        left_facts
+            .has_exact_query_term_match
+            .cmp(&right_facts.has_exact_query_term_match)
+    })
 }

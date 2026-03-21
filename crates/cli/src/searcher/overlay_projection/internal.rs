@@ -201,8 +201,8 @@ pub(crate) fn build_entrypoint_surface_projection_records_from_paths(
 pub(in crate::searcher) fn decode_entrypoint_surface_projection_record(
     record: &EntrypointSurfaceProjection,
 ) -> FriggResult<StoredEntrypointSurfaceProjection> {
-    let path_class = record.path_class.clone();
-    let source_class = record.source_class.clone();
+    let path_class = record.path_class;
+    let source_class = record.source_class;
     let _stored_terms = &record.path_terms;
     let _stored_surface_terms = &record.surface_terms;
     let _stored_flags: EntrypointSurfaceProjectionFlags = serde_json::from_str(&record.flags_json)

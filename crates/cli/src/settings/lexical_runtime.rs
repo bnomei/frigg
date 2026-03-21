@@ -3,9 +3,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LexicalBackendMode {
+    #[default]
     Auto,
     Native,
     Ripgrep,
@@ -18,12 +19,6 @@ impl LexicalBackendMode {
             Self::Native => "native",
             Self::Ripgrep => "ripgrep",
         }
-    }
-}
-
-impl Default for LexicalBackendMode {
-    fn default() -> Self {
-        Self::Auto
     }
 }
 

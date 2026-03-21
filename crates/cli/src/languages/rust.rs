@@ -79,9 +79,9 @@ pub(crate) fn parse_impl_signature(symbol_name: &str) -> Option<(Option<&str>, &
 }
 
 pub(crate) fn source_suffix_looks_like_call(mut suffix: &str) -> bool {
-    suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+    suffix = suffix.trim_start_matches([' ', '\t']);
     suffix = suffix.trim_start_matches(|ch: char| ch.is_ascii_alphanumeric() || ch == '_');
-    suffix = suffix.trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+    suffix = suffix.trim_start_matches([' ', '\t']);
     if suffix.starts_with('(') {
         return true;
     }
@@ -89,7 +89,7 @@ pub(crate) fn source_suffix_looks_like_call(mut suffix: &str) -> bool {
         return false;
     }
 
-    suffix = suffix[2..].trim_start_matches(|ch: char| ch == ' ' || ch == '\t');
+    suffix = suffix[2..].trim_start_matches([' ', '\t']);
     if !suffix.starts_with('<') {
         return false;
     }
@@ -113,7 +113,7 @@ pub(crate) fn source_suffix_looks_like_call(mut suffix: &str) -> bool {
         return false;
     };
     suffix[end_index..]
-        .trim_start_matches(|ch: char| ch == ' ' || ch == '\t')
+        .trim_start_matches([' ', '\t'])
         .starts_with('(')
 }
 
@@ -397,12 +397,11 @@ fn rust_use_query_hint_from_focus(
                     .child_by_field_name("path")
                     .and_then(|path| rust_path_segments(path, source))
                     && let Some(existing) = segments.as_mut()
+                    && !existing.starts_with(prefix.as_slice())
                 {
-                    if !existing.starts_with(prefix.as_slice()) {
-                        let mut merged = prefix;
-                        merged.extend(existing.iter().cloned());
-                        *existing = merged;
-                    }
+                    let mut merged = prefix;
+                    merged.extend(existing.iter().cloned());
+                    *existing = merged;
                 }
             }
             _ => {}

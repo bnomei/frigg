@@ -16,7 +16,7 @@ pub(crate) fn scrub_leading_html_comment<'a>(raw: &'a str) -> Cow<'a, str> {
     };
 
     let mut scrubbed = String::with_capacity(raw.len());
-    scrubbed.extend(raw[..start].chars());
+    scrubbed.push_str(&raw[..start]);
     scrubbed.extend(raw[start..end].chars().map(|ch| match ch {
         '\n' | '\r' => ch,
         _ => ' ',
@@ -39,7 +39,7 @@ pub(crate) fn scrub_leading_metadata_comment<'a>(raw: &'a str, marker: &str) -> 
     };
 
     let mut scrubbed = String::with_capacity(raw.len());
-    scrubbed.extend(raw[..start].chars());
+    scrubbed.push_str(&raw[..start]);
     scrubbed.extend(raw[start..end].chars().map(|ch| match ch {
         '\n' | '\r' => ch,
         _ => ' ',

@@ -1,3 +1,5 @@
+#![allow(clippy::panic)]
+
 use super::runtime::{decode_params, diff_trace_artifacts, normalize_trace_response_for_tool};
 use super::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchPlaybookStep, DeepSearchTraceArtifact,
@@ -534,7 +536,7 @@ async fn playbook_suite_run_step_wraps_decode_failures_as_invalid_params() {
             assert!(message.contains("missing field `path`"));
         }
         DeepSearchTraceOutcome::Ok { .. } => {
-            panic!("invalid read_file params should not succeed")
+            unreachable!("invalid read_file params should not succeed")
         }
     }
 }

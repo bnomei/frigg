@@ -125,6 +125,7 @@ pub(super) fn diversify_hybrid_ranked_evidence(
     selected
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_diversification_candidate(
     heap: &mut BinaryHeap<DiversificationHeapEntry>,
     candidates: &[Option<SelectionCandidate>],
@@ -146,6 +147,7 @@ fn push_diversification_candidate(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn refresh_diversification_heap(
     heap: &mut BinaryHeap<DiversificationHeapEntry>,
     candidates: &[Option<SelectionCandidate>],
@@ -362,9 +364,11 @@ mod tests {
             graph_score: 0.0,
             semantic_score: 0.0,
             lexical_sources: vec![format!("lexical:{path}")],
-            witness_sources: (witness_score > 0.0)
-                .then(|| vec![format!("witness:{path}")])
-                .unwrap_or_default(),
+            witness_sources: if witness_score > 0.0 {
+                vec![format!("witness:{path}")]
+            } else {
+                Vec::new()
+            },
             graph_sources: Vec::new(),
             semantic_sources: Vec::new(),
         }

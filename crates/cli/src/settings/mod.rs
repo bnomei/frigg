@@ -293,8 +293,10 @@ mod tests {
 
     #[test]
     fn frigg_config_rejects_zero_watch_timers() {
-        let mut config = FriggConfig::default();
-        config.workspace_roots = vec![existing_workspace_root()];
+        let mut config = FriggConfig {
+            workspace_roots: vec![existing_workspace_root()],
+            ..FriggConfig::default()
+        };
         config.watch.debounce_ms = 0;
         let debounce_err = config
             .validate()

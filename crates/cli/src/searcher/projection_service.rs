@@ -14,6 +14,7 @@ use super::types::HybridPathWitnessProjectionCacheKey;
 mod loaders;
 mod query;
 
+#[allow(clippy::type_complexity)]
 #[derive(Clone, Default)]
 pub(crate) struct ProjectionStoreService {
     path_witness_cache: Arc<

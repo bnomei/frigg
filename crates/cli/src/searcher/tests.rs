@@ -11,7 +11,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::domain::{FriggError, FriggResult, model::TextMatch};
 use crate::settings::{
-    FriggConfig, SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider,
+    FriggConfig, LexicalBackendMode, SemanticRuntimeConfig, SemanticRuntimeCredentials,
+    SemanticRuntimeProvider,
 };
 use crate::storage::{
     ManifestEntry, SemanticChunkEmbeddingRecord, Storage, ensure_provenance_db_parent_dir,
@@ -96,7 +97,10 @@ impl SemanticRuntimeQueryEmbeddingExecutor for PanicSemanticQueryEmbeddingExecut
         _query: String,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>> {
         Box::pin(async move {
-            panic!("semantic executor should not be called when semantic toggle is disabled")
+            Err(FriggError::Internal(
+                "semantic executor should not be called when semantic toggle is disabled"
+                    .to_owned(),
+            ))
         })
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use rayon::prelude::*;
 
 pub fn extract_symbols_from_source(
     language: SymbolLanguage,
@@ -33,28 +34,33 @@ pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
     let mut ordered_paths = paths.to_vec();
     ordered_paths.sort();
 
-    let mut output = SymbolExtractionOutput::default();
-    for path in ordered_paths {
-        let Some(language) = SymbolLanguage::from_path(&path) else {
-            continue;
-        };
-
-        match fs::read_to_string(&path) {
-            Ok(source) => match extract_symbols_from_source(language, &path, &source) {
-                Ok(mut symbols) => output.symbols.append(&mut symbols),
+    let mut output = ordered_paths
+        .into_par_iter()
+        .filter_map(|path| {
+            let language = SymbolLanguage::from_path(&path)?;
+            let mut output = SymbolExtractionOutput::default();
+            match fs::read_to_string(&path) {
+                Ok(source) => match extract_symbols_from_source(language, &path, &source) {
+                    Ok(mut symbols) => output.symbols.append(&mut symbols),
+                    Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
+                        path: path.clone(),
+                        language: Some(language),
+                        message: err.to_string(),
+                    }),
+                },
                 Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
                     path: path.clone(),
                     language: Some(language),
                     message: err.to_string(),
                 }),
-            },
-            Err(err) => output.diagnostics.push(SymbolExtractionDiagnostic {
-                path: path.clone(),
-                language: Some(language),
-                message: err.to_string(),
-            }),
-        }
-    }
+            }
+            Some(output)
+        })
+        .reduce(SymbolExtractionOutput::default, |mut left, mut right| {
+            left.symbols.append(&mut right.symbols);
+            left.diagnostics.append(&mut right.diagnostics);
+            left
+        });
 
     output.symbols.sort_by(|left, right| {
         left.path
@@ -64,6 +70,12 @@ pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
             .then(left.kind.cmp(&right.kind))
             .then(left.name.cmp(&right.name))
             .then(left.stable_id.cmp(&right.stable_id))
+    });
+    output.diagnostics.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.language.cmp(&right.language))
+            .then(left.message.cmp(&right.message))
     });
     output
 }

@@ -228,23 +228,23 @@ Body text.
 
         let all_required = witness_outcomes(&groups, &["src/lib.rs".to_owned()], true, false);
         assert_eq!(all_required.len(), 3);
-        assert_eq!(all_required[0].passed, true);
+        assert!(all_required[0].passed);
         assert_eq!(all_required[0].matched_by, HybridWitnessMatchBy::Exact);
-        assert_eq!(all_required[1].passed, false);
+        assert!(!all_required[1].passed);
         assert_eq!(all_required[1].matched_by, HybridWitnessMatchBy::None);
-        assert_eq!(all_required[2].passed, false);
+        assert!(!all_required[2].passed);
         assert_eq!(all_required[2].matched_by, HybridWitnessMatchBy::None);
 
         let all_required = witness_outcomes(&groups, &["src/ignored".to_owned()], false, true);
         assert_eq!(all_required.len(), 1);
-        assert_eq!(all_required[0].passed, false);
+        assert!(!all_required[0].passed);
         assert_eq!(all_required[0].matched_by, HybridWitnessMatchBy::None);
         let all_required = witness_outcomes(&groups, &["docs/ok.md".to_owned()], true, false);
         assert_eq!(all_required.len(), 3);
-        assert_eq!(all_required[0].passed, false);
-        assert_eq!(all_required[1].passed, true);
+        assert!(!all_required[0].passed);
+        assert!(all_required[1].passed);
         assert_eq!(all_required[1].matched_by, HybridWitnessMatchBy::Exact);
-        assert_eq!(all_required[2].passed, false);
+        assert!(!all_required[2].passed);
     }
 
     #[test]

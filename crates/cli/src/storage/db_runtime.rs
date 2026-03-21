@@ -828,11 +828,12 @@ mod tests {
 
         let err =
             read_schema_version(&conn).expect_err("schema version query should fail without table");
-        let message = match err {
-            FriggError::Internal(message) => message,
-            other => {
-                panic!("expected internal error when schema_version table is missing, got: {other}")
-            }
+        assert!(
+            matches!(err, FriggError::Internal(_)),
+            "expected internal error when schema_version table is missing, got: {err}"
+        );
+        let FriggError::Internal(message) = err else {
+            unreachable!("asserted above");
         };
         assert!(
             message.contains("no such table: schema_version"),

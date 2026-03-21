@@ -77,6 +77,7 @@ impl FriggMcpServer {
         cached
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn cache_go_to_definition_response(
         &self,
         cache_key: GoToDefinitionResponseCacheKey,
@@ -149,6 +150,7 @@ impl FriggMcpServer {
         cached
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn cache_find_declarations_response(
         &self,
         cache_key: FindDeclarationsResponseCacheKey,

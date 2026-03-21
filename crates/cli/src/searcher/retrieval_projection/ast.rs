@@ -2,13 +2,16 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rayon::prelude::*;
+
 use crate::graph::RelationKind;
 use crate::indexer::{
     SymbolDefinition, SymbolKind, extract_php_source_evidence_from_source,
     extract_symbols_for_paths,
 };
 use crate::languages::{
-    SymbolLanguage, extract_blade_source_evidence_from_source, php_symbol_indices_by_lower_name,
+    BladeSourceEvidence, PhpSourceEvidence, SymbolLanguage,
+    extract_blade_source_evidence_from_source, php_symbol_indices_by_lower_name,
     php_symbol_indices_by_name, resolve_blade_relation_evidence_edges,
     resolve_php_target_evidence_edges,
 };
@@ -20,6 +23,18 @@ use super::super::candidates::normalize_repository_relative_path;
 use super::super::path_witness_projection::StoredPathWitnessProjection;
 use super::super::path_witness_projection::family_bits_for_projection;
 use super::RETRIEVAL_PROJECTION_INPUT_MODE_AST;
+
+enum AstSourceEvidence {
+    Php {
+        relative_path: String,
+        evidence: PhpSourceEvidence,
+        canonical_names_by_stable_id: BTreeMap<String, String>,
+    },
+    Blade {
+        relative_path: String,
+        evidence: BladeSourceEvidence,
+    },
+}
 
 pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidence(
     workspace_root: &Path,
@@ -70,44 +85,76 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
     let mut php_evidence = Vec::new();
     let mut blade_evidence = Vec::new();
 
-    for absolute_path in absolute_manifest_paths {
-        let relative_path = normalize_repository_relative_path(workspace_root, absolute_path);
-        if !witness_by_path.contains_key(&relative_path) {
-            continue;
-        }
+    let mut ast_source_evidence = absolute_manifest_paths
+        .par_iter()
+        .filter_map(|absolute_path| {
+            let relative_path = normalize_repository_relative_path(workspace_root, absolute_path);
+            if !witness_by_path.contains_key(&relative_path) {
+                return None;
+            }
 
-        match SymbolLanguage::from_path(absolute_path) {
-            Some(SymbolLanguage::Php) => {
-                let Ok(source) = fs::read_to_string(absolute_path) else {
-                    continue;
-                };
-                let file_symbols = file_symbols_by_path
-                    .get(&relative_path)
-                    .cloned()
-                    .unwrap_or_default();
-                let Ok(evidence) =
-                    extract_php_source_evidence_from_source(absolute_path, &source, &file_symbols)
-                else {
-                    continue;
-                };
-                php_canonical_names_by_stable_id
-                    .extend(evidence.canonical_names_by_stable_id.clone().into_iter());
+            match SymbolLanguage::from_path(absolute_path) {
+                Some(SymbolLanguage::Php) => {
+                    let Ok(source) = fs::read_to_string(absolute_path) else {
+                        return None;
+                    };
+                    let file_symbols = file_symbols_by_path
+                        .get(&relative_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    let Ok(evidence) = extract_php_source_evidence_from_source(
+                        absolute_path,
+                        &source,
+                        &file_symbols,
+                    ) else {
+                        return None;
+                    };
+                    Some(AstSourceEvidence::Php {
+                        relative_path,
+                        canonical_names_by_stable_id: evidence.canonical_names_by_stable_id.clone(),
+                        evidence,
+                    })
+                }
+                Some(SymbolLanguage::Blade) => {
+                    let Ok(source) = fs::read_to_string(absolute_path) else {
+                        return None;
+                    };
+                    let file_symbols = file_symbols_by_path
+                        .get(&relative_path)
+                        .cloned()
+                        .unwrap_or_default();
+                    Some(AstSourceEvidence::Blade {
+                        relative_path,
+                        evidence: extract_blade_source_evidence_from_source(&source, &file_symbols),
+                    })
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    ast_source_evidence.sort_by(|left, right| {
+        let left_path = match left {
+            AstSourceEvidence::Php { relative_path, .. }
+            | AstSourceEvidence::Blade { relative_path, .. } => relative_path,
+        };
+        let right_path = match right {
+            AstSourceEvidence::Php { relative_path, .. }
+            | AstSourceEvidence::Blade { relative_path, .. } => relative_path,
+        };
+        left_path.cmp(right_path)
+    });
+
+    for evidence in ast_source_evidence {
+        match evidence {
+            AstSourceEvidence::Php {
+                evidence,
+                canonical_names_by_stable_id,
+                ..
+            } => {
+                php_canonical_names_by_stable_id.extend(canonical_names_by_stable_id);
                 php_evidence.push(evidence);
             }
-            Some(SymbolLanguage::Blade) => {
-                let Ok(source) = fs::read_to_string(absolute_path) else {
-                    continue;
-                };
-                let file_symbols = file_symbols_by_path
-                    .get(&relative_path)
-                    .cloned()
-                    .unwrap_or_default();
-                blade_evidence.push(extract_blade_source_evidence_from_source(
-                    &source,
-                    &file_symbols,
-                ));
-            }
-            _ => {}
+            AstSourceEvidence::Blade { evidence, .. } => blade_evidence.push(evidence),
         }
     }
 
@@ -172,6 +219,7 @@ pub(crate) fn augment_path_relation_projection_records_with_ast_relation_evidenc
     }
 }
 
+#[allow(clippy::ptr_arg)]
 pub(super) fn apply_ast_projection_contributions(
     workspace_root: &Path,
     absolute_manifest_paths: &[PathBuf],

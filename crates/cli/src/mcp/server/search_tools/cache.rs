@@ -250,6 +250,7 @@ impl FriggMcpServer {
         cached
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn cache_search_symbol_response(
         &self,
         cache_key: SearchSymbolResponseCacheKey,

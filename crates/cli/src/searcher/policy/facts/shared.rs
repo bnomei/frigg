@@ -494,6 +494,7 @@ pub(crate) struct SelectionCoverageState {
 }
 
 impl SelectionCoverageState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn observe(
         &mut self,
         path: &str,

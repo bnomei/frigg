@@ -1,4 +1,5 @@
 use super::*;
+use rayon::prelude::*;
 
 impl FriggMcpServer {
     pub(super) fn collect_repository_symbol_corpus(
@@ -432,8 +433,10 @@ impl FriggMcpServer {
     ) -> Result<Vec<Arc<RepositorySymbolCorpus>>, ErrorData> {
         let mut corpora = self
             .roots_for_repository(repository_id)?
-            .into_iter()
+            .into_par_iter()
             .map(|(repository_id, root)| self.collect_repository_symbol_corpus(repository_id, root))
+            .collect::<Vec<_>>()
+            .into_iter()
             .collect::<Result<Vec<_>, ErrorData>>()?;
 
         corpora.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));

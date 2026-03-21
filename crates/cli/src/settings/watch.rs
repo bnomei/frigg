@@ -7,9 +7,10 @@ use super::RuntimeTransportKind;
 pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 2_000;
 pub const DEFAULT_WATCH_RETRY_MS: u64 = 5_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchMode {
+    #[default]
     Auto,
     On,
     Off,
@@ -22,12 +23,6 @@ impl WatchMode {
             Self::On => "on",
             Self::Off => "off",
         }
-    }
-}
-
-impl Default for WatchMode {
-    fn default() -> Self {
-        Self::Auto
     }
 }
 

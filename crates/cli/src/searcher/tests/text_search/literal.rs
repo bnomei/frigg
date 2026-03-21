@@ -182,7 +182,8 @@ fn literal_search_applies_path_regex_filter() -> FriggResult<()> {
         ],
     )?;
 
-    let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.lexical_runtime.backend = LexicalBackendMode::Native;
     let searcher = TextSearcher::new(config);
     let query =
         SearchTextQuery {
@@ -241,7 +242,8 @@ fn literal_search_small_limit_matches_sorted_prefix_of_full_results() -> FriggRe
         ],
     )?;
 
-    let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.lexical_runtime.backend = LexicalBackendMode::Native;
     let searcher = TextSearcher::new(config);
     let full_query = SearchTextQuery {
         query: "needle".to_owned(),
@@ -280,7 +282,16 @@ fn diagnostics_literal_search_reports_read_failures_deterministically() -> Frigg
         "pub fn hotspot() { let _ = \"needle_hotspot\"; }\n",
     )
     .map_err(FriggError::Io)?;
-    fs::write(root.join("src/bad.rs"), [0xff, b'\n']).map_err(FriggError::Io)?;
+    let unreadable_path = root.join("src/bad.rs");
+    fs::write(&unreadable_path, "pub fn hidden() {}\n").map_err(FriggError::Io)?;
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&unreadable_path)
+            .map_err(FriggError::Io)?
+            .permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&unreadable_path, permissions).map_err(FriggError::Io)?;
+    }
 
     let config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
     let searcher = TextSearcher::new(config);
@@ -324,6 +335,14 @@ fn diagnostics_literal_search_reports_read_failures_deterministically() -> Frigg
         "diagnostic message should be populated for read failures"
     );
 
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&unreadable_path)
+            .map_err(FriggError::Io)?
+            .permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&unreadable_path, permissions).map_err(FriggError::Io)?;
+    }
     cleanup_workspace(&root);
     Ok(())
 }

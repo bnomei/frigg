@@ -802,8 +802,8 @@ fn hybrid_path_witness_recall_treats_partial_snapshot_rows_as_read_only_fallback
             }],
             path_witness: vec![crate::storage::PathWitnessProjection {
                 path: "tests/CreatesApplication.php".to_owned(),
-                path_class: authoritative_projection.path_class.clone(),
-                source_class: authoritative_projection.source_class.clone(),
+                path_class: authoritative_projection.path_class,
+                source_class: authoritative_projection.source_class,
                 file_stem: authoritative_projection.file_stem.clone(),
                 path_terms: authoritative_projection.path_terms.clone(),
                 subtree_root: authoritative_projection.subtree_root.clone(),
@@ -873,8 +873,8 @@ fn hybrid_path_witness_recall_uses_authoritative_current_snapshot_projection_row
             }],
             path_witness: vec![crate::storage::PathWitnessProjection {
                 path: "src/main.rs".to_owned(),
-                path_class: authoritative_projection.path_class.clone(),
-                source_class: authoritative_projection.source_class.clone(),
+                path_class: authoritative_projection.path_class,
+                source_class: authoritative_projection.source_class,
                 file_stem: authoritative_projection.file_stem.clone(),
                 path_terms: vec!["bespokeprojectionterm".to_owned()],
                 subtree_root: authoritative_projection.subtree_root.clone(),
@@ -959,8 +959,8 @@ fn hybrid_path_witness_recall_prefers_authoritative_anchor_sketch_excerpt() -> F
             ],
             path_witness: vec![crate::storage::PathWitnessProjection {
                 path: "src/main.rs".to_owned(),
-                path_class: authoritative_projection.path_class.clone(),
-                source_class: authoritative_projection.source_class.clone(),
+                path_class: authoritative_projection.path_class,
+                source_class: authoritative_projection.source_class,
                 file_stem: authoritative_projection.file_stem.clone(),
                 path_terms: vec![
                     "server".to_owned(),

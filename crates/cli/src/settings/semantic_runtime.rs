@@ -60,24 +60,13 @@ impl FromStr for SemanticRuntimeProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Controls whether semantic indexing and semantic recall are part of the runtime contract.
 pub struct SemanticRuntimeConfig {
     pub enabled: bool,
     pub provider: Option<SemanticRuntimeProvider>,
     pub model: Option<String>,
     pub strict_mode: bool,
-}
-
-impl Default for SemanticRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            provider: None,
-            model: None,
-            strict_mode: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

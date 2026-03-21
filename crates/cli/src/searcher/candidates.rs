@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::workspace_ignores::hard_excluded_runtime_path;
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 
 use super::surfaces::{
     is_ci_workflow_path, is_entrypoint_build_workflow_path, is_root_scoped_runtime_config_path,
@@ -34,48 +35,28 @@ pub(super) fn walk_candidate_files_for_repository(
     filters: &NormalizedSearchFilters,
     diagnostics: &mut SearchExecutionDiagnostics,
 ) -> Vec<(String, PathBuf)> {
-    let walker = search_walk_builder(root).build();
-    let mut file_candidates = Vec::new();
-
-    for dent in walker {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(err) => {
-                diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.to_owned(),
-                    path: None,
-                    kind: SearchDiagnosticKind::Walk,
-                    message: err.to_string(),
-                });
-                continue;
+    let path_regex = query.path_regex.clone();
+    let language = filters.language;
+    let (file_candidates, mut walk_diagnostics) = collect_candidate_files_parallel(
+        repository_id,
+        root,
+        search_walk_builder(root),
+        None,
+        move |path, rel_path| {
+            if let Some(language) = language
+                && !language.matches_path(path)
+            {
+                return false;
             }
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
-
-        let path = dent.path();
-        if hard_excluded_runtime_path(root, path) {
-            continue;
-        }
-        let rel_path = normalize_repository_relative_path(root, path);
-
-        if let Some(language) = filters.language {
-            if !language.matches_path(path) {
-                continue;
+            if let Some(path_regex) = &path_regex
+                && !path_regex.is_match(rel_path)
+            {
+                return false;
             }
-        }
-
-        if let Some(path_regex) = &query.path_regex {
-            if !path_regex.is_match(&rel_path) {
-                continue;
-            }
-        }
-
-        file_candidates.push((rel_path, path.to_path_buf()));
-    }
-    file_candidates.sort_by(|left, right| left.0.cmp(&right.0));
-    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+            true
+        },
+    );
+    diagnostics.entries.append(&mut walk_diagnostics);
     file_candidates
 }
 
@@ -100,51 +81,34 @@ pub(super) fn hidden_workflow_candidates_for_repository(
         .standard_filters(true)
         .hidden(false)
         .require_git(false);
-    let walker = builder.build();
-    let mut file_candidates = Vec::new();
-    for dent in walker {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(err) => {
-                diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.to_owned(),
-                    path: Some(".github/workflows".to_owned()),
-                    kind: SearchDiagnosticKind::Walk,
-                    message: err.to_string(),
-                });
-                continue;
+    let language = filters.language;
+    let wants_entrypoint_build_flow = intent.wants_entrypoint_build_flow;
+    let wants_ci_workflow_witnesses = intent.wants_ci_workflow_witnesses;
+    let (file_candidates, mut walk_diagnostics) = collect_candidate_files_parallel(
+        repository_id,
+        root,
+        builder,
+        Some(".github/workflows".to_owned()),
+        move |path, rel_path| {
+            if wants_entrypoint_build_flow {
+                let allow_ci_witness = wants_ci_workflow_witnesses && is_ci_workflow_path(rel_path);
+                if !allow_ci_witness && !is_entrypoint_build_workflow_path(rel_path) {
+                    return false;
+                }
+            } else if !is_ci_workflow_path(rel_path) {
+                return false;
             }
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
 
-        let path = dent.path();
-        if hard_excluded_runtime_path(root, path) {
-            continue;
-        }
-        let rel_path = normalize_repository_relative_path(root, path);
-        if intent.wants_entrypoint_build_flow {
-            let allow_ci_witness =
-                intent.wants_ci_workflow_witnesses && is_ci_workflow_path(&rel_path);
-            if !allow_ci_witness && !is_entrypoint_build_workflow_path(&rel_path) {
-                continue;
+            if let Some(language) = language
+                && !language.matches_path(path)
+            {
+                return false;
             }
-        } else if !is_ci_workflow_path(&rel_path) {
-            continue;
-        }
 
-        if let Some(language) = filters.language {
-            if !language.matches_path(path) {
-                continue;
-            }
-        }
-
-        file_candidates.push((rel_path, path.to_path_buf()));
-    }
-
-    file_candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+            true
+        },
+    );
+    diagnostics.entries.append(&mut walk_diagnostics);
     file_candidates
 }
 
@@ -167,42 +131,11 @@ pub(super) fn root_scoped_runtime_config_candidates_for_repository(
         // Root-scoped runtime config may live one tool directory below the root, for example
         // `gradle/wrapper/gradle-wrapper.properties`.
         .max_depth(Some(3));
-    let walker = builder.build();
-    let mut file_candidates = Vec::new();
-    for dent in walker {
-        let dent = match dent {
-            Ok(entry) => entry,
-            Err(err) => {
-                diagnostics.entries.push(SearchDiagnostic {
-                    repository_id: repository_id.to_owned(),
-                    path: None,
-                    kind: SearchDiagnosticKind::Walk,
-                    message: err.to_string(),
-                });
-                continue;
-            }
-        };
-        if !dent.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
-
-        let path = dent.path();
-        if hard_excluded_runtime_path(root, path) {
-            continue;
-        }
-
-        let rel_path = normalize_repository_relative_path(root, path);
-        if !is_root_scoped_runtime_config_path(&rel_path) {
-            continue;
-        }
-
-        // Language filters only match source files, but root-scoped config artifacts remain
-        // relevant for language-profiled entrypoint/config queries.
-        file_candidates.push((rel_path, path.to_path_buf()));
-    }
-
-    file_candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    file_candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    let (file_candidates, mut walk_diagnostics) =
+        collect_candidate_files_parallel(repository_id, root, builder, None, |_path, rel_path| {
+            is_root_scoped_runtime_config_path(rel_path)
+        });
+    diagnostics.entries.append(&mut walk_diagnostics);
     file_candidates
 }
 
@@ -220,4 +153,87 @@ fn search_walk_builder(root: &Path) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
     builder.standard_filters(true).require_git(false);
     builder
+}
+
+fn collect_candidate_files_parallel(
+    repository_id: &str,
+    root: &Path,
+    builder: WalkBuilder,
+    diagnostic_path: Option<String>,
+    should_include: impl Fn(&Path, &str) -> bool + Send + Sync + 'static,
+) -> (Vec<(String, PathBuf)>, Vec<SearchDiagnostic>) {
+    let repository_id = Arc::<str>::from(repository_id.to_owned());
+    let root = Arc::new(root.to_path_buf());
+    let diagnostic_path = diagnostic_path.map(Arc::<str>::from);
+    let should_include = Arc::new(should_include);
+    let candidates = Arc::new(Mutex::new(Vec::new()));
+    let diagnostics = Arc::new(Mutex::new(Vec::new()));
+
+    builder.build_parallel().run(|| {
+        let repository_id = Arc::clone(&repository_id);
+        let root = Arc::clone(&root);
+        let diagnostic_path = diagnostic_path.clone();
+        let should_include = Arc::clone(&should_include);
+        let candidates = Arc::clone(&candidates);
+        let diagnostics = Arc::clone(&diagnostics);
+        Box::new(move |dent| {
+            match dent {
+                Ok(entry) => {
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        return WalkState::Continue;
+                    }
+
+                    let path = entry.path();
+                    if hard_excluded_runtime_path(root.as_ref(), path) {
+                        return WalkState::Continue;
+                    }
+
+                    let rel_path = normalize_repository_relative_path(root.as_ref(), path);
+                    if !should_include(path, &rel_path) {
+                        return WalkState::Continue;
+                    }
+
+                    candidates
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push((rel_path, path.to_path_buf()));
+                }
+                Err(err) => {
+                    diagnostics
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(SearchDiagnostic {
+                            repository_id: repository_id.to_string(),
+                            path: diagnostic_path.as_deref().map(str::to_owned),
+                            kind: SearchDiagnosticKind::Walk,
+                            message: err.to_string(),
+                        });
+                }
+            }
+            WalkState::Continue
+        })
+    });
+
+    let mut candidates = candidates
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut diagnostics = diagnostics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    sort_search_diagnostics(&mut diagnostics);
+    (candidates, diagnostics)
+}
+
+fn sort_search_diagnostics(diagnostics: &mut [SearchDiagnostic]) {
+    diagnostics.sort_by(|left, right| {
+        left.repository_id
+            .cmp(&right.repository_id)
+            .then(left.path.cmp(&right.path))
+            .then(left.kind.cmp(&right.kind))
+            .then(left.message.cmp(&right.message))
+    });
 }

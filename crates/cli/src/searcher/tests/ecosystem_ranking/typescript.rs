@@ -109,7 +109,7 @@ fn hybrid_ranking_type_package_and_workspace_surfaces_keep_localized_coverage() 
         .iter()
         .map(|entry| entry.document.path.as_str())
         .collect::<Vec<_>>();
-    let witness_paths = output
+    let _witness_paths = output
         .channel_results
         .iter()
         .find(|result| result.channel == crate::domain::EvidenceChannel::PathSurfaceWitness)
@@ -128,7 +128,7 @@ fn hybrid_ranking_type_package_and_workspace_surfaces_keep_localized_coverage() 
     let workspace_position = ranked_paths
         .iter()
         .position(|path| *path == "apps/platform/tsconfig.json")
-        .unwrap_or_else(|| panic!("workspace config surface should be ranked: ranked={ranked_paths:?} witness={witness_paths:?}"));
+        .expect("workspace config surface should be ranked");
     let sibling_package_position = ranked_paths
         .iter()
         .position(|path| *path == "apps/other/package.json")

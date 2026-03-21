@@ -141,6 +141,7 @@ impl FriggMcpServer {
         metadata
     }
 
+    #[allow(clippy::type_complexity)]
     pub(in crate::mcp::server) fn precise_call_site_fields(
         root: &Path,
         occurrence: &crate::graph::PreciseOccurrenceRecord,

@@ -23,7 +23,7 @@ impl FriggMcpServer {
             let mut precise_artifacts_failed = 0usize;
             let mut match_count = 0usize;
             let mut fallback_reason: Option<String> = None;
-            let result = (|| -> Result<Json<FindImplementationsResponse>, ErrorData> {
+            (|| -> Result<Json<FindImplementationsResponse>, ErrorData> {
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
@@ -170,8 +170,7 @@ impl FriggMcpServer {
                     metadata,
                     note,
                 }))
-            })();
-            result
+            })()
         });
         execution.await?
     }
@@ -195,7 +194,7 @@ impl FriggMcpServer {
             let mut target_selection_same_rank_count = 0usize;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let result = (|| -> Result<Json<IncomingCallsResponse>, ErrorData> {
+            (|| -> Result<Json<IncomingCallsResponse>, ErrorData> {
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
@@ -458,8 +457,7 @@ impl FriggMcpServer {
                     metadata,
                     note,
                 }))
-            })();
-            result
+            })()
         });
         execution.await?
     }
@@ -483,7 +481,7 @@ impl FriggMcpServer {
             let mut target_selection_same_rank_count = 0usize;
             let mut precise_artifacts_ingested = 0usize;
             let mut precise_artifacts_failed = 0usize;
-            let result = (|| -> Result<Json<OutgoingCallsResponse>, ErrorData> {
+            (|| -> Result<Json<OutgoingCallsResponse>, ErrorData> {
                 let limit = params_for_blocking
                     .limit
                     .unwrap_or(server.config.max_search_results)
@@ -796,8 +794,7 @@ impl FriggMcpServer {
                     metadata,
                     note,
                 }))
-            })();
-            result
+            })()
         });
         execution.await?
     }

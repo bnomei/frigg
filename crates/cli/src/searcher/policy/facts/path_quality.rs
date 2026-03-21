@@ -114,21 +114,6 @@ impl PathQualityFacts {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn root_scoped_runtime_configs_receive_repo_root_quality_flag() {
-        let intent = HybridRankingIntent::from_query("config");
-        let facts =
-            PathQualityFacts::from_path("gradle/wrapper/gradle-wrapper.properties", &intent);
-
-        assert!(facts.is_runtime_config_artifact);
-        assert!(facts.is_repo_root_runtime_config_artifact);
-    }
-}
-
-#[cfg(test)]
 impl Default for PathQualityFacts {
     fn default() -> Self {
         Self {
@@ -182,5 +167,20 @@ impl Default for PathQualityFacts {
             is_laravel_layout_blade_view: false,
             is_laravel_view_component_class: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_scoped_runtime_configs_receive_repo_root_quality_flag() {
+        let intent = HybridRankingIntent::from_query("config");
+        let facts =
+            PathQualityFacts::from_path("gradle/wrapper/gradle-wrapper.properties", &intent);
+
+        assert!(facts.is_runtime_config_artifact);
+        assert!(facts.is_repo_root_runtime_config_artifact);
     }
 }

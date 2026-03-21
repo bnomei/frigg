@@ -36,7 +36,7 @@ where
             {
                 continue;
             }
-            if should_scrub_leading_markdown_comment(&rel_path) {
+            if should_scrub_leading_markdown_comment(rel_path) {
                 let content = match fs::read_to_string(path) {
                     Ok(content) => content,
                     Err(err) => {
@@ -66,8 +66,8 @@ where
                             && matches.is_full()
                             && matches.worst().is_some_and(|worst| {
                                 !text_match_candidate_order(
-                                    &repository_id,
-                                    &rel_path,
+                                    repository_id,
+                                    rel_path,
                                     line_number,
                                     column,
                                     line,
@@ -143,8 +143,8 @@ where
                         && matches.is_full()
                         && matches.worst().is_some_and(|worst| {
                             !text_match_candidate_order(
-                                &repository_id,
-                                &rel_path,
+                                repository_id,
+                                rel_path,
                                 line_number,
                                 column,
                                 &line,
@@ -427,8 +427,8 @@ where
                         && matches.is_full()
                         && matches.worst().is_some_and(|worst| {
                             !text_match_candidate_order(
-                                &repository_id,
-                                &rel_path,
+                                repository_id,
+                                rel_path,
                                 line_number,
                                 column,
                                 line,

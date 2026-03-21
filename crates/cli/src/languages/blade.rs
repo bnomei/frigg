@@ -66,17 +66,16 @@ pub(crate) fn collect_symbols_from_source(
             continue;
         };
         let normalized = format!("livewire:{}", name.as_str().trim());
+        let Some(span) = capture.get(0) else {
+            continue;
+        };
         push_symbol_definition(
             symbols,
             SymbolLanguage::Blade,
             SymbolKind::Component,
             path,
             &normalized,
-            source_span_from_offsets(
-                source,
-                capture.get(0).unwrap().start(),
-                capture.get(0).unwrap().end(),
-            ),
+            source_span_from_offsets(source, span.start(), span.end()),
         );
     }
 

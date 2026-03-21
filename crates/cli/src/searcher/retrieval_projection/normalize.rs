@@ -47,6 +47,7 @@ pub(crate) fn normalize_path_relation_projection_records(rows: &mut Vec<PathRela
     *rows = bounded;
 }
 
+#[allow(clippy::ptr_arg)]
 pub(crate) fn normalize_path_surface_term_projection_records(
     rows: &mut Vec<PathSurfaceTermProjection>,
 ) {

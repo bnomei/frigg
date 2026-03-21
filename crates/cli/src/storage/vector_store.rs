@@ -132,7 +132,7 @@ pub(super) fn semantic_chunk_embedding_record_order(
 }
 
 pub(crate) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(values.len() * std::mem::size_of::<f32>());
+    let mut buffer = Vec::with_capacity(std::mem::size_of_val(values));
     for value in values {
         buffer.extend_from_slice(&value.to_le_bytes());
     }
@@ -140,7 +140,7 @@ pub(crate) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
 }
 
 pub(super) fn decode_f32_vector(blob: &[u8]) -> Result<Vec<f32>, String> {
-    if !blob.len().is_multiple_of(std::mem::size_of::<f32>()) {
+    if blob.len() % std::mem::size_of::<f32>() != 0 {
         return Err(format!(
             "semantic embedding blob length {} is not divisible by {}",
             blob.len(),

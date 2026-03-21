@@ -305,6 +305,7 @@ impl Storage {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn load_semantic_vector_topk_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -453,6 +454,7 @@ impl Storage {
 }
 
 impl SemanticReadContext {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn load_semantic_vector_topk_for_repository_snapshot_model(
         &self,
         repository_id: &str,
@@ -568,6 +570,7 @@ impl SemanticReadContext {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_semantic_vector_topk_for_repository_snapshot_model_on_connection(
     conn: &Connection,
     repository_id: &str,

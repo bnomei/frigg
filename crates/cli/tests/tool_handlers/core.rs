@@ -78,7 +78,7 @@ async fn core_read_file_supports_line_range_slicing() {
     assert_eq!(response.repository_id, "repo-001");
     assert_eq!(response.path, "src/lib.rs");
     assert_eq!(response.content, "    \"hello from fixture\"");
-    assert_eq!(response.bytes, response.content.as_bytes().len());
+    assert_eq!(response.bytes, response.content.len());
 }
 
 #[tokio::test]

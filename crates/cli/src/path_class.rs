@@ -16,9 +16,8 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         )
     }) {
         PathClass::Support
-    } else if is_roc_platform_source_path(normalized) {
-        PathClass::Runtime
-    } else if normalized == "bootstrap/app.php"
+    } else if is_roc_platform_source_path(normalized)
+        || normalized == "bootstrap/app.php"
         || normalized.starts_with("app/")
         || normalized.starts_with("bootstrap/")
         || normalized.starts_with("routes/")
@@ -29,9 +28,7 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         PathClass::Runtime
     } else if normalized.starts_with("resources/views/") {
         PathClass::Support
-    } else if components.iter().any(|component| *component == "src")
-        || is_repo_root_supported_source_file(normalized)
-    {
+    } else if components.contains(&"src") || is_repo_root_supported_source_file(normalized) {
         PathClass::Runtime
     } else {
         PathClass::Project
@@ -54,7 +51,7 @@ pub(crate) fn repository_path_class(relative_path: &str) -> &'static str {
 }
 
 pub(crate) fn repository_path_class_rank(path_class: &str) -> u8 {
-    PathClass::from_str(path_class)
+    PathClass::from_label(path_class)
         .map(PathClass::rank)
         .unwrap_or(3)
 }

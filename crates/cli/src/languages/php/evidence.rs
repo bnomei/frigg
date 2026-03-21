@@ -132,6 +132,7 @@ pub(crate) fn resolve_target_evidence_edges(
     edges
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_source_evidence(
     source: &str,
     node: Node<'_>,
@@ -564,6 +565,7 @@ fn collect_parameter_type_evidence(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_type_evidence(
     source: &str,
     type_node: Node<'_>,

@@ -149,6 +149,7 @@ pub fn inspect_syntax_tree_in_source(
     .map(|(inspection, _)| inspection)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn inspect_syntax_tree_with_follow_up_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -302,7 +303,7 @@ fn search_structural_matches_in_source(
                 let Some(matched) = structural_query_capture_row(
                     source,
                     path,
-                    &capture_name,
+                    capture_name,
                     capture.node,
                     follow_up_structural,
                 ) else {
@@ -324,7 +325,7 @@ fn search_structural_matches_in_source(
                             .get(capture.index as usize)
                             .cloned()
                             .unwrap_or(GENERATED_STRUCTURAL_CAPTURE_NAME);
-                        structural_query_capture_node(source, &capture_name, capture.node)
+                        structural_query_capture_node(source, capture_name, capture.node)
                     })
                     .collect::<Vec<_>>();
                 if capture_nodes.is_empty() {
@@ -363,6 +364,7 @@ fn search_structural_matches_in_source(
     Ok(matches)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inspect_syntax_tree_internal(
     language: SymbolLanguage,
     path: &Path,
@@ -675,6 +677,7 @@ fn structural_follow_up_queries_for_kinds(
     suggestions
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_structural_follow_up(
     suggestions: &mut Vec<GeneratedStructuralFollowUp>,
     strategy: GeneratedStructuralFollowUpStrategy,

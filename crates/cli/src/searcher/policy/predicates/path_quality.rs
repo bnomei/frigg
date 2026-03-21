@@ -478,6 +478,8 @@ pub(crate) const fn is_laravel_view_component_class_leaf() -> PredicateLeaf<Path
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::bool_comparison, clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::searcher::HybridRankingIntent;
 

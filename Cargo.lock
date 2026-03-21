@@ -777,6 +777,7 @@ dependencies = [
  "notify",
  "petgraph",
  "protobuf",
+ "rayon",
  "regex",
  "reqwest",
  "rmcp",

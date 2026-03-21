@@ -4,6 +4,8 @@ use std::io::Read;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use super::*;
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -34,6 +36,7 @@ impl SemanticChunkCandidate {
 }
 
 pub(super) trait SemanticRuntimeEmbeddingExecutor: Sync {
+    #[allow(clippy::type_complexity)]
     fn embed_documents<'a>(
         &'a self,
         provider: SemanticRuntimeProvider,
@@ -195,7 +198,7 @@ pub(super) fn build_semantic_embedding_records(
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
 ) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
     semantic_runtime
-        .validate_startup(&credentials)
+        .validate_startup(credentials)
         .map_err(|err| {
             FriggError::InvalidInput(format!(
                 "semantic runtime validation failed code={}: {err}",
@@ -312,52 +315,50 @@ pub(crate) fn build_semantic_chunk_candidates(
 ) -> FriggResult<Vec<SemanticChunkCandidate>> {
     let repository_id = Arc::<str>::from(repository_id);
     let snapshot_id = Arc::<str>::from(snapshot_id);
-    let mut output = Vec::with_capacity(
-        estimate_semantic_chunk_capacity(current_manifest).max(current_manifest.len()),
-    );
-    let mut last_repository_relative_path: Option<String> = None;
-    let mut needs_sort = false;
-    let mut source = String::new();
+    let estimated_capacity =
+        estimate_semantic_chunk_capacity(current_manifest).max(current_manifest.len());
+    let mut output = current_manifest
+        .par_iter()
+        .map(|entry| {
+            let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
+                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+            };
+            let repository_relative_path =
+                normalize_repository_relative_path(workspace_root, &entry.path)?;
+            let mut source = String::new();
+            let mut file = match File::open(&entry.path) {
+                Ok(file) => file,
+                Err(_) => return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new()),
+            };
+            if file.read_to_string(&mut source).is_err() {
+                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+            }
 
-    for entry in current_manifest {
-        let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
-            continue;
-        };
-        let repository_relative_path =
-            normalize_repository_relative_path(workspace_root, &entry.path)?;
-        if last_repository_relative_path
-            .as_ref()
-            .is_some_and(|previous| previous > &repository_relative_path)
-        {
-            needs_sort = true;
-        }
-        source.clear();
-        let mut file = match File::open(&entry.path) {
-            Ok(file) => file,
-            Err(_) => continue,
-        };
-        if file.read_to_string(&mut source).is_err() {
-            continue;
-        }
-        append_file_semantic_chunks(
-            &mut output,
-            Arc::clone(&repository_id),
-            Arc::clone(&snapshot_id),
-            Arc::<str>::from(repository_relative_path.as_str()),
-            language,
-            source.as_str(),
-        );
-        last_repository_relative_path = Some(repository_relative_path);
-    }
+            let mut chunks = Vec::new();
+            append_file_semantic_chunks(
+                &mut chunks,
+                Arc::clone(&repository_id),
+                Arc::clone(&snapshot_id),
+                Arc::<str>::from(repository_relative_path.as_str()),
+                language,
+                source.as_str(),
+            );
+            Ok(chunks)
+        })
+        .try_reduce(
+            || Vec::with_capacity(estimated_capacity),
+            |mut left, mut right| {
+                left.append(&mut right);
+                Ok::<Vec<SemanticChunkCandidate>, FriggError>(left)
+            },
+        )?;
 
-    if needs_sort {
-        output.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then(left.chunk_index.cmp(&right.chunk_index))
-                .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
-        });
-    }
+    output.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.chunk_index.cmp(&right.chunk_index))
+            .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
+    });
     Ok(output)
 }
 
@@ -434,7 +435,7 @@ fn append_file_semantic_chunks_with_context(
         if should_flush {
             let created = append_semantic_chunk_candidates(
                 output,
-                &file_context,
+                file_context,
                 chunk_index,
                 start_line,
                 line_number.saturating_sub(1),
@@ -455,7 +456,7 @@ fn append_file_semantic_chunks_with_context(
 
     append_semantic_chunk_candidates(
         output,
-        &file_context,
+        file_context,
         chunk_index,
         start_line,
         current_line.max(start_line),

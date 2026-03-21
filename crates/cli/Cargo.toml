@@ -28,6 +28,7 @@ ignore.workspace = true
 notify.workspace = true
 petgraph.workspace = true
 protobuf.workspace = true
+rayon.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rmcp.workspace = true

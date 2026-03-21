@@ -32,6 +32,7 @@ enum ScipArtifactInputFormat {
     Protobuf,
 }
 
+#[allow(clippy::ptr_arg)]
 pub(super) fn apply_scip_projection_contributions(
     repository_id: &str,
     workspace_root: &Path,
