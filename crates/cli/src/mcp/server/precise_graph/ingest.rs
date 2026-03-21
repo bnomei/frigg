@@ -581,13 +581,28 @@ impl FriggMcpServer {
         root: &Path,
         budgets: FindReferencesResourceBudgets,
     ) -> Result<CachedPreciseGraph, ErrorData> {
+        let discovery = Self::collect_scip_artifact_digests(root);
+        self.precise_graph_for_repository_root_with_discovery(
+            repository_id,
+            root,
+            &discovery,
+            budgets,
+        )
+    }
+
+    pub(in crate::mcp::server) fn precise_graph_for_repository_root_with_discovery(
+        &self,
+        repository_id: &str,
+        root: &Path,
+        discovery: &ScipArtifactDiscovery,
+        budgets: FindReferencesResourceBudgets,
+    ) -> Result<CachedPreciseGraph, ErrorData> {
         if let Some(cached) =
             self.try_reuse_latest_precise_graph_for_repository(repository_id, root)
         {
             return Ok(cached);
         }
 
-        let discovery = Self::collect_scip_artifact_digests(root);
         let current_root_signature =
             Self::current_root_signature_for_repository(root, repository_id).ok_or_else(|| {
                 Self::internal(
@@ -622,7 +637,7 @@ impl FriggMcpServer {
             &mut graph,
             root,
             repository_id,
-            &discovery,
+            discovery,
             budgets,
         )?;
         let coverage_mode = Self::precise_coverage_mode(&ingest_stats);
@@ -630,7 +645,7 @@ impl FriggMcpServer {
             graph: Arc::new(graph),
             ingest_stats,
             corpus_signature: current_root_signature,
-            discovery,
+            discovery: discovery.clone(),
             coverage_mode,
         };
 

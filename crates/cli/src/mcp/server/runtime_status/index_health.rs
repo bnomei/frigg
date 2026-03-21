@@ -74,11 +74,14 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         storage: &WorkspaceStorageSummary,
     ) -> WorkspaceIndexHealthSummary {
+        let scip_discovery = Self::collect_scip_artifact_digests(&workspace.root);
         WorkspaceIndexHealthSummary {
             lexical: self.workspace_lexical_index_summary(workspace, storage),
             semantic: self.workspace_semantic_index_summary(workspace, storage),
-            scip: self.workspace_scip_index_summary(workspace),
-            precise_ingest: Some(self.workspace_precise_ingest_summary(workspace)),
+            scip: self.workspace_scip_index_summary_from_discovery(&scip_discovery),
+            precise_ingest: Some(
+                self.workspace_precise_ingest_summary_from_discovery(workspace, &scip_discovery),
+            ),
             precise_generators: self.workspace_precise_generator_summaries(workspace),
         }
     }
@@ -159,11 +162,11 @@ impl FriggMcpServer {
         }
     }
 
-    pub(in crate::mcp::server) fn workspace_precise_ingest_summary(
+    fn workspace_precise_ingest_summary_from_discovery(
         &self,
         workspace: &AttachedWorkspace,
+        discovery: &ScipArtifactDiscovery,
     ) -> WorkspacePreciseIngestSummary {
-        let discovery = Self::collect_scip_artifact_digests(&workspace.root);
         if discovery.artifact_digests.is_empty() {
             return WorkspacePreciseIngestSummary {
                 state: WorkspacePreciseIngestState::Missing,
@@ -189,9 +192,10 @@ impl FriggMcpServer {
             );
         }
 
-        match self.precise_graph_for_repository_root(
+        match self.precise_graph_for_repository_root_with_discovery(
             &workspace.repository_id,
             &workspace.root,
+            discovery,
             self.find_references_resource_budgets(),
         ) {
             Ok(cached) => {
@@ -672,11 +676,10 @@ impl FriggMcpServer {
         }
     }
 
-    pub(in crate::mcp::server) fn workspace_scip_index_summary(
+    fn workspace_scip_index_summary_from_discovery(
         &self,
-        workspace: &AttachedWorkspace,
+        discovery: &ScipArtifactDiscovery,
     ) -> WorkspaceIndexComponentSummary {
-        let discovery = Self::collect_scip_artifact_digests(&workspace.root);
         let artifact_count = discovery.artifact_digests.len();
         WorkspaceIndexComponentSummary {
             state: if artifact_count == 0 {
