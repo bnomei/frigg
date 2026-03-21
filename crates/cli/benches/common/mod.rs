@@ -102,6 +102,7 @@ pub(crate) fn attached_server_session(config: FriggConfig, root: &Path) -> Bench
             repository_id: None,
             set_default: Some(true),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
         })))
         .expect("benchmark workspace attach should succeed")
         .0;

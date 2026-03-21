@@ -2,8 +2,19 @@
 mod support;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use frigg::mcp::types::{ExploreOperation, ExploreParams, ReadFileParams, SearchPatternType};
+use frigg::mcp::types::{
+    ExploreOperation, ExploreParams, ExploreResponse, ReadFileParams, ReadFileResponse,
+    ReadPresentationMode, SearchPatternType,
+};
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
+
+fn structured_tool_result<T: serde::de::DeserializeOwned>(result: CallToolResult) -> T {
+    let structured = result
+        .structured_content
+        .expect("benchmark tool call should return structured content");
+    serde_json::from_value(structured).expect("benchmark structured_content should deserialize")
+}
 
 fn bench_content_cache(c: &mut Criterion) {
     let mut group = c.benchmark_group("content_cache");
@@ -25,9 +36,10 @@ fn bench_content_cache(c: &mut Criterion) {
                             max_bytes: Some(2_048),
                             line_start: Some(1),
                             line_end: Some(8),
+                            presentation_mode: Some(ReadPresentationMode::Json),
                         })))
-                        .expect("cold read_file benchmark should succeed")
-                        .0;
+                        .expect("cold read_file benchmark should succeed");
+                    let response: ReadFileResponse = structured_tool_result(response);
                     criterion::black_box(response.bytes);
                 },
                 BatchSize::SmallInput,
@@ -46,9 +58,10 @@ fn bench_content_cache(c: &mut Criterion) {
                     max_bytes: Some(2_048),
                     line_start: Some(1),
                     line_end: Some(8),
+                    presentation_mode: Some(ReadPresentationMode::Json),
                 })))
-                .expect("hot read_file benchmark should succeed")
-                .0;
+                .expect("hot read_file benchmark should succeed");
+            let response: ReadFileResponse = structured_tool_result(response);
             criterion::black_box(response.bytes);
         });
     });
@@ -67,9 +80,10 @@ fn bench_content_cache(c: &mut Criterion) {
                     context_lines: Some(2),
                     max_matches: Some(8),
                     resume_from: None,
+                    presentation_mode: Some(ReadPresentationMode::Json),
                 })))
-                .expect("hot explore benchmark should succeed")
-                .0;
+                .expect("hot explore benchmark should succeed");
+            let response: ExploreResponse = structured_tool_result(response);
             criterion::black_box(response.total_matches);
         });
     });
