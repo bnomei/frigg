@@ -50,12 +50,42 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
-                target_selection_candidate_count = resolved_target.target.candidate_count;
+                let target_selection = Some(Self::navigation_target_selection_summary_for_selection(
+                    &corpora,
+                    &symbol_query,
+                    &resolved_target.selection,
+                ));
+                let target_resolution = match resolved_target.selection {
+                    NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
+                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                        let metadata = json!({
+                            "precision": "unavailable",
+                            "heuristic": false,
+                            "disambiguation_required": true,
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_summary_value(
+                                target_selection
+                                    .as_ref()
+                                    .expect("target selection summary should be present"),
+                            ),
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        return Ok(Json(FindImplementationsResponse {
+                            matches: Vec::new(),
+                            result_handle: None,
+                            mode: NavigationMode::UnavailableNoPrecise,
+                            target_selection,
+                            metadata,
+                            note,
+                        }));
+                    }
+                };
+                target_selection_candidate_count = target_resolution.candidate_count;
                 target_selection_same_rank_count =
-                    resolved_target.target.selected_rank_candidate_count;
-                let target = resolved_target.target.candidate;
+                    target_resolution.selected_rank_candidate_count;
+                let target = target_resolution.candidate;
                 selected_symbol_id = Some(target.symbol.stable_id.clone());
-                let target_corpus = resolved_target.target.corpus;
+                let target_corpus = target_resolution.corpus;
 
                 let cached_precise_graph =
                     server.precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
@@ -171,6 +201,7 @@ impl FriggMcpServer {
                     mode: Self::navigation_mode_from_precision_label(
                         resolution_precision.as_deref(),
                     ),
+                    target_selection: target_selection.clone(),
                     metadata,
                     note,
                 }))
@@ -225,7 +256,44 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
-                let target_resolution = resolved_target.target;
+                let target_selection =
+                    Some(Self::navigation_target_selection_summary_for_selection(
+                        &corpora,
+                        &symbol_query,
+                        &resolved_target.selection,
+                    ));
+                let target_resolution = match resolved_target.selection {
+                    NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
+                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                        let availability = NavigationAvailability {
+                            status: "unavailable".to_owned(),
+                            reason: Some("disambiguation_required".to_owned()),
+                            precise_required_for_complete_results: false,
+                        };
+                        let metadata = json!({
+                            "precision": "unavailable",
+                            "heuristic": false,
+                            "disambiguation_required": true,
+                            "availability": availability.clone(),
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_summary_value(
+                                target_selection
+                                    .as_ref()
+                                    .expect("target selection summary should be present"),
+                            ),
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        return Ok(Json(IncomingCallsResponse {
+                            matches: Vec::new(),
+                            result_handle: None,
+                            mode: NavigationMode::UnavailableNoPrecise,
+                            availability: Some(availability),
+                            target_selection,
+                            metadata,
+                            note,
+                        }));
+                    }
+                };
                 target_selection_candidate_count = target_resolution.candidate_count;
                 target_selection_same_rank_count = target_resolution.selected_rank_candidate_count;
                 let target = target_resolution.candidate;
@@ -329,6 +397,7 @@ impl FriggMcpServer {
                             resolution_precision.as_deref(),
                         ),
                         availability: Some(availability),
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     }));
@@ -373,17 +442,24 @@ impl FriggMcpServer {
                             resolution_precision.as_deref(),
                         ),
                         availability: Some(availability),
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     }));
                 }
 
+                let (target_container, target_signature) = Self::symbol_context_for_stable_id(
+                    target_corpus.as_ref(),
+                    &target.symbol.stable_id,
+                );
                 let mut matches = graph
                     .incoming_adjacency(&target.symbol.stable_id)
                     .into_iter()
                     .filter(|adjacent| Self::is_heuristic_call_relation(adjacent.relation))
                     .map(|adjacent| CallHierarchyMatch {
                         match_id: None,
+                        source_stable_symbol_id: None,
+                        target_stable_symbol_id: Some(target.symbol.stable_id.clone()),
                         source_symbol: adjacent.symbol.display_name,
                         target_symbol: target.symbol.name.clone(),
                         repository_id: target_corpus.repository_id.clone(),
@@ -394,6 +470,10 @@ impl FriggMcpServer {
                         line: adjacent.symbol.line,
                         column: 1,
                         relation: adjacent.relation.as_str().to_owned(),
+                        source_container: None,
+                        target_container: target_container.clone(),
+                        source_signature: None,
+                        target_signature: target_signature.clone(),
                         precision: Some("heuristic".to_owned()),
                         call_path: None,
                         call_line: None,
@@ -464,6 +544,7 @@ impl FriggMcpServer {
                         resolution_precision.as_deref(),
                     ),
                     availability: Some(availability),
+                    target_selection: target_selection.clone(),
                     metadata,
                     note,
                 }))
@@ -518,7 +599,44 @@ impl FriggMcpServer {
                 )?;
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
-                let target_resolution = resolved_target.target;
+                let target_selection =
+                    Some(Self::navigation_target_selection_summary_for_selection(
+                        &corpora,
+                        &symbol_query,
+                        &resolved_target.selection,
+                    ));
+                let target_resolution = match resolved_target.selection {
+                    NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
+                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                        let availability = NavigationAvailability {
+                            status: "unavailable".to_owned(),
+                            reason: Some("disambiguation_required".to_owned()),
+                            precise_required_for_complete_results: false,
+                        };
+                        let metadata = json!({
+                            "precision": "unavailable",
+                            "heuristic": false,
+                            "disambiguation_required": true,
+                            "availability": availability.clone(),
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_summary_value(
+                                target_selection
+                                    .as_ref()
+                                    .expect("target selection summary should be present"),
+                            ),
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        return Ok(Json(OutgoingCallsResponse {
+                            matches: Vec::new(),
+                            result_handle: None,
+                            mode: NavigationMode::UnavailableNoPrecise,
+                            availability: Some(availability),
+                            target_selection,
+                            metadata,
+                            note,
+                        }));
+                    }
+                };
                 target_selection_candidate_count = target_resolution.candidate_count;
                 target_selection_same_rank_count = target_resolution.selected_rank_candidate_count;
                 let target = target_resolution.candidate;
@@ -614,6 +732,7 @@ impl FriggMcpServer {
                             resolution_precision.as_deref(),
                         ),
                         availability: Some(availability),
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     }));
@@ -659,11 +778,16 @@ impl FriggMcpServer {
                             resolution_precision.as_deref(),
                         ),
                         availability: Some(availability),
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     }));
                 }
 
+                let (source_container, source_signature) = Self::symbol_context_for_stable_id(
+                    target_corpus.as_ref(),
+                    &target.symbol.stable_id,
+                );
                 let mut source_cache: std::collections::BTreeMap<String, Option<String>> =
                     std::collections::BTreeMap::new();
                 let mut call_target_cache: std::collections::BTreeMap<
@@ -686,6 +810,8 @@ impl FriggMcpServer {
                     })
                     .map(|adjacent| CallHierarchyMatch {
                         match_id: None,
+                        source_stable_symbol_id: Some(target.symbol.stable_id.clone()),
+                        target_stable_symbol_id: None,
                         source_symbol: target.symbol.name.clone(),
                         target_symbol: adjacent.symbol.display_name,
                         repository_id: target_corpus.repository_id.clone(),
@@ -696,6 +822,10 @@ impl FriggMcpServer {
                         line: adjacent.symbol.line,
                         column: 1,
                         relation: adjacent.relation.as_str().to_owned(),
+                        source_container: source_container.clone(),
+                        target_container: None,
+                        source_signature: source_signature.clone(),
+                        target_signature: None,
                         precision: Some("heuristic".to_owned()),
                         call_path: None,
                         call_line: None,
@@ -767,6 +897,7 @@ impl FriggMcpServer {
                         resolution_precision.as_deref(),
                     ),
                     availability: Some(availability),
+                    target_selection: target_selection.clone(),
                     metadata,
                     note,
                 }))

@@ -191,6 +191,88 @@ impl FriggMcpServer {
         })
     }
 
+    fn symbol_match_from_symbol_candidate(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        candidate: &SymbolCandidate,
+    ) -> SymbolMatch {
+        let (container, signature) = corpora
+            .iter()
+            .find(|corpus| corpus.repository_id == candidate.repository_id)
+            .map(|corpus| Self::symbol_context_for_stable_id(corpus, &candidate.symbol.stable_id))
+            .unwrap_or((None, None));
+        SymbolMatch {
+            match_id: None,
+            stable_symbol_id: Some(candidate.symbol.stable_id.clone()),
+            repository_id: candidate.repository_id.clone(),
+            symbol: candidate.symbol.name.clone(),
+            kind: candidate.symbol.kind.as_str().to_owned(),
+            path: Self::relative_display_path(&candidate.root, &candidate.symbol.path),
+            line: candidate.symbol.line,
+            container,
+            signature,
+        }
+    }
+
+    pub(in crate::mcp::server) fn navigation_target_selection_summary_for_resolved(
+        symbol_query: &str,
+        target: &ResolvedSymbolTarget,
+    ) -> NavigationTargetSelectionSummary {
+        NavigationTargetSelectionSummary {
+            status: NavigationTargetSelectionStatus::Resolved,
+            symbol_query: symbol_query.to_owned(),
+            selected_stable_symbol_id: Some(target.candidate.symbol.stable_id.clone()),
+            candidate_count: target.candidate_count,
+            same_rank_candidate_count: target.selected_rank_candidate_count,
+            ambiguous_query: target.selected_rank_candidate_count > 1,
+            candidates: Vec::new(),
+        }
+    }
+
+    pub(in crate::mcp::server) fn navigation_target_selection_summary_for_disambiguation(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol_query: &str,
+        target: &DisambiguationRequiredSymbolTarget,
+    ) -> NavigationTargetSelectionSummary {
+        NavigationTargetSelectionSummary {
+            status: NavigationTargetSelectionStatus::DisambiguationRequired,
+            symbol_query: symbol_query.to_owned(),
+            selected_stable_symbol_id: None,
+            candidate_count: target.candidate_count,
+            same_rank_candidate_count: target.selected_rank_candidate_count,
+            ambiguous_query: true,
+            candidates: target
+                .candidates
+                .iter()
+                .map(|candidate| Self::symbol_match_from_symbol_candidate(corpora, candidate))
+                .collect(),
+        }
+    }
+
+    pub(in crate::mcp::server) fn navigation_target_selection_summary_for_selection(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        symbol_query: &str,
+        selection: &NavigationTargetSelection,
+    ) -> NavigationTargetSelectionSummary {
+        match selection {
+            NavigationTargetSelection::Resolved(target) => {
+                Self::navigation_target_selection_summary_for_resolved(symbol_query, target)
+            }
+            NavigationTargetSelection::DisambiguationRequired(target) => {
+                Self::navigation_target_selection_summary_for_disambiguation(
+                    corpora,
+                    symbol_query,
+                    target,
+                )
+            }
+        }
+    }
+
+    pub(in crate::mcp::server) fn navigation_target_selection_summary_value(
+        summary: &NavigationTargetSelectionSummary,
+    ) -> Value {
+        serde_json::to_value(summary).expect("target selection summary should serialize")
+    }
+
     pub(in crate::mcp::server) fn precise_absence_reason(
         coverage_mode: PreciseCoverageMode,
         stats: &PreciseIngestStats,
@@ -417,18 +499,27 @@ impl FriggMcpServer {
         };
         let matches = candidates
             .into_iter()
-            .map(|candidate| ImplementationMatch {
-                match_id: None,
-                symbol: candidate.symbol,
-                kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
-                repository_id: target_corpus.repository_id.clone(),
-                path: Self::relative_display_path(target_root, &candidate.source_symbol.path),
-                line: candidate.source_symbol.line,
-                column: 1,
-                relation: Some(candidate.relation.to_owned()),
-                precision: Some("heuristic".to_owned()),
-                fallback_reason: Some(candidate.fallback_reason.to_owned()),
-                follow_up_structural: Vec::new(),
+            .map(|candidate| {
+                let (container, signature) = Self::symbol_context_for_stable_id(
+                    target_corpus,
+                    &candidate.source_symbol.stable_id,
+                );
+                ImplementationMatch {
+                    match_id: None,
+                    stable_symbol_id: Some(candidate.source_symbol.stable_id.clone()),
+                    symbol: candidate.symbol,
+                    kind: Self::display_symbol_kind(candidate.source_symbol.kind.as_str()),
+                    repository_id: target_corpus.repository_id.clone(),
+                    path: Self::relative_display_path(target_root, &candidate.source_symbol.path),
+                    line: candidate.source_symbol.line,
+                    column: 1,
+                    relation: Some(candidate.relation.to_owned()),
+                    container,
+                    signature,
+                    precision: Some("heuristic".to_owned()),
+                    fallback_reason: Some(candidate.fallback_reason.to_owned()),
+                    follow_up_structural: Vec::new(),
+                }
             })
             .collect::<Vec<_>>();
 
@@ -459,8 +550,11 @@ impl FriggMcpServer {
                 continue;
             }
 
+            let (container, signature) =
+                Self::symbol_context_for_stable_id(target_corpus, &source_symbol.stable_id);
             matches.push(ImplementationMatch {
                 match_id: None,
+                stable_symbol_id: Some(source_symbol.stable_id.clone()),
                 symbol: source_symbol.name.clone(),
                 kind: Self::display_symbol_kind(source_symbol.kind.as_str()),
                 repository_id: target_corpus.repository_id.clone(),
@@ -468,6 +562,8 @@ impl FriggMcpServer {
                 line: source_symbol.line,
                 column: 1,
                 relation: Some(RelationKind::as_str(relation).to_owned()),
+                container,
+                signature,
                 precision: Some("heuristic".to_owned()),
                 fallback_reason: Some("precise_absent".to_owned()),
                 follow_up_structural: Vec::new(),

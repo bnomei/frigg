@@ -17,6 +17,41 @@ struct LoadedHeuristicReferences {
 }
 
 impl FriggMcpServer {
+    fn selected_target_reference_match(
+        target_corpus: &RepositorySymbolCorpus,
+        target_root: &Path,
+        target_symbol: &SymbolDefinition,
+        display_symbol: String,
+        path: String,
+        line: usize,
+        column: usize,
+        match_kind: ReferenceMatchKind,
+        precision: Option<String>,
+        fallback_reason: Option<String>,
+    ) -> ReferenceMatch {
+        let (container, signature) =
+            Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
+        ReferenceMatch {
+            match_id: None,
+            stable_symbol_id: Some(target_symbol.stable_id.clone()),
+            repository_id: target_corpus.repository_id.clone(),
+            symbol: display_symbol,
+            path: if path.is_empty() {
+                Self::relative_display_path(target_root, &target_symbol.path)
+            } else {
+                path
+            },
+            line,
+            column,
+            match_kind,
+            precision,
+            fallback_reason,
+            container,
+            signature,
+            follow_up_structural: Vec::new(),
+        }
+    }
+
     fn heuristic_reference_probe_terms(
         target_corpus: &RepositorySymbolCorpus,
         target_symbol: &SymbolDefinition,
@@ -440,6 +475,7 @@ impl FriggMcpServer {
                                     .take(limit)
                                     .map(|reference| ReferenceMatch {
                                         match_id: None,
+                                        stable_symbol_id: None,
                                         repository_id: direct_precise_target.repository_id.clone(),
                                         symbol: display_symbol.clone(),
                                         path: Self::canonicalize_navigation_path(
@@ -460,6 +496,8 @@ impl FriggMcpServer {
                                             .to_owned(),
                                         ),
                                         fallback_reason: None,
+                                        container: None,
+                                        signature: None,
                                         follow_up_structural: Vec::new(),
                                     })
                                     .collect::<Vec<_>>();
@@ -519,6 +557,7 @@ impl FriggMcpServer {
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
+                                    target_selection: None,
                                     metadata,
                                     note,
                                 }));
@@ -530,7 +569,46 @@ impl FriggMcpServer {
                 };
                 resolution_source = Some(resolved_target.resolution_source.to_owned());
                 let symbol_query = resolved_target.symbol_query;
-                let target_resolution = resolved_target.target;
+                let target_selection = Some(Self::navigation_target_selection_summary_for_selection(
+                    &corpora,
+                    &symbol_query,
+                    &resolved_target.selection,
+                ));
+                let target_resolution = match resolved_target.selection {
+                    NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
+                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                        let metadata = json!({
+                            "precision": "unavailable",
+                            "heuristic": false,
+                            "disambiguation_required": true,
+                            "resolution_source": resolution_source.clone(),
+                            "target_selection": Self::navigation_target_selection_summary_value(
+                                target_selection
+                                    .as_ref()
+                                    .expect("target selection summary should be present"),
+                            ),
+                            "diagnostics_count": diagnostics_count,
+                            "diagnostics": {
+                                "manifest_walk": manifest_walk_diagnostics_count,
+                                "manifest_read": manifest_read_diagnostics_count,
+                                "symbol_extraction": symbol_extraction_diagnostics_count,
+                                "source_read": source_read_diagnostics_count,
+                                "total": diagnostics_count,
+                            },
+                            "resource_budgets": resource_budget_metadata_for_blocking.clone(),
+                        });
+                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        return Ok(Json(FindReferencesResponse {
+                            total_matches: 0,
+                            matches: Vec::new(),
+                            result_handle: None,
+                            mode: NavigationMode::UnavailableNoPrecise,
+                            target_selection,
+                            metadata,
+                            note,
+                        }));
+                    }
+                };
                 target_selection_candidate_count = target_resolution.candidate_count;
                 target_selection_same_rank_count = target_resolution.selected_rank_candidate_count;
                 let target = target_resolution.candidate;
@@ -594,28 +672,26 @@ impl FriggMcpServer {
                                 target.root.join(reference_path)
                             };
 
-                            ReferenceMatch {
-                                match_id: None,
-                                repository_id: target_corpus.repository_id.clone(),
-                                symbol: precise_target
+                            Self::selected_target_reference_match(
+                                target_corpus.as_ref(),
+                                &target.root,
+                                &target.symbol,
+                                precise_target
                                     .as_ref()
                                     .map(|selected| selected.display_name.clone())
                                     .filter(|display_name| !display_name.is_empty())
                                     .unwrap_or_else(|| target.symbol.name.clone()),
-                                path: Self::relative_display_path(&target.root, &absolute_path),
-                                line: reference.range.start_line,
-                                column: reference.range.start_column,
-                                match_kind: if reference.is_definition() {
+                                Self::relative_display_path(&target.root, &absolute_path),
+                                reference.range.start_line,
+                                reference.range.start_column,
+                                if reference.is_definition() {
                                     ReferenceMatchKind::Definition
                                 } else {
                                     ReferenceMatchKind::Reference
                                 },
-                                precision: Some(
-                                    Self::precise_match_precision(precise_coverage).to_owned(),
-                                ),
-                                fallback_reason: None,
-                                follow_up_structural: Vec::new(),
-                            }
+                                Some(Self::precise_match_precision(precise_coverage).to_owned()),
+                                None,
+                            )
                         })
                         .collect::<Vec<_>>();
                     let should_supplement_php_method_references =
@@ -679,6 +755,7 @@ impl FriggMcpServer {
 
                                         Some(ReferenceMatch {
                                             match_id: None,
+                                            stable_symbol_id: Some(target.symbol.stable_id.clone()),
                                             repository_id: reference.repository_id,
                                             symbol: reference.symbol_name,
                                             path: relative_path,
@@ -689,6 +766,16 @@ impl FriggMcpServer {
                                             fallback_reason: Some(
                                                 "precise_supplemented".to_owned(),
                                             ),
+                                            container: Self::symbol_context_for_stable_id(
+                                                target_corpus.as_ref(),
+                                                &target.symbol.stable_id,
+                                            )
+                                            .0,
+                                            signature: Self::symbol_context_for_stable_id(
+                                                target_corpus.as_ref(),
+                                                &target.symbol.stable_id,
+                                            )
+                                            .1,
                                             follow_up_structural: Vec::new(),
                                         })
                                     })
@@ -787,6 +874,7 @@ impl FriggMcpServer {
                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                             precision,
                         )),
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     }));
@@ -815,18 +903,18 @@ impl FriggMcpServer {
 
                 let mut matches = Vec::new();
                 if include_definition {
-                    matches.push(ReferenceMatch {
-                        match_id: None,
-                        repository_id: target_corpus.repository_id.clone(),
-                        symbol: target.symbol.name.clone(),
-                        path: Self::relative_display_path(&target.root, &target.symbol.path),
-                        line: target.symbol.line,
-                        column: 1,
-                        match_kind: ReferenceMatchKind::Definition,
-                        precision: Some("heuristic".to_owned()),
-                        fallback_reason: Some("precise_absent".to_owned()),
-                        follow_up_structural: Vec::new(),
-                    });
+                    matches.push(Self::selected_target_reference_match(
+                        target_corpus.as_ref(),
+                        &target.root,
+                        &target.symbol,
+                        target.symbol.name.clone(),
+                        String::new(),
+                        target.symbol.line,
+                        1,
+                        ReferenceMatchKind::Definition,
+                        Some("heuristic".to_owned()),
+                        Some("precise_absent".to_owned()),
+                    ));
                 }
 
                 matches.extend(references.iter().map(|reference| {
@@ -840,18 +928,18 @@ impl FriggMcpServer {
                             HeuristicReferenceEvidence::LexicalToken => lexical_evidence += 1,
                         }
 
-                        ReferenceMatch {
-                            match_id: None,
-                            repository_id: reference.repository_id.clone(),
-                            symbol: reference.symbol_name.clone(),
-                            path: Self::relative_display_path(&target.root, &reference.path),
-                            line: reference.line,
-                            column: reference.column,
-                            match_kind: ReferenceMatchKind::Reference,
-                            precision: Some("heuristic".to_owned()),
-                            fallback_reason: Some("precise_absent".to_owned()),
-                            follow_up_structural: Vec::new(),
-                        }
+                        Self::selected_target_reference_match(
+                            target_corpus.as_ref(),
+                            &target.root,
+                            &target.symbol,
+                            reference.symbol_name.clone(),
+                            Self::relative_display_path(&target.root, &reference.path),
+                            reference.line,
+                            reference.column,
+                            ReferenceMatchKind::Reference,
+                            Some("heuristic".to_owned()),
+                            Some("precise_absent".to_owned()),
+                        )
                     }));
                 if matches.len() > limit {
                     matches.truncate(limit);
@@ -926,6 +1014,7 @@ impl FriggMcpServer {
                     matches,
                     result_handle: None,
                     mode: NavigationMode::HeuristicNoPrecise,
+                    target_selection: target_selection.clone(),
                     metadata,
                     note,
                 }))

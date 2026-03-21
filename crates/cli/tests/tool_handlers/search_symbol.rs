@@ -23,6 +23,7 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
     assert_eq!(response.matches[0].kind, "function");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 1);
+    assert!(response.matches[0].stable_symbol_id.is_some());
 
     let note = response
         .note
@@ -375,6 +376,18 @@ async fn search_symbol_resolves_php_canonical_queries() {
         }),
         "expected canonical member query to resolve method symbol"
     );
+    let method_match = method_response
+        .matches
+        .iter()
+        .find(|matched| {
+            matched.symbol == "handle"
+                && matched.kind == "method"
+                && matched.path == "src/OrderHandler.php"
+        })
+        .expect("expected canonical member row");
+    assert!(method_match.stable_symbol_id.is_some());
+    assert_eq!(method_match.container.as_deref(), Some("OrderHandler"));
+    assert!(method_match.signature.is_some());
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -414,6 +427,13 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
     assert_eq!(paths[0], "src/lib.rs");
     assert!(paths.contains(&"tests/support.rs"));
     assert!(paths.contains(&"benches/bench.rs"));
+    assert!(
+        response
+            .matches
+            .iter()
+            .all(|matched| matched.stable_symbol_id.is_some()),
+        "search_symbol should expose stable ids for ambiguous exact-name matches"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }

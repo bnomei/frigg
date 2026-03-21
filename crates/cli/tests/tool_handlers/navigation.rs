@@ -1,4 +1,5 @@
 use super::*;
+use frigg::mcp::types::NavigationTargetSelectionStatus;
 
 #[tokio::test]
 async fn navigation_go_to_definition_prefers_precise_matches() {
@@ -974,7 +975,7 @@ async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_f
 }
 
 #[tokio::test]
-async fn navigation_go_to_definition_prefers_runtime_paths_for_ambiguous_exact_name_queries() {
+async fn navigation_go_to_definition_requires_disambiguation_for_same_rank_symbol_queries() {
     let workspace_root = temp_workspace_root("go-to-definition-runtime-first");
     let src_root = workspace_root.join("src");
     let benches_root = workspace_root.join("benches");
@@ -1001,26 +1002,41 @@ async fn navigation_go_to_definition_prefers_runtime_paths_for_ambiguous_exact_n
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("go_to_definition should prefer runtime code for ambiguous exact-name queries")
+        .expect("go_to_definition should report disambiguation for ambiguous exact-name queries")
         .0;
 
-    assert_eq!(response.matches.len(), 1);
-    assert_eq!(response.matches[0].symbol, "try_execute");
-    assert_eq!(response.matches[0].path, "src/lib.rs");
-    assert_eq!(response.matches[0].precision.as_deref(), Some("heuristic"));
+    assert!(response.matches.is_empty());
+    assert_eq!(response.mode, NavigationMode::UnavailableNoPrecise);
+    let selection = response
+        .target_selection
+        .as_ref()
+        .expect("go_to_definition should surface target selection details");
+    assert_eq!(
+        selection.status,
+        NavigationTargetSelectionStatus::DisambiguationRequired
+    );
+    assert_eq!(selection.symbol_query, "try_execute");
+    assert_eq!(selection.candidate_count, 2);
+    assert_eq!(selection.same_rank_candidate_count, 2);
+    assert_eq!(selection.candidates.len(), 2);
+    assert_eq!(selection.candidates[0].path, "src/lib.rs");
+    assert_eq!(
+        selection.candidates[1].path,
+        "benches/runtime_bottlenecks.rs"
+    );
+    assert!(selection.candidates[0].stable_symbol_id.is_some());
 
     let note = response
         .note
         .as_ref()
-        .expect("go_to_definition should emit target selection metadata");
+        .expect("go_to_definition should emit disambiguation metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
-    assert_eq!(note_json["target_selection"]["selected_path"], "src/lib.rs");
+    assert_eq!(note_json["disambiguation_required"], true);
     assert_eq!(
-        note_json["target_selection"]["selected_path_class"],
-        "runtime"
+        note_json["target_selection"]["status"],
+        "disambiguation_required"
     );
-    assert_eq!(note_json["target_selection"]["ambiguous_query"], true);
     assert_eq!(note_json["target_selection"]["candidate_count"], 2);
     assert_eq!(
         note_json["target_selection"]["same_rank_candidate_count"],
@@ -1031,7 +1047,7 @@ async fn navigation_go_to_definition_prefers_runtime_paths_for_ambiguous_exact_n
 }
 
 #[tokio::test]
-async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_target_selection() {
+async fn navigation_go_to_definition_precise_results_round_trip_through_stable_symbol_id() {
     let workspace_root = temp_workspace_root("go-to-definition-precise-target-pinning");
     let src_root = workspace_root.join("src");
     let benches_root = workspace_root.join("benches");
@@ -1082,9 +1098,28 @@ async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_targ
     );
 
     let server = server_for_workspace_root(&workspace_root);
+    let search = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "try_execute".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("search_symbol should surface ambiguous exact-name candidates")
+        .0;
+    let runtime_symbol_id = search
+        .matches
+        .iter()
+        .find(|matched| matched.path == "src/lib.rs")
+        .and_then(|matched| matched.stable_symbol_id.clone())
+        .expect("runtime search result should expose a stable symbol id");
+
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
-            symbol: Some("try_execute".to_owned()),
+            symbol: Some(runtime_symbol_id.clone()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -1094,13 +1129,26 @@ async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_targ
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("go_to_definition should keep precise definitions pinned to the selected runtime target")
+        .expect("go_to_definition should resolve a stable symbol id without name ambiguity")
         .0;
 
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.matches[0].symbol, "try_execute");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].precision.as_deref(), Some("precise"));
+    assert_eq!(
+        response.matches[0].stable_symbol_id.as_deref(),
+        Some(runtime_symbol_id.as_str())
+    );
+    let selection = response
+        .target_selection
+        .as_ref()
+        .expect("go_to_definition should keep resolved target selection details");
+    assert_eq!(selection.status, NavigationTargetSelectionStatus::Resolved);
+    assert_eq!(
+        selection.selected_stable_symbol_id.as_deref(),
+        Some(runtime_symbol_id.as_str())
+    );
 
     let note = response
         .note
@@ -1108,6 +1156,7 @@ async fn navigation_go_to_definition_precise_results_stay_pinned_to_runtime_targ
         .expect("go_to_definition should emit target selection metadata");
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("go_to_definition note should be valid JSON");
+    assert_eq!(note_json["resolution_source"], "symbol");
     assert_eq!(note_json["target_selection"]["selected_path"], "src/lib.rs");
     assert_eq!(
         note_json["target_selection"]["selected_path_class"],

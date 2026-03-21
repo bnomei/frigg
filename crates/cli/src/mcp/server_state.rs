@@ -74,9 +74,22 @@ pub(crate) struct ResolvedSymbolTarget {
 }
 
 #[derive(Clone)]
+pub(crate) struct DisambiguationRequiredSymbolTarget {
+    pub candidates: Vec<SymbolCandidate>,
+    pub candidate_count: usize,
+    pub selected_rank_candidate_count: usize,
+}
+
+#[derive(Clone)]
+pub(crate) enum NavigationTargetSelection {
+    Resolved(ResolvedSymbolTarget),
+    DisambiguationRequired(DisambiguationRequiredSymbolTarget),
+}
+
+#[derive(Clone)]
 pub(crate) struct ResolvedNavigationTarget {
     pub symbol_query: String,
-    pub target: ResolvedSymbolTarget,
+    pub selection: NavigationTargetSelection,
     pub resolution_source: &'static str,
 }
 

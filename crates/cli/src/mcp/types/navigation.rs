@@ -33,6 +33,26 @@ pub enum NavigationMode {
     UnavailableNoPrecise,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationTargetSelectionStatus {
+    Resolved,
+    DisambiguationRequired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NavigationTargetSelectionSummary {
+    pub status: NavigationTargetSelectionStatus,
+    pub symbol_query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_stable_symbol_id: Option<String>,
+    pub candidate_count: usize,
+    pub same_rank_candidate_count: usize,
+    pub ambiguous_query: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<crate::domain::model::SymbolMatch>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesResponse {
     pub total_matches: usize,
@@ -40,6 +60,8 @@ pub struct FindReferencesResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -62,12 +84,18 @@ pub struct GoToDefinitionParams {
 pub struct NavigationLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_symbol_id: Option<String>,
     pub symbol: String,
     pub repository_id: String,
     pub path: String,
     pub line: usize,
     pub column: usize,
     pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     pub precision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
@@ -79,6 +107,8 @@ pub struct GoToDefinitionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -103,6 +133,8 @@ pub struct FindDeclarationsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -125,6 +157,8 @@ pub struct FindImplementationsParams {
 pub struct ImplementationMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_symbol_id: Option<String>,
     pub symbol: String,
     pub kind: Option<String>,
     pub repository_id: String,
@@ -132,6 +166,10 @@ pub struct ImplementationMatch {
     pub line: usize,
     pub column: usize,
     pub relation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     pub precision: Option<String>,
     pub fallback_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -144,6 +182,8 @@ pub struct FindImplementationsResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -180,6 +220,10 @@ pub struct OutgoingCallsParams {
 pub struct CallHierarchyMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_stable_symbol_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_stable_symbol_id: Option<String>,
     pub source_symbol: String,
     pub target_symbol: String,
     pub repository_id: String,
@@ -187,6 +231,14 @@ pub struct CallHierarchyMatch {
     pub line: usize,
     pub column: usize,
     pub relation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_signature: Option<String>,
     pub precision: Option<String>,
     pub call_path: Option<String>,
     pub call_line: Option<usize>,
@@ -204,6 +256,8 @@ pub struct IncomingCallsResponse {
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub availability: Option<NavigationAvailability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -215,6 +269,8 @@ pub struct OutgoingCallsResponse {
     pub result_handle: Option<String>,
     pub mode: NavigationMode,
     pub availability: Option<NavigationAvailability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_selection: Option<NavigationTargetSelectionSummary>,
     pub metadata: Option<Value>,
     pub note: Option<String>,
 }
@@ -242,6 +298,8 @@ pub struct DocumentSymbolsParams {
 pub struct DocumentSymbolItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_symbol_id: Option<String>,
     pub symbol: String,
     pub kind: String,
     pub repository_id: String,
@@ -251,6 +309,8 @@ pub struct DocumentSymbolItem {
     pub end_line: Option<usize>,
     pub end_column: Option<usize>,
     pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
     pub children: Vec<DocumentSymbolItem>,

@@ -55,6 +55,39 @@ fn route_definition_name_regex(route_name: &str) -> Option<regex::Regex> {
 }
 
 impl FriggMcpServer {
+    fn selected_target_navigation_location(
+        target_corpus: &RepositorySymbolCorpus,
+        target_root: &Path,
+        target_symbol: &SymbolDefinition,
+        display_symbol: String,
+        path: String,
+        line: usize,
+        column: usize,
+        kind: Option<String>,
+        precision: Option<String>,
+    ) -> NavigationLocation {
+        let (container, signature) =
+            Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
+        NavigationLocation {
+            match_id: None,
+            stable_symbol_id: Some(target_symbol.stable_id.clone()),
+            symbol: display_symbol,
+            repository_id: target_corpus.repository_id.clone(),
+            path: if path.is_empty() {
+                Self::relative_display_path(target_root, &target_symbol.path)
+            } else {
+                path
+            },
+            line,
+            column,
+            kind,
+            container,
+            signature,
+            precision,
+            follow_up_structural: Vec::new(),
+        }
+    }
+
     fn route_helper_definition_matches(
         corpora: &[Arc<RepositorySymbolCorpus>],
         route_name: &str,
@@ -94,12 +127,15 @@ impl FriggMcpServer {
                         crate::indexer::line_column_for_offset(&source, route_literal.start());
                     corpus_matches.push(NavigationLocation {
                         match_id: None,
+                        stable_symbol_id: None,
                         symbol: route_name.to_owned(),
                         repository_id: corpus.repository_id.clone(),
                         path: relative_path.clone(),
                         line,
                         column,
                         kind: Some("route".to_owned()),
+                        container: None,
+                        signature: None,
                         precision: Some("heuristic".to_owned()),
                         follow_up_structural: Vec::new(),
                     });
@@ -294,6 +330,7 @@ impl FriggMcpServer {
                                             mode: FriggMcpServer::navigation_mode_from_precision_label(
                                                 Some(precision),
                                             ),
+                                            target_selection: None,
                                             metadata,
                                             note,
                                         }));
@@ -331,6 +368,7 @@ impl FriggMcpServer {
                                             matches: route_matches,
                                             result_handle: None,
                                             mode: NavigationMode::HeuristicNoPrecise,
+                                            target_selection: None,
                                             metadata,
                                             note,
                                         }));
@@ -368,13 +406,51 @@ impl FriggMcpServer {
                                 resolution_source =
                                     Some(resolved_target.resolution_source.to_owned());
                                 let symbol_query = resolved_target.symbol_query;
+                                let target_selection = Some(
+                                    Self::navigation_target_selection_summary_for_selection(
+                                        &corpora,
+                                        &symbol_query,
+                                        &resolved_target.selection,
+                                    ),
+                                );
+                                let target_resolution = match resolved_target.selection {
+                                    NavigationTargetSelection::Resolved(target_resolution) => {
+                                        target_resolution
+                                    }
+                                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                                        let metadata = json!({
+                                            "precision": "unavailable",
+                                            "heuristic": false,
+                                            "disambiguation_required": true,
+                                            "resolution_source": resolution_source.clone(),
+                                            "target_selection": Self::navigation_target_selection_summary_value(
+                                                target_selection
+                                                    .as_ref()
+                                                    .expect("target selection summary should be present"),
+                                            ),
+                                        });
+                                        let metadata = Self::metadata_with_freshness_basis(
+                                            metadata,
+                                            &cache_freshness.basis,
+                                        );
+                                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                                        return Ok(Json(GoToDefinitionResponse {
+                                            matches: Vec::new(),
+                                            result_handle: None,
+                                            mode: NavigationMode::UnavailableNoPrecise,
+                                            target_selection,
+                                            metadata,
+                                            note,
+                                        }));
+                                    }
+                                };
                                 target_selection_candidate_count =
-                                    resolved_target.target.candidate_count;
+                                    target_resolution.candidate_count;
                                 target_selection_same_rank_count =
-                                    resolved_target.target.selected_rank_candidate_count;
-                                let target = resolved_target.target.candidate;
+                                    target_resolution.selected_rank_candidate_count;
+                                let target = target_resolution.candidate;
                                 selected_symbol_id = Some(target.symbol.stable_id.clone());
-                                let target_corpus = resolved_target.target.corpus;
+                                let target_corpus = target_resolution.corpus;
 
                                 let cached_precise_graph = server.precise_graph_for_corpus(
                                     target_corpus.as_ref(),
@@ -408,28 +484,32 @@ impl FriggMcpServer {
                                             )
                                             .into_iter()
                                             .filter(|occurrence| occurrence.is_definition())
-                                            .map(|occurrence| NavigationLocation {
-                                                match_id: None,
-                                                symbol: if precise_target.display_name.is_empty() {
-                                                    target.symbol.name.clone()
-                                                } else {
-                                                    precise_target.display_name.clone()
-                                                },
-                                                repository_id: target_corpus.repository_id.clone(),
-                                                path: Self::canonicalize_navigation_path(
+                                            .map(|occurrence| {
+                                                Self::selected_target_navigation_location(
+                                                    target_corpus.as_ref(),
                                                     &target.root,
-                                                    &occurrence.path,
-                                                ),
-                                                line: occurrence.range.start_line,
-                                                column: occurrence.range.start_column,
-                                                kind: Self::display_symbol_kind(
-                                                    &precise_target.kind,
-                                                ),
-                                                precision: Some(
-                                                    Self::precise_match_precision(precise_coverage)
+                                                    &target.symbol,
+                                                    if precise_target.display_name.is_empty() {
+                                                        target.symbol.name.clone()
+                                                    } else {
+                                                        precise_target.display_name.clone()
+                                                    },
+                                                    Self::canonicalize_navigation_path(
+                                                        &target.root,
+                                                        &occurrence.path,
+                                                    ),
+                                                    occurrence.range.start_line,
+                                                    occurrence.range.start_column,
+                                                    Self::display_symbol_kind(
+                                                        &precise_target.kind,
+                                                    ),
+                                                    Some(
+                                                        Self::precise_match_precision(
+                                                            precise_coverage,
+                                                        )
                                                         .to_owned(),
-                                                ),
-                                                follow_up_structural: Vec::new(),
+                                                    ),
+                                                )
                                             })
                                             .collect::<Vec<_>>()
                                     })
@@ -480,26 +560,22 @@ impl FriggMcpServer {
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
+                                        target_selection: target_selection.clone(),
                                         metadata,
                                         note,
                                     })
                                 } else {
-                                    let mut matches = vec![NavigationLocation {
-                                        match_id: None,
-                                        symbol: target.symbol.name.clone(),
-                                        repository_id: target_corpus.repository_id.clone(),
-                                        path: Self::relative_display_path(
-                                            &target.root,
-                                            &target.symbol.path,
-                                        ),
-                                        line: target.symbol.line,
-                                        column: 1,
-                                        kind: Self::display_symbol_kind(
-                                            target.symbol.kind.as_str(),
-                                        ),
-                                        precision: Some("heuristic".to_owned()),
-                                        follow_up_structural: Vec::new(),
-                                    }];
+                                    let mut matches = vec![Self::selected_target_navigation_location(
+                                        target_corpus.as_ref(),
+                                        &target.root,
+                                        &target.symbol,
+                                        target.symbol.name.clone(),
+                                        String::new(),
+                                        target.symbol.line,
+                                        1,
+                                        Self::display_symbol_kind(target.symbol.kind.as_str()),
+                                        Some("heuristic".to_owned()),
+                                    )];
                                     Self::sort_navigation_locations(&mut matches);
                                     if matches.len() > limit {
                                         matches.truncate(limit);
@@ -546,6 +622,7 @@ impl FriggMcpServer {
                                         matches,
                                         result_handle: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
+                                        target_selection: target_selection.clone(),
                                         metadata,
                                         note,
                                     })
@@ -570,13 +647,51 @@ impl FriggMcpServer {
                             )?;
                             resolution_source = Some(resolved_target.resolution_source.to_owned());
                             let symbol_query = resolved_target.symbol_query;
+                            let target_selection = Some(
+                                Self::navigation_target_selection_summary_for_selection(
+                                    &corpora,
+                                    &symbol_query,
+                                    &resolved_target.selection,
+                                ),
+                            );
+                            let target_resolution = match resolved_target.selection {
+                                NavigationTargetSelection::Resolved(target_resolution) => {
+                                    target_resolution
+                                }
+                                NavigationTargetSelection::DisambiguationRequired(_) => {
+                                    let metadata = json!({
+                                        "precision": "unavailable",
+                                        "heuristic": false,
+                                        "disambiguation_required": true,
+                                        "resolution_source": resolution_source.clone(),
+                                        "target_selection": Self::navigation_target_selection_summary_value(
+                                            target_selection
+                                                .as_ref()
+                                                .expect("target selection summary should be present"),
+                                        ),
+                                    });
+                                    let metadata = Self::metadata_with_freshness_basis(
+                                        metadata,
+                                        &cache_freshness.basis,
+                                    );
+                                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                                    return Ok(Json(GoToDefinitionResponse {
+                                        matches: Vec::new(),
+                                        result_handle: None,
+                                        mode: NavigationMode::UnavailableNoPrecise,
+                                        target_selection,
+                                        metadata,
+                                        note,
+                                    }));
+                                }
+                            };
                             target_selection_candidate_count =
-                                resolved_target.target.candidate_count;
+                                target_resolution.candidate_count;
                             target_selection_same_rank_count =
-                                resolved_target.target.selected_rank_candidate_count;
-                            let target = resolved_target.target.candidate;
+                                target_resolution.selected_rank_candidate_count;
+                            let target = target_resolution.candidate;
                             selected_symbol_id = Some(target.symbol.stable_id.clone());
-                            let target_corpus = resolved_target.target.corpus;
+                            let target_corpus = target_resolution.corpus;
 
                             let cached_precise_graph = server.precise_graph_for_corpus(
                                 target_corpus.as_ref(),
@@ -609,26 +724,30 @@ impl FriggMcpServer {
                                         )
                                         .into_iter()
                                         .filter(|occurrence| occurrence.is_definition())
-                                        .map(|occurrence| NavigationLocation {
-                                            match_id: None,
-                                            symbol: if precise_target.display_name.is_empty() {
-                                                target.symbol.name.clone()
-                                            } else {
-                                                precise_target.display_name.clone()
-                                            },
-                                            repository_id: target_corpus.repository_id.clone(),
-                                            path: Self::canonicalize_navigation_path(
+                                        .map(|occurrence| {
+                                            Self::selected_target_navigation_location(
+                                                target_corpus.as_ref(),
                                                 &target.root,
-                                                &occurrence.path,
-                                            ),
-                                            line: occurrence.range.start_line,
-                                            column: occurrence.range.start_column,
-                                            kind: Self::display_symbol_kind(&precise_target.kind),
-                                            precision: Some(
-                                                Self::precise_match_precision(precise_coverage)
+                                                &target.symbol,
+                                                if precise_target.display_name.is_empty() {
+                                                    target.symbol.name.clone()
+                                                } else {
+                                                    precise_target.display_name.clone()
+                                                },
+                                                Self::canonicalize_navigation_path(
+                                                    &target.root,
+                                                    &occurrence.path,
+                                                ),
+                                                occurrence.range.start_line,
+                                                occurrence.range.start_column,
+                                                Self::display_symbol_kind(&precise_target.kind),
+                                                Some(
+                                                    Self::precise_match_precision(
+                                                        precise_coverage,
+                                                    )
                                                     .to_owned(),
-                                            ),
-                                            follow_up_structural: Vec::new(),
+                                                ),
+                                            )
                                         })
                                         .collect::<Vec<_>>()
                                 })
@@ -679,24 +798,22 @@ impl FriggMcpServer {
                                     mode: FriggMcpServer::navigation_mode_from_precision_label(
                                         Some(precision),
                                     ),
+                                    target_selection: target_selection.clone(),
                                     metadata,
                                     note,
                                 })
                             } else {
-                                let mut matches = vec![NavigationLocation {
-                                    match_id: None,
-                                    symbol: target.symbol.name.clone(),
-                                    repository_id: target_corpus.repository_id.clone(),
-                                    path: Self::relative_display_path(
-                                        &target.root,
-                                        &target.symbol.path,
-                                    ),
-                                    line: target.symbol.line,
-                                    column: 1,
-                                    kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
-                                    precision: Some("heuristic".to_owned()),
-                                    follow_up_structural: Vec::new(),
-                                }];
+                                let mut matches = vec![Self::selected_target_navigation_location(
+                                    target_corpus.as_ref(),
+                                    &target.root,
+                                    &target.symbol,
+                                    target.symbol.name.clone(),
+                                    String::new(),
+                                    target.symbol.line,
+                                    1,
+                                    Self::display_symbol_kind(target.symbol.kind.as_str()),
+                                    Some("heuristic".to_owned()),
+                                )];
                                 Self::sort_navigation_locations(&mut matches);
                                 if matches.len() > limit {
                                     matches.truncate(limit);
@@ -743,6 +860,7 @@ impl FriggMcpServer {
                                     matches,
                                     result_handle: None,
                                     mode: NavigationMode::HeuristicNoPrecise,
+                                    target_selection: target_selection.clone(),
                                     metadata,
                                     note,
                                 })
@@ -769,13 +887,51 @@ impl FriggMcpServer {
                                 resolution_source =
                                     Some(resolved_target.resolution_source.to_owned());
                                 let symbol_query = resolved_target.symbol_query;
+                                let target_selection = Some(
+                                    Self::navigation_target_selection_summary_for_selection(
+                                        &corpora,
+                                        &symbol_query,
+                                        &resolved_target.selection,
+                                    ),
+                                );
+                                let target_resolution = match resolved_target.selection {
+                                    NavigationTargetSelection::Resolved(target_resolution) => {
+                                        target_resolution
+                                    }
+                                    NavigationTargetSelection::DisambiguationRequired(_) => {
+                                        let metadata = json!({
+                                            "precision": "unavailable",
+                                            "heuristic": false,
+                                            "disambiguation_required": true,
+                                            "resolution_source": resolution_source.clone(),
+                                            "target_selection": Self::navigation_target_selection_summary_value(
+                                                target_selection
+                                                    .as_ref()
+                                                    .expect("target selection summary should be present"),
+                                            ),
+                                        });
+                                        let metadata = Self::metadata_with_freshness_basis(
+                                            metadata,
+                                            &cache_freshness.basis,
+                                        );
+                                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                                        return Ok(Json(GoToDefinitionResponse {
+                                            matches: Vec::new(),
+                                            result_handle: None,
+                                            mode: NavigationMode::UnavailableNoPrecise,
+                                            target_selection,
+                                            metadata,
+                                            note,
+                                        }));
+                                    }
+                                };
                                 target_selection_candidate_count =
-                                    resolved_target.target.candidate_count;
+                                    target_resolution.candidate_count;
                                 target_selection_same_rank_count =
-                                    resolved_target.target.selected_rank_candidate_count;
-                                let target = resolved_target.target.candidate;
+                                    target_resolution.selected_rank_candidate_count;
+                                let target = target_resolution.candidate;
                                 selected_symbol_id = Some(target.symbol.stable_id.clone());
-                                let target_corpus = resolved_target.target.corpus;
+                                let target_corpus = target_resolution.corpus;
 
                                 let cached_precise_graph = server
                                     .precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
@@ -800,34 +956,38 @@ impl FriggMcpServer {
                                     .as_ref()
                                     .map(|precise_target| {
                                         graph
-                                            .precise_occurrences_for_symbol(
-                                                &target_corpus.repository_id,
-                                                &precise_target.symbol,
-                                            )
-                                            .into_iter()
-                                            .filter(|occurrence| occurrence.is_definition())
-                                            .map(|occurrence| NavigationLocation {
-                                                match_id: None,
-                                                symbol: if precise_target.display_name.is_empty() {
+                                        .precise_occurrences_for_symbol(
+                                            &target_corpus.repository_id,
+                                            &precise_target.symbol,
+                                        )
+                                        .into_iter()
+                                        .filter(|occurrence| occurrence.is_definition())
+                                        .map(|occurrence| {
+                                            Self::selected_target_navigation_location(
+                                                target_corpus.as_ref(),
+                                                &target.root,
+                                                &target.symbol,
+                                                if precise_target.display_name.is_empty() {
                                                     target.symbol.name.clone()
                                                 } else {
                                                     precise_target.display_name.clone()
                                                 },
-                                                repository_id: target_corpus.repository_id.clone(),
-                                                path: Self::canonicalize_navigation_path(
+                                                Self::canonicalize_navigation_path(
                                                     &target.root,
                                                     &occurrence.path,
                                                 ),
-                                                line: occurrence.range.start_line,
-                                                column: occurrence.range.start_column,
-                                                kind: Self::display_symbol_kind(&precise_target.kind),
-                                                precision: Some(
-                                                    Self::precise_match_precision(precise_coverage)
-                                                        .to_owned(),
+                                                occurrence.range.start_line,
+                                                occurrence.range.start_column,
+                                                Self::display_symbol_kind(&precise_target.kind),
+                                                Some(
+                                                    Self::precise_match_precision(
+                                                        precise_coverage,
+                                                    )
+                                                    .to_owned(),
                                                 ),
-                                                follow_up_structural: Vec::new(),
-                                            })
-                                            .collect::<Vec<_>>()
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
                                     })
                                     .unwrap_or_default();
                                 Self::sort_navigation_locations(&mut precise_matches);
@@ -875,24 +1035,22 @@ impl FriggMcpServer {
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                                             precision,
                                         )),
+                                        target_selection: target_selection.clone(),
                                         metadata,
                                         note,
                                     })
                                 } else {
-                                    let mut matches = vec![NavigationLocation {
-                                        match_id: None,
-                                        symbol: target.symbol.name.clone(),
-                                        repository_id: target_corpus.repository_id.clone(),
-                                        path: Self::relative_display_path(
-                                            &target.root,
-                                            &target.symbol.path,
-                                        ),
-                                        line: target.symbol.line,
-                                        column: 1,
-                                        kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
-                                        precision: Some("heuristic".to_owned()),
-                                        follow_up_structural: Vec::new(),
-                                    }];
+                                    let mut matches = vec![Self::selected_target_navigation_location(
+                                        target_corpus.as_ref(),
+                                        &target.root,
+                                        &target.symbol,
+                                        target.symbol.name.clone(),
+                                        String::new(),
+                                        target.symbol.line,
+                                        1,
+                                        Self::display_symbol_kind(target.symbol.kind.as_str()),
+                                        Some("heuristic".to_owned()),
+                                    )];
                                     Self::sort_navigation_locations(&mut matches);
                                     if matches.len() > limit {
                                         matches.truncate(limit);
@@ -939,6 +1097,7 @@ impl FriggMcpServer {
                                         matches,
                                         result_handle: None,
                                         mode: NavigationMode::HeuristicNoPrecise,
+                                        target_selection: target_selection.clone(),
                                         metadata,
                                         note,
                                     })
@@ -1007,6 +1166,7 @@ impl FriggMcpServer {
                                         mode: FriggMcpServer::navigation_mode_from_precision_label(
                                             Some(precision),
                                         ),
+                                        target_selection: None,
                                         metadata,
                                         note,
                                     })
@@ -1195,12 +1355,64 @@ impl FriggMcpServer {
                     )?;
                     resolution_source = Some(resolved_target.resolution_source.to_owned());
                     let symbol_query = resolved_target.symbol_query;
-                    target_selection_candidate_count = resolved_target.target.candidate_count;
+                    let target_selection =
+                        Some(Self::navigation_target_selection_summary_for_selection(
+                            &corpora,
+                            &symbol_query,
+                            &resolved_target.selection,
+                        ));
+                    let target_resolution = match resolved_target.selection {
+                        NavigationTargetSelection::Resolved(target_resolution) => target_resolution,
+                        NavigationTargetSelection::DisambiguationRequired(_) => {
+                            let metadata = json!({
+                                "precision": "unavailable",
+                                "heuristic": false,
+                                "disambiguation_required": true,
+                                "declaration_mode": "definition_anchor_v1",
+                                "resolution_source": resolution_source.clone(),
+                                "target_selection": Self::navigation_target_selection_summary_value(
+                                    target_selection
+                                        .as_ref()
+                                        .expect("target selection summary should be present"),
+                                ),
+                            });
+                            let metadata = Self::metadata_with_freshness_basis(
+                                metadata,
+                                &cache_freshness.basis,
+                            );
+                            let (metadata, note) = Self::metadata_note_pair(metadata);
+                            let response = FindDeclarationsResponse {
+                                matches: Vec::new(),
+                                result_handle: None,
+                                mode: NavigationMode::UnavailableNoPrecise,
+                                target_selection,
+                                metadata,
+                                note,
+                            };
+                            if let Some(cache_key) = cache_key.clone() {
+                                server.cache_find_declarations_response(
+                                    cache_key,
+                                    &response,
+                                    &scoped_repository_ids,
+                                    selected_symbol_id.as_deref(),
+                                    selected_precise_symbol.as_deref(),
+                                    resolution_precision.as_deref(),
+                                    resolution_source.as_deref(),
+                                    limit,
+                                    precise_artifacts_ingested,
+                                    precise_artifacts_failed,
+                                    match_count,
+                                );
+                            }
+                            return Ok(Json(response));
+                        }
+                    };
+                    target_selection_candidate_count = target_resolution.candidate_count;
                     target_selection_same_rank_count =
-                        resolved_target.target.selected_rank_candidate_count;
-                    let target = resolved_target.target.candidate;
+                        target_resolution.selected_rank_candidate_count;
+                    let target = target_resolution.candidate;
                     selected_symbol_id = Some(target.symbol.stable_id.clone());
-                    let target_corpus = resolved_target.target.corpus;
+                    let target_corpus = target_resolution.corpus;
 
                     let cached_precise_graph = server
                         .precise_graph_for_corpus(target_corpus.as_ref(), resource_budgets)?;
@@ -1230,25 +1442,28 @@ impl FriggMcpServer {
                                 )
                                 .into_iter()
                                 .filter(|occurrence| occurrence.is_definition())
-                                .map(|occurrence| NavigationLocation {
-                                    match_id: None,
-                                    symbol: if precise_target.display_name.is_empty() {
-                                        target.symbol.name.clone()
-                                    } else {
-                                        precise_target.display_name.clone()
-                                    },
-                                    repository_id: target_corpus.repository_id.clone(),
-                                    path: Self::canonicalize_navigation_path(
+                                .map(|occurrence| {
+                                    Self::selected_target_navigation_location(
+                                        target_corpus.as_ref(),
                                         &target.root,
-                                        &occurrence.path,
-                                    ),
-                                    line: occurrence.range.start_line,
-                                    column: occurrence.range.start_column,
-                                    kind: Self::display_symbol_kind(&precise_target.kind),
-                                    precision: Some(
-                                        Self::precise_match_precision(precise_coverage).to_owned(),
-                                    ),
-                                    follow_up_structural: Vec::new(),
+                                        &target.symbol,
+                                        if precise_target.display_name.is_empty() {
+                                            target.symbol.name.clone()
+                                        } else {
+                                            precise_target.display_name.clone()
+                                        },
+                                        Self::canonicalize_navigation_path(
+                                            &target.root,
+                                            &occurrence.path,
+                                        ),
+                                        occurrence.range.start_line,
+                                        occurrence.range.start_column,
+                                        Self::display_symbol_kind(&precise_target.kind),
+                                        Some(
+                                            Self::precise_match_precision(precise_coverage)
+                                                .to_owned(),
+                                        ),
+                                    )
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -1297,6 +1512,7 @@ impl FriggMcpServer {
                             mode: FriggMcpServer::navigation_mode_from_precision_label(Some(
                                 precision,
                             )),
+                            target_selection: target_selection.clone(),
                             metadata,
                             note,
                         };
@@ -1318,17 +1534,17 @@ impl FriggMcpServer {
                         return Ok(Json(response));
                     }
 
-                    let mut matches = vec![NavigationLocation {
-                        match_id: None,
-                        symbol: target.symbol.name.clone(),
-                        repository_id: target_corpus.repository_id.clone(),
-                        path: Self::relative_display_path(&target.root, &target.symbol.path),
-                        line: target.symbol.line,
-                        column: 1,
-                        kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
-                        precision: Some("heuristic".to_owned()),
-                        follow_up_structural: Vec::new(),
-                    }];
+                    let mut matches = vec![Self::selected_target_navigation_location(
+                        target_corpus.as_ref(),
+                        &target.root,
+                        &target.symbol,
+                        target.symbol.name.clone(),
+                        String::new(),
+                        target.symbol.line,
+                        1,
+                        Self::display_symbol_kind(target.symbol.kind.as_str()),
+                        Some("heuristic".to_owned()),
+                    )];
                     Self::sort_navigation_locations(&mut matches);
                     if matches.len() > limit {
                         matches.truncate(limit);
@@ -1374,6 +1590,7 @@ impl FriggMcpServer {
                         matches,
                         result_handle: None,
                         mode: NavigationMode::HeuristicNoPrecise,
+                        target_selection: target_selection.clone(),
                         metadata,
                         note,
                     };

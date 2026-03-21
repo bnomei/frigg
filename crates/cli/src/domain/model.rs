@@ -86,11 +86,17 @@ pub struct GeneratedStructuralFollowUp {
 pub struct SymbolMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_symbol_id: Option<String>,
     pub repository_id: String,
     pub symbol: String,
     pub kind: String,
     pub path: String,
     pub line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -105,6 +111,8 @@ pub enum ReferenceMatchKind {
 pub struct ReferenceMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_symbol_id: Option<String>,
     pub repository_id: String,
     pub symbol: String,
     pub path: String,
@@ -115,6 +123,10 @@ pub struct ReferenceMatch {
     pub precision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }

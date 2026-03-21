@@ -76,6 +76,7 @@ fn response_caches_respect_registry_entry_limits_and_track_evictions() {
         matches: Vec::new(),
         result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
+        target_selection: None,
         metadata: None,
         note: None,
     };
@@ -569,6 +570,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
         matches: Vec::new(),
         result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
+        target_selection: None,
         metadata: None,
         note: None,
     };
@@ -576,6 +578,7 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
         matches: Vec::new(),
         result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
+        target_selection: None,
         metadata: None,
         note: None,
     };
@@ -1089,6 +1092,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
         matches: Vec::new(),
         result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
+        target_selection: None,
         metadata: None,
         note: None,
     };
@@ -1096,6 +1100,7 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
         matches: Vec::new(),
         result_handle: None,
         mode: NavigationMode::UnavailableNoPrecise,
+        target_selection: None,
         metadata: None,
         note: None,
     };

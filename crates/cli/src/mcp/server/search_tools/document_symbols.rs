@@ -218,6 +218,7 @@ impl FriggMcpServer {
             nodes.push(PendingDocumentSymbolNode {
                 item: crate::mcp::types::DocumentSymbolItem {
                     match_id: None,
+                    stable_symbol_id: Some(symbol.stable_id.clone()),
                     symbol: symbol.name.clone(),
                     kind: symbol.kind.as_str().to_owned(),
                     repository_id: repository_id.to_owned(),
@@ -227,6 +228,7 @@ impl FriggMcpServer {
                     end_line: Some(symbol.span.end_line),
                     end_column: Some(symbol.span.end_column),
                     container,
+                    signature: None,
                     follow_up_structural: follow_up_source
                         .map(|(language, absolute_path, source)| {
                             generated_follow_up_structural_at_location_in_source(

@@ -1,4 +1,5 @@
 use super::*;
+use frigg::mcp::types::NavigationTargetSelectionStatus;
 
 #[tokio::test]
 async fn core_find_references_returns_heuristic_metadata_and_matches() {
@@ -862,8 +863,26 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("find_references should succeed with ambiguous symbol names")
+        .expect("find_references should require disambiguation for ambiguous symbol names")
         .0;
+
+    assert_eq!(response.total_matches, 0);
+    assert!(response.matches.is_empty());
+    assert_eq!(response.mode, NavigationMode::UnavailableNoPrecise);
+    let selection = response
+        .target_selection
+        .as_ref()
+        .expect("find_references should surface target selection details");
+    assert_eq!(
+        selection.status,
+        NavigationTargetSelectionStatus::DisambiguationRequired
+    );
+    assert_eq!(selection.symbol_query, "invalid_params");
+    assert_eq!(selection.candidate_count, 2);
+    assert_eq!(selection.same_rank_candidate_count, 2);
+    assert_eq!(selection.candidates.len(), 2);
+    assert_eq!(selection.candidates[0].path, "src/a.rs");
+    assert_eq!(selection.candidates[1].path, "src/b.rs");
 
     let note = response
         .note
@@ -872,25 +891,22 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
     let note_json: serde_json::Value =
         serde_json::from_str(note).expect("find_references note should be valid JSON");
     assert_eq!(note_json["resolution_source"], "symbol");
-    assert_eq!(note_json["target_selection"]["query"], "invalid_params");
-    assert_eq!(note_json["target_selection"]["selected_path"], "src/a.rs");
-    assert_eq!(note_json["target_selection"]["selected_line"], 1);
-    assert_eq!(note_json["target_selection"]["ambiguous_query"], true);
+    assert_eq!(note_json["disambiguation_required"], true);
+    assert_eq!(
+        note_json["target_selection"]["status"],
+        "disambiguation_required"
+    );
     assert_eq!(note_json["target_selection"]["candidate_count"], 2);
     assert_eq!(
         note_json["target_selection"]["same_rank_candidate_count"],
         2
-    );
-    assert_eq!(
-        note_json["precise_absence_reason"],
-        "no_scip_artifacts_discovered"
     );
 
     cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
-async fn find_references_precise_results_stay_pinned_to_runtime_target_selection() {
+async fn find_references_precise_results_round_trip_through_stable_symbol_id() {
     let workspace_root = temp_workspace_root("find-references-precise-target-pinning");
     let src_root = workspace_root.join("src");
     let benches_root = workspace_root.join("benches");
@@ -966,9 +982,28 @@ async fn find_references_precise_results_stay_pinned_to_runtime_target_selection
     );
 
     let server = server_for_workspace_root(&workspace_root);
+    let search = server
+        .search_symbol(Parameters(SearchSymbolParams {
+            query: "try_execute".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            path_class: None,
+            path_regex: None,
+            limit: Some(20),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("search_symbol should surface ambiguous exact-name candidates")
+        .0;
+    let runtime_symbol_id = search
+        .matches
+        .iter()
+        .find(|matched| matched.path == "src/lib.rs")
+        .and_then(|matched| matched.stable_symbol_id.clone())
+        .expect("runtime search result should expose a stable symbol id");
+
     let response = server
         .find_references(Parameters(FindReferencesParams {
-            symbol: Some("try_execute".to_owned()),
+            symbol: Some(runtime_symbol_id.clone()),
             repository_id: Some("repo-001".to_owned()),
             path: None,
             line: None,
@@ -979,13 +1014,26 @@ async fn find_references_precise_results_stay_pinned_to_runtime_target_selection
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("find_references should pin precise results to the selected runtime target")
+        .expect("find_references should resolve a stable symbol id without name ambiguity")
         .0;
 
     assert_eq!(response.matches.len(), 1);
     assert_eq!(response.matches[0].symbol, "try_execute");
     assert_eq!(response.matches[0].path, "src/lib.rs");
     assert_eq!(response.matches[0].line, 2);
+    assert_eq!(
+        response.matches[0].stable_symbol_id.as_deref(),
+        Some(runtime_symbol_id.as_str())
+    );
+    let selection = response
+        .target_selection
+        .as_ref()
+        .expect("find_references should keep resolved target selection details");
+    assert_eq!(selection.status, NavigationTargetSelectionStatus::Resolved);
+    assert_eq!(
+        selection.selected_stable_symbol_id.as_deref(),
+        Some(runtime_symbol_id.as_str())
+    );
 
     let note = response
         .note

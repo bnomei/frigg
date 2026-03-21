@@ -69,6 +69,74 @@ impl FriggMcpServer {
         });
     }
 
+    fn source_span_strictly_contains(parent: &SourceSpan, child: &SourceSpan) -> bool {
+        let starts_before = parent.start_line < child.start_line
+            || (parent.start_line == child.start_line && parent.start_column <= child.start_column);
+        let ends_after = parent.end_line > child.end_line
+            || (parent.end_line == child.end_line && parent.end_column >= child.end_column);
+        starts_before
+            && ends_after
+            && (parent.start_line != child.start_line
+                || parent.start_column != child.start_column
+                || parent.end_line != child.end_line
+                || parent.end_column != child.end_column)
+    }
+
+    pub(in crate::mcp::server) fn symbol_context_for_index(
+        corpus: &RepositorySymbolCorpus,
+        symbol_index: usize,
+    ) -> (Option<String>, Option<String>) {
+        let symbol = &corpus.symbols[symbol_index];
+        let container = corpus
+            .symbols
+            .iter()
+            .enumerate()
+            .filter(|(candidate_index, candidate)| {
+                *candidate_index != symbol_index
+                    && candidate.path == symbol.path
+                    && Self::source_span_strictly_contains(&candidate.span, &symbol.span)
+            })
+            .min_by(|(_, left), (_, right)| {
+                let left_span = left.span.end_line.saturating_sub(left.span.start_line);
+                let right_span = right.span.end_line.saturating_sub(right.span.start_line);
+                let left_column_span = if left_span == 0 {
+                    left.span.end_column.saturating_sub(left.span.start_column)
+                } else {
+                    usize::MAX
+                };
+                let right_column_span = if right_span == 0 {
+                    right
+                        .span
+                        .end_column
+                        .saturating_sub(right.span.start_column)
+                } else {
+                    usize::MAX
+                };
+                left_span
+                    .cmp(&right_span)
+                    .then(left_column_span.cmp(&right_column_span))
+                    .then(left.line.cmp(&right.line))
+                    .then(left.stable_id.cmp(&right.stable_id))
+            })
+            .map(|(_, container)| container.name.clone());
+        let signature = corpus
+            .canonical_symbol_name_by_stable_id
+            .get(symbol.stable_id.as_str())
+            .cloned();
+        (container, signature)
+    }
+
+    pub(in crate::mcp::server) fn symbol_context_for_stable_id(
+        corpus: &RepositorySymbolCorpus,
+        stable_id: &str,
+    ) -> (Option<String>, Option<String>) {
+        corpus
+            .symbol_index_by_stable_id
+            .get(stable_id)
+            .map(|symbol_index| Self::symbol_context_for_index(corpus, *symbol_index))
+            .unwrap_or((None, None))
+    }
+
     pub(in crate::mcp::server) fn build_ranked_symbol_match(
         corpus: &RepositorySymbolCorpus,
         symbol_index: usize,
@@ -98,6 +166,7 @@ impl FriggMcpServer {
             return None;
         }
         let path_class = Self::navigation_path_class(&path);
+        let (container, signature) = Self::symbol_context_for_index(corpus, symbol_index);
         Some(RankedSymbolMatch {
             rank,
             path_class_rank: Self::navigation_path_class_rank(path_class),
@@ -110,11 +179,14 @@ impl FriggMcpServer {
             },
             matched: SymbolMatch {
                 match_id: None,
+                stable_symbol_id: Some(symbol.stable_id.clone()),
                 repository_id: corpus.repository_id.clone(),
                 symbol: symbol.name.clone(),
                 kind: symbol.kind.as_str().to_owned(),
                 path,
                 line: symbol.line,
+                container,
+                signature,
             },
         })
     }
@@ -169,7 +241,8 @@ impl FriggMcpServer {
         repository_id_hint: Option<&str>,
         location_relative_path: Option<&str>,
         rust_hint: Option<&crate::languages::RustNavigationQueryHint>,
-    ) -> Result<ResolvedSymbolTarget, ErrorData> {
+        require_disambiguation: bool,
+    ) -> Result<NavigationTargetSelection, ErrorData> {
         let mut candidates = Vec::new();
         let query_lower = symbol_query.to_ascii_lowercase();
         let query_looks_canonical = symbol_query.contains('\\')
@@ -282,13 +355,26 @@ impl FriggMcpServer {
             .iter()
             .take_while(|resolved| resolved.rank == candidate.rank)
             .count();
+        if require_disambiguation && selected_rank_candidate_count > 1 {
+            let same_rank_candidates = candidates
+                .into_iter()
+                .take(selected_rank_candidate_count)
+                .collect::<Vec<_>>();
+            return Ok(NavigationTargetSelection::DisambiguationRequired(
+                DisambiguationRequiredSymbolTarget {
+                    candidates: same_rank_candidates,
+                    candidate_count,
+                    selected_rank_candidate_count,
+                },
+            ));
+        }
 
-        Ok(ResolvedSymbolTarget {
+        Ok(NavigationTargetSelection::Resolved(ResolvedSymbolTarget {
             candidate,
             corpus,
             candidate_count,
             selected_rank_candidate_count,
-        })
+        }))
     }
 
     pub(in crate::mcp::server) fn navigation_path_class(relative_path: &str) -> &'static str {
@@ -865,10 +951,11 @@ impl FriggMcpServer {
                 repository_id_hint,
                 None,
                 None,
+                true,
             )?;
             return Ok(ResolvedNavigationTarget {
                 symbol_query: query.to_owned(),
-                target,
+                selection: target,
                 resolution_source: "symbol",
             });
         }
@@ -912,11 +999,12 @@ impl FriggMcpServer {
                 repository_id_hint,
                 Some(location_hint.relative_path.as_str()),
                 location_hint.rust_hint.as_ref(),
+                false,
             )
         {
             return Ok(ResolvedNavigationTarget {
                 symbol_query: location_hint.symbol_query,
-                target,
+                selection: target,
                 resolution_source: location_hint.resolution_source,
             });
         }
@@ -933,10 +1021,11 @@ impl FriggMcpServer {
             repository_id_hint,
             None,
             None,
+            false,
         )?;
         Ok(ResolvedNavigationTarget {
             symbol_query,
-            target,
+            selection: target,
             resolution_source: "location_enclosing_symbol",
         })
     }
