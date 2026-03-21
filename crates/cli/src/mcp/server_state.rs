@@ -28,6 +28,7 @@ pub(crate) struct RepositorySymbolCorpus {
     pub root_signature: String,
     pub source_paths: Vec<PathBuf>,
     pub symbols: Vec<SymbolDefinition>,
+    pub container_symbol_index_by_index: Vec<Option<usize>>,
     pub symbols_by_relative_path: BTreeMap<String, Vec<usize>>,
     pub symbol_index_by_stable_id: BTreeMap<String, usize>,
     pub symbol_indices_by_name: BTreeMap<String, Vec<usize>>,

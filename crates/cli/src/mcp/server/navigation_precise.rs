@@ -592,6 +592,8 @@ impl FriggMcpServer {
                         return None;
                     };
 
+                let (container, signature) =
+                    Self::symbol_context_for_stable_id(target_corpus, &enclosing_symbol.stable_id);
                 Some(ImplementationMatch {
                     match_id: None,
                     stable_symbol_id: Some(enclosing_symbol.stable_id.clone()),
@@ -602,16 +604,8 @@ impl FriggMcpServer {
                     line,
                     column,
                     relation,
-                    container: Self::symbol_context_for_stable_id(
-                        target_corpus,
-                        &enclosing_symbol.stable_id,
-                    )
-                    .0,
-                    signature: Self::symbol_context_for_stable_id(
-                        target_corpus,
-                        &enclosing_symbol.stable_id,
-                    )
-                    .1,
+                    container,
+                    signature,
                     precision: Some(precision.clone()),
                     fallback_reason: None,
                     follow_up_structural: Vec::new(),

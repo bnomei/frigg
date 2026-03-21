@@ -11,6 +11,43 @@ use rayon::prelude::*;
 const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
 
 impl FriggMcpServer {
+    fn container_symbol_index_by_index(symbols: &[SymbolDefinition]) -> Vec<Option<usize>> {
+        symbols
+            .iter()
+            .enumerate()
+            .map(|(symbol_index, symbol)| {
+                symbols
+                    .iter()
+                    .enumerate()
+                    .filter(|(candidate_index, candidate)| {
+                        *candidate_index != symbol_index
+                            && candidate.path == symbol.path
+                            && Self::source_span_strictly_contains(&candidate.span, &symbol.span)
+                    })
+                    .min_by(|(_, left), (_, right)| {
+                        let left_span = left.span.end_line.saturating_sub(left.span.start_line);
+                        let right_span = right.span.end_line.saturating_sub(right.span.start_line);
+                        let left_column_span = if left_span == 0 {
+                            left.span.end_column.saturating_sub(left.span.start_column)
+                        } else {
+                            usize::MAX
+                        };
+                        let right_column_span = if right_span == 0 {
+                            right.span.end_column.saturating_sub(right.span.start_column)
+                        } else {
+                            usize::MAX
+                        };
+                        left_span
+                            .cmp(&right_span)
+                            .then(left_column_span.cmp(&right_column_span))
+                            .then(left.line.cmp(&right.line))
+                            .then(left.stable_id.cmp(&right.stable_id))
+                    })
+                    .map(|(container_index, _)| container_index)
+            })
+            .collect()
+    }
+
     pub(super) fn invalidate_repository_symbol_corpus_cache(&self, repository_id: &str) {
         self.cache_state
             .symbol_corpus_cache
@@ -206,6 +243,7 @@ impl FriggMcpServer {
             &symbol_index_by_stable_id,
             &canonical_symbol_name_by_stable_id,
         );
+        let container_symbol_index_by_index = Self::container_symbol_index_by_index(&symbols);
 
         let corpus = Arc::new(RepositorySymbolCorpus {
             repository_id: repository_id.clone(),
@@ -213,6 +251,7 @@ impl FriggMcpServer {
             root_signature: root_signature.clone(),
             source_paths,
             symbols,
+            container_symbol_index_by_index,
             symbols_by_relative_path,
             symbol_index_by_stable_id,
             symbol_indices_by_name,

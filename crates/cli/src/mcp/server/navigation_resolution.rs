@@ -69,7 +69,10 @@ impl FriggMcpServer {
         });
     }
 
-    fn source_span_strictly_contains(parent: &SourceSpan, child: &SourceSpan) -> bool {
+    pub(in crate::mcp::server) fn source_span_strictly_contains(
+        parent: &SourceSpan,
+        child: &SourceSpan,
+    ) -> bool {
         let starts_before = parent.start_line < child.start_line
             || (parent.start_line == child.start_line && parent.start_column <= child.start_column);
         let ends_after = parent.end_line > child.end_line
@@ -86,39 +89,15 @@ impl FriggMcpServer {
         corpus: &RepositorySymbolCorpus,
         symbol_index: usize,
     ) -> (Option<String>, Option<String>) {
-        let symbol = &corpus.symbols[symbol_index];
+        let Some(symbol) = corpus.symbols.get(symbol_index) else {
+            return (None, None);
+        };
         let container = corpus
-            .symbols
-            .iter()
-            .enumerate()
-            .filter(|(candidate_index, candidate)| {
-                *candidate_index != symbol_index
-                    && candidate.path == symbol.path
-                    && Self::source_span_strictly_contains(&candidate.span, &symbol.span)
-            })
-            .min_by(|(_, left), (_, right)| {
-                let left_span = left.span.end_line.saturating_sub(left.span.start_line);
-                let right_span = right.span.end_line.saturating_sub(right.span.start_line);
-                let left_column_span = if left_span == 0 {
-                    left.span.end_column.saturating_sub(left.span.start_column)
-                } else {
-                    usize::MAX
-                };
-                let right_column_span = if right_span == 0 {
-                    right
-                        .span
-                        .end_column
-                        .saturating_sub(right.span.start_column)
-                } else {
-                    usize::MAX
-                };
-                left_span
-                    .cmp(&right_span)
-                    .then(left_column_span.cmp(&right_column_span))
-                    .then(left.line.cmp(&right.line))
-                    .then(left.stable_id.cmp(&right.stable_id))
-            })
-            .map(|(_, container)| container.name.clone());
+            .container_symbol_index_by_index
+            .get(symbol_index)
+            .and_then(|container_index| {
+                container_index.and_then(|index| corpus.symbols.get(index).map(|symbol| symbol.name.clone()))
+            });
         let signature = corpus
             .canonical_symbol_name_by_stable_id
             .get(symbol.stable_id.as_str())

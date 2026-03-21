@@ -753,6 +753,10 @@ impl FriggMcpServer {
                                             return None;
                                         }
 
+                                        let (container, signature) = Self::symbol_context_for_stable_id(
+                                            target_corpus.as_ref(),
+                                            &target.symbol.stable_id,
+                                        );
                                         Some(ReferenceMatch {
                                             match_id: None,
                                             stable_symbol_id: Some(target.symbol.stable_id.clone()),
@@ -766,16 +770,8 @@ impl FriggMcpServer {
                                             fallback_reason: Some(
                                                 "precise_supplemented".to_owned(),
                                             ),
-                                            container: Self::symbol_context_for_stable_id(
-                                                target_corpus.as_ref(),
-                                                &target.symbol.stable_id,
-                                            )
-                                            .0,
-                                            signature: Self::symbol_context_for_stable_id(
-                                                target_corpus.as_ref(),
-                                                &target.symbol.stable_id,
-                                            )
-                                            .1,
+                                            container,
+                                            signature,
                                             follow_up_structural: Vec::new(),
                                         })
                                     })
