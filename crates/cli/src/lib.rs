@@ -38,6 +38,7 @@ pub mod storage;
 /// setup in every suite.
 pub mod test_support;
 pub(crate) mod text_sanitization;
+pub(crate) mod vendor_grammars;
 /// Incremental freshness runtime that keeps attached workspaces reindexed without pushing watch
 /// logic into request handlers.
 pub mod watch;

@@ -770,6 +770,7 @@ dependencies = [
  "async-trait",
  "axum",
  "blake3",
+ "cc",
  "chrono",
  "clap",
  "criterion",
@@ -795,14 +796,11 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
- "tree-sitter-blade",
  "tree-sitter-go",
- "tree-sitter-kotlin",
+ "tree-sitter-language",
  "tree-sitter-lua",
- "tree-sitter-nim",
  "tree-sitter-php",
  "tree-sitter-python",
- "tree-sitter-roc",
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "url",
@@ -3115,30 +3113,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-blade"
-version = "0.12.0"
-dependencies = [
- "cc",
- "tree-sitter",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-go"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
 dependencies = [
  "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-kotlin"
-version = "0.3.8"
-dependencies = [
- "cc",
- "tree-sitter",
  "tree-sitter-language",
 ]
 
@@ -3159,15 +3139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-nim"
-version = "0.6.2"
-dependencies = [
- "cc",
- "tree-sitter",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-php"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3184,15 +3155,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d065aaa27f3aaceaf60c1f0e0ac09e1cb9eb8ed28e7bcdaa52129cffc7f4b04"
 dependencies = [
  "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-roc"
-version = "0.0.1"
-dependencies = [
- "cc",
- "tree-sitter",
  "tree-sitter-language",
 ]
 

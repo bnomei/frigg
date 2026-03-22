@@ -2,6 +2,7 @@
 name = "tree-sitter-blade"
 description = "blade grammar for the tree-sitter parsing library"
 version = "0.12.0"
+publish = false
 authors = ["Emran M. Rahaman <Emran@opulence.design>"]
 keywords = ["incremental", "parsing", "tree-sitter", "blade"]
 categories = ["parsing", "text-editors"]

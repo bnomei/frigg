@@ -2,6 +2,7 @@
 name = "tree-sitter-roc"
 description = "ROC grammar for the tree-sitter parsing library"
 version = "0.0.1"
+publish = false
 keywords = ["incremental", "parsing", "ROC"]
 categories = ["parsing", "text-editors"]
 repository = "https://github.com/faldor20/tree-sitter-roc"

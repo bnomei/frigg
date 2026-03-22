@@ -2,6 +2,12 @@
 members = [
   "crates/cli",
 ]
+exclude = [
+  "vendor/*",
+]
+default-members = [
+  "crates/cli",
+]
 resolver = "2"
 
 [workspace.package]
@@ -12,7 +18,7 @@ documentation = "https://docs.rs/frigg"
 edition = "2024"
 homepage = "https://github.com/bnomei/frigg"
 keywords = ["mcp", "code-search", "code-navigation", "tree-sitter", "semantic-search"]
-license = "MIT"
+license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
 rust-version = "1.85"
@@ -49,14 +55,10 @@ tokio = { version = "1.50.0", features = ["fs", "io-std", "macros", "net", "rt",
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 tree-sitter = "0.26.6"
-tree-sitter-blade = { path = "vendor/tree-sitter-blade", version = "0.12.0" }
 tree-sitter-go = "0.25.0"
-tree-sitter-kotlin = { path = "vendor/tree-sitter-kotlin", version = "0.3.8" }
 tree-sitter-lua = "0.5.0"
-tree-sitter-nim = { path = "vendor/tree-sitter-nim", version = "0.6.2" }
 tree-sitter-python = "0.23.3"
 tree-sitter-php = "0.24.2"
-tree-sitter-roc = { path = "vendor/tree-sitter-roc", version = "0.0.1" }
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 url = "2.5.8"

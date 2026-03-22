@@ -14,6 +14,9 @@ use tree_sitter::{Node, Parser};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::indexer::SymbolKind;
+use crate::vendor_grammars::{
+    tree_sitter_blade, tree_sitter_kotlin, tree_sitter_nim, tree_sitter_roc,
+};
 
 use super::{blade, go, kotlin, lua, nim, php, python, roc, rust, typescript};
 
