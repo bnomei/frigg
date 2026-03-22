@@ -3,6 +3,7 @@
 [![Crates.io Version](https://img.shields.io/crates/v/frigg)](https://crates.io/crates/frigg)
 [![Build Status](https://github.com/bnomei/frigg/actions/workflows/ci.yml/badge.svg)](https://github.com/bnomei/frigg/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MPL2.0-blue)](LICENSE)
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
