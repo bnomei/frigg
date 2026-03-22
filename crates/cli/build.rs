@@ -1,10 +1,28 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
+    compile_sqlite_vec();
     compile_tree_sitter_blade();
     compile_tree_sitter_kotlin();
     compile_tree_sitter_nim();
     compile_tree_sitter_roc();
+}
+
+fn compile_sqlite_vec() {
+    let src_dir = Path::new("vendor-sqlite-vec");
+    let mut build = cc::Build::new();
+    build.include(src_dir);
+    add_common_flags(&mut build);
+    build.define("SQLITE_CORE", None);
+    build.file(src_dir.join("sqlite-vec.c"));
+    build.compile("frigg_sqlite_vec");
+
+    rerun_paths(&[
+        src_dir.join("sqlite-vec.c"),
+        src_dir.join("sqlite-vec.h"),
+        src_dir.join("sqlite3.h"),
+        src_dir.join("sqlite3ext.h"),
+    ]);
 }
 
 fn compile_tree_sitter_blade() {

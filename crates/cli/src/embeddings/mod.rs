@@ -9,9 +9,6 @@ use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
 
-#[allow(unused_imports)]
-use sqlite_vec as _;
-
 /// Result type shared by semantic indexing and query-time embedding calls.
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 

@@ -11,8 +11,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
-#[allow(unused_imports)]
-use sqlite_vec as _;
 
 mod db_runtime;
 mod lifecycle;
