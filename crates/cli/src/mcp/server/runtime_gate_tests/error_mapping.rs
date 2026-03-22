@@ -155,14 +155,16 @@ fn internal_error_maps_to_internal_error_class() {
 fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
     let warning = FriggMcpServer::search_hybrid_warning(
         "capture_screen",
-        false,
-        crate::mcp::types::SearchHybridQueryShape::CodeShaped,
-        Some(crate::domain::ChannelHealthStatus::Ok),
-        None,
-        Some(0),
-        Some(0),
-        None,
-        false,
+        crate::mcp::server::search_tools::SearchHybridWarningContext {
+            lexical_only_mode: false,
+            query_shape: crate::mcp::types::SearchHybridQueryShape::CodeShaped,
+            semantic_status: Some(crate::domain::ChannelHealthStatus::Ok),
+            semantic_reason: None,
+            semantic_hit_count: Some(0),
+            semantic_match_count: Some(0),
+            exact_pivot_assistance: None,
+            witness_demotion_applied: false,
+        },
     );
 
     assert_eq!(
@@ -177,14 +179,16 @@ fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
 fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
     let warning = FriggMcpServer::search_hybrid_warning(
         "capture_screen",
-        false,
-        crate::mcp::types::SearchHybridQueryShape::CodeShaped,
-        Some(crate::domain::ChannelHealthStatus::Ok),
-        None,
-        Some(3),
-        Some(0),
-        None,
-        false,
+        crate::mcp::server::search_tools::SearchHybridWarningContext {
+            lexical_only_mode: false,
+            query_shape: crate::mcp::types::SearchHybridQueryShape::CodeShaped,
+            semantic_status: Some(crate::domain::ChannelHealthStatus::Ok),
+            semantic_reason: None,
+            semantic_hit_count: Some(3),
+            semantic_match_count: Some(0),
+            exact_pivot_assistance: None,
+            witness_demotion_applied: false,
+        },
     );
 
     assert_eq!(
@@ -199,14 +203,16 @@ fn search_hybrid_warning_surfaces_semantic_ok_noncontributing_hits() {
 fn search_hybrid_warning_escalates_broad_queries_in_lexical_only_mode() {
     let warning = FriggMcpServer::search_hybrid_warning(
         "where is capture request flow handled after tool layer",
-        true,
-        crate::mcp::types::SearchHybridQueryShape::BroadNaturalLanguage,
-        Some(crate::domain::ChannelHealthStatus::Disabled),
-        None,
-        Some(0),
-        Some(0),
-        None,
-        false,
+        crate::mcp::server::search_tools::SearchHybridWarningContext {
+            lexical_only_mode: true,
+            query_shape: crate::mcp::types::SearchHybridQueryShape::BroadNaturalLanguage,
+            semantic_status: Some(crate::domain::ChannelHealthStatus::Disabled),
+            semantic_reason: None,
+            semantic_hit_count: Some(0),
+            semantic_match_count: Some(0),
+            exact_pivot_assistance: None,
+            witness_demotion_applied: false,
+        },
     );
 
     assert_eq!(
@@ -221,19 +227,21 @@ fn search_hybrid_warning_escalates_broad_queries_in_lexical_only_mode() {
 fn search_hybrid_warning_mentions_exact_assistance_for_code_shaped_lexical_only_queries() {
     let warning = FriggMcpServer::search_hybrid_warning(
         "setNavigationContext",
-        true,
-        crate::mcp::types::SearchHybridQueryShape::CodeShaped,
-        Some(crate::domain::ChannelHealthStatus::Disabled),
-        Some("semantic channel disabled by request toggle"),
-        Some(0),
-        Some(0),
-        Some(&crate::mcp::types::SearchHybridExactPivotAssistance {
-            applied: true,
-            exact_symbol_hit_count: 1,
-            exact_text_hit_count: 1,
-            boosted_match_count: 1,
-        }),
-        true,
+        crate::mcp::server::search_tools::SearchHybridWarningContext {
+            lexical_only_mode: true,
+            query_shape: crate::mcp::types::SearchHybridQueryShape::CodeShaped,
+            semantic_status: Some(crate::domain::ChannelHealthStatus::Disabled),
+            semantic_reason: Some("semantic channel disabled by request toggle"),
+            semantic_hit_count: Some(0),
+            semantic_match_count: Some(0),
+            exact_pivot_assistance: Some(&crate::mcp::types::SearchHybridExactPivotAssistance {
+                applied: true,
+                exact_symbol_hit_count: 1,
+                exact_text_hit_count: 1,
+                boosted_match_count: 1,
+            }),
+            witness_demotion_applied: true,
+        },
     );
 
     assert_eq!(

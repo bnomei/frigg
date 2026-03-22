@@ -22,6 +22,9 @@ mod text;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use self::hybrid::SearchHybridWarningContext;
+
 impl FriggMcpServer {
     pub(super) fn search_lexical_backend_metadata(
         backend: Option<SearchLexicalBackend>,

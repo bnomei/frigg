@@ -46,6 +46,17 @@ impl SearchHybridExactPivotAssistInternal {
     }
 }
 
+pub(crate) struct SearchHybridWarningContext<'a> {
+    pub(crate) lexical_only_mode: bool,
+    pub(crate) query_shape: SearchHybridQueryShape,
+    pub(crate) semantic_status: Option<ChannelHealthStatus>,
+    pub(crate) semantic_reason: Option<&'a str>,
+    pub(crate) semantic_hit_count: Option<usize>,
+    pub(crate) semantic_match_count: Option<usize>,
+    pub(crate) exact_pivot_assistance: Option<&'a SearchHybridExactPivotAssistance>,
+    pub(crate) witness_demotion_applied: bool,
+}
+
 impl FriggMcpServer {
     pub(crate) async fn search_hybrid_impl(
         &self,
@@ -250,14 +261,16 @@ impl FriggMcpServer {
                     witness_demotion_applied = Some(witness_demotion_was_applied);
                     warning = Self::search_hybrid_warning(
                         &params_for_blocking.query,
-                        search_output.note.lexical_only_mode,
-                        detected_query_shape,
-                        semantic_status,
-                        semantic_reason.as_deref(),
-                        semantic_hit_count,
-                        semantic_match_count,
-                        exact_pivot_assistance.as_ref(),
-                        witness_demotion_was_applied,
+                        SearchHybridWarningContext {
+                            lexical_only_mode: search_output.note.lexical_only_mode,
+                            query_shape: detected_query_shape,
+                            semantic_status,
+                            semantic_reason: semantic_reason.as_deref(),
+                            semantic_hit_count,
+                            semantic_match_count,
+                            exact_pivot_assistance: exact_pivot_assistance.as_ref(),
+                            witness_demotion_applied: witness_demotion_was_applied,
+                        },
                     );
                     match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
 
@@ -428,22 +441,17 @@ impl FriggMcpServer {
 
     pub(crate) fn search_hybrid_warning(
         query: &str,
-        lexical_only_mode: bool,
-        query_shape: SearchHybridQueryShape,
-        semantic_status: Option<ChannelHealthStatus>,
-        semantic_reason: Option<&str>,
-        semantic_hit_count: Option<usize>,
-        semantic_match_count: Option<usize>,
-        exact_pivot_assistance: Option<&SearchHybridExactPivotAssistance>,
-        witness_demotion_applied: bool,
+        context: SearchHybridWarningContext<'_>,
     ) -> Option<String> {
-        let broad_natural_language =
-            lexical_only_mode && Self::search_hybrid_query_looks_broad_natural_language(query);
-        let code_shaped_exact_assist = lexical_only_mode
-            && query_shape == SearchHybridQueryShape::CodeShaped
-            && exact_pivot_assistance.is_some_and(|assistance| assistance.applied);
-        let base = match semantic_status {
-            Some(ChannelHealthStatus::Disabled) => Some(match semantic_reason {
+        let broad_natural_language = context.lexical_only_mode
+            && Self::search_hybrid_query_looks_broad_natural_language(query);
+        let code_shaped_exact_assist = context.lexical_only_mode
+            && context.query_shape == SearchHybridQueryShape::CodeShaped
+            && context
+                .exact_pivot_assistance
+                .is_some_and(|assistance| assistance.applied);
+        let base = match context.semantic_status {
+            Some(ChannelHealthStatus::Disabled) => Some(match context.semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "{} ({reason})",
                     if broad_natural_language {
@@ -460,7 +468,7 @@ impl FriggMcpServer {
                     }
                 }
             }),
-            Some(ChannelHealthStatus::Unavailable) => Some(match semantic_reason {
+            Some(ChannelHealthStatus::Unavailable) => Some(match context.semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "{} ({reason})",
                     if broad_natural_language {
@@ -477,19 +485,19 @@ impl FriggMcpServer {
                     }
                 }
             }),
-            Some(ChannelHealthStatus::Degraded) => Some(match semantic_reason {
+            Some(ChannelHealthStatus::Degraded) => Some(match context.semantic_reason {
                 Some(reason) if !reason.trim().is_empty() => format!(
                     "semantic retrieval is degraded; semantic contribution may be partial ({reason})"
                 ),
                 _ => "semantic retrieval is degraded; semantic contribution may be partial".to_owned(),
             }),
-            Some(ChannelHealthStatus::Ok) if semantic_hit_count == Some(0) => Some(
+            Some(ChannelHealthStatus::Ok) if context.semantic_hit_count == Some(0) => Some(
                 "semantic retrieval completed successfully but retained no query-relevant semantic hits; results are ranked from lexical and graph signals only"
                     .to_owned(),
             ),
             Some(ChannelHealthStatus::Ok)
-                if semantic_hit_count.unwrap_or(0) > 0
-                    && semantic_match_count == Some(0) =>
+                if context.semantic_hit_count.unwrap_or(0) > 0
+                    && context.semantic_match_count == Some(0) =>
             {
                 Some(
                     "semantic retrieval retained semantic hits, but none contributed to the returned top results; ranking is effectively lexical and graph for this result set"
@@ -501,7 +509,8 @@ impl FriggMcpServer {
 
         let mut warning = base;
         if code_shaped_exact_assist {
-            let boosted = exact_pivot_assistance
+            let boosted = context
+                .exact_pivot_assistance
                 .map(|assistance| assistance.boosted_match_count)
                 .unwrap_or(0);
             if boosted > 0 {
@@ -512,7 +521,7 @@ impl FriggMcpServer {
                 warning.push_str("; code-shaped exact symbol/text pivots were checked");
             }
         }
-        if lexical_only_mode && witness_demotion_applied {
+        if context.lexical_only_mode && context.witness_demotion_applied {
             warning.push_str("; weak witness-only matches were demoted");
         }
         Some(warning)

@@ -16,18 +16,22 @@ struct LoadedHeuristicReferences {
     source_bytes_loaded: u64,
 }
 
+struct SelectedReferenceMatchArgs {
+    display_symbol: String,
+    path: String,
+    line: usize,
+    column: usize,
+    match_kind: ReferenceMatchKind,
+    precision: Option<String>,
+    fallback_reason: Option<String>,
+}
+
 impl FriggMcpServer {
     fn selected_target_reference_match(
         target_corpus: &RepositorySymbolCorpus,
         target_root: &Path,
         target_symbol: &SymbolDefinition,
-        display_symbol: String,
-        path: String,
-        line: usize,
-        column: usize,
-        match_kind: ReferenceMatchKind,
-        precision: Option<String>,
-        fallback_reason: Option<String>,
+        args: SelectedReferenceMatchArgs,
     ) -> ReferenceMatch {
         let (container, signature) =
             Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
@@ -35,17 +39,17 @@ impl FriggMcpServer {
             match_id: None,
             stable_symbol_id: Some(target_symbol.stable_id.clone()),
             repository_id: target_corpus.repository_id.clone(),
-            symbol: display_symbol,
-            path: if path.is_empty() {
+            symbol: args.display_symbol,
+            path: if args.path.is_empty() {
                 Self::relative_display_path(target_root, &target_symbol.path)
             } else {
-                path
+                args.path
             },
-            line,
-            column,
-            match_kind,
-            precision,
-            fallback_reason,
+            line: args.line,
+            column: args.column,
+            match_kind: args.match_kind,
+            precision: args.precision,
+            fallback_reason: args.fallback_reason,
             container,
             signature,
             follow_up_structural: Vec::new(),
@@ -676,21 +680,29 @@ impl FriggMcpServer {
                                 target_corpus.as_ref(),
                                 &target.root,
                                 &target.symbol,
-                                precise_target
-                                    .as_ref()
-                                    .map(|selected| selected.display_name.clone())
-                                    .filter(|display_name| !display_name.is_empty())
-                                    .unwrap_or_else(|| target.symbol.name.clone()),
-                                Self::relative_display_path(&target.root, &absolute_path),
-                                reference.range.start_line,
-                                reference.range.start_column,
-                                if reference.is_definition() {
-                                    ReferenceMatchKind::Definition
-                                } else {
-                                    ReferenceMatchKind::Reference
+                                SelectedReferenceMatchArgs {
+                                    display_symbol: precise_target
+                                        .as_ref()
+                                        .map(|selected| selected.display_name.clone())
+                                        .filter(|display_name| !display_name.is_empty())
+                                        .unwrap_or_else(|| target.symbol.name.clone()),
+                                    path: Self::relative_display_path(
+                                        &target.root,
+                                        &absolute_path,
+                                    ),
+                                    line: reference.range.start_line,
+                                    column: reference.range.start_column,
+                                    match_kind: if reference.is_definition() {
+                                        ReferenceMatchKind::Definition
+                                    } else {
+                                        ReferenceMatchKind::Reference
+                                    },
+                                    precision: Some(
+                                        Self::precise_match_precision(precise_coverage)
+                                            .to_owned(),
+                                    ),
+                                    fallback_reason: None,
                                 },
-                                Some(Self::precise_match_precision(precise_coverage).to_owned()),
-                                None,
                             )
                         })
                         .collect::<Vec<_>>();
@@ -903,13 +915,15 @@ impl FriggMcpServer {
                         target_corpus.as_ref(),
                         &target.root,
                         &target.symbol,
-                        target.symbol.name.clone(),
-                        String::new(),
-                        target.symbol.line,
-                        1,
-                        ReferenceMatchKind::Definition,
-                        Some("heuristic".to_owned()),
-                        Some("precise_absent".to_owned()),
+                        SelectedReferenceMatchArgs {
+                            display_symbol: target.symbol.name.clone(),
+                            path: String::new(),
+                            line: target.symbol.line,
+                            column: 1,
+                            match_kind: ReferenceMatchKind::Definition,
+                            precision: Some("heuristic".to_owned()),
+                            fallback_reason: Some("precise_absent".to_owned()),
+                        },
                     ));
                 }
 
@@ -928,13 +942,18 @@ impl FriggMcpServer {
                             target_corpus.as_ref(),
                             &target.root,
                             &target.symbol,
-                            reference.symbol_name.clone(),
-                            Self::relative_display_path(&target.root, &reference.path),
-                            reference.line,
-                            reference.column,
-                            ReferenceMatchKind::Reference,
-                            Some("heuristic".to_owned()),
-                            Some("precise_absent".to_owned()),
+                            SelectedReferenceMatchArgs {
+                                display_symbol: reference.symbol_name.clone(),
+                                path: Self::relative_display_path(
+                                    &target.root,
+                                    &reference.path,
+                                ),
+                                line: reference.line,
+                                column: reference.column,
+                                match_kind: ReferenceMatchKind::Reference,
+                                precision: Some("heuristic".to_owned()),
+                                fallback_reason: Some("precise_absent".to_owned()),
+                            },
                         )
                     }));
                 if matches.len() > limit {

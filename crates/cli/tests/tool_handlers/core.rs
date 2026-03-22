@@ -1507,8 +1507,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             presentation_mode: None,
         }))
         .await
-        .err()
-        .expect("probe without query should fail");
+        .expect_err("probe without query should fail");
     assert_eq!(probe_error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&probe_error), Some("invalid_params"));
     assert_eq!(probe_error.message, "query must not be empty");
@@ -1527,8 +1526,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             presentation_mode: None,
         }))
         .await
-        .err()
-        .expect("zoom with query should fail");
+        .expect_err("zoom with query should fail");
     assert_eq!(zoom_error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&zoom_error), Some("invalid_params"));
     assert_eq!(zoom_error.message, "query is not allowed for zoom");
@@ -1552,8 +1550,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             presentation_mode: None,
         }))
         .await
-        .err()
-        .expect("refine with resume_from outside scan scope should fail");
+        .expect_err("refine with resume_from outside scan scope should fail");
     assert_eq!(refine_error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&refine_error), Some("invalid_params"));
     assert_eq!(
@@ -1575,8 +1572,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             presentation_mode: Some(ReadPresentationMode::Text),
         }))
         .await
-        .err()
-        .expect("probe text mode should fail");
+        .expect_err("probe text mode should fail");
     assert_eq!(text_probe_error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&text_probe_error), Some("invalid_params"));
     assert_eq!(

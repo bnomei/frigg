@@ -436,8 +436,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
             presentation_mode: None,
         }))
         .await
-        .err()
-        .expect("explore should reject paths outside workspace roots");
+        .expect_err("explore should reject paths outside workspace roots");
 
     assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
     assert_eq!(error_code_tag(&error), Some("access_denied"));
@@ -479,8 +478,7 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
             presentation_mode: None,
         }))
         .await
-        .err()
-        .expect("explore should reject abusive regex patterns");
+        .expect_err("explore should reject abusive regex patterns");
 
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     assert_eq!(error_code_tag(&error), Some("invalid_params"));

@@ -54,36 +54,40 @@ fn route_definition_name_regex(route_name: &str) -> Option<regex::Regex> {
     .ok()
 }
 
+struct SelectedNavigationLocationArgs {
+    display_symbol: String,
+    path: String,
+    line: usize,
+    column: usize,
+    kind: Option<String>,
+    precision: Option<String>,
+}
+
 impl FriggMcpServer {
     fn selected_target_navigation_location(
         target_corpus: &RepositorySymbolCorpus,
         target_root: &Path,
         target_symbol: &SymbolDefinition,
-        display_symbol: String,
-        path: String,
-        line: usize,
-        column: usize,
-        kind: Option<String>,
-        precision: Option<String>,
+        args: SelectedNavigationLocationArgs,
     ) -> NavigationLocation {
         let (container, signature) =
             Self::symbol_context_for_stable_id(target_corpus, &target_symbol.stable_id);
         NavigationLocation {
             match_id: None,
             stable_symbol_id: Some(target_symbol.stable_id.clone()),
-            symbol: display_symbol,
+            symbol: args.display_symbol,
             repository_id: target_corpus.repository_id.clone(),
-            path: if path.is_empty() {
+            path: if args.path.is_empty() {
                 Self::relative_display_path(target_root, &target_symbol.path)
             } else {
-                path
+                args.path
             },
-            line,
-            column,
-            kind,
+            line: args.line,
+            column: args.column,
+            kind: args.kind,
             container,
             signature,
-            precision,
+            precision: args.precision,
             follow_up_structural: Vec::new(),
         }
     }
@@ -489,26 +493,31 @@ impl FriggMcpServer {
                                                     target_corpus.as_ref(),
                                                     &target.root,
                                                     &target.symbol,
-                                                    if precise_target.display_name.is_empty() {
-                                                        target.symbol.name.clone()
-                                                    } else {
-                                                        precise_target.display_name.clone()
+                                                    SelectedNavigationLocationArgs {
+                                                        display_symbol: if precise_target
+                                                            .display_name
+                                                            .is_empty()
+                                                        {
+                                                            target.symbol.name.clone()
+                                                        } else {
+                                                            precise_target.display_name.clone()
+                                                        },
+                                                        path: Self::canonicalize_navigation_path(
+                                                            &target.root,
+                                                            &occurrence.path,
+                                                        ),
+                                                        line: occurrence.range.start_line,
+                                                        column: occurrence.range.start_column,
+                                                        kind: Self::display_symbol_kind(
+                                                            &precise_target.kind,
+                                                        ),
+                                                        precision: Some(
+                                                            Self::precise_match_precision(
+                                                                precise_coverage,
+                                                            )
+                                                            .to_owned(),
+                                                        ),
                                                     },
-                                                    Self::canonicalize_navigation_path(
-                                                        &target.root,
-                                                        &occurrence.path,
-                                                    ),
-                                                    occurrence.range.start_line,
-                                                    occurrence.range.start_column,
-                                                    Self::display_symbol_kind(
-                                                        &precise_target.kind,
-                                                    ),
-                                                    Some(
-                                                        Self::precise_match_precision(
-                                                            precise_coverage,
-                                                        )
-                                                        .to_owned(),
-                                                    ),
                                                 )
                                             })
                                             .collect::<Vec<_>>()
@@ -569,12 +578,16 @@ impl FriggMcpServer {
                                         target_corpus.as_ref(),
                                         &target.root,
                                         &target.symbol,
-                                        target.symbol.name.clone(),
-                                        String::new(),
-                                        target.symbol.line,
-                                        1,
-                                        Self::display_symbol_kind(target.symbol.kind.as_str()),
-                                        Some("heuristic".to_owned()),
+                                        SelectedNavigationLocationArgs {
+                                            display_symbol: target.symbol.name.clone(),
+                                            path: String::new(),
+                                            line: target.symbol.line,
+                                            column: 1,
+                                            kind: Self::display_symbol_kind(
+                                                target.symbol.kind.as_str(),
+                                            ),
+                                            precision: Some("heuristic".to_owned()),
+                                        },
                                     )];
                                     Self::sort_navigation_locations(&mut matches);
                                     if matches.len() > limit {
@@ -729,24 +742,31 @@ impl FriggMcpServer {
                                                 target_corpus.as_ref(),
                                                 &target.root,
                                                 &target.symbol,
-                                                if precise_target.display_name.is_empty() {
-                                                    target.symbol.name.clone()
-                                                } else {
-                                                    precise_target.display_name.clone()
+                                                SelectedNavigationLocationArgs {
+                                                    display_symbol: if precise_target
+                                                        .display_name
+                                                        .is_empty()
+                                                    {
+                                                        target.symbol.name.clone()
+                                                    } else {
+                                                        precise_target.display_name.clone()
+                                                    },
+                                                    path: Self::canonicalize_navigation_path(
+                                                        &target.root,
+                                                        &occurrence.path,
+                                                    ),
+                                                    line: occurrence.range.start_line,
+                                                    column: occurrence.range.start_column,
+                                                    kind: Self::display_symbol_kind(
+                                                        &precise_target.kind,
+                                                    ),
+                                                    precision: Some(
+                                                        Self::precise_match_precision(
+                                                            precise_coverage,
+                                                        )
+                                                        .to_owned(),
+                                                    ),
                                                 },
-                                                Self::canonicalize_navigation_path(
-                                                    &target.root,
-                                                    &occurrence.path,
-                                                ),
-                                                occurrence.range.start_line,
-                                                occurrence.range.start_column,
-                                                Self::display_symbol_kind(&precise_target.kind),
-                                                Some(
-                                                    Self::precise_match_precision(
-                                                        precise_coverage,
-                                                    )
-                                                    .to_owned(),
-                                                ),
                                             )
                                         })
                                         .collect::<Vec<_>>()
@@ -807,12 +827,16 @@ impl FriggMcpServer {
                                     target_corpus.as_ref(),
                                     &target.root,
                                     &target.symbol,
-                                    target.symbol.name.clone(),
-                                    String::new(),
-                                    target.symbol.line,
-                                    1,
-                                    Self::display_symbol_kind(target.symbol.kind.as_str()),
-                                    Some("heuristic".to_owned()),
+                                    SelectedNavigationLocationArgs {
+                                        display_symbol: target.symbol.name.clone(),
+                                        path: String::new(),
+                                        line: target.symbol.line,
+                                        column: 1,
+                                        kind: Self::display_symbol_kind(
+                                            target.symbol.kind.as_str(),
+                                        ),
+                                        precision: Some("heuristic".to_owned()),
+                                    },
                                 )];
                                 Self::sort_navigation_locations(&mut matches);
                                 if matches.len() > limit {
@@ -967,24 +991,31 @@ impl FriggMcpServer {
                                                 target_corpus.as_ref(),
                                                 &target.root,
                                                 &target.symbol,
-                                                if precise_target.display_name.is_empty() {
-                                                    target.symbol.name.clone()
-                                                } else {
-                                                    precise_target.display_name.clone()
+                                                SelectedNavigationLocationArgs {
+                                                    display_symbol: if precise_target
+                                                        .display_name
+                                                        .is_empty()
+                                                    {
+                                                        target.symbol.name.clone()
+                                                    } else {
+                                                        precise_target.display_name.clone()
+                                                    },
+                                                    path: Self::canonicalize_navigation_path(
+                                                        &target.root,
+                                                        &occurrence.path,
+                                                    ),
+                                                    line: occurrence.range.start_line,
+                                                    column: occurrence.range.start_column,
+                                                    kind: Self::display_symbol_kind(
+                                                        &precise_target.kind,
+                                                    ),
+                                                    precision: Some(
+                                                        Self::precise_match_precision(
+                                                            precise_coverage,
+                                                        )
+                                                        .to_owned(),
+                                                    ),
                                                 },
-                                                Self::canonicalize_navigation_path(
-                                                    &target.root,
-                                                    &occurrence.path,
-                                                ),
-                                                occurrence.range.start_line,
-                                                occurrence.range.start_column,
-                                                Self::display_symbol_kind(&precise_target.kind),
-                                                Some(
-                                                    Self::precise_match_precision(
-                                                        precise_coverage,
-                                                    )
-                                                    .to_owned(),
-                                                ),
                                             )
                                         })
                                         .collect::<Vec<_>>()
@@ -1044,12 +1075,16 @@ impl FriggMcpServer {
                                         target_corpus.as_ref(),
                                         &target.root,
                                         &target.symbol,
-                                        target.symbol.name.clone(),
-                                        String::new(),
-                                        target.symbol.line,
-                                        1,
-                                        Self::display_symbol_kind(target.symbol.kind.as_str()),
-                                        Some("heuristic".to_owned()),
+                                        SelectedNavigationLocationArgs {
+                                            display_symbol: target.symbol.name.clone(),
+                                            path: String::new(),
+                                            line: target.symbol.line,
+                                            column: 1,
+                                            kind: Self::display_symbol_kind(
+                                                target.symbol.kind.as_str(),
+                                            ),
+                                            precision: Some("heuristic".to_owned()),
+                                        },
                                     )];
                                     Self::sort_navigation_locations(&mut matches);
                                     if matches.len() > limit {
@@ -1447,22 +1482,27 @@ impl FriggMcpServer {
                                         target_corpus.as_ref(),
                                         &target.root,
                                         &target.symbol,
-                                        if precise_target.display_name.is_empty() {
-                                            target.symbol.name.clone()
-                                        } else {
-                                            precise_target.display_name.clone()
+                                        SelectedNavigationLocationArgs {
+                                            display_symbol: if precise_target
+                                                .display_name
+                                                .is_empty()
+                                            {
+                                                target.symbol.name.clone()
+                                            } else {
+                                                precise_target.display_name.clone()
+                                            },
+                                            path: Self::canonicalize_navigation_path(
+                                                &target.root,
+                                                &occurrence.path,
+                                            ),
+                                            line: occurrence.range.start_line,
+                                            column: occurrence.range.start_column,
+                                            kind: Self::display_symbol_kind(&precise_target.kind),
+                                            precision: Some(
+                                                Self::precise_match_precision(precise_coverage)
+                                                    .to_owned(),
+                                            ),
                                         },
-                                        Self::canonicalize_navigation_path(
-                                            &target.root,
-                                            &occurrence.path,
-                                        ),
-                                        occurrence.range.start_line,
-                                        occurrence.range.start_column,
-                                        Self::display_symbol_kind(&precise_target.kind),
-                                        Some(
-                                            Self::precise_match_precision(precise_coverage)
-                                                .to_owned(),
-                                        ),
                                     )
                                 })
                                 .collect::<Vec<_>>()
@@ -1538,12 +1578,14 @@ impl FriggMcpServer {
                         target_corpus.as_ref(),
                         &target.root,
                         &target.symbol,
-                        target.symbol.name.clone(),
-                        String::new(),
-                        target.symbol.line,
-                        1,
-                        Self::display_symbol_kind(target.symbol.kind.as_str()),
-                        Some("heuristic".to_owned()),
+                        SelectedNavigationLocationArgs {
+                            display_symbol: target.symbol.name.clone(),
+                            path: String::new(),
+                            line: target.symbol.line,
+                            column: 1,
+                            kind: Self::display_symbol_kind(target.symbol.kind.as_str()),
+                            precision: Some("heuristic".to_owned()),
+                        },
                     )];
                     Self::sort_navigation_locations(&mut matches);
                     if matches.len() > limit {
