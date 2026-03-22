@@ -7,7 +7,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$binPath = "target/$Target/release/$BinName.exe"
+if ($env:CARGO_TARGET_DIR) {
+  $targetDir = $env:CARGO_TARGET_DIR
+} else {
+  $metadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+  $targetDir = $metadata.target_directory
+}
+
+if (-not $targetDir) {
+  $targetDir = 'target'
+}
+
+$binPath = Join-Path $targetDir "$Target/release/$BinName.exe"
 if (-not (Test-Path $binPath)) {
   throw "Binary not found: $binPath"
 }
