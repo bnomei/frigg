@@ -673,9 +673,9 @@ printf '%s' "local-python-scip" > "${{6}}"
 }
 
 #[test]
-fn workspace_index_health_reports_python_precise_generation_shards_oversized_artifacts() {
-    let workspace_root = temp_workspace_root("python-precise-generator-shards");
-    let bin_dir = temp_workspace_root("python-precise-generator-shards-bin");
+fn workspace_index_health_reports_python_precise_generation_keeps_monolith_on_large_output() {
+    let workspace_root = temp_workspace_root("python-precise-generator-monolith");
+    let bin_dir = temp_workspace_root("python-precise-generator-monolith-bin");
     fs::create_dir_all(workspace_root.join("src/pkg_a"))
         .expect("failed to create python pkg_a fixture");
     fs::create_dir_all(workspace_root.join("src/pkg_b"))
@@ -738,34 +738,11 @@ if [ "${{1:-}}" = "index" ] && [ "${{2:-}}" = "--help" ]; then
   printf '%s\n' "usage: scip-python index"
   exit 0
 fi
-if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ]; then
+if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ] || [ -n "${{7:-}}" ]; then
   printf '%s\n' "unexpected python args: $*" >&2
   exit 71
 fi
-output_path="${{6}}"
-target_only=""
-if [ "${{7:-}}" = "--target-only" ] && [ -n "${{8:-}}" ]; then
-  target_only="${{8}}"
-fi
-case "$target_only" in
-  "src")
-    printf '%s' "0123456789" > "$output_path"
-    ;;
-  "src/pkg_a")
-    printf '%s' "aaa" > "$output_path"
-    ;;
-  "src/pkg_b")
-    printf '%s' "bbb" > "$output_path"
-    ;;
-  "")
-    printf '%s\n' "unexpected python monolith invocation" >&2
-    exit 72
-    ;;
-  *)
-    printf '%s\n' "unexpected python shard target: $target_only" >&2
-    exit 73
-    ;;
-esac
+printf '%s' "0123456789" > "${{6}}"
 "#
             ),
         );
@@ -777,35 +754,35 @@ esac
         );
 
         let scip_dir = workspace.root.join(".frigg/scip");
-        let mut shard_paths = Vec::new();
         for _ in 0..200 {
-            let discovered = fs::read_dir(&scip_dir)
-                .ok()
-                .into_iter()
-                .flat_map(|entries| entries.filter_map(Result::ok))
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("python--") && name.ends_with(".scip"))
-                })
-                .collect::<Vec<_>>();
-            if discovered.len() == 2 {
-                shard_paths = discovered;
+            let ready = fs::read(&stale_artifact)
+                .map(|contents| contents == b"0123456789")
+                .unwrap_or(false);
+            if ready {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        shard_paths.sort();
-        assert_eq!(shard_paths.len(), 2);
         assert!(
-            !stale_artifact.exists(),
-            "oversized monolith should be replaced by published shard artifacts"
+            stale_artifact.is_file(),
+            "python precise generation should keep publishing a monolithic python.scip artifact"
+        );
+        assert_eq!(
+            fs::read(&stale_artifact).expect("python artifact should be readable"),
+            b"0123456789"
         );
         assert!(
-            shard_paths.iter().all(|path| path.is_file()),
-            "published python shards should exist on disk"
+            fs::read_dir(&scip_dir)
+                .expect("scip directory should exist")
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .all(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_none_or(|name| !name.starts_with("python--"))
+                }),
+            "python precise generation should not publish shard artifacts"
         );
 
         let storage = FriggMcpServer::workspace_storage_summary(&workspace);
@@ -823,14 +800,18 @@ esac
             generation.status,
             crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
         );
-        assert_eq!(generation.artifact_path, None);
-        assert_eq!(generation.artifact_count, Some(2));
-        assert_eq!(generation.artifact_sample_paths.len(), 2);
+        let expected_artifact_path = fs::canonicalize(&stale_artifact)
+            .expect("python artifact path should canonicalize")
+            .display()
+            .to_string();
+        assert_eq!(
+            generation.artifact_path.as_deref(),
+            Some(expected_artifact_path.as_str())
+        );
+        assert_eq!(generation.artifact_count, None);
         assert!(
-            generation
-                .artifact_sample_paths
-                .iter()
-                .all(|path| path.contains("python--"))
+            generation.artifact_sample_paths.is_empty(),
+            "monolithic python generation should not report shard samples"
         );
     });
 
@@ -839,9 +820,9 @@ esac
 }
 
 #[test]
-fn workspace_index_health_reports_python_precise_generation_reuses_existing_sharded_strategy() {
-    let workspace_root = temp_workspace_root("python-precise-generator-reuses-shards");
-    let bin_dir = temp_workspace_root("python-precise-generator-reuses-shards-bin");
+fn workspace_index_health_reports_python_precise_generation_cleans_up_stale_shards() {
+    let workspace_root = temp_workspace_root("python-precise-generator-cleans-stale-shards");
+    let bin_dir = temp_workspace_root("python-precise-generator-cleans-stale-shards-bin");
     fs::create_dir_all(workspace_root.join("src/pkg_a"))
         .expect("failed to create python pkg_a fixture");
     fs::create_dir_all(workspace_root.join("src/pkg_b"))
@@ -902,16 +883,11 @@ if [ "${{1:-}}" = "index" ] && [ "${{2:-}}" = "--help" ]; then
   printf '%s\n' "usage: scip-python index"
   exit 0
 fi
-if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ]; then
+if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ] || [ -n "${{7:-}}" ]; then
   printf '%s\n' "unexpected python args: $*" >&2
   exit 81
 fi
-output_path="${{6}}"
-if [ "${{7:-}}" != "--target-only" ] || [ "${{8:-}}" != "src" ] || [ -n "${{9:-}}" ]; then
-  printf '%s\n' "unexpected python regeneration args: $*" >&2
-  exit 82
-fi
-printf '%s' "root" > "$output_path"
+printf '%s' "root" > "${{6}}"
 "#
             ),
         );
@@ -922,35 +898,23 @@ printf '%s' "root" > "$output_path"
             &[],
         );
 
-        let mut shard_paths = Vec::new();
         for _ in 0..200 {
-            let discovered = fs::read_dir(&scip_dir)
-                .ok()
-                .into_iter()
-                .flat_map(|entries| entries.filter_map(Result::ok))
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.starts_with("python--") && name.ends_with(".scip"))
-                })
-                .collect::<Vec<_>>();
-            if discovered.len() == 1 && !stale_shard_a.exists() && !stale_shard_b.exists() {
-                shard_paths = discovered;
+            if workspace.root.join(".frigg/scip/python.scip").is_file()
+                && !stale_shard_a.exists()
+                && !stale_shard_b.exists()
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        shard_paths.sort();
-        assert_eq!(shard_paths.len(), 1);
         assert!(
-            !workspace.root.join(".frigg/scip/python.scip").exists(),
-            "sharded regeneration should not publish a monolithic python.scip artifact"
+            workspace.root.join(".frigg/scip/python.scip").is_file(),
+            "python regeneration should publish a monolithic python.scip artifact"
         );
         assert!(
             !stale_shard_a.exists() && !stale_shard_b.exists(),
-            "stale shard artifacts should be replaced during regeneration"
+            "stale shard artifacts should be removed during regeneration"
         );
 
         let storage = FriggMcpServer::workspace_storage_summary(&workspace);
@@ -970,12 +934,14 @@ printf '%s' "root" > "$output_path"
         );
         assert_eq!(generation.artifact_count, None);
         assert_eq!(generation.artifact_sample_paths.len(), 0);
+        let expected_artifact_path =
+            fs::canonicalize(workspace.root.join(".frigg/scip/python.scip"))
+                .expect("python artifact path should canonicalize")
+                .display()
+                .to_string();
         assert!(
-            generation
-                .artifact_path
-                .as_deref()
-                .is_some_and(|path| path.contains("python--")),
-            "sharded regeneration should report the shard artifact path"
+            generation.artifact_path.as_deref() == Some(expected_artifact_path.as_str()),
+            "python regeneration should report the monolithic artifact path"
         );
     });
 
@@ -1027,6 +993,52 @@ fn workspace_index_health_reports_python_precise_generation_missing_tool_for_sou
 
     let _ = fs::remove_dir_all(workspace_root);
     let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
+fn workspace_index_health_ignores_python_generator_for_nested_target_output_only() {
+    let workspace_root = temp_workspace_root("python-precise-generator-nested-target-only");
+    fs::create_dir_all(workspace_root.join("src/main/java"))
+        .expect("failed to create java source fixture");
+    fs::create_dir_all(workspace_root.join("codec-native-quic/target/boringssl-source/util"))
+        .expect("failed to create nested target fixture");
+    fs::write(
+        workspace_root.join("pom.xml"),
+        "<project><modelVersion>4.0.0</modelVersion></project>\n",
+    )
+    .expect("failed to write maven fixture");
+    fs::write(
+        workspace_root.join("src/main/java/App.java"),
+        "final class App {}\n",
+    )
+    .expect("failed to write java source fixture");
+    fs::write(
+        workspace_root
+            .join("codec-native-quic/target/boringssl-source/util/generate_build_files.py"),
+        "print('generated')\n",
+    )
+    .expect("failed to write nested target python fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    let storage = FriggMcpServer::workspace_storage_summary(&workspace);
+    let health = server.workspace_index_health_summary(&workspace, &storage);
+    assert!(
+        !health
+            .precise_generators
+            .iter()
+            .any(|generator| generator.language.as_deref() == Some("python")),
+        "nested target output should not make a non-Python workspace report scip-python"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
 }
 
 #[test]

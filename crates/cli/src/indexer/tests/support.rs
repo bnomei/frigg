@@ -392,6 +392,26 @@ pub(super) fn kotlin_symbols_fixture() -> &'static str {
     )
 }
 
+pub(super) fn java_symbols_fixture() -> &'static str {
+    concat!(
+        "package com.example.app;\n",
+        "public enum Role { Admin }\n",
+        "public class Service {\n",
+        "    public static final int LIMIT = 10;\n",
+        "    private String name = \"ok\";\n",
+        "    public Service() {}\n",
+        "    public String run() { return name; }\n",
+        "}\n",
+        "public interface Runner {\n",
+        "    String find();\n",
+        "}\n",
+        "public @interface Marker {\n",
+        "    String value();\n",
+        "}\n",
+        "public record Alias(String name) {}\n",
+    )
+}
+
 pub(super) fn lua_symbols_fixture() -> &'static str {
     concat!(
         "function Service.run()\n",

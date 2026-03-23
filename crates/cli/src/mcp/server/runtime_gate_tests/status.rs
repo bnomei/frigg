@@ -304,3 +304,61 @@ fn repository_summary_reports_precise_ingest_failures_separately_from_scip_disco
 
     let _ = fs::remove_dir_all(workspace_root);
 }
+
+#[test]
+fn repository_summary_full_scip_ingest_mode_accepts_artifacts_above_default_budget() {
+    let workspace_root = temp_workspace_root("precise-ingest-full-scip-mode");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct User;\n\npub fn current_user() -> User { User }\n",
+    )
+    .expect("failed to write source fixture");
+    let scip_dir = workspace_root.join(".frigg/scip");
+    fs::create_dir_all(&scip_dir).expect("failed to create scip dir");
+    fs::write(
+        scip_dir.join("oversized.json"),
+        r#"{"documents":[{"relative_path":"src/lib.rs","occurrences":[{"symbol":"scip-rust pkg repo#User","range":[0,11,15],"symbol_roles":1},{"symbol":"scip-rust pkg repo#User","range":[2,31,35],"symbol_roles":8}],"symbols":[{"symbol":"scip-rust pkg repo#User","display_name":"User","kind":"class"}]}]}"#,
+    )
+    .expect("failed to write scip artifact");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.max_file_bytes = 1;
+    config.full_scip_ingest = true;
+    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    let summary = server.repository_summary(&workspace);
+    let health = summary
+        .health
+        .as_ref()
+        .expect("repository summary should expose health");
+    let precise_ingest = health
+        .precise_ingest
+        .as_ref()
+        .expect("repository health should expose precise ingest status");
+    assert_eq!(precise_ingest.state, WorkspacePreciseIngestState::Ready);
+    assert_eq!(
+        precise_ingest.coverage_mode,
+        Some(WorkspacePreciseCoverageMode::Full)
+    );
+    assert_eq!(precise_ingest.artifacts_discovered, 1);
+    assert_eq!(precise_ingest.artifacts_ingested, 1);
+    assert_eq!(precise_ingest.artifacts_failed, 0);
+
+    let precise = server.workspace_precise_summary_for_workspace(&workspace, None);
+    assert_eq!(precise.state, WorkspacePreciseState::Ok);
+    assert!(precise.failure_summary.is_none());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}

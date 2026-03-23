@@ -20,6 +20,7 @@ pub(crate) fn resolve_base_config(
     if let Some(max_file_bytes) = cli.max_file_bytes {
         config.max_file_bytes = max_file_bytes;
     }
+    config.full_scip_ingest = cli.full_scip_ingest;
     config.watch = resolve_watch_config(cli, watch_default_transport);
     config.lexical_runtime = resolve_lexical_runtime_config(cli);
     if workspace_roots_required {

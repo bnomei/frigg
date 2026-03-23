@@ -7,7 +7,7 @@
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
-Frigg is a local-first, read-only MCP server built in Rust for code understanding. It scans local repositories, stores synchronized indexes in local SQLite, and gives AI agents fast, source-backed search and navigation across Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim, even when the relevant answer lives in another adopted repository.
+Frigg is a local-first, read-only MCP server built in Rust for code understanding. It scans local repositories, stores synchronized indexes in local SQLite, and gives AI agents fast, source-backed search and navigation across Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim, even when the relevant answer lives in another adopted repository.
 All supported languages participate in text search, symbol search, structural search, document outlines, and hybrid retrieval. Blade support is source-based and bounded.
 
 It is built for the moment when an agent needs more than `rg/fd/ast-grep`: definitions, references, implementations, callers, structural queries, document outlines, and better answers to “which files matter here?”. **Under the hood Frigg combines deterministic file manifests, Tree-sitter AST parsing, optional SCIP overlays for more precise navigation, and optional semantic retrieval.** It is not a replacement for shell tools or your IDE. It is a context engine that brings more IDE-like code intelligence into MCP.
@@ -238,7 +238,7 @@ frigg reindex
 
 ### Optional SCIP artifacts (Highly Recommended)
 
-Frigg can consume external SCIP artifacts, and if supported generator tools are installed it will **automatically detect and invoke them during workspace attach/reindex flows** for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin. Kotlin auto-generation is intentionally scoped to Gradle/KTS workspaces with Kotlin source files; other Kotlin/JVM layouts should continue to use manual `.frigg/scip/` artifact drops.
+Frigg can consume external SCIP artifacts, and if supported generator tools are installed it will **automatically detect and invoke them during workspace attach/reindex flows** for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin. Java source support is available too, but current JVM auto-generation is intentionally scoped to Gradle/KTS workspaces with Kotlin source files; Java/JVM and other Kotlin/JVM layouts should continue to use manual `.frigg/scip/` artifact drops.
 
 The commands below are only needed if you want to pre-populate artifacts yourself, or if your workspace falls outside Frigg's automatic generation path. Manual artifacts should be placed under:
 
@@ -260,7 +260,7 @@ If you want to generate SCIP artifacts yourself, these are good starting points:
 - Laravel: [scip-laravel](https://github.com/bnomei/scip-laravel)
 - TypeScript / JavaScript: [scip-typescript](https://github.com/sourcegraph/scip-typescript)
 - Python: [scip-python](https://github.com/sourcegraph/scip-python)
-- Kotlin / Gradle: [scip-java](https://sourcegraph.github.io/scip-java/docs/getting-started.html)
+- Kotlin / Gradle, Java / JVM: [scip-java](https://sourcegraph.github.io/scip-java/docs/getting-started.html)
 
 Laravel PHP workspaces prefer repo-local `vendor/bin/scip-laravel` when `bootstrap/app.php` is present; otherwise Frigg keeps using the existing PHP `vendor/bin/scip-php` / `scip-php` lookup.
 
@@ -268,13 +268,13 @@ Frigg distills those artifacts into snapshot-scoped retrieval projections on the
 
 When generator tools are installed, `repository.health.precise_generators` and `workspace_current.repository.health.precise_generators` report their detected status and any last generation result, and Frigg writes best-effort artifacts under `.frigg/scip/`.
 
+Frigg now disables the normal precise SCIP ingest budgets by default, so oversized monolithic artifacts are ingested without extra configuration. `--full-scip-ingest` and `FRIGG_FULL_SCIP_INGEST=true` are still accepted for explicitness.
+
 Python generation now uses the `scip-python index` subcommand shape directly:
 
 ```bash
 scip-python index --quiet --project-name <derived-name> --output .frigg/scip/python.scip
 ```
-
-If the monolithic Python artifact exceeds Frigg's active per-artifact ingest budget, Frigg automatically republishes deterministic Python shards under `.frigg/scip/` using names like `python--src-pkg-a-<hash>.scip` instead of leaving an oversized unusable monolith behind.
 
 Optional repository-local precise config lives at `.frigg/precise.json`. Use it to disable a generator for one repo, add generator-specific extra args, or exclude paths from filtered generation workspaces and trigger calculations without compiling repo-specific path rules into Frigg itself.
 
@@ -299,7 +299,7 @@ Status surfaces are separated on purpose:
 - `health.precise_ingest` reports whether Frigg could actually ingest those artifacts, with coverage mode, discovered or ingested byte counts, and sampled failed artifact reasons.
 - `workspace_current.precise` stays as the compact operator summary built on top of that ingest status.
 
-`workspace_attach` and `workspace_reindex` also support `wait_for_precise=true`. By default they remain non-blocking and may return while precise generation is still running. With `wait_for_precise`, the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary with artifact path or multi-artifact shard details.
+`workspace_attach` and `workspace_reindex` also support `wait_for_precise=true`. By default they remain non-blocking and may return while precise generation is still running. With `wait_for_precise`, the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary with artifact path details.
 
 ## Built-In Watch Mode
 
@@ -381,6 +381,7 @@ Precedence is `CLI flag > env var > default`.
 | --- | --- | --- |
 | `--workspace-root` | utility commands default to current directory; serving mode can start empty | Limits what Frigg can read and index. Repeatable. In serving mode these roots become the global known-repository catalog. |
 | `--max-file-bytes` / `FRIGG_MAX_FILE_BYTES` | `2097152` | Maximum file size Frigg will read. |
+| `--full-scip-ingest` / `FRIGG_FULL_SCIP_INGEST` | `true` | Disable precise SCIP ingest budgets. This is the default. |
 | `--watch-mode` / `FRIGG_WATCH_MODE` | stdio `off`, HTTP `auto` | Controls the built-in watch worker: `auto`, `on`, or `off`. |
 | `--watch-debounce-ms` / `FRIGG_WATCH_DEBOUNCE_MS` | `2000` | Debounce delay before a watch-triggered refresh starts. |
 | `--watch-retry-ms` / `FRIGG_WATCH_RETRY_MS` | `5000` | Retry delay after a failed watch refresh. |

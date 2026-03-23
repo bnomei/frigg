@@ -309,6 +309,15 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
     )
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
+        src_root.join("Main.java"),
+        concat!(
+            "class JavaService {\n",
+            "    String run() { return \"ok\"; }\n",
+            "}\n",
+        ),
+    )
+    .expect("failed to seed temporary java fixture");
+    fs::write(
         src_root.join("init.lua"),
         concat!("function Service.run()\n", "    return \"ok\"\n", "end\n",),
     )
@@ -384,6 +393,38 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
             .as_ref()
             .expect("document_symbols should emit typed metadata")["language"],
         "kotlin"
+    );
+
+    let java_response = server
+        .document_symbols(Parameters(DocumentSymbolsParams {
+            path: "src/Main.java".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            include_follow_up_structural: None,
+            response_mode: Some(ResponseMode::Full),
+            ..Default::default()
+        }))
+        .await
+        .expect("document_symbols should return java outline")
+        .0;
+    assert!(
+        java_response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.symbol == "JavaService" && symbol.kind == "class")
+    );
+    assert!(
+        java_response
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.children.iter())
+            .any(|symbol| symbol.symbol == "run" && symbol.kind == "method")
+    );
+    assert_eq!(
+        java_response
+            .metadata
+            .as_ref()
+            .expect("document_symbols should emit typed metadata")["language"],
+        "java"
     );
 
     let lua_response = server

@@ -258,7 +258,7 @@ pub(crate) fn read_guidance_prompt(
 1. Prefer shell tools for trivial local scans, file reads, or git/filesystem inspection.\n\
 2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
-4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
+4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
 5. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
 6. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
 7. Use `explore` only after discovery and only when the active profile includes it.\n\n",
@@ -333,6 +333,7 @@ mod tests {
             "python",
             "go",
             "kotlin",
+            "java",
             "lua",
             "roc",
             "nim",

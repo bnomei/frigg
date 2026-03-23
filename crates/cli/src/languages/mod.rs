@@ -1,5 +1,6 @@
 mod blade;
 mod go;
+mod java;
 mod kotlin;
 mod lua;
 mod nim;
@@ -122,6 +123,10 @@ mod tests {
         );
         assert_eq!(
             parse_supported_language("java", LanguageCapability::SymbolCorpus),
+            Some(SymbolLanguage::Java)
+        );
+        assert_eq!(
+            parse_supported_language("javascript", LanguageCapability::SymbolCorpus),
             None
         );
     }
@@ -174,6 +179,13 @@ mod tests {
                 LanguageCapability::StructuralSearch
             ),
             Some(SymbolLanguage::Kotlin)
+        );
+        assert_eq!(
+            supported_language_for_path(
+                Path::new("app/Main.java"),
+                LanguageCapability::DocumentSymbols
+            ),
+            Some(SymbolLanguage::Java)
         );
         assert_eq!(
             supported_language_for_path(
@@ -245,6 +257,10 @@ mod tests {
             None
         );
         assert_eq!(
+            semantic_chunk_language_for_path(Path::new("app/Main.java")),
+            None
+        );
+        assert_eq!(
             semantic_chunk_language_for_path(Path::new("scripts/init.lua")),
             None
         );
@@ -287,6 +303,10 @@ mod tests {
         assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Go), None);
         assert_eq!(
             heuristic_implementation_strategy(SymbolLanguage::Kotlin),
+            None
+        );
+        assert_eq!(
+            heuristic_implementation_strategy(SymbolLanguage::Java),
             None
         );
         assert_eq!(heuristic_implementation_strategy(SymbolLanguage::Lua), None);

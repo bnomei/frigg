@@ -265,6 +265,15 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
     )
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
+        src_root.join("Main.java"),
+        concat!(
+            "class JavaService {\n",
+            "    String javaHelper() { return \"ok\"; }\n",
+            "}\n",
+        ),
+    )
+    .expect("failed to seed temporary java fixture");
+    fs::write(
         src_root.join("init.lua"),
         concat!("function luaRun()\n", "    return \"ok\"\n", "end\n",),
     )
@@ -284,6 +293,7 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
     for (query, expected_kind, expected_path) in [
         ("GoService", "struct", "src/main.go"),
         ("KotlinService", "class", "src/Main.kt"),
+        ("JavaService", "class", "src/Main.java"),
         ("luaRun", "function", "src/init.lua"),
         ("nimHelper", "function", "src/app.nim"),
         ("rocGreet", "function", "src/main.roc"),

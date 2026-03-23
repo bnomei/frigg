@@ -275,6 +275,18 @@ async fn search_structural_returns_additional_baseline_language_matches() {
     )
     .expect("failed to seed temporary kotlin fixture");
     fs::write(
+        src_root.join("Main.java"),
+        concat!(
+            "class JavaService {\n",
+            "    String run() { return \"ok\"; }\n",
+            "}\n",
+            "interface Runner {\n",
+            "    String find();\n",
+            "}\n",
+        ),
+    )
+    .expect("failed to seed temporary java fixture");
+    fs::write(
         src_root.join("init.lua"),
         concat!("function Service.run()\n", "    return \"ok\"\n", "end\n",),
     )
@@ -329,6 +341,26 @@ async fn search_structural_returns_additional_baseline_language_matches() {
     assert_eq!(
         kotlin_response.metadata.as_ref().expect("typed metadata")["language"],
         "kotlin"
+    );
+
+    let java_response = server
+        .search_structural(Parameters(SearchStructuralParams {
+            query: "(method_declaration) @fn".to_owned(),
+            language: Some("java".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"Main\.java$".to_owned()),
+            limit: Some(20),
+            result_mode: None,
+            primary_capture: None,
+            include_follow_up_structural: None,
+        }))
+        .await
+        .expect("search_structural should return java matches")
+        .0;
+    assert_eq!(java_response.matches.len(), 2);
+    assert_eq!(
+        java_response.metadata.as_ref().expect("typed metadata")["language"],
+        "java"
     );
 
     let lua_response = server
@@ -400,7 +432,7 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
     let error = match server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item) @fn".to_owned(),
-            language: Some("java".to_owned()),
+            language: Some("javascript".to_owned()),
             repository_id: Some("repo-001".to_owned()),
             path_regex: None,
             limit: Some(20),
@@ -427,6 +459,7 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
             "python",
             "go",
             "kotlin",
+            "java",
             "lua",
             "roc",
             "nim"

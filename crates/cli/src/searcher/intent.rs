@@ -303,6 +303,7 @@ impl SearchIntent {
             SymbolLanguage::Python => self.has_framework_hint(FrameworkHint::Python),
             SymbolLanguage::Go => self.has_framework_hint(FrameworkHint::Go),
             SymbolLanguage::Kotlin => self.has_framework_hint(FrameworkHint::Kotlin),
+            SymbolLanguage::Java => false,
             SymbolLanguage::Lua => self.has_framework_hint(FrameworkHint::Lua),
             SymbolLanguage::Roc => self.has_framework_hint(FrameworkHint::Roc),
             SymbolLanguage::Nim => self.has_framework_hint(FrameworkHint::Nim),

@@ -47,6 +47,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tree-sitter.workspace = true
 tree-sitter-go.workspace = true
+tree-sitter-java.workspace = true
 tree-sitter-language = "0.1"
 tree-sitter-lua.workspace = true
 tree-sitter-php.workspace = true

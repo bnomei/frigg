@@ -67,6 +67,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
             ("src/lib.py", "needle 4\n"),
             ("src/lib.go", "needle 5\n"),
             ("src/lib.kts", "needle 6\n"),
+            ("src/lib.java", "needle 19\n"),
             ("src/lib.lua", "needle 7\n"),
             ("src/lib.roc", "needle 8\n"),
             ("src/lib.nims", "needle 14\n"),
@@ -81,6 +82,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
             ("src/main.py", "needle 12\n"),
             ("src/main.go", "needle 13\n"),
             ("src/main.kt", "needle 15\n"),
+            ("src/main.java", "needle 20\n"),
             ("src/main.lua", "needle 16\n"),
             ("src/main.roc", "needle 17\n"),
             ("src/main.nim", "needle 18\n"),
@@ -186,6 +188,25 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         ]
     );
 
+    let java_matches = searcher.search_regex_with_filters(
+        SearchTextQuery {
+            query: r"needle".to_owned(),
+            path_regex: None,
+            limit: 10,
+        },
+        SearchFilters {
+            repository_id: None,
+            language: Some("java".to_owned()),
+        },
+    )?;
+    assert_eq!(
+        java_matches,
+        vec![
+            text_match("repo-001", "src/lib.java", 1, 1, "needle 19"),
+            text_match("repo-002", "src/main.java", 1, 1, "needle 20"),
+        ]
+    );
+
     let lua_matches = searcher.search_regex_with_filters(
         SearchTextQuery {
             query: r"needle".to_owned(),
@@ -251,7 +272,7 @@ fn ordering_filter_normalization_applies_repo_path_and_language() -> FriggResult
         },
         SearchFilters {
             repository_id: None,
-            language: Some("java".to_owned()),
+            language: Some("javascript".to_owned()),
         },
     );
     let err = unsupported_language.expect_err("unsupported language filter should fail");

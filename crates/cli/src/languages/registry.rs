@@ -18,12 +18,14 @@ use crate::vendor_grammars::{
     tree_sitter_blade, tree_sitter_kotlin, tree_sitter_nim, tree_sitter_roc,
 };
 
-use super::{blade, go, kotlin, lua, nim, php, python, roc, rust, typescript};
+use super::{blade, go, java, kotlin, lua, nim, php, python, roc, rust, typescript};
 
 #[allow(dead_code)]
 const _: &str = tree_sitter_nim::NODE_TYPES;
 #[allow(dead_code)]
 const _: &str = tree_sitter_roc::NODE_TYPES;
+#[allow(dead_code)]
+const _: &str = tree_sitter_java::NODE_TYPES;
 
 const DOCUMENT_SYMBOLS_LANGUAGES: &[SymbolLanguage] = &[
     SymbolLanguage::Rust,
@@ -33,6 +35,7 @@ const DOCUMENT_SYMBOLS_LANGUAGES: &[SymbolLanguage] = &[
     SymbolLanguage::Python,
     SymbolLanguage::Go,
     SymbolLanguage::Kotlin,
+    SymbolLanguage::Java,
     SymbolLanguage::Lua,
     SymbolLanguage::Roc,
     SymbolLanguage::Nim,
@@ -47,6 +50,7 @@ const DOCUMENT_SYMBOLS_EXTENSIONS: &[&str] = &[
     ".go",
     ".kt",
     ".kts",
+    ".java",
     ".lua",
     ".roc",
     ".nim",
@@ -60,6 +64,7 @@ const STRUCTURAL_SEARCH_LANGUAGES: &[SymbolLanguage] = &[
     SymbolLanguage::Python,
     SymbolLanguage::Go,
     SymbolLanguage::Kotlin,
+    SymbolLanguage::Java,
     SymbolLanguage::Lua,
     SymbolLanguage::Roc,
     SymbolLanguage::Nim,
@@ -74,6 +79,7 @@ const STRUCTURAL_SEARCH_EXTENSIONS: &[&str] = &[
     ".go",
     ".kt",
     ".kts",
+    ".java",
     ".lua",
     ".roc",
     ".nim",
@@ -87,6 +93,7 @@ const SYMBOL_CORPUS_LANGUAGES: &[SymbolLanguage] = &[
     SymbolLanguage::Python,
     SymbolLanguage::Go,
     SymbolLanguage::Kotlin,
+    SymbolLanguage::Java,
     SymbolLanguage::Lua,
     SymbolLanguage::Roc,
     SymbolLanguage::Nim,
@@ -101,6 +108,7 @@ const SYMBOL_CORPUS_EXTENSIONS: &[&str] = &[
     ".go",
     ".kt",
     ".kts",
+    ".java",
     ".lua",
     ".roc",
     ".nim",
@@ -121,6 +129,7 @@ const SOURCE_FILTER_VALUES: &[&str] = &[
     "kotlin",
     "kt",
     "kts",
+    "java",
     "lua",
     "roc",
     "nim",
@@ -134,6 +143,7 @@ const CANONICAL_LANGUAGE_NAMES: &[&str] = &[
     "python",
     "go",
     "kotlin",
+    "java",
     "lua",
     "roc",
     "nim",
@@ -155,6 +165,7 @@ enum ParserPoolKey {
     Python,
     Go,
     Kotlin,
+    Java,
     Lua,
     Roc,
     Nim,
@@ -170,6 +181,7 @@ impl ParserPoolKey {
             SymbolLanguage::Python => Self::Python,
             SymbolLanguage::Go => Self::Go,
             SymbolLanguage::Kotlin => Self::Kotlin,
+            SymbolLanguage::Java => Self::Java,
             SymbolLanguage::Lua => Self::Lua,
             SymbolLanguage::Roc => Self::Roc,
             SymbolLanguage::Nim => Self::Nim,
@@ -193,6 +205,7 @@ impl ParserPoolKey {
             Self::Python => tree_sitter_python::LANGUAGE.into(),
             Self::Go => tree_sitter_go::LANGUAGE.into(),
             Self::Kotlin => tree_sitter_kotlin::LANGUAGE.into(),
+            Self::Java => tree_sitter_java::LANGUAGE.into(),
             Self::Lua => tree_sitter_lua::LANGUAGE.into(),
             Self::Roc => tree_sitter_roc::LANGUAGE.into(),
             Self::Nim => tree_sitter_nim::LANGUAGE.into(),
@@ -346,13 +359,14 @@ pub enum SymbolLanguage {
     Python,
     Go,
     Kotlin,
+    Java,
     Lua,
     Roc,
     Nim,
 }
 
 impl SymbolLanguage {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Rust,
         Self::Php,
         Self::Blade,
@@ -360,6 +374,7 @@ impl SymbolLanguage {
         Self::Python,
         Self::Go,
         Self::Kotlin,
+        Self::Java,
         Self::Lua,
         Self::Roc,
         Self::Nim,
@@ -380,6 +395,9 @@ impl SymbolLanguage {
         }
         if kotlin::is_kotlin_path(path) {
             return Some(Self::Kotlin);
+        }
+        if java::is_java_path(path) {
+            return Some(Self::Java);
         }
         if lua::is_lua_path(path) {
             return Some(Self::Lua);
@@ -406,6 +424,7 @@ impl SymbolLanguage {
             "python" | "py" => Some(Self::Python),
             "go" | "golang" => Some(Self::Go),
             "kotlin" | "kt" | "kts" => Some(Self::Kotlin),
+            "java" => Some(Self::Java),
             "lua" => Some(Self::Lua),
             "roc" => Some(Self::Roc),
             "nim" | "nims" => Some(Self::Nim),
@@ -422,6 +441,7 @@ impl SymbolLanguage {
             Self::Python => "python",
             Self::Go => "go",
             Self::Kotlin => "kotlin",
+            Self::Java => "java",
             Self::Lua => "lua",
             Self::Roc => "roc",
             Self::Nim => "nim",
@@ -437,6 +457,7 @@ impl SymbolLanguage {
             Self::Python => "Python",
             Self::Go => "Go",
             Self::Kotlin => "Kotlin / KTS",
+            Self::Java => "Java",
             Self::Lua => "Lua",
             Self::Roc => "Roc",
             Self::Nim => "Nim",
@@ -599,6 +620,7 @@ pub(crate) fn heuristic_implementation_strategy(
         | SymbolLanguage::Python
         | SymbolLanguage::Go
         | SymbolLanguage::Kotlin
+        | SymbolLanguage::Java
         | SymbolLanguage::Lua
         | SymbolLanguage::Roc
         | SymbolLanguage::Nim => None,
@@ -668,6 +690,7 @@ pub(crate) fn symbol_from_node(
         SymbolLanguage::Python => python::symbol_from_node(source, node),
         SymbolLanguage::Go => go::symbol_from_node(source, node),
         SymbolLanguage::Kotlin => kotlin::symbol_from_node(source, node),
+        SymbolLanguage::Java => java::symbol_from_node(source, node),
         SymbolLanguage::Lua => lua::symbol_from_node(source, node),
         SymbolLanguage::Roc => roc::symbol_from_node(source, node),
         SymbolLanguage::Nim => nim::symbol_from_node(source, node),

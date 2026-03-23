@@ -327,6 +327,67 @@ fn symbols_kotlin_extracts_definition_metadata() -> FriggResult<()> {
 }
 
 #[test]
+fn symbols_java_extracts_definition_metadata() -> FriggResult<()> {
+    let path = Path::new("fixtures/java_symbols.java");
+    let symbols = extract_symbols_from_source(SymbolLanguage::Java, path, java_symbols_fixture())?;
+
+    assert!(
+        find_symbol(&symbols, SymbolKind::Module, "com.example.app", 1).is_some(),
+        "expected Java package symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Enum, "Role", 2).is_some(),
+        "expected Java enum symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::EnumCase, "Admin", 2).is_some(),
+        "expected Java enum case symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Class, "Service", 3).is_some(),
+        "expected Java class symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Constant, "LIMIT", 4).is_some(),
+        "expected Java constant symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Property, "name", 5).is_some(),
+        "expected Java property symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Method, "Service", 6).is_some(),
+        "expected Java constructor symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Method, "run", 7).is_some(),
+        "expected Java method symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Interface, "Runner", 9).is_some(),
+        "expected Java interface symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Method, "find", 10).is_some(),
+        "expected Java interface method symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Interface, "Marker", 12).is_some(),
+        "expected Java annotation type symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Method, "value", 13).is_some(),
+        "expected Java annotation element symbol"
+    );
+    assert!(
+        find_symbol(&symbols, SymbolKind::Class, "Alias", 15).is_some(),
+        "expected Java record symbol"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn symbols_lua_extracts_definition_metadata() -> FriggResult<()> {
     let path = Path::new("fixtures/lua_symbols.lua");
     let symbols = extract_symbols_from_source(SymbolLanguage::Lua, path, lua_symbols_fixture())?;

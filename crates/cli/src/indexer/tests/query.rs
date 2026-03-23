@@ -120,6 +120,29 @@ fn structural_search_kotlin_returns_deterministic_captures() -> FriggResult<()> 
 }
 
 #[test]
+fn structural_search_java_returns_deterministic_captures() -> FriggResult<()> {
+    let first = search_structural_in_source(
+        SymbolLanguage::Java,
+        Path::new("fixtures/java_symbols.java"),
+        java_symbols_fixture(),
+        "(method_declaration) @fn",
+    )?;
+    let second = search_structural_in_source(
+        SymbolLanguage::Java,
+        Path::new("fixtures/java_symbols.java"),
+        java_symbols_fixture(),
+        "(method_declaration) @fn",
+    )?;
+
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0].span.start_line, 7);
+    assert_eq!(first[1].span.start_line, 10);
+
+    Ok(())
+}
+
+#[test]
 fn structural_search_lua_returns_deterministic_captures() -> FriggResult<()> {
     let first = search_structural_in_source(
         SymbolLanguage::Lua,

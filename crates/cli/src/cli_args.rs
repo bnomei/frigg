@@ -22,6 +22,14 @@ pub(crate) struct Cli {
     )]
     pub(crate) max_file_bytes: Option<usize>,
 
+    #[arg(
+        long,
+        env = "FRIGG_FULL_SCIP_INGEST",
+        global = true,
+        default_value_t = true
+    )]
+    pub(crate) full_scip_ingest: bool,
+
     #[arg(long, value_name = "PORT", global = true)]
     pub(crate) mcp_http_port: Option<u16>,
 

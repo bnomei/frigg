@@ -218,6 +218,22 @@ impl FriggMcpServer {
             .max_file_bytes
             .saturating_mul(Self::FIND_REFERENCES_SOURCE_FILE_BYTES_MULTIPLIER)
             .max(self.config.max_file_bytes);
+        if self.config.full_scip_ingest {
+            let source_max_total_bytes = source_max_file_bytes
+                .saturating_mul(Self::FIND_REFERENCES_TOTAL_BYTES_MULTIPLIER)
+                .max(source_max_file_bytes);
+            return FindReferencesResourceBudgets {
+                scip_max_artifacts: usize::MAX,
+                scip_max_artifact_bytes: usize::MAX,
+                scip_max_total_bytes: usize::MAX,
+                scip_max_documents_per_artifact: usize::MAX,
+                scip_max_elapsed_ms: u64::MAX,
+                source_max_files: Self::FIND_REFERENCES_MAX_SOURCE_FILES,
+                source_max_file_bytes,
+                source_max_total_bytes,
+                source_max_elapsed_ms: Self::FIND_REFERENCES_SOURCE_MAX_ELAPSED_MS,
+            };
+        }
         let scip_max_artifact_bytes = self
             .config
             .max_file_bytes

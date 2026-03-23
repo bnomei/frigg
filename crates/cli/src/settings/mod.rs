@@ -245,6 +245,7 @@ mod tests {
             workspace_roots: vec![existing_workspace_root()],
             max_search_results: DEFAULT_MAX_SEARCH_RESULTS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            full_scip_ingest: true,
             watch: WatchConfig::default(),
             lexical_runtime: LexicalRuntimeConfig::default(),
             semantic_runtime: SemanticRuntimeConfig {
@@ -272,6 +273,7 @@ mod tests {
     fn frigg_config_default_uses_aggressive_max_file_bytes_budget() {
         let config = FriggConfig::default();
         assert_eq!(config.max_file_bytes, 2 * 1024 * 1024);
+        assert!(config.full_scip_ingest);
     }
 
     #[test]

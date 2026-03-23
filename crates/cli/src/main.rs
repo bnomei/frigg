@@ -99,6 +99,7 @@ mod tests {
             quiet: false,
             workspace_roots: vec![PathBuf::from(".")],
             max_file_bytes: None,
+            full_scip_ingest: true,
             mcp_http_port: None,
             mcp_http_host: None,
             allow_remote_http: false,
@@ -656,6 +657,13 @@ mod tests {
         let config = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
             .expect("startup config should accept explicit max-file-bytes override");
         assert_eq!(config.max_file_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn startup_config_defaults_to_full_scip_ingest() {
+        let config = resolve_startup_config(&base_cli(), RuntimeTransportKind::Stdio)
+            .expect("startup config should default to full-scip-ingest");
+        assert!(config.full_scip_ingest);
     }
 
     #[test]
