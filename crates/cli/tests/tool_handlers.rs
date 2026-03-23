@@ -167,6 +167,7 @@ fn server_for_workspace_root_with_max_file_bytes(
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace root must produce valid config");
     config.max_file_bytes = max_file_bytes;
+    config.full_scip_ingest = false;
     FriggMcpServer::new(config)
 }
 

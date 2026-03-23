@@ -710,6 +710,7 @@ async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
             ".go",
             ".kt",
             ".kts",
+            ".java",
             ".lua",
             ".roc",
             ".nim",

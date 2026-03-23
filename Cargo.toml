@@ -22,7 +22,7 @@ license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
 rust-version = "1.85"
-version = "0.1.1"
+version = "0.2.0"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"
@@ -41,7 +41,7 @@ protobuf = "=3.7.2"
 rayon = "1.11.0"
 regex = "1.12.3"
 reqwest = { version = "0.13.2", features = ["json"] }
-rmcp = { version = "1.1.0", features = ["transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "1.2.0", features = ["transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 scip = "0.6.1"
