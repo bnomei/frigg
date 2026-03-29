@@ -107,10 +107,8 @@ pub(super) async fn serve_http(
     server: FriggMcpServer,
 ) -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(runtime.bind_addr).await?;
-    let config = StreamableHttpServerConfig {
-        stateful_mode: true,
-        ..StreamableHttpServerConfig::default()
-    };
+    let mut config = StreamableHttpServerConfig::default();
+    config.stateful_mode = true;
     let shutdown = config.cancellation_token.clone();
     let service = server.streamable_http_service(config);
 
