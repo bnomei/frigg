@@ -2,8 +2,12 @@
 //! search, navigation, and health-reporting semantics explicit so server code, tests, and schema
 //! generation all describe the same external API.
 
-use schemars::JsonSchema;
+use std::borrow::Cow;
+use std::ops::Deref;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const PUBLIC_TOOL_NAMES: [&str; 24] = [
     "list_repositories",
@@ -61,6 +65,78 @@ pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 2] = ["workspace_attach", "
 pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_reindex"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
+
+/// Object-only metadata payload used by several MCP read responses.
+///
+/// Frigg emits structured JSON objects here at runtime, and the explicit wrapper keeps the
+/// generated tool `outputSchema` compatible with strict MCP clients that reject boolean
+/// subschemas for `properties.metadata`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct MetadataObject(Value);
+
+impl MetadataObject {
+    pub fn into_inner(self) -> Value {
+        self.0
+    }
+}
+
+impl TryFrom<Value> for MetadataObject {
+    type Error = &'static str;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Object(_) => Ok(Self(value)),
+            _ => Err("metadata payload must be a JSON object"),
+        }
+    }
+}
+
+impl From<MetadataObject> for Value {
+    fn from(value: MetadataObject) -> Self {
+        value.0
+    }
+}
+
+impl Deref for MetadataObject {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialEq<Value> for MetadataObject {
+    fn eq(&self, other: &Value) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<MetadataObject> for Value {
+    fn eq(&self, other: &MetadataObject) -> bool {
+        *self == other.0
+    }
+}
+
+impl JsonSchema for MetadataObject {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "MetadataObject".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        schemars::json_schema!({
+            "type": "object"
+        })
+    }
+}
+
+pub fn metadata_object_field_schema(generator: &mut SchemaGenerator) -> Schema {
+    MetadataObject::json_schema(generator)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

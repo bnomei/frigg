@@ -22,7 +22,7 @@ license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
 rust-version = "1.85"
-version = "0.2.1"
+version = "0.2.2"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"

@@ -125,9 +125,11 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) fn metadata_note_pair(
         metadata: Value,
-    ) -> (Option<Value>, Option<String>) {
+    ) -> (Option<crate::mcp::types::MetadataObject>, Option<String>) {
         let note =
             Some(serde_json::to_string(&metadata).expect("metadata payload should serialize"));
+        let metadata = crate::mcp::types::MetadataObject::try_from(metadata)
+            .expect("metadata payload should be a JSON object");
         (Some(metadata), note)
     }
 

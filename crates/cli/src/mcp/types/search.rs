@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
-use super::{ReadPresentationMode, ResponseMode};
+use super::{MetadataObject, ReadPresentationMode, ResponseMode};
 use crate::domain::{
     ChannelHealthStatus, EvidenceAnchor, PathClass, SourceClass, model::SymbolMatch,
     model::TextMatch,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -484,7 +483,8 @@ pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
-    pub metadata: Option<Value>,
+    #[schemars(schema_with = "super::metadata_object_field_schema")]
+    pub metadata: Option<MetadataObject>,
     pub note: Option<String>,
 }
 

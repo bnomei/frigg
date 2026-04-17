@@ -367,3 +367,51 @@ impl FriggMcpServer {
         Self::build_frigg_error_data(Self::translate_frigg_error(err))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_with_metadata_publish_object_schemas() {
+        let router = FriggMcpServer::filtered_tool_router(ToolSurfaceProfile::Extended);
+        let metadata_tools = [
+            "document_symbols",
+            "find_declarations",
+            "find_implementations",
+            "find_references",
+            "go_to_definition",
+            "incoming_calls",
+            "inspect_syntax_tree",
+            "outgoing_calls",
+            "search_structural",
+            "search_symbol",
+        ];
+
+        for tool_name in metadata_tools {
+            let tool = router
+                .get(tool_name)
+                .expect("expected tool to be registered");
+            let output_schema = tool
+                .output_schema
+                .as_ref()
+                .expect("expected tool to publish output schema");
+            let properties = output_schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("expected tool output schema properties");
+            let metadata_schema = properties
+                .get("metadata")
+                .expect("expected tool metadata schema");
+            assert!(
+                metadata_schema.is_object(),
+                "tool `{tool_name}` published non-object metadata schema: {metadata_schema}",
+            );
+            assert_eq!(
+                metadata_schema.get("type"),
+                Some(&Value::String("object".to_owned())),
+                "tool `{tool_name}` should publish metadata as an explicit object schema",
+            );
+        }
+    }
+}
