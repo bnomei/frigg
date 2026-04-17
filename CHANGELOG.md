@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-04-17
+
+- Upgraded dependencies
+
 ## 0.2.2 - 2026-04-17
 
 - Replaced permissive `outputSchema.properties.metadata` boolean schemas with explicit object schemas for the affected MCP navigation and symbol-search tools, improving compatibility with strict clients such as Cursor.
