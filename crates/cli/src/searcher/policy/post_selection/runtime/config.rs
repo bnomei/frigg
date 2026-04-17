@@ -208,10 +208,7 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_config_surface_
             .then_with(|| left.document.path.cmp(&right.document.path))
     });
 
-    for (slot_index, ordered_entry) in surface_indices
-        .into_iter()
-        .zip(ordered_surfaces)
-    {
+    for (slot_index, ordered_entry) in surface_indices.into_iter().zip(ordered_surfaces) {
         matches[slot_index] = ordered_entry;
     }
 
