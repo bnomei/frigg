@@ -502,11 +502,9 @@ impl FriggMcpServer {
                             blade_relations_detected = blade_relations_detected
                                 .saturating_add(blade_evidence.relations.len());
                             blade_livewire_components
-                                .extend(blade_evidence.livewire_components.into_iter());
-                            blade_wire_directives
-                                .extend(blade_evidence.wire_directives.into_iter());
-                            blade_flux_components
-                                .extend(blade_evidence.flux_components.into_iter());
+                                .extend(blade_evidence.livewire_components);
+                            blade_wire_directives.extend(blade_evidence.wire_directives);
+                            blade_flux_components.extend(blade_evidence.flux_components);
                         }
                         files_matched = files_matched
                             .saturating_add(usize::from(!structural_matches.is_empty()));

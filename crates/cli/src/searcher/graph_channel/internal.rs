@@ -807,7 +807,7 @@ fn expand_graph_emittable_paths(
         for adjacent in graph
             .incoming_adjacency(&anchor.symbol_id)
             .into_iter()
-            .chain(graph.outgoing_adjacency(&anchor.symbol_id).into_iter())
+            .chain(graph.outgoing_adjacency(&anchor.symbol_id))
         {
             let relative_path =
                 normalize_repository_relative_path(root, Path::new(&adjacent.symbol.path));

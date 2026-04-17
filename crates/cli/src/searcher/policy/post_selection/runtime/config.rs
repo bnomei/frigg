@@ -210,7 +210,7 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_config_surface_
 
     for (slot_index, ordered_entry) in surface_indices
         .into_iter()
-        .zip(ordered_surfaces.into_iter())
+        .zip(ordered_surfaces)
     {
         matches[slot_index] = ordered_entry;
     }

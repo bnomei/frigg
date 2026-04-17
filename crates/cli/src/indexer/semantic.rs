@@ -265,7 +265,7 @@ pub(super) fn build_semantic_embedding_records(
             )));
         }
 
-        for (chunk, embedding) in batch.iter().zip(vectors.into_iter()) {
+        for (chunk, embedding) in batch.iter().zip(vectors) {
             if embedding.is_empty() {
                 return Err(FriggError::Internal(format!(
                     "semantic embedding provider returned an empty vector for chunk_id={}",
