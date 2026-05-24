@@ -117,10 +117,13 @@ impl FriggMcpServer {
                             &params_for_blocking,
                         )?));
                     }
-                    let (scoped_config, repository_id_map) =
+                    let (scoped_config, scoped_runtime_repository_ids, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
 
-                    let searcher = server.runtime_text_searcher(scoped_config);
+                    let searcher = server.runtime_text_searcher_with_repository_ids(
+                        scoped_config,
+                        scoped_runtime_repository_ids,
+                    );
                     let search_output = match pattern_type {
                         SearchPatternType::Literal => searcher
                             .search_literal_with_filters_diagnostics(

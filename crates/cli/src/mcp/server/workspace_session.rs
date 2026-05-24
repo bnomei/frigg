@@ -21,6 +21,7 @@ impl FriggMcpServer {
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
         let server = self.clone();
         Arc::new(move |repository_id: &str| {
+            let original_repository_id = repository_id.to_owned();
             let workspace = server
                 .runtime_state
                 .workspace_registry
@@ -39,6 +40,12 @@ impl FriggMcpServer {
                 .runtime_state
                 .searcher_projection_store_service
                 .invalidate_repository(repository_id);
+            if original_repository_id != repository_id {
+                server
+                    .runtime_state
+                    .searcher_projection_store_service
+                    .invalidate_repository(&original_repository_id);
+            }
             server.invalidate_repository_precise_generator_probe_cache(repository_id);
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
@@ -284,6 +291,11 @@ impl FriggMcpServer {
         self.runtime_state
             .searcher_projection_store_service
             .invalidate_repository(&workspace.repository_id);
+        if workspace.runtime_repository_id != workspace.repository_id {
+            self.runtime_state
+                .searcher_projection_store_service
+                .invalidate_repository(&workspace.runtime_repository_id);
+        }
         self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
         self.invalidate_repository_summary_cache(&workspace.repository_id);
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
@@ -397,7 +409,7 @@ impl FriggMcpServer {
     pub(super) fn scoped_search_config(
         &self,
         scoped_workspaces: &[AttachedWorkspace],
-    ) -> (FriggConfig, BTreeMap<String, String>) {
+    ) -> (FriggConfig, Vec<String>, BTreeMap<String, String>) {
         let scoped_config = FriggConfig {
             workspace_roots: scoped_workspaces
                 .iter()
@@ -405,13 +417,23 @@ impl FriggMcpServer {
                 .collect(),
             ..(*self.config).clone()
         };
-        let repository_id_map = scoped_config
+        let runtime_repository_ids = scoped_workspaces
+            .iter()
+            .map(|workspace| workspace.runtime_repository_id.clone())
+            .collect::<Vec<_>>();
+        let mut repository_id_map = BTreeMap::new();
+        for (temporary, actual) in scoped_config
             .repositories()
             .into_iter()
             .zip(scoped_workspaces.iter())
-            .map(|(temporary, actual)| (temporary.repository_id.0, actual.repository_id.clone()))
-            .collect::<BTreeMap<_, _>>();
-        (scoped_config, repository_id_map)
+        {
+            repository_id_map.insert(temporary.repository_id.0, actual.repository_id.clone());
+            repository_id_map.insert(
+                actual.runtime_repository_id.clone(),
+                actual.repository_id.clone(),
+            );
+        }
+        (scoped_config, runtime_repository_ids, repository_id_map)
     }
 
     pub(super) fn canonicalize_existing_ancestor(
@@ -528,5 +550,65 @@ impl FriggMcpServer {
             "path is outside workspace roots",
             Some(serde_json::json!({ "path": params.path })),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_workspace_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "frigg-scoped-search-config-{test_name}-{nonce}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn scoped_search_config_uses_runtime_ids_for_search_and_public_ids_for_results() {
+        let root = temp_workspace_root("runtime-id");
+        fs::create_dir_all(&root).expect("scoped search fixture root should be creatable");
+        let public_repository_id = crate::domain::model::stable_repository_id_for_root(&root).0;
+        let runtime_repository_id = format!("{public_repository_id}-runtime");
+        let workspace = AttachedWorkspace {
+            repository_id: public_repository_id.clone(),
+            runtime_repository_id: runtime_repository_id.clone(),
+            display_name: "runtime-id".to_owned(),
+            root: root.clone(),
+            db_path: root.join(".frigg/storage.sqlite3"),
+        };
+        let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid");
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+
+        let (scoped_config, runtime_repository_ids, repository_id_map) =
+            server.scoped_search_config(std::slice::from_ref(&workspace));
+
+        assert_eq!(scoped_config.repositories()[0].repository_id.0, "repo-001");
+        assert_eq!(runtime_repository_ids, vec![runtime_repository_id.clone()]);
+        assert_eq!(
+            repository_id_map.get("repo-001"),
+            Some(&public_repository_id)
+        );
+        assert_eq!(
+            repository_id_map.get(&runtime_repository_id),
+            Some(&public_repository_id)
+        );
+
+        let searcher =
+            server.runtime_text_searcher_with_repository_ids(scoped_config, runtime_repository_ids);
+        assert_eq!(
+            searcher.repositories()[0].repository_id.0,
+            runtime_repository_id
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

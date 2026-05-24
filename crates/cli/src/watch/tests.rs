@@ -475,6 +475,38 @@ fn watch_path_filter_ignores_internal_roots_only() {
         &repository,
         &root.join("target/debug/app")
     ));
+    assert!(should_ignore_watch_path(
+        &repository,
+        &root.join("index.scip")
+    ));
+    assert!(should_ignore_watch_path(
+        &repository,
+        &root.join("output.scip")
+    ));
+    assert!(should_ignore_watch_path(
+        &repository,
+        &root.join("scip.index.scip")
+    ));
+    assert!(should_ignore_watch_path(
+        &repository,
+        &root.join("rust.scip")
+    ));
+    assert!(should_ignore_watch_path(
+        &repository,
+        &root.join(".frigg-index-backup-123.scip")
+    ));
+    assert!(!should_ignore_watch_path(
+        &repository,
+        &root.join("src/index.scip")
+    ));
+    assert!(!should_ignore_watch_path(
+        &repository,
+        &root.join("src/output.scip")
+    ));
+    assert!(!should_ignore_watch_path(
+        &repository,
+        &root.join("src/rust.scip")
+    ));
     assert!(!should_ignore_watch_path(
         &repository,
         &root.join("contracts/errors.md")

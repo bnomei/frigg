@@ -15,6 +15,15 @@ impl FriggMcpServer {
         )
     }
 
+    pub(super) fn runtime_text_searcher_with_repository_ids(
+        &self,
+        config: FriggConfig,
+        repository_ids: Vec<String>,
+    ) -> TextSearcher {
+        self.runtime_text_searcher(config)
+            .with_runtime_repository_ids(repository_ids)
+    }
+
     pub(super) fn record_runtime_cache_event(
         &self,
         family: RuntimeCacheFamily,

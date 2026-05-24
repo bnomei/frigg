@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 - 2026-05-24
+
+- Fixed scoped MCP search to use runtime repository IDs for manifest and semantic storage lookups while preserving stable public repository IDs in responses.
+- Fixed adjacent symbol/navigation manifest lookup, hybrid exact-pivot repository scoping, and root generated SCIP artifact watch churn.
+
+## 0.4.0 - 2026-05-18
+
+- Updated dependencies and removed the unused `gix` workspace dependency.
+
 ## 0.3.2 - 2026-04-17
 
 - Upgraded dependencies

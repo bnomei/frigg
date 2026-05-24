@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::domain::model::stable_repository_id_for_root;
 use crate::manifest_validation::latest_validated_manifest_snapshot;
-use crate::settings::FriggConfig;
 use crate::storage::{Storage, resolve_provenance_db_path};
 use crate::workspace_ignores::{build_root_ignore_matcher, should_ignore_runtime_path};
 
@@ -37,11 +35,15 @@ impl TextSearcher {
         filters: &NormalizedSearchFilters,
     ) -> SearchCandidateUniverseBuild {
         let mut diagnostics = SearchExecutionDiagnostics::default();
-        let mut repositories = self.config.repositories();
+        let mut repositories = self
+            .repositories()
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>();
         let mut candidate_intake_elapsed_us = 0_u64;
         let mut freshness_validation_elapsed_us = 0_u64;
         let mut manifest_backed_repository_count = 0_usize;
-        repositories.sort_by(|left, right| {
+        repositories.sort_by(|(_, left), (_, right)| {
             left.repository_id
                 .cmp(&right.repository_id)
                 .then(left.root_path.cmp(&right.root_path))
@@ -49,14 +51,9 @@ impl TextSearcher {
 
         let repositories = repositories
             .into_iter()
-            .enumerate()
             .filter(|(index, repository)| {
                 filters.repository_id.as_ref().is_none_or(|repository_id| {
-                    repository_id == &repository.repository_id.0
-                        || repository_id
-                            == &stable_repository_id_for_root(Path::new(&repository.root_path)).0
-                        || repository_id
-                            == &FriggConfig::legacy_repository_id_for_workspace_index(*index).0
+                    self.repository_matches_filter(repository, *index, repository_id)
                 })
             })
             .map(|(_, repository)| {

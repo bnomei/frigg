@@ -22,7 +22,7 @@ license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
 rust-version = "1.85"
-version = "0.3.2"
+version = "0.4.1"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"
@@ -32,7 +32,6 @@ axum = "0.8.8"
 blake3 = "1.8.3"
 chrono = { version = "0.4.44", features = ["clock", "serde"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
-gix = "0.80.0"
 ignore = "0.4.25"
 memchr = "2.7.6"
 notify = "8.2.0"

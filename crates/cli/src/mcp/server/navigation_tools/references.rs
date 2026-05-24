@@ -96,7 +96,13 @@ impl FriggMcpServer {
 
         let probe_terms = Self::heuristic_reference_probe_terms(target_corpus, target_symbol);
         if !probe_terms.is_empty() {
-            let searcher = self.runtime_text_searcher((*self.config).clone());
+            let searcher = self.runtime_text_searcher_with_repository_ids(
+                FriggConfig {
+                    workspace_roots: vec![target_corpus.root.clone()],
+                    ..(*self.config).clone()
+                },
+                vec![target_corpus.runtime_repository_id.clone()],
+            );
             let limit = resource_budgets
                 .source_max_files
                 .saturating_mul(32)

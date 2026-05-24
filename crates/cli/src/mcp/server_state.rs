@@ -24,6 +24,7 @@ use tracing::info;
 #[derive(Clone)]
 pub(crate) struct RepositorySymbolCorpus {
     pub repository_id: String,
+    pub runtime_repository_id: String,
     pub root: PathBuf,
     pub root_signature: String,
     pub source_paths: Vec<PathBuf>,

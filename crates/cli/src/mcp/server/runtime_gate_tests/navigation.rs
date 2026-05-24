@@ -93,6 +93,78 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[test]
+fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
+    let workspace_root = temp_workspace_root("symbol-corpus-runtime-repository-id");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/manifest.rs"),
+        "pub struct StoredOnly;\n",
+    )
+    .expect("failed to write manifest-backed source fixture");
+    fs::write(workspace_root.join("src/live.rs"), "pub struct LiveOnly;\n")
+        .expect("failed to write live-only source fixture");
+
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    assert_ne!(workspace.repository_id, workspace.runtime_repository_id);
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-runtime",
+        &["src/manifest.rs"],
+    );
+
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&workspace.repository_id))
+        .expect("symbol corpus should build from runtime manifest storage");
+    assert_eq!(corpora.len(), 1);
+    let corpus = &corpora[0];
+    assert_eq!(corpus.repository_id, workspace.repository_id);
+    assert_eq!(
+        corpus.runtime_repository_id,
+        workspace.runtime_repository_id
+    );
+    let canonical_workspace_root = workspace_root
+        .canonicalize()
+        .expect("workspace root should canonicalize");
+    let source_paths = corpus
+        .source_paths
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&canonical_workspace_root)
+                .unwrap_or(path)
+                .to_path_buf()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(source_paths, vec![PathBuf::from("src/manifest.rs")]);
+    assert!(
+        corpus
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "StoredOnly")
+    );
+    assert!(
+        !corpus
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "LiveOnly")
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 #[tokio::test]
 async fn inspect_syntax_tree_returns_focus_and_ancestor_stack() {
     let workspace_root = temp_workspace_root("inspect-syntax-tree");

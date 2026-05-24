@@ -111,7 +111,7 @@ impl FriggMcpServer {
                     )?;
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
-                    let (scoped_config, repository_id_map) =
+                    let (scoped_config, scoped_runtime_repository_ids, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
 
                     let weights = {
@@ -165,7 +165,10 @@ impl FriggMcpServer {
                         )));
                     }
 
-                    let searcher = server.runtime_text_searcher(scoped_config);
+                    let searcher = server.runtime_text_searcher_with_repository_ids(
+                        scoped_config,
+                        scoped_runtime_repository_ids,
+                    );
                     let search_output = searcher
                         .search_hybrid_with_filters(
                             SearchHybridQuery {
@@ -245,6 +248,7 @@ impl FriggMcpServer {
                                 params_for_blocking.language.as_deref(),
                                 &searcher,
                                 &matches,
+                                &repository_id_map,
                             )?
                         } else {
                             None
@@ -759,6 +763,7 @@ impl FriggMcpServer {
         language: Option<&str>,
         searcher: &TextSearcher,
         matches: &[SearchHybridMatch],
+        repository_id_map: &BTreeMap<String, String>,
     ) -> Result<Option<SearchHybridExactPivotAssistInternal>, ErrorData> {
         let relevant_paths = matches
             .iter()
@@ -766,13 +771,6 @@ impl FriggMcpServer {
             .collect::<BTreeSet<_>>();
         if relevant_paths.is_empty() {
             return Ok(None);
-        }
-        let mut relevant_paths_by_path: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-        for key in &relevant_paths {
-            relevant_paths_by_path
-                .entry(key.1.clone())
-                .or_default()
-                .push(key.clone());
         }
 
         let mut assistance = SearchHybridExactPivotAssistInternal {
@@ -842,15 +840,17 @@ impl FriggMcpServer {
             )
             .map_err(Self::map_frigg_error)?;
         for text_match in text_hits.matches {
-            let Some(relevant_keys) = relevant_paths_by_path.get(&text_match.path) else {
+            let repository_id = repository_id_map
+                .get(&text_match.repository_id)
+                .cloned()
+                .unwrap_or_else(|| text_match.repository_id.clone());
+            let key = (repository_id, text_match.path);
+            if !relevant_paths.contains(&key) {
                 continue;
-            };
-            for key in relevant_keys {
-                let lines = assistance.text_hit_lines.entry(key.clone()).or_default();
-                if lines.insert(text_match.line) {
-                    assistance.exact_text_hit_count =
-                        assistance.exact_text_hit_count.saturating_add(1);
-                }
+            }
+            let lines = assistance.text_hit_lines.entry(key).or_default();
+            if lines.insert(text_match.line) {
+                assistance.exact_text_hit_count = assistance.exact_text_hit_count.saturating_add(1);
             }
         }
 
@@ -1188,6 +1188,29 @@ impl FriggMcpServer {
 mod tests {
     use super::*;
 
+    fn temp_workspace_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "frigg-hybrid-search-tools-{test_name}-{nonce}-{}",
+            std::process::id()
+        ))
+    }
+
+    fn hybrid_match_fixture_for_repository(
+        repository_id: &str,
+        path: &str,
+        line: usize,
+        lexical_sources: &[&str],
+        excerpt: &str,
+    ) -> SearchHybridMatch {
+        let mut matched = hybrid_match_fixture(path, line, lexical_sources, excerpt);
+        matched.repository_id = repository_id.to_owned();
+        matched
+    }
+
     fn hybrid_match_fixture(
         path: &str,
         line: usize,
@@ -1222,6 +1245,93 @@ mod tests {
             }),
             rank_reasons: vec![],
         }
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_assistance_keeps_text_hits_repository_scoped() {
+        let first_root = temp_workspace_root("exact-pivot-first");
+        let second_root = temp_workspace_root("exact-pivot-second");
+        fs::create_dir_all(first_root.join("src")).expect("first src directory should exist");
+        fs::create_dir_all(second_root.join("src")).expect("second src directory should exist");
+        fs::write(
+            first_root.join("src/lib.rs"),
+            "pub fn exact_pivot_marker() {}\n",
+        )
+        .expect("first source fixture should be writable");
+        fs::write(
+            second_root.join("src/lib.rs"),
+            "pub fn unrelated_marker() {}\n",
+        )
+        .expect("second source fixture should be writable");
+
+        let config =
+            FriggConfig::from_workspace_roots(vec![first_root.clone(), second_root.clone()])
+                .expect("workspace roots should produce a config");
+        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let workspaces = server.known_workspaces();
+        for workspace in &workspaces {
+            server
+                .adopt_workspace(workspace, false)
+                .expect("test workspace should be adoptable");
+        }
+        let canonical_first = first_root
+            .canonicalize()
+            .expect("first root should canonicalize");
+        let canonical_second = second_root
+            .canonicalize()
+            .expect("second root should canonicalize");
+        let first_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.root == canonical_first)
+            .expect("first workspace should be registered");
+        let second_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.root == canonical_second)
+            .expect("second workspace should be registered");
+        let (scoped_config, runtime_repository_ids, repository_id_map) =
+            server.scoped_search_config(&workspaces);
+        let searcher =
+            server.runtime_text_searcher_with_repository_ids(scoped_config, runtime_repository_ids);
+        let matches = vec![
+            hybrid_match_fixture_for_repository(
+                &first_workspace.repository_id,
+                "src/lib.rs",
+                1,
+                &["path_surface_witness:src/lib.rs:1:1"],
+                "first",
+            ),
+            hybrid_match_fixture_for_repository(
+                &second_workspace.repository_id,
+                "src/lib.rs",
+                1,
+                &["path_surface_witness:src/lib.rs:1:1"],
+                "second",
+            ),
+        ];
+
+        let assistance = FriggMcpServer::search_hybrid_exact_pivot_assistance(
+            &server,
+            "exact_pivot_marker",
+            None,
+            None,
+            &searcher,
+            &matches,
+            &repository_id_map,
+        )
+        .expect("exact pivot assistance should run")
+        .expect("exact pivot assistance should be returned");
+
+        assert!(assistance.text_hit_lines.contains_key(&(
+            first_workspace.repository_id.clone(),
+            "src/lib.rs".to_owned()
+        )));
+        assert!(!assistance.text_hit_lines.contains_key(&(
+            second_workspace.repository_id.clone(),
+            "src/lib.rs".to_owned()
+        )));
+
+        let _ = fs::remove_dir_all(first_root);
+        let _ = fs::remove_dir_all(second_root);
     }
 
     #[test]

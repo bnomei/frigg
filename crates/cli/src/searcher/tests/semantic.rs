@@ -86,6 +86,86 @@ fn hybrid_ranking_semantic_channel_surfaces_docs_runtime_and_tests_witnesses() -
 }
 
 #[test]
+fn hybrid_semantic_uses_runtime_repository_id_override_for_storage() -> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-semantic-runtime-repository-id");
+    prepare_workspace(
+        &root,
+        &[(
+            "src/lib.rs",
+            "pub fn runtime_repository_id_marker() { let _ = \"needle\"; }\n",
+        )],
+    )?;
+    let runtime_repository_id = crate::domain::model::stable_repository_id_for_root(&root).0;
+    seed_semantic_embeddings(
+        &root,
+        &runtime_repository_id,
+        "snapshot-runtime",
+        &[semantic_record(
+            &runtime_repository_id,
+            "snapshot-runtime",
+            "src/lib.rs",
+            0,
+            vec![1.0, 0.0],
+        )],
+    )?;
+
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.semantic_runtime = semantic_runtime_enabled(false);
+    let searcher =
+        TextSearcher::new(config).with_runtime_repository_ids(vec![runtime_repository_id.clone()]);
+
+    let candidate_universe = searcher.build_candidate_universe_with_attribution(
+        &SearchTextQuery {
+            query: String::new(),
+            path_regex: None,
+            limit: 10,
+        },
+        &normalize_search_filters(SearchFilters::default())?,
+    );
+    assert_eq!(candidate_universe.manifest_backed_repository_count, 1);
+    assert_eq!(
+        candidate_universe.universe.repositories[0].repository_id,
+        runtime_repository_id
+    );
+    assert_eq!(
+        candidate_universe.universe.repositories[0]
+            .snapshot_id
+            .as_deref(),
+        Some("snapshot-runtime")
+    );
+
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "needle runtime repository id".to_owned(),
+            limit: 5,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(true),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        },
+        &MockSemanticQueryEmbeddingExecutor::success(vec![1.0, 0.0]),
+    )?;
+
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+    assert_eq!(output.note.semantic_candidate_count, 1);
+    assert!(output.note.semantic_reason.is_none());
+    assert!(
+        output.matches.iter().any(|matched| {
+            matched.document.repository_id == runtime_repository_id
+                && matched.document.path == "src/lib.rs"
+                && matched.semantic_score > 0.0
+        }),
+        "semantic matches should be loaded from rows stored under the runtime repository id"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_semantic_ok_still_expands_lexical_recall_for_underfilled_queries()
 -> FriggResult<()> {
     let root = temp_workspace_root("hybrid-semantic-ok-lexical-recall");

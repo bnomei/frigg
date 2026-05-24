@@ -240,8 +240,12 @@ pub(super) fn search_semantic_channel_hits(
     let semantic_vector_query_limit = semantic_candidate_limit
         .saturating_mul(4)
         .min(SQLITE_VEC_KNN_MAX_K);
-    let mut repositories = searcher.config.repositories();
-    repositories.sort_by(|left, right| {
+    let mut repositories = searcher
+        .repositories()
+        .into_iter()
+        .enumerate()
+        .collect::<Vec<_>>();
+    repositories.sort_by(|(_, left), (_, right)| {
         left.repository_id
             .cmp(&right.repository_id)
             .then(left.root_path.cmp(&right.root_path))
@@ -255,11 +259,13 @@ pub(super) fn search_semantic_channel_hits(
     let mut snapshot_id_by_hit = BTreeMap::<(String, String), String>::new();
     let mut degraded_reasons = Vec::new();
     let mut unavailable_reasons = Vec::new();
-    for repo in repositories {
+    for (index, repo) in repositories {
         if normalized_filters
             .repository_id
             .as_ref()
-            .is_some_and(|repository_id| repository_id != &repo.repository_id.0)
+            .is_some_and(|repository_id| {
+                !searcher.repository_matches_filter(&repo, index, repository_id)
+            })
         {
             continue;
         }

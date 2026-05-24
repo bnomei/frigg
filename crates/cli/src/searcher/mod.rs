@@ -3,6 +3,7 @@
 //! artifacts and delivery surfaces such as MCP tools or playbook probes.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 mod attribution;
@@ -33,7 +34,10 @@ mod semantic;
 mod surfaces;
 mod types;
 
-use crate::domain::{FriggError, FriggResult, model::TextMatch};
+use crate::domain::{
+    FriggError, FriggResult,
+    model::{RepositoryId, RepositoryRecord, TextMatch, stable_repository_id_for_root},
+};
 use crate::languages::{LanguageCapability, SymbolLanguage, parse_supported_language};
 pub use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
@@ -261,6 +265,7 @@ fn rank_hybrid_evidence_for_query_with_witness(
 /// graph, path-witness, and optional semantic signals into ranked evidence for higher layers.
 pub struct TextSearcher {
     config: FriggConfig,
+    runtime_repository_ids: Vec<String>,
     validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     projection_store_service: ProjectionStoreService,
     hybrid_graph_file_analysis_cache:
@@ -317,11 +322,41 @@ impl TextSearcher {
     ) -> Self {
         Self {
             config,
+            runtime_repository_ids: Vec::new(),
             validated_manifest_candidate_cache,
             projection_store_service,
             hybrid_graph_file_analysis_cache: Arc::new(RwLock::new(BTreeMap::new())),
             hybrid_graph_artifact_cache: Arc::new(RwLock::new(BTreeMap::new())),
         }
+    }
+
+    pub(crate) fn with_runtime_repository_ids(mut self, repository_ids: Vec<String>) -> Self {
+        self.runtime_repository_ids = repository_ids;
+        self
+    }
+
+    pub(crate) fn repositories(&self) -> Vec<RepositoryRecord> {
+        let mut repositories = self.config.repositories();
+        if self.runtime_repository_ids.len() == repositories.len() {
+            for (repository, repository_id) in repositories
+                .iter_mut()
+                .zip(self.runtime_repository_ids.iter())
+            {
+                repository.repository_id = RepositoryId(repository_id.clone());
+            }
+        }
+        repositories
+    }
+
+    pub(crate) fn repository_matches_filter(
+        &self,
+        repository: &RepositoryRecord,
+        index: usize,
+        repository_id: &str,
+    ) -> bool {
+        repository_id == repository.repository_id.0
+            || repository_id == stable_repository_id_for_root(Path::new(&repository.root_path)).0
+            || repository_id == FriggConfig::legacy_repository_id_for_workspace_index(index).0
     }
 
     #[cfg(test)]

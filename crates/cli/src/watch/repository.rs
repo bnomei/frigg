@@ -191,6 +191,9 @@ pub(super) fn should_ignore_watch_path(repository: &WatchedRepository, path: &Pa
     let Some(component) = relative.components().next() else {
         return false;
     };
+    if is_root_generated_scip_artifact(relative.as_path()) {
+        return true;
+    }
     let component = component.as_os_str().to_string_lossy();
     if matches!(component.as_ref(), ".frigg" | ".git" | "target") {
         return true;
@@ -200,4 +203,26 @@ pub(super) fn should_ignore_watch_path(repository: &WatchedRepository, path: &Pa
         .root_ignore_matcher
         .matched_path_or_any_parents(&relative, path.is_dir())
         .is_ignore()
+}
+
+fn is_root_generated_scip_artifact(relative: &Path) -> bool {
+    if relative.components().count() != 1 {
+        return false;
+    }
+    let Some(file_name) = relative.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let lower = file_name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "index.scip"
+            | "output.scip"
+            | "scip.index.scip"
+            | "rust.scip"
+            | "go.scip"
+            | "typescript.scip"
+            | "php.scip"
+            | "python.scip"
+            | "kotlin.scip"
+    ) || (lower.starts_with(".frigg-index-backup-") && lower.ends_with(".scip"))
 }

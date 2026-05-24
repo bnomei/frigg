@@ -71,6 +71,7 @@ impl FriggMcpServer {
     pub(super) fn collect_repository_symbol_corpus(
         &self,
         repository_id: String,
+        runtime_repository_id: String,
         root: PathBuf,
     ) -> Result<Arc<RepositorySymbolCorpus>, ErrorData> {
         let mut diagnostics = RepositoryDiagnosticsSummary::default();
@@ -87,7 +88,7 @@ impl FriggMcpServer {
         let (file_digests, manifest_token) =
             match Self::load_latest_validated_manifest_snapshot_shared(
                 &root,
-                &repository_id,
+                &runtime_repository_id,
                 Some(&self.runtime_state.validated_manifest_candidate_cache),
             ) {
                 Some(snapshot) => {
@@ -250,6 +251,7 @@ impl FriggMcpServer {
 
         let corpus = Arc::new(RepositorySymbolCorpus {
             repository_id: repository_id.clone(),
+            runtime_repository_id,
             root,
             root_signature: root_signature.clone(),
             source_paths,
@@ -549,9 +551,15 @@ impl FriggMcpServer {
         repository_id: Option<&str>,
     ) -> Result<Vec<Arc<RepositorySymbolCorpus>>, ErrorData> {
         let mut corpora = self
-            .roots_for_repository(repository_id)?
+            .attached_workspaces_for_repository(repository_id)?
             .into_par_iter()
-            .map(|(repository_id, root)| self.collect_repository_symbol_corpus(repository_id, root))
+            .map(|workspace| {
+                self.collect_repository_symbol_corpus(
+                    workspace.repository_id,
+                    workspace.runtime_repository_id,
+                    workspace.root,
+                )
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .collect::<Result<Vec<_>, ErrorData>>()?;
