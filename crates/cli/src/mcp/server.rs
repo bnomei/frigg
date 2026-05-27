@@ -315,6 +315,7 @@ pub struct FriggMcpServer {
 struct FriggMcpRuntimeState {
     runtime_profile: RuntimeProfile,
     runtime_watch_active: bool,
+    semantic_runtime_credentials: Option<SemanticRuntimeCredentials>,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
@@ -474,6 +475,7 @@ impl FriggMcpServer {
             runtime_state: FriggMcpRuntimeState {
                 runtime_profile,
                 runtime_watch_active,
+                semantic_runtime_credentials: None,
                 workspace_registry: Arc::clone(&workspace_registry),
                 watch_runtime: Arc::clone(&watch_runtime),
                 runtime_task_registry,
@@ -532,6 +534,16 @@ impl FriggMcpServer {
         let enable_extended_tools =
             active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
         Self::new_with_runtime_options(config, provenance_best_effort, enable_extended_tools)
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_semantic_runtime_credentials(
+        config: FriggConfig,
+        credentials: SemanticRuntimeCredentials,
+    ) -> Self {
+        let mut server = Self::new(config);
+        server.runtime_state.semantic_runtime_credentials = Some(credentials);
+        server
     }
 
     pub fn runtime_registered_tool_names(&self) -> Vec<String> {

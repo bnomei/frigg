@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 - 2026-05-27
+
+- Fixed semantic reindex recovery for deleted files recorded with absolute paths when indexing from a relative workspace root, allowing stale semantic chunks to be skipped or cleaned instead of failing on path canonicalization.
+- Updated dependencies.
+
 ## 0.4.1 - 2026-05-24
 
 - Fixed scoped MCP search to use runtime repository IDs for manifest and semantic storage lookups while preserving stable public repository IDs in responses.

@@ -17,7 +17,8 @@ use frigg::mcp::types::{
     WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
 };
 use frigg::settings::{
-    FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeProvider,
+    FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeCredentials,
+    SemanticRuntimeProvider,
 };
 use frigg::storage::{
     DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, Storage,
@@ -158,6 +159,16 @@ fn server_for_config(config: FriggConfig) -> FriggMcpServer {
         .validate_for_serving()
         .expect("test config must validate for serving");
     FriggMcpServer::new(config)
+}
+
+fn server_for_config_with_semantic_runtime_credentials(
+    config: FriggConfig,
+    credentials: SemanticRuntimeCredentials,
+) -> FriggMcpServer {
+    config
+        .validate_for_serving()
+        .expect("test config must validate for serving");
+    FriggMcpServer::new_with_semantic_runtime_credentials(config, credentials)
 }
 
 fn server_for_workspace_root_with_max_file_bytes(

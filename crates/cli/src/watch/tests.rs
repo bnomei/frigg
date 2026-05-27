@@ -6,9 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use notify::{Event, EventKind};
 
 use super::*;
-use crate::indexer::{
-    ManifestStore, ReindexMode, reindex_repository, reindex_repository_with_runtime_config,
-};
+use crate::indexer::{ManifestStore, ReindexMode, reindex_repository_with_runtime_config};
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::RuntimeTaskRegistry;
 use crate::searcher::{SearchFilters, SearchTextQuery, TextSearcher};
@@ -874,11 +872,13 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
         .expect("source file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    let summary = reindex_repository(
+    let summary = reindex_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
         ReindexMode::ChangedOnly,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
     )
     .expect("baseline changed-only reindex should succeed");
 

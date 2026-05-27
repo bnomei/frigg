@@ -632,6 +632,21 @@ impl TextSearcher {
         )
     }
 
+    pub(crate) fn search_hybrid_with_filters_with_credentials(
+        &self,
+        query: SearchHybridQuery,
+        filters: SearchFilters,
+        credentials: &SemanticRuntimeCredentials,
+    ) -> FriggResult<SearchHybridExecutionOutput> {
+        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::new(credentials.clone());
+        self.search_hybrid_with_filters_using_executor(
+            query,
+            filters,
+            credentials,
+            &semantic_executor,
+        )
+    }
+
     pub(crate) fn search_hybrid_with_filters_with_trace(
         &self,
         query: SearchHybridQuery,

@@ -14,15 +14,15 @@ pub(super) use super::super::{
     BladeRelationKind, FileDigest, Hasher, HeuristicReferenceConfidence,
     HeuristicReferenceEvidence, ManifestBuilder, ManifestDiagnosticKind, ManifestStore,
     PhpDeclarationRelation, PhpTargetEvidenceKind, PhpTypeEvidenceKind, ReindexMode,
-    RuntimeSemanticEmbeddingExecutor, SEMANTIC_CHUNK_MAX_CHARS, SemanticRefreshMode,
-    SemanticRuntimeEmbeddingExecutor, SourceSpan, SymbolDefinition, SymbolKind, SymbolLanguage,
-    build_file_semantic_chunks, build_reindex_plan_for_tests, build_semantic_chunk_candidates,
-    diff, extract_blade_source_evidence_from_source, extract_php_declaration_relations_from_source,
-    extract_php_source_evidence_from_source, extract_symbols_for_paths,
-    extract_symbols_from_source, file_digest_order,
+    ReindexSummary, RuntimeSemanticEmbeddingExecutor, SEMANTIC_CHUNK_MAX_CHARS,
+    SemanticRefreshMode, SemanticRuntimeEmbeddingExecutor, SourceSpan, SymbolDefinition,
+    SymbolKind, SymbolLanguage, build_file_semantic_chunks, build_reindex_plan_for_tests,
+    build_semantic_chunk_candidates, diff, extract_blade_source_evidence_from_source,
+    extract_php_declaration_relations_from_source, extract_php_source_evidence_from_source,
+    extract_symbols_for_paths, extract_symbols_from_source, file_digest_order,
     generated_follow_up_structural_at_location_in_source,
     inspect_syntax_tree_with_follow_up_in_source, mark_local_flux_overlays,
-    navigation_symbol_target_rank, register_symbol_definitions, reindex_repository,
+    navigation_symbol_target_rank, register_symbol_definitions,
     reindex_repository_with_runtime_config, reindex_repository_with_semantic_executor,
     resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
 };
@@ -184,6 +184,22 @@ pub(super) fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
     }
+}
+
+pub(super) fn reindex_repository_without_semantic(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: ReindexMode,
+) -> FriggResult<ReindexSummary> {
+    reindex_repository_with_runtime_config(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
 }
 
 pub(super) fn digest(path: &str, size_bytes: u64, mtime_ns: Option<u64>, hash: &str) -> FileDigest {

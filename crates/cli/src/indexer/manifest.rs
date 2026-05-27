@@ -258,8 +258,8 @@ pub(super) fn normalize_repository_relative_path(
     workspace_root: &Path,
     path: &Path,
 ) -> FriggResult<String> {
-    if let Ok(relative) = path.strip_prefix(workspace_root) {
-        return Ok(relative.to_string_lossy().replace('\\', "/"));
+    if let Some(relative) = repository_relative_path_string(workspace_root, path) {
+        return Ok(relative);
     }
 
     let root_canonical = workspace_root.canonicalize().map_err(|err| {
@@ -268,22 +268,48 @@ pub(super) fn normalize_repository_relative_path(
             workspace_root.display()
         ))
     })?;
+    if let Some(relative) = repository_relative_path_string(&root_canonical, path) {
+        return Ok(relative);
+    }
+
+    if path.is_relative()
+        && let Some(relative) = repository_relative_path_string_from_relative(path)
+    {
+        return Ok(relative);
+    }
+
     let path_canonical = path.canonicalize().map_err(|err| {
         FriggError::Internal(format!(
             "failed to canonicalize semantic source path '{}': {err}",
             path.display()
         ))
     })?;
-    let relative = path_canonical
-        .strip_prefix(&root_canonical)
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "semantic chunk path '{}' escapes workspace root '{}': {err}",
-                path.display(),
-                workspace_root.display()
-            ))
-        })?;
-    Ok(relative.to_string_lossy().replace('\\', "/"))
+    repository_relative_path_string(&root_canonical, &path_canonical).ok_or_else(|| {
+        FriggError::Internal(format!(
+            "semantic chunk path '{}' escapes workspace root '{}'",
+            path.display(),
+            workspace_root.display()
+        ))
+    })
+}
+
+fn repository_relative_path_string(base: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(base).ok()?;
+    repository_relative_path_string_from_relative(relative)
+}
+
+fn repository_relative_path_string_from_relative(relative: &Path) -> Option<String> {
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized.to_string_lossy().replace('\\', "/"))
 }
 
 fn frigg_walk_builder(root: &Path, follow_symlinks: bool) -> WalkBuilder {
@@ -458,4 +484,35 @@ fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_repository_relative_path_handles_deleted_absolute_path_under_relative_root()
+    -> FriggResult<()> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let missing_name = format!(
+            ".frigg-missing-semantic-source-{nonce}-{}",
+            std::process::id()
+        );
+        let absolute_missing = std::env::current_dir()
+            .map_err(FriggError::Io)?
+            .join(&missing_name);
+        assert!(
+            !absolute_missing.exists(),
+            "test fixture path must not exist: {}",
+            absolute_missing.display()
+        );
+
+        let normalized = normalize_repository_relative_path(Path::new("."), &absolute_missing)?;
+
+        assert_eq!(normalized, missing_name);
+        Ok(())
+    }
 }

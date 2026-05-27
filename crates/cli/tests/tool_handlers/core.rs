@@ -948,7 +948,10 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
     };
-    let server = server_for_config(config);
+    let server = server_for_config_with_semantic_runtime_credentials(
+        config,
+        SemanticRuntimeCredentials::default(),
+    );
 
     let response = server
         .search_hybrid(Parameters(SearchHybridParams {

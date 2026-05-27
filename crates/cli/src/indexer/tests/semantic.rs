@@ -750,8 +750,18 @@ fn reindex_continues_with_read_diagnostics_for_unreadable_files() -> FriggResult
     let unreadable_path = workspace_root.join("src/private.rs");
     set_file_mode(&unreadable_path, 0o000)?;
 
-    let first = reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
-    let second = reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+    let first = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
+    let second = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
 
     assert_eq!(first.snapshot_id, second.snapshot_id);
     assert_eq!(first.files_scanned, 1);
@@ -803,11 +813,16 @@ fn changed_only_reuses_previous_digests_for_unchanged_unreadable_files() -> Frig
         ],
     )?;
 
-    let first = reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+    let first = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
     let unreadable_path = workspace_root.join("src/private.rs");
     set_file_mode(&unreadable_path, 0o000)?;
 
-    let second = reindex_repository(
+    let second = reindex_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,

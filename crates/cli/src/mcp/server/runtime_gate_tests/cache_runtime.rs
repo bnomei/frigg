@@ -1015,11 +1015,13 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     Storage::new(&db_path)
         .initialize()
         .expect("manifest storage should initialize");
-    reindex_repository(
+    crate::indexer::reindex_repository_with_runtime_config(
         &declared_repository.repository_id.0,
         &declared_root,
         &db_path,
         ReindexMode::ChangedOnly,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
     )
     .expect("baseline changed-only reindex should succeed");
 

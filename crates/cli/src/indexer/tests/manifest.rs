@@ -599,9 +599,13 @@ fn incremental_roundtrip_changed_only_reports_zero_for_unchanged_workspace() -> 
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary =
-        reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
-    let changed_summary = reindex_repository(
+    let full_summary = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
+    let changed_summary = reindex_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,
@@ -633,14 +637,18 @@ fn incremental_roundtrip_changed_only_detects_modified_added_and_deleted_files()
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary =
-        reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+    let full_summary = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
 
     fs::write(workspace_root.join("README.md"), "hello changed\n").map_err(FriggError::Io)?;
     fs::remove_file(workspace_root.join("src/main.rs")).map_err(FriggError::Io)?;
     fs::write(workspace_root.join("src/new.rs"), "pub fn added() {}\n").map_err(FriggError::Io)?;
 
-    let changed_summary = reindex_repository(
+    let changed_summary = reindex_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,
@@ -667,8 +675,12 @@ fn reindex_plan_changed_only_unchanged_workspace_reuses_existing_snapshot() -> F
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary =
-        reindex_repository("repo-001", &workspace_root, &db_path, ReindexMode::Full)?;
+    let full_summary = reindex_repository_without_semantic(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+    )?;
     let plan = build_reindex_plan_for_tests(
         "repo-001",
         &workspace_root,

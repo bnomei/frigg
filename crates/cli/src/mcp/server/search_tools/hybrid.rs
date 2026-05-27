@@ -169,20 +169,29 @@ impl FriggMcpServer {
                         scoped_config,
                         scoped_runtime_repository_ids,
                     );
-                    let search_output = searcher
-                        .search_hybrid_with_filters(
-                            SearchHybridQuery {
-                                query: query.clone(),
-                                limit,
-                                weights,
-                                semantic: params_for_blocking.semantic,
-                            },
-                            SearchFilters {
-                                repository_id: None,
-                                language: params_for_blocking.language.clone(),
-                            },
-                        )
-                        .map_err(Self::map_frigg_error)?;
+                    let search_query = SearchHybridQuery {
+                        query: query.clone(),
+                        limit,
+                        weights,
+                        semantic: params_for_blocking.semantic,
+                    };
+                    let search_filters = SearchFilters {
+                        repository_id: None,
+                        language: params_for_blocking.language.clone(),
+                    };
+                    let search_output = match server
+                        .runtime_state
+                        .semantic_runtime_credentials
+                        .as_ref()
+                    {
+                        Some(credentials) => searcher.search_hybrid_with_filters_with_credentials(
+                            search_query,
+                            search_filters,
+                            credentials,
+                        ),
+                        None => searcher.search_hybrid_with_filters(search_query, search_filters),
+                    }
+                    .map_err(Self::map_frigg_error)?;
 
                     diagnostics_count = search_output.diagnostics.total_count();
                     walk_diagnostics_count = search_output
