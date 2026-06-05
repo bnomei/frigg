@@ -1,5 +1,7 @@
 use super::*;
-use frigg::mcp::types::WorkspacePreciseLifecyclePhase;
+use frigg::mcp::types::{
+    WorkspaceAttachIndexMode, WorkspaceIndexLifecyclePhase, WorkspacePreciseLifecyclePhase,
+};
 
 #[tokio::test]
 async fn core_list_repositories_is_deterministic() {
@@ -64,6 +66,9 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
             set_default: None,
             resolve_mode: None,
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should succeed for fixture file path")
@@ -75,7 +80,14 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert_eq!(first.resolution, WorkspaceResolveMode::GitRoot);
     assert!(first.session_default);
     assert_eq!(first.action, WorkspaceAttachAction::AttachedFresh);
-    assert_ne!(first.storage.index_state, WorkspaceStorageIndexState::Error);
+    assert_eq!(first.index_lifecycle.mode, WorkspaceAttachIndexMode::Ensure);
+    assert_eq!(
+        first.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Ready
+    );
+    assert!(first.index_lifecycle.waited_for_completion);
+    assert!(first.index_lifecycle.lexical_ready);
+    assert!(first.index_lifecycle.semantic_ready);
     assert!(matches!(
         first.precise.state,
         WorkspacePreciseState::Ok
@@ -95,6 +107,8 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
                 | WorkspacePreciseLifecyclePhase::Skipped
                 | WorkspacePreciseLifecyclePhase::Unavailable
                 | WorkspacePreciseLifecyclePhase::NotStarted
+                | WorkspacePreciseLifecyclePhase::Failed
+                | WorkspacePreciseLifecyclePhase::Timeout
         ),
         "workspace_attach should expose the precise lifecycle phase"
     );
@@ -124,6 +138,9 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
             set_default: Some(false),
             resolve_mode: None,
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should reuse existing root")
@@ -133,6 +150,10 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
         first.repository.repository_id
     );
     assert_eq!(second.action, WorkspaceAttachAction::ReusedWorkspace);
+    assert_eq!(
+        second.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Ready
+    );
 
     let current = server
         .workspace_current(Parameters(WorkspaceCurrentParams {}))
@@ -210,7 +231,60 @@ fn workspace_attach_accepts_natural_resolve_mode_aliases() {
 }
 
 #[tokio::test]
-async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
+async fn workspace_attach_ensures_missing_manifest_by_default() {
+    let workspace_root = temp_workspace_root("workspace-attach-ensures-missing-manifest");
+    fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        "fn main() { println!(\"indexed\"); }\n",
+    )
+    .expect("workspace source file should be writable");
+
+    let server = server_for_config(
+        FriggConfig::from_optional_workspace_roots(Vec::new())
+            .expect("empty serving config should be valid"),
+    );
+
+    let response = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
+            set_default: None,
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: Some(false),
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
+        }))
+        .await
+        .expect("workspace_attach should index missing manifest by default")
+        .0;
+
+    assert_eq!(
+        response.index_lifecycle.mode,
+        WorkspaceAttachIndexMode::Ensure
+    );
+    assert_eq!(
+        response.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Ready
+    );
+    assert!(response.index_lifecycle.waited_for_completion);
+    assert!(response.index_lifecycle.lexical_ready);
+    assert!(response.index_lifecycle.semantic_ready);
+    assert_eq!(
+        response
+            .repository
+            .health
+            .as_ref()
+            .map(|health| health.lexical.state),
+        Some(WorkspaceIndexComponentState::Ready)
+    );
+
+    fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");
+}
+
+#[tokio::test]
+async fn workspace_attach_skip_reports_schema_only_storage_as_uninitialized() {
     let workspace_root = temp_workspace_root("workspace-attach-schema-only-storage");
     fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
     fs::write(
@@ -243,6 +317,9 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
             wait_for_precise: None,
+            index_mode: Some(WorkspaceAttachIndexMode::Skip),
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should succeed for schema-only storage")
@@ -251,6 +328,14 @@ async fn workspace_attach_reports_schema_only_storage_as_uninitialized() {
     assert_eq!(
         response.storage.index_state,
         WorkspaceStorageIndexState::Uninitialized
+    );
+    assert_eq!(
+        response.index_lifecycle.mode,
+        WorkspaceAttachIndexMode::Skip
+    );
+    assert_eq!(
+        response.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Skipped
     );
     assert!(response.storage.exists);
     assert!(
@@ -368,6 +453,9 @@ async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
             set_default: None,
             resolve_mode: Some(WorkspaceResolveMode::Direct),
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should succeed for indexed workspace")
@@ -378,6 +466,10 @@ async fn workspace_attach_reports_known_lexical_and_semantic_artifact_counts() {
         .health
         .as_ref()
         .expect("workspace_attach should include health");
+    assert_eq!(
+        response.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Ready
+    );
     assert_eq!(health.lexical.state, WorkspaceIndexComponentState::Ready);
     assert_eq!(health.lexical.artifact_count, Some(2));
     assert_eq!(health.semantic.state, WorkspaceIndexComponentState::Ready);
@@ -426,6 +518,9 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
             set_default: Some(false),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should attach repo a")
@@ -437,6 +532,9 @@ async fn workspace_session_default_scopes_search_text_without_repository_hint() 
             set_default: Some(true),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should attach repo b and set default")

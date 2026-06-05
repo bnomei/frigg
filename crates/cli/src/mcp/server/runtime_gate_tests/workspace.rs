@@ -35,6 +35,9 @@ async fn workspace_attach_can_adopt_known_repository_id_for_new_session() {
             set_default: Some(true),
             resolve_mode: None,
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should adopt a known repository id")
@@ -78,6 +81,9 @@ async fn workspace_detach_clears_session_default_and_preserves_known_workspace()
             set_default: Some(true),
             resolve_mode: None,
             wait_for_precise: None,
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should adopt a known repository id");
@@ -156,6 +162,9 @@ printf '%s' "local-python-scip" > "${{6}}"
             set_default: Some(true),
             resolve_mode: Some(WorkspaceResolveMode::Direct),
             wait_for_precise: Some(true),
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
         }))
         .await
         .expect("workspace_attach should succeed")

@@ -380,6 +380,34 @@ fn repository_response_cache_freshness_marks_missing_snapshot_uncacheable() {
             .and_then(Value::as_bool),
         Some(false)
     );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/cacheable_reason")
+            .and_then(Value::as_str),
+        Some("missing_snapshot")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/candidate_source")
+            .and_then(Value::as_str),
+        Some("live_walk")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/using_live_walk")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/recommended_client_behavior")
+            .and_then(Value::as_str),
+        Some("continue_using_frigg_live_fallback")
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -439,6 +467,34 @@ fn repository_response_cache_freshness_marks_stale_snapshot_uncacheable() {
             .pointer("/repositories/0/dirty_root")
             .and_then(Value::as_bool),
         Some(false)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/cacheable_reason")
+            .and_then(Value::as_str),
+        Some("stale_snapshot")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/candidate_source")
+            .and_then(Value::as_str),
+        Some("live_walk")
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/using_live_walk")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        freshness
+            .basis
+            .pointer("/repositories/0/recommended_client_behavior")
+            .and_then(Value::as_str),
+        Some("continue_using_frigg_live_fallback")
     );
 
     let _ = fs::remove_dir_all(workspace_root);

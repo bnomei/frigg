@@ -271,18 +271,11 @@ impl FriggMcpServer {
         }
     }
 
-    pub(super) fn attach_workspace_target_internal(
+    pub(super) fn invalidate_workspace_index_runtime_caches(
         &self,
-        path: Option<&str>,
-        repository_id: Option<&str>,
-        set_default: bool,
-        resolve_mode: WorkspaceResolveMode,
-    ) -> Result<WorkspaceAttachResponse, ErrorData> {
-        let (workspace, resolved_from, resolution) =
-            self.resolve_workspace_target(path, repository_id, resolve_mode)?;
-
-        let newly_adopted = self.adopt_workspace(&workspace, set_default)?;
-
+        workspace: &AttachedWorkspace,
+        invalidate_precise_generation: bool,
+    ) {
         self.runtime_state
             .validated_manifest_candidate_cache
             .write()
@@ -301,10 +294,422 @@ impl FriggMcpServer {
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
+        if invalidate_precise_generation {
+            self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
+        }
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         self.invalidate_repository_search_response_caches(&workspace.repository_id);
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
-        self.maybe_refresh_workspace_semantic_snapshot(&workspace);
+    }
+
+    fn active_repository_index_tasks(&self, repository_id: &str) -> Vec<RuntimeTaskSummary> {
+        let workspace = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_repository_id(repository_id);
+        self.runtime_state
+            .runtime_task_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_tasks()
+            .into_iter()
+            .filter(|task| {
+                matches!(
+                    task.kind,
+                    RuntimeTaskKind::ChangedReindex
+                        | RuntimeTaskKind::SemanticRefresh
+                        | RuntimeTaskKind::WorkspacePrepare
+                        | RuntimeTaskKind::WorkspaceReindex
+                ) && (task.repository_id == repository_id
+                    || workspace.as_ref().is_some_and(|workspace| {
+                        workspace.runtime_repository_id != repository_id
+                            && task.repository_id == workspace.runtime_repository_id
+                    }))
+            })
+            .collect()
+    }
+
+    async fn wait_for_repository_index_work(&self, repository_id: &str, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.active_repository_index_tasks(repository_id).is_empty() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    pub(super) fn workspace_index_readiness(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> (bool, bool, Option<String>) {
+        let mut manifest_only_runtime = self.config.semantic_runtime.clone();
+        manifest_only_runtime.enabled = false;
+        let lexical_ready =
+            match self.workspace_repository_freshness_status(workspace, &manifest_only_runtime) {
+                Ok(status) => {
+                    matches!(status.manifest, RepositoryManifestFreshness::Ready)
+                        && !self.workspace_has_dirty_root(workspace)
+                }
+                Err(err) => return (false, false, Some(err)),
+            };
+
+        if !self.config.semantic_runtime.enabled {
+            return (lexical_ready, true, None);
+        }
+
+        match self.workspace_repository_freshness_status(workspace, &self.config.semantic_runtime) {
+            Ok(status) => {
+                let semantic_ready = matches!(
+                    status.semantic,
+                    RepositorySemanticFreshness::Disabled
+                        | RepositorySemanticFreshness::NoEligibleEntries
+                        | RepositorySemanticFreshness::Ready
+                );
+                (lexical_ready, semantic_ready, None)
+            }
+            Err(err) => (lexical_ready, false, Some(err)),
+        }
+    }
+
+    pub(super) fn workspace_index_lifecycle_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+        mode: WorkspaceAttachIndexMode,
+        waited_for_completion: bool,
+        timed_out: bool,
+        action_taken: WorkspaceIndexAction,
+        failure_summary: Option<String>,
+    ) -> WorkspaceIndexLifecycleSummary {
+        let (lexical_ready, semantic_ready, readiness_error) =
+            self.workspace_index_readiness(workspace);
+        let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
+        let failure_summary = failure_summary.or(readiness_error);
+        let phase = if lexical_ready && semantic_ready {
+            WorkspaceIndexLifecyclePhase::Ready
+        } else if timed_out {
+            WorkspaceIndexLifecyclePhase::Timeout
+        } else if failure_summary.is_some() || matches!(action_taken, WorkspaceIndexAction::Failed)
+        {
+            WorkspaceIndexLifecyclePhase::Failed
+        } else if matches!(action_taken, WorkspaceIndexAction::SkippedByRequest) {
+            WorkspaceIndexLifecyclePhase::Skipped
+        } else if !active_tasks.is_empty()
+            || matches!(action_taken, WorkspaceIndexAction::SkippedActiveTask)
+        {
+            WorkspaceIndexLifecyclePhase::Refreshing
+        } else if matches!(action_taken, WorkspaceIndexAction::Queued) {
+            WorkspaceIndexLifecyclePhase::RefreshQueued
+        } else if matches!(action_taken, WorkspaceIndexAction::Unavailable) {
+            WorkspaceIndexLifecyclePhase::Unavailable
+        } else {
+            WorkspaceIndexLifecyclePhase::Skipped
+        };
+        let recommended_action = (!lexical_ready || !semantic_ready).then_some(match phase {
+            WorkspaceIndexLifecyclePhase::Failed
+            | WorkspaceIndexLifecyclePhase::Skipped
+            | WorkspaceIndexLifecyclePhase::Timeout
+            | WorkspaceIndexLifecyclePhase::Unavailable => WorkspaceRecommendedAction::RerunReindex,
+            WorkspaceIndexLifecyclePhase::Ready
+            | WorkspaceIndexLifecyclePhase::Refreshing
+            | WorkspaceIndexLifecyclePhase::RefreshQueued => {
+                WorkspaceRecommendedAction::UseHeuristicMode
+            }
+        });
+        WorkspaceIndexLifecycleSummary {
+            phase,
+            mode,
+            waited_for_completion,
+            timed_out,
+            action_taken,
+            lexical_ready,
+            semantic_ready,
+            active_tasks,
+            failure_summary,
+            recommended_action,
+        }
+    }
+
+    fn spawn_workspace_attach_index_refresh(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> tokio::task::JoinHandle<Result<crate::indexer::ReindexSummary, String>> {
+        let task_id = self
+            .runtime_state
+            .runtime_task_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_task(
+                RuntimeTaskKind::WorkspaceReindex,
+                workspace.repository_id.clone(),
+                "attach_index_ensure",
+                Some(format!("attach index ensure {}", workspace.root.display())),
+            );
+        let server = self.clone();
+        let workspace = workspace.clone();
+        let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
+        let semantic_runtime = self.config.semantic_runtime.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = (|| -> Result<crate::indexer::ReindexSummary, String> {
+                let db_path = ensure_provenance_db_parent_dir(&workspace.root)
+                    .map_err(|err| err.to_string())?;
+                let credentials = SemanticRuntimeCredentials::from_process_env();
+                reindex_repository_with_runtime_config(
+                    &workspace.runtime_repository_id,
+                    &workspace.root,
+                    &db_path,
+                    ReindexMode::ChangedOnly,
+                    &semantic_runtime,
+                    &credentials,
+                )
+                .map_err(|err| err.to_string())
+            })();
+            if result.is_ok() {
+                server.invalidate_workspace_index_runtime_caches(&workspace, true);
+            }
+            let (status, detail) = match &result {
+                Ok(_) => (RuntimeTaskStatus::Succeeded, None),
+                Err(err) => (RuntimeTaskStatus::Failed, Some(err.clone())),
+            };
+            task_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .finish_task(&task_id, status, detail);
+            result
+        })
+    }
+
+    pub(super) async fn ensure_workspace_index_for_attach(
+        &self,
+        workspace: &AttachedWorkspace,
+        wait_for_index: bool,
+        timeout: Duration,
+    ) -> (
+        WorkspaceIndexLifecycleSummary,
+        Option<crate::indexer::ReindexSummary>,
+    ) {
+        let started_at = tokio::time::Instant::now();
+        let (lexical_ready, semantic_ready, readiness_error) =
+            self.workspace_index_readiness(workspace);
+        if lexical_ready && semantic_ready {
+            return (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    wait_for_index,
+                    false,
+                    WorkspaceIndexAction::SkippedNoWork,
+                    None,
+                ),
+                None,
+            );
+        }
+        if let Some(error) = readiness_error {
+            return (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    wait_for_index,
+                    false,
+                    WorkspaceIndexAction::Failed,
+                    Some(error),
+                ),
+                None,
+            );
+        }
+        if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            if !wait_for_index {
+                return (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        false,
+                        false,
+                        WorkspaceIndexAction::SkippedActiveTask,
+                        None,
+                    ),
+                    None,
+                );
+            }
+            let remaining_timeout = timeout
+                .checked_sub(started_at.elapsed())
+                .unwrap_or(Duration::ZERO);
+            if remaining_timeout.is_zero() {
+                return (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        true,
+                        true,
+                        WorkspaceIndexAction::SkippedActiveTask,
+                        None,
+                    ),
+                    None,
+                );
+            }
+            if !self
+                .wait_for_repository_index_work(&workspace.repository_id, remaining_timeout)
+                .await
+            {
+                return (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        true,
+                        true,
+                        WorkspaceIndexAction::SkippedActiveTask,
+                        None,
+                    ),
+                    None,
+                );
+            }
+            let (lexical_ready, semantic_ready, readiness_error) =
+                self.workspace_index_readiness(workspace);
+            if lexical_ready && semantic_ready {
+                return (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        true,
+                        false,
+                        WorkspaceIndexAction::SkippedActiveTask,
+                        None,
+                    ),
+                    None,
+                );
+            }
+            if let Some(error) = readiness_error {
+                return (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        true,
+                        false,
+                        WorkspaceIndexAction::Failed,
+                        Some(error),
+                    ),
+                    None,
+                );
+            }
+        }
+
+        let handle = self.spawn_workspace_attach_index_refresh(workspace);
+        if !wait_for_index {
+            return (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    false,
+                    false,
+                    WorkspaceIndexAction::Queued,
+                    None,
+                ),
+                None,
+            );
+        }
+
+        let remaining_timeout = timeout
+            .checked_sub(started_at.elapsed())
+            .unwrap_or(Duration::ZERO);
+        if remaining_timeout.is_zero() {
+            return (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    true,
+                    true,
+                    WorkspaceIndexAction::SkippedActiveTask,
+                    None,
+                ),
+                None,
+            );
+        }
+
+        match tokio::time::timeout(remaining_timeout, handle).await {
+            Ok(Ok(Ok(summary))) => {
+                let (lexical_ready, semantic_ready, readiness_error) =
+                    self.workspace_index_readiness(workspace);
+                let failure_summary = if lexical_ready && semantic_ready {
+                    None
+                } else {
+                    readiness_error.or_else(|| {
+                        Some(
+                            "attach index refresh completed but index freshness is not ready"
+                                .to_owned(),
+                        )
+                    })
+                };
+                (
+                    self.workspace_index_lifecycle_summary(
+                        workspace,
+                        WorkspaceAttachIndexMode::Ensure,
+                        true,
+                        false,
+                        if failure_summary.is_some() {
+                            WorkspaceIndexAction::Failed
+                        } else {
+                            WorkspaceIndexAction::Refreshed
+                        },
+                        failure_summary,
+                    ),
+                    Some(summary),
+                )
+            }
+            Ok(Ok(Err(err))) => (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    true,
+                    false,
+                    WorkspaceIndexAction::Failed,
+                    Some(err),
+                ),
+                None,
+            ),
+            Ok(Err(err)) => (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    true,
+                    false,
+                    WorkspaceIndexAction::Failed,
+                    Some(format!("attach index refresh task join failure: {err}")),
+                ),
+                None,
+            ),
+            Err(_) => (
+                self.workspace_index_lifecycle_summary(
+                    workspace,
+                    WorkspaceAttachIndexMode::Ensure,
+                    true,
+                    true,
+                    WorkspaceIndexAction::SkippedActiveTask,
+                    None,
+                ),
+                None,
+            ),
+        }
+    }
+
+    pub(super) fn attach_workspace_target_internal(
+        &self,
+        path: Option<&str>,
+        repository_id: Option<&str>,
+        set_default: bool,
+        resolve_mode: WorkspaceResolveMode,
+        index_mode: WorkspaceAttachIndexMode,
+    ) -> Result<WorkspaceAttachResponse, ErrorData> {
+        let (workspace, resolved_from, resolution) =
+            self.resolve_workspace_target(path, repository_id, resolve_mode)?;
+
+        let newly_adopted = self.adopt_workspace(&workspace, set_default)?;
+
+        self.invalidate_workspace_index_runtime_caches(&workspace, false);
 
         let mut repository = self.repository_summary(&workspace);
         let storage = repository
@@ -312,9 +717,19 @@ impl FriggMcpServer {
             .clone()
             .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
         repository.storage = None;
-        self.maybe_spawn_workspace_runtime_prewarm(&workspace);
-        let precise_generation_action =
-            self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
+        let index_action = match index_mode {
+            WorkspaceAttachIndexMode::Ensure => WorkspaceIndexAction::SkippedNoWork,
+            WorkspaceAttachIndexMode::Defer => {
+                self.maybe_spawn_workspace_runtime_prewarm(&workspace);
+                WorkspaceIndexAction::Queued
+            }
+            WorkspaceAttachIndexMode::Skip => WorkspaceIndexAction::SkippedByRequest,
+        };
+        let precise_generation_action = if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
+            WorkspacePreciseGenerationAction::NotApplicable
+        } else {
+            self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[])
+        };
         let precise = self
             .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
         let precise_lifecycle = self.workspace_precise_lifecycle_summary(
@@ -339,6 +754,14 @@ impl FriggMcpServer {
             },
             precise,
             precise_lifecycle,
+            index_lifecycle: self.workspace_index_lifecycle_summary(
+                &workspace,
+                index_mode,
+                false,
+                false,
+                index_action,
+                None,
+            ),
         })
     }
 
@@ -350,7 +773,13 @@ impl FriggMcpServer {
         resolve_mode: WorkspaceResolveMode,
     ) -> Result<WorkspaceAttachResponse, ErrorData> {
         let owned_path = path.display().to_string();
-        self.attach_workspace_target_internal(Some(&owned_path), None, set_default, resolve_mode)
+        self.attach_workspace_target_internal(
+            Some(&owned_path),
+            None,
+            set_default,
+            resolve_mode,
+            WorkspaceAttachIndexMode::Skip,
+        )
     }
 
     pub(super) fn repository_has_active_runtime_work(&self, repository_id: &str) -> bool {

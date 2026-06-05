@@ -182,7 +182,7 @@ Frigg can also read:
 - your source files under the configured workspace roots
 - optional `.frigg/scip/*.scip` or `.frigg/scip/*.json` artifacts for more precise definitions, references, implementations, and call navigation
 
-Frigg does not modify your source tree during plain session adoption. `workspace_attach` by itself does not create `.frigg` state. Frigg writes `.frigg/storage.sqlite3` only when indexing/preparing/reindexing paths run.
+Frigg does not modify your source tree during session adoption. By default `workspace_attach` ensures stale or missing indexed state before returning, which may create or update `.frigg/storage.sqlite3`. Pass `index_mode=skip` to adopt the repository without attach-time indexing.
 
 ## Showcases
 
@@ -195,7 +195,7 @@ The [showcases/](https://github.com/bnomei/frigg/tree/main/showcases) directory 
 Once Frigg is running, the normal workflow is:
 
 1. Let your agent adopt repositories session-locally with `workspace_attach`.
-   `workspace_attach` reports whether the session attached a fresh workspace or reused an already-adopted one, and it returns a compact precise-index summary for the selected repo. That summary now exposes `state`, `failure_tool`, `failure_class`, `failure_summary`, `recommended_action`, and `generation_action` so clients do not need to parse nested generator detail first.
+   `workspace_attach` defaults to `index_mode=ensure`: it refreshes stale or missing lexical/semantic state, waits up to 30s, and returns `index_lifecycle` so clients can tell whether Frigg is ready, refreshing, skipped, timed out, or failed. Use `index_mode=skip` for the old lightweight attach path.
 2. Use `search_hybrid` as the discovery surface for broad questions, then pivot into `read_match`, `read_file`, `document_symbols`, `go_to_definition`, or `search_symbol` when you need precise anchors and deeper navigation.
 3. Use `workspace_prepare` or `workspace_reindex` only when you intentionally want to initialize or refresh repository state from inside the client.
 4. Use `inspect_syntax_tree` before `search_structural` whenever the tree-sitter node shape is unclear.
@@ -309,7 +309,9 @@ Status surfaces are separated on purpose:
 - `health.precise_ingest` reports whether Frigg could actually ingest those artifacts, with coverage mode, discovered or ingested byte counts, and sampled failed artifact reasons.
 - `workspace_current.precise` stays as the compact operator summary built on top of that ingest status.
 
-`workspace_attach` and `workspace_reindex` also support `wait_for_precise=true`. By default they remain non-blocking and may return while precise generation is still running. With `wait_for_precise`, the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary with artifact path details.
+`workspace_attach` and `workspace_reindex` support `wait_for_precise` (defaults to `true`). By default they wait for precise generation to complete (or time out after 30s) before returning, so the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary. Pass `wait_for_precise=false` to get the previous non-blocking behavior.
+
+`workspace_attach` also supports `index_mode`, `wait_for_index`, and `index_timeout_ms`. The default `index_mode=ensure` runs needed changed-only index refreshes and waits up to 30s so `repository.health.lexical` and semantic readiness are green when possible. `index_mode=defer` starts available recovery work and returns quickly; `index_mode=skip` performs no attach-time indexing and reports the current health plus a recommended action when indexed state is stale or missing.
 
 ## Built-In Watch Mode
 

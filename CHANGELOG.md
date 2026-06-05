@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.4 - 2026-06-05
+
+- Changed `workspace_attach` to default to `index_mode=ensure`: stale or missing lexical/semantic indexed state is refreshed and waited on for up to 30s before returning. Use `index_mode=skip` for lightweight adoption without attach-time indexing, or `index_mode=defer` to start recovery and return quickly. Attach/current responses now include `index_lifecycle`.
+- Changed default for `wait_for_precise` on `workspace_attach` and `workspace_reindex` from `false` to `true` (now waits up to 30s for precise generation by default, matching the `waited_for_completion` behavior previously only available when explicitly passing `true`). Use `wait_for_precise=false` to restore the previous fast/non-blocking return. Updated docs and README.
+
 ## 0.4.2 - 2026-05-27
 
 - Fixed semantic reindex recovery for deleted files recorded with absolute paths when indexing from a relative workspace root, allowing stale semantic chunks to be skipped or cleaned instead of failing on path canonicalization.

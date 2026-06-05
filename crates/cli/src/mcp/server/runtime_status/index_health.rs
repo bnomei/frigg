@@ -312,6 +312,35 @@ impl FriggMcpServer {
             let semantic = Self::repository_semantic_freshness_label(&status.semantic);
             let snapshot_id = status.snapshot_id.clone();
             let semantic_target = status.semantic_target.clone();
+            let active_index_tasks = self
+                .runtime_state
+                .runtime_task_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .active_tasks()
+                .into_iter()
+                .filter(|task| {
+                    matches!(
+                        task.kind,
+                        RuntimeTaskKind::ChangedReindex
+                            | RuntimeTaskKind::SemanticRefresh
+                            | RuntimeTaskKind::WorkspaceReindex
+                            | RuntimeTaskKind::WorkspacePrepare
+                    ) && (task.repository_id == workspace.repository_id
+                        || (workspace.runtime_repository_id != workspace.repository_id
+                            && task.repository_id == workspace.runtime_repository_id))
+                })
+                .collect::<Vec<_>>();
+            let cacheable_reason = if dirty_root {
+                Some("dirty_root")
+            } else if !matches!(status.manifest, RepositoryManifestFreshness::Ready) {
+                Some(manifest)
+            } else if status.snapshot_id.is_none() {
+                Some("missing_snapshot_id")
+            } else {
+                None
+            };
+            let using_live_walk = cacheable_reason.is_some();
 
             repositories.push(json!({
                 "repository_id": workspace.repository_id,
@@ -319,6 +348,16 @@ impl FriggMcpServer {
                 "manifest": manifest,
                 "semantic": semantic,
                 "dirty_root": dirty_root,
+                "cacheable_reason": cacheable_reason,
+                "candidate_source": if using_live_walk { "live_walk" } else { "manifest_snapshot" },
+                "using_live_walk": using_live_walk,
+                "refresh_in_progress": !active_index_tasks.is_empty(),
+                "active_index_tasks": active_index_tasks,
+                "recommended_client_behavior": if using_live_walk {
+                    "continue_using_frigg_live_fallback"
+                } else {
+                    "use_cached_frigg_results"
+                },
                 "provider": semantic_target.as_ref().map(|target| target.provider.clone()),
                 "model": semantic_target.as_ref().map(|target| target.model.clone()),
             }));
@@ -792,39 +831,6 @@ impl FriggMcpServer {
         })
     }
 
-    pub(in crate::mcp::server) fn maybe_refresh_workspace_semantic_snapshot(
-        &self,
-        workspace: &AttachedWorkspace,
-    ) {
-        let Some(plan) = self.workspace_semantic_refresh_plan(workspace) else {
-            return;
-        };
-        if plan.reason != "semantic_snapshot_missing_for_active_model" {
-            return;
-        }
-        if self
-            .runtime_state
-            .runtime_task_registry
-            .read()
-            .expect("runtime task registry poisoned")
-            .has_active_task_for_repository(
-                crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                &workspace.repository_id,
-            )
-        {
-            return;
-        }
-        if let Err(err) = self.refresh_workspace_semantic_snapshot_with_plan(workspace, &plan) {
-            warn!(
-                repository_id = workspace.repository_id,
-                snapshot_id = %plan.latest_snapshot_id,
-                reason = plan.reason,
-                error = %err,
-                "workspace semantic refresh failed during attach"
-            );
-        }
-    }
-
     pub(in crate::mcp::server) fn maybe_spawn_workspace_runtime_prewarm(
         &self,
         workspace: &AttachedWorkspace,
@@ -1118,14 +1124,7 @@ impl FriggMcpServer {
                     "uninitialized_db".to_owned()
                 }),
             ),
-            WorkspaceStorageIndexState::Ready => return None,
-            WorkspaceStorageIndexState::Error => (
-                WorkspaceIndexComponentState::Error,
-                storage
-                    .error
-                    .clone()
-                    .or_else(|| Some("storage_error".to_owned())),
-            ),
+            WorkspaceStorageIndexState::Ready | WorkspaceStorageIndexState::Error => return None,
         };
         Some(WorkspaceIndexComponentSummary {
             state,
