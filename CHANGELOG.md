@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5 - 2026-06-07
+
+- Fixed compact MCP responses for navigation, symbol search, `document_symbols`, `inspect_syntax_tree`, and `search_structural` to omit absent `metadata` and `note` fields instead of serializing them as `null`, keeping payloads compatible with the object-only `metadata` output schema used by strict clients.
+
 ## 0.4.4 - 2026-06-05
 
 - Changed `workspace_attach` to default to `index_mode=ensure`: stale or missing lexical/semantic indexed state is refreshed and waited on for up to 30s before returning. Use `index_mode=skip` for lightweight adoption without attach-time indexing, or `index_mode=defer` to start recovery and return quickly. Attach/current responses now include `index_lifecycle`.
