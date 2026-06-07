@@ -7,14 +7,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use frigg::domain::model::{ReferenceMatchKind, stable_repository_id_for_root};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    DocumentSymbolsParams, ExploreAnchor, ExploreCursor, ExploreOperation, ExploreParams,
-    FindDeclarationsParams, FindImplementationsParams, FindReferencesParams, GoToDefinitionParams,
-    IncomingCallsParams, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
-    ReadFileParams, ReadMatchParams, ReadPresentationMode, ResponseMode, SearchHybridParams,
-    SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType, SearchStructuralParams,
-    SearchSymbolParams, SearchSymbolPathClass, SearchTextParams, WorkspaceAttachAction,
-    WorkspaceAttachParams, WorkspaceCurrentParams, WorkspaceIndexComponentState,
-    WorkspacePreciseState, WorkspaceResolveMode, WorkspaceStorageIndexState,
+    DocumentSymbolsParams, DocumentSymbolsResponse, ExploreAnchor, ExploreCursor, ExploreOperation,
+    ExploreParams, FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
+    FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
+    GoToDefinitionParams, GoToDefinitionResponse, IncomingCallsParams, IncomingCallsResponse,
+    InspectSyntaxTreeResponse, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
+    OutgoingCallsResponse, ReadFileParams, ReadMatchParams, ReadPresentationMode, ResponseMode,
+    SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem,
+    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceIndexComponentState, WorkspacePreciseState, WorkspaceResolveMode,
+    WorkspaceStorageIndexState,
 };
 use frigg::settings::{
     FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeCredentials,
@@ -129,6 +133,144 @@ fn tool_result_text(result: &CallToolResult) -> &str {
         .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .unwrap_or_else(|| panic!("expected first tool result content item to be text"))
+}
+
+fn assert_omits_absent_metadata_and_note<T: serde::Serialize>(tool_name: &str, response: &T) {
+    let value = serde_json::to_value(response)
+        .unwrap_or_else(|err| panic!("{tool_name} response should serialize: {err}"));
+    assert!(
+        value.get("metadata").is_none(),
+        "{tool_name} should omit absent metadata instead of serializing null"
+    );
+    assert!(
+        value.get("note").is_none(),
+        "{tool_name} should omit absent note instead of serializing null"
+    );
+}
+
+#[test]
+fn metadata_note_responses_omit_absent_fields_on_wire() {
+    assert_omits_absent_metadata_and_note(
+        "search_symbol",
+        &SearchSymbolResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "find_references",
+        &FindReferencesResponse {
+            total_matches: 0,
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "go_to_definition",
+        &GoToDefinitionResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "find_declarations",
+        &FindDeclarationsResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "find_implementations",
+        &FindImplementationsResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "incoming_calls",
+        &IncomingCallsResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            availability: None,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "outgoing_calls",
+        &OutgoingCallsResponse {
+            matches: Vec::new(),
+            result_handle: None,
+            mode: NavigationMode::UnavailableNoPrecise,
+            availability: None,
+            target_selection: None,
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "document_symbols",
+        &DocumentSymbolsResponse {
+            symbols: Vec::new(),
+            result_handle: None,
+            metadata: None,
+            note: None,
+        },
+    );
+
+    let node = SyntaxTreeNodeItem {
+        kind: "source_file".to_owned(),
+        named: true,
+        path: "src/lib.rs".to_owned(),
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 1,
+        excerpt: String::new(),
+    };
+    assert_omits_absent_metadata_and_note(
+        "inspect_syntax_tree",
+        &InspectSyntaxTreeResponse {
+            repository_id: "repo-001".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            language: "rust".to_owned(),
+            focus: node,
+            ancestors: Vec::new(),
+            children: Vec::new(),
+            follow_up_structural: Vec::new(),
+            metadata: None,
+            note: None,
+        },
+    );
+    assert_omits_absent_metadata_and_note(
+        "search_structural",
+        &SearchStructuralResponse {
+            matches: Vec::new(),
+            result_mode: StructuralResultMode::Matches,
+            metadata: None,
+            note: None,
+        },
+    );
 }
 
 fn temp_workspace_root(test_name: &str) -> PathBuf {

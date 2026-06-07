@@ -483,8 +483,10 @@ pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "super::metadata_object_field_schema")]
     pub metadata: Option<MetadataObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
