@@ -37,6 +37,7 @@ pub(super) struct HttpRequestDiagnostics {
     pub(super) body_bytes: usize,
     pub(super) body_blake3: String,
     pub(super) trace_id: Option<String>,
+    raw_inputs: Vec<String>,
 }
 
 impl HttpRequestDiagnostics {
@@ -71,6 +72,7 @@ impl HttpRequestDiagnostics {
             body_bytes: body_bytes.len(),
             body_blake3: blake3::hash(&body_bytes).to_hex().to_string(),
             trace_id: request.trace_id.clone(),
+            raw_inputs: request.input.clone(),
         })
     }
 }
@@ -114,7 +116,93 @@ pub(super) fn append_request_diagnostics(
     message: impl AsRef<str>,
     diagnostics: &HttpRequestDiagnostics,
 ) -> String {
-    format!("{} {}", message.as_ref(), diagnostics)
+    append_request_diagnostics_with_secrets(message, diagnostics, &[])
+}
+
+pub(super) fn append_request_diagnostics_with_secrets(
+    message: impl AsRef<str>,
+    diagnostics: &HttpRequestDiagnostics,
+    secrets: &[&str],
+) -> String {
+    let message = sanitize_diagnostic_message(message.as_ref(), diagnostics, secrets);
+    format!("{} {}", message, diagnostics)
+}
+
+fn sanitize_diagnostic_message(
+    message: &str,
+    diagnostics: &HttpRequestDiagnostics,
+    secrets: &[&str],
+) -> String {
+    let mut sanitized = message.to_string();
+
+    for secret in secrets.iter().copied().filter(|secret| !secret.is_empty()) {
+        sanitized = sanitized.replace(secret, "[REDACTED_API_KEY]");
+    }
+
+    for input in diagnostics
+        .raw_inputs
+        .iter()
+        .filter(|input| !input.trim().is_empty())
+    {
+        sanitized = sanitized.replace(input, "[REDACTED_INPUT]");
+    }
+
+    redact_key_bearing_url_parameters(&sanitized)
+}
+
+fn redact_key_bearing_url_parameters(message: &str) -> String {
+    const SECRET_PARAMS: &[&str] = &[
+        "key",
+        "api_key",
+        "apikey",
+        "access_token",
+        "token",
+        "client_secret",
+    ];
+
+    let mut output = String::with_capacity(message.len());
+    let mut chars = message.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        output.push(ch);
+        if ch != '?' && ch != '&' {
+            continue;
+        }
+
+        let key_start = index + ch.len_utf8();
+        let mut key_end = key_start;
+        while let Some(&(next_index, next_ch)) = chars.peek() {
+            if next_ch == '=' || next_ch == '&' || next_ch.is_whitespace() {
+                break;
+            }
+            key_end = next_index + next_ch.len_utf8();
+            output.push(next_ch);
+            chars.next();
+        }
+
+        let key = &message[key_start..key_end];
+        if !matches!(chars.peek(), Some(&(_, '='))) {
+            continue;
+        }
+
+        output.push('=');
+        chars.next();
+
+        let is_secret = SECRET_PARAMS
+            .iter()
+            .any(|secret_param| key.eq_ignore_ascii_case(secret_param));
+        if is_secret {
+            output.push_str("[REDACTED]");
+            while let Some(&(_, value_ch)) = chars.peek() {
+                if value_ch == '&' || value_ch.is_whitespace() || value_ch == ')' || value_ch == '}'
+                {
+                    break;
+                }
+                chars.next();
+            }
+        }
+    }
+
+    output
 }
 
 #[async_trait]

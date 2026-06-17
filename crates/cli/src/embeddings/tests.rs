@@ -548,6 +548,89 @@ async fn provider_adapters_openai_provider_error_includes_request_diagnostics() 
 }
 
 #[tokio::test]
+async fn provider_adapters_openai_redacts_api_keys_and_raw_source_from_diagnostics() {
+    let source_snippet = "fn secret_payment_token() { let token = \"sk-source-leak\"; }";
+    let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
+        status_code: 400,
+        body: json!({
+            "error": {
+                "message": format!(
+                    "request used key test-openai-key and included source: {source_snippet}"
+                ),
+                "code": "invalid_request_error",
+                "type": "invalid_request_error"
+            }
+        })
+        .to_string(),
+    })]));
+    let sleeper = Arc::new(MockSleeper::default());
+    let provider = openai_provider_for_test(
+        http,
+        sleeper,
+        RetryPolicy {
+            max_retries: 0,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(10),
+        },
+    );
+    let mut request = sample_request(EmbeddingPurpose::Document);
+    request.input = vec![source_snippet.to_string()];
+
+    let error = provider
+        .embed(request)
+        .await
+        .expect_err("expected redacted provider error");
+
+    let EmbeddingError::Provider(failure) = error else {
+        panic!("expected provider error");
+    };
+    assert!(failure.message.contains("[REDACTED_API_KEY]"));
+    assert!(failure.message.contains("[REDACTED_INPUT]"));
+    assert!(failure.message.contains("request_context{"));
+    assert!(!failure.message.contains("test-openai-key"));
+    assert!(!failure.message.contains(source_snippet));
+    assert!(!failure.message.contains("sk-source-leak"));
+}
+
+#[tokio::test]
+async fn provider_adapters_google_redacts_key_bearing_urls_from_transport_diagnostics() {
+    let source_snippet = "class PaymentSecret { const API_KEY = 'source-secret'; }";
+    let http = Arc::new(MockHttpExecutor::new(vec![Err(
+        HttpTransportError::non_retryable(format!(
+            "failed posting https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=test-google-key&alt=json with body {source_snippet}"
+        )),
+    )]));
+    let sleeper = Arc::new(MockSleeper::default());
+    let provider = google_provider_for_test(
+        http,
+        sleeper,
+        RetryPolicy {
+            max_retries: 0,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(10),
+        },
+    );
+    let mut request = sample_request(EmbeddingPurpose::Document);
+    request.model = "text-embedding-004".to_string();
+    request.input = vec![source_snippet.to_string()];
+
+    let error = provider
+        .embed(request)
+        .await
+        .expect_err("expected redacted transport error");
+
+    let EmbeddingError::Transport(failure) = error else {
+        panic!("expected transport error");
+    };
+    assert!(failure.message.contains("key=[REDACTED]"));
+    assert!(failure.message.contains("[REDACTED_INPUT]"));
+    assert!(failure.message.contains("request_context{"));
+    assert!(!failure.message.contains("test-google-key"));
+    assert!(!failure.message.contains(source_snippet));
+    assert!(!failure.message.contains("source-secret"));
+}
+
+#[tokio::test]
 async fn reqwest_http_executor_sends_parseable_openai_json_body() {
     async fn capture_openai_body(
         State(captured): State<Arc<Mutex<Vec<(String, usize, String)>>>>,

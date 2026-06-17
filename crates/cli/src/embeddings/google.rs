@@ -172,7 +172,8 @@ impl GoogleEmbeddingProvider {
         error: HttpTransportError,
         diagnostics: &HttpRequestDiagnostics,
     ) -> EmbeddingError {
-        let message = append_request_diagnostics(error.message, diagnostics);
+        let message =
+            append_request_diagnostics_with_secrets(error.message, diagnostics, &[&self.api_key]);
         let failure = match error.retryability {
             Retryability::Retryable => {
                 TransportFailure::retryable(self.kind(), operation, message, trace_id)
@@ -215,7 +216,8 @@ impl GoogleEmbeddingProvider {
                 retryability = status_retryability(provider_status_code);
             }
         }
-        let message = append_request_diagnostics(message, diagnostics);
+        let message =
+            append_request_diagnostics_with_secrets(message, diagnostics, &[&self.api_key]);
 
         let failure = match retryability {
             Retryability::Retryable => {
