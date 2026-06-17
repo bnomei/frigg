@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.6 - 2026-06-17
+
+- Added a Frigg CI scorecard workflow and release artifact smoke checks to improve release confidence.
+- Added the operator runbook and updated README guidance for workspace adoption, safety boundaries, and precise-generator side effects.
+- Added semantic provider redaction regression tests for OpenAI and Google transport diagnostics.
+- Documented and tested the `workspace_attach` side-effect contract, including `index_mode=skip` behavior and `wait_for_precise=false` precise-generation scheduling.
+- Added a precise-generator diagnostics scorecard with discovery state, failure classes, recommended actions, duration, artifact count/byte metrics, and repo-local touch-risk reporting.
+
 ## 0.4.5 - 2026-06-07
 
 - Fixed compact MCP responses for navigation, symbol search, `document_symbols`, `inspect_syntax_tree`, and `search_structural` to omit absent `metadata` and `note` fields instead of serializing them as `null`, keeping payloads compatible with the object-only `metadata` output schema used by strict clients.
