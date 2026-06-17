@@ -85,9 +85,13 @@ pub struct WorkspacePreciseGenerationSummary {
     pub status: WorkspacePreciseGenerationStatus,
     pub generated_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_sample_paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,6 +100,22 @@ pub struct WorkspacePreciseGenerationSummary {
     pub recommended_action: Option<WorkspaceRecommendedAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseRepoLocalTouchRisk {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub executes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub may_patch: Vec<String>,
+}
+
+impl WorkspacePreciseRepoLocalTouchRisk {
+    pub fn is_empty(&self) -> bool {
+        self.writes.is_empty() && self.executes.is_empty() && self.may_patch.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -111,6 +131,11 @@ pub struct WorkspacePreciseGeneratorSummary {
     pub expected_output_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_generation: Option<WorkspacePreciseGenerationSummary>,
+    #[serde(
+        default,
+        skip_serializing_if = "WorkspacePreciseRepoLocalTouchRisk::is_empty"
+    )]
+    pub repo_local_touch_risk: WorkspacePreciseRepoLocalTouchRisk,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

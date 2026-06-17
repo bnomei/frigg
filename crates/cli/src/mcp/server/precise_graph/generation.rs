@@ -660,11 +660,21 @@ impl FriggMcpServer {
             .to_string()
     }
 
+    fn precise_generation_artifact_bytes(artifact_paths: &[PathBuf]) -> Option<u64> {
+        artifact_paths.iter().try_fold(0u64, |total, path| {
+            fs::metadata(path)
+                .ok()
+                .filter(|metadata| metadata.is_file())
+                .map(|metadata| total.saturating_add(metadata.len()))
+        })
+    }
+
     fn precise_generation_succeeded_summary(
         generated_at_ms: u64,
         artifact_paths: &[PathBuf],
         detail: String,
     ) -> WorkspacePreciseGenerationSummary {
+        let artifact_bytes = Self::precise_generation_artifact_bytes(artifact_paths);
         let mut published_paths = artifact_paths
             .iter()
             .map(|path| Self::display_precise_artifact_path(path))
@@ -685,8 +695,10 @@ impl FriggMcpServer {
         WorkspacePreciseGenerationSummary {
             status: WorkspacePreciseGenerationStatus::Succeeded,
             generated_at_ms,
+            duration_ms: None,
             artifact_path,
-            artifact_count: (artifact_count > 1).then_some(artifact_count),
+            artifact_count: Some(artifact_count),
+            artifact_bytes,
             artifact_sample_paths,
             failure_class: None,
             recommended_action: None,
@@ -757,18 +769,18 @@ impl FriggMcpServer {
 
     fn run_precise_generator_command(
         request: PreciseGeneratorCommandRequest<'_>,
-    ) -> Result<PathBuf, WorkspacePreciseGenerationSummary> {
+    ) -> Result<PathBuf, Box<WorkspacePreciseGenerationSummary>> {
         let output_dir = request
             .output_path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| request.generator_workspace_root.to_path_buf());
         if let Err(detail) = Self::remove_file_if_exists(request.output_path) {
-            return Err(Self::precise_failed_summary(
+            return Err(Box::new(Self::precise_failed_summary(
                 request.generated_at_ms,
                 None,
                 detail,
-            ));
+            )));
         }
 
         let mut command = Command::new(&request.tool.command);
@@ -796,28 +808,30 @@ impl FriggMcpServer {
             Ok(output) => output,
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::NotFound {
-                    return Err(WorkspacePreciseGenerationSummary {
+                    return Err(Box::new(WorkspacePreciseGenerationSummary {
                         status: WorkspacePreciseGenerationStatus::MissingTool,
                         generated_at_ms: request.generated_at_ms,
+                        duration_ms: None,
                         artifact_path: None,
                         artifact_count: None,
+                        artifact_bytes: None,
                         artifact_sample_paths: Vec::new(),
                         failure_class: Some(WorkspacePreciseFailureClass::MissingTool),
                         recommended_action: Some(WorkspaceRecommendedAction::InstallTool),
                         detail: Some(err.to_string()),
-                    });
+                    }));
                 }
-                return Err(Self::precise_failed_summary(
+                return Err(Box::new(Self::precise_failed_summary(
                     request.generated_at_ms,
                     None,
                     err.to_string(),
-                ));
+                )));
             }
         };
 
         if !output.status.success() {
             let stderr_detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            return Err(Self::precise_failed_summary(
+            return Err(Box::new(Self::precise_failed_summary(
                 request.generated_at_ms,
                 None,
                 if stderr_detail.is_empty() {
@@ -828,7 +842,7 @@ impl FriggMcpServer {
                 } else {
                     stderr_detail
                 },
-            ));
+            )));
         }
 
         match Self::write_precise_artifact(
@@ -843,19 +857,19 @@ impl FriggMcpServer {
             request.spec.stdout_artifact_fallback,
         ) {
             Ok(Some(path)) => Ok(path),
-            Ok(None) => Err(Self::precise_failed_summary(
+            Ok(None) => Err(Box::new(Self::precise_failed_summary(
                 request.generated_at_ms,
                 None,
                 format!(
                     "generator '{}' succeeded but no SCIP artifact was produced",
                     request.tool.display
                 ),
-            )),
-            Err(detail) => Err(Self::precise_failed_summary(
+            ))),
+            Err(detail) => Err(Box::new(Self::precise_failed_summary(
                 request.generated_at_ms,
                 None,
                 detail,
-            )),
+            ))),
         }
     }
 
@@ -864,7 +878,10 @@ impl FriggMcpServer {
     ) -> WorkspacePreciseGenerationSummary {
         let output_path = request.output_dir.join(request.spec.output_artifact_name);
         let result =
-            (|| -> Result<WorkspacePreciseGenerationSummary, WorkspacePreciseGenerationSummary> {
+            (|| -> Result<
+                WorkspacePreciseGenerationSummary,
+                Box<WorkspacePreciseGenerationSummary>,
+            > {
                 let artifact_path =
                     Self::run_precise_generator_command(PreciseGeneratorCommandRequest {
                         workspace: request.workspace,
@@ -883,7 +900,11 @@ impl FriggMcpServer {
                     Some(&artifact_path),
                 )
                 .map_err(|detail| {
-                    Self::precise_failed_summary(request.generated_at_ms, None, detail)
+                    Box::new(Self::precise_failed_summary(
+                        request.generated_at_ms,
+                        None,
+                        detail,
+                    ))
                 })?;
                 Ok(Self::precise_generation_succeeded_summary(
                     request.generated_at_ms,
@@ -897,7 +918,7 @@ impl FriggMcpServer {
 
         match result {
             Ok(summary) => summary,
-            Err(summary) => summary,
+            Err(summary) => *summary,
         }
     }
 
@@ -1071,8 +1092,10 @@ impl FriggMcpServer {
         WorkspacePreciseGenerationSummary {
             status: WorkspacePreciseGenerationStatus::Failed,
             generated_at_ms,
+            duration_ms: None,
             artifact_path,
             artifact_count: None,
+            artifact_bytes: None,
             artifact_sample_paths: Vec::new(),
             failure_class: Some(failure_class),
             recommended_action: Some(Self::precise_recommended_action(failure_class)),
@@ -1154,8 +1177,9 @@ impl FriggMcpServer {
         let started_at = Instant::now();
         let generated_at_ms = Self::scip_now_unix_ms();
         let finish =
-            |summary: WorkspacePreciseGenerationSummary| -> WorkspacePreciseGenerationSummary {
+            |mut summary: WorkspacePreciseGenerationSummary| -> WorkspacePreciseGenerationSummary {
                 let duration_ms = started_at.elapsed().as_millis() as u64;
+                summary.duration_ms.get_or_insert(duration_ms);
                 match summary.status {
                     WorkspacePreciseGenerationStatus::Succeeded => {
                         tracing::info!(
@@ -1203,8 +1227,10 @@ impl FriggMcpServer {
             return finish(WorkspacePreciseGenerationSummary {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
+                duration_ms: None,
                 artifact_path: None,
                 artifact_count: None,
+                artifact_bytes: None,
                 artifact_sample_paths: Vec::new(),
                 failure_class: None,
                 recommended_action: None,
@@ -1215,8 +1241,10 @@ impl FriggMcpServer {
             return finish(WorkspacePreciseGenerationSummary {
                 status: WorkspacePreciseGenerationStatus::NotConfigured,
                 generated_at_ms,
+                duration_ms: None,
                 artifact_path: None,
                 artifact_count: None,
+                artifact_bytes: None,
                 artifact_sample_paths: Vec::new(),
                 failure_class: None,
                 recommended_action: None,
@@ -1232,8 +1260,10 @@ impl FriggMcpServer {
                 return finish(WorkspacePreciseGenerationSummary {
                     status: WorkspacePreciseGenerationStatus::MissingTool,
                     generated_at_ms,
+                    duration_ms: None,
                     artifact_path: None,
                     artifact_count: None,
+                    artifact_bytes: None,
                     artifact_sample_paths: Vec::new(),
                     failure_class: Some(WorkspacePreciseFailureClass::MissingTool),
                     recommended_action: Some(WorkspaceRecommendedAction::InstallTool),
@@ -1336,7 +1366,7 @@ impl FriggMcpServer {
                         spec.generator_id, tool.display
                     ),
                 ),
-                Err(summary) => summary,
+                Err(summary) => *summary,
             }
         })();
 

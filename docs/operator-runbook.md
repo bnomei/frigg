@@ -48,7 +48,7 @@ A degraded semantic state means Frigg remains usable, but natural-language recal
 
 Precise navigation comes from optional SCIP artifacts and best-effort automatic generators. Frigg keeps working without precise data by using Tree-sitter, source-backed heuristics, lexical search, and structural tools.
 
-`workspace_current.precise`, `workspace_attach.precise`, and `workspace_attach.precise_lifecycle` are the compact operator surfaces. Repository health also exposes lower-level `health.scip`, `health.precise_ingest`, and `health.precise_generators` details.
+`workspace_current.precise`, `workspace_attach.precise`, and `workspace_attach.precise_lifecycle` are the compact operator surfaces. Repository health also exposes lower-level `health.scip`, `health.precise_ingest`, and `health.precise_generators` details. The generator scorecard includes discovery state, tool/version, expected artifact path, repo-local writes/executions/patch risk, last generation duration, artifact counts/bytes, failure class, and recommended action.
 
 | Precise state | Meaning | Operator action |
 | --- | --- | --- |

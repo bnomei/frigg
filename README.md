@@ -278,7 +278,7 @@ Laravel PHP workspaces prefer repo-local `vendor/bin/scip-laravel` when `bootstr
 
 Frigg distills those artifacts into snapshot-scoped retrieval projections on the next `frigg reindex`. Server startup alone does not change retrieval state. If you do not provide SCIP data, Frigg still works with heuristic and source-backed navigation plus path and AST-derived retrieval summaries.
 
-When generator tools are installed, `repository.health.precise_generators` and `workspace_current.repository.health.precise_generators` report their detected status and any last generation result, and Frigg writes best-effort artifacts under `.frigg/scip/`.
+When generator tools are installed, `repository.health.precise_generators` and `workspace_current.repository.health.precise_generators` report a generator scorecard: detected status, tool/version, expected artifact path, repo-local touch risk, and any last generation result. Last generation summaries include failure classification plus duration, artifact count, and artifact byte metrics when available. Frigg writes best-effort artifacts under `.frigg/scip/`.
 
 Frigg now disables the normal precise SCIP ingest budgets by default, so oversized monolithic artifacts are ingested without extra configuration. `--full-scip-ingest` and `FRIGG_FULL_SCIP_INGEST=true` are still accepted for explicitness.
 

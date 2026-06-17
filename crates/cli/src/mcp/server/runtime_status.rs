@@ -4,8 +4,8 @@ use std::ffi::OsStr;
 use crate::mcp::server::precise_graph::php_precise_generator_tool_candidates;
 use crate::mcp::types::{
     RepositorySessionSummary, RepositoryWatchSummary, WorkspacePreciseFailureClass,
-    WorkspacePreciseGenerationAction, WorkspacePreciseState, WorkspacePreciseSummary,
-    WorkspaceRecommendedAction,
+    WorkspacePreciseGenerationAction, WorkspacePreciseRepoLocalTouchRisk, WorkspacePreciseState,
+    WorkspacePreciseSummary, WorkspaceRecommendedAction,
 };
 
 mod index_health;

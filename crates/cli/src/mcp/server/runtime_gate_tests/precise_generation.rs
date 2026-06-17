@@ -208,6 +208,32 @@ printf '%s' "local-scip-php"
                 .ends_with("vendor/bin/scip-php"),
             "repo-local vendor/bin/scip-php should be preferred in health reporting"
         );
+        assert!(
+            php_generator
+                .repo_local_touch_risk
+                .writes
+                .iter()
+                .any(|path| path.ends_with(".frigg/scip/php.scip")),
+            "scorecard should report the repo-local PHP artifact write"
+        );
+        assert!(
+            php_generator
+                .repo_local_touch_risk
+                .executes
+                .iter()
+                .any(|path| path.ends_with("vendor/bin/scip-php")),
+            "scorecard should report the repo-local PHP generator execution"
+        );
+        assert!(
+            php_generator
+                .repo_local_touch_risk
+                .may_patch
+                .iter()
+                .any(|path| path.ends_with(
+                    "vendor/davidrjenni/scip-php/src/Composer/Composer.php"
+                )),
+            "scorecard should report the repo-local scip-php patch risk"
+        );
         assert_eq!(
             php_generator
                 .expected_output_path
@@ -620,6 +646,26 @@ printf '%s' "local-python-scip" > "${{6}}"
                 .ends_with("node_modules/.bin/scip-python"),
             "repo-local node_modules/.bin/scip-python should be preferred"
         );
+        assert!(
+            python_generator
+                .repo_local_touch_risk
+                .writes
+                .iter()
+                .any(|path| path.ends_with(".frigg/scip/python.scip")),
+            "scorecard should report the repo-local precise artifact write"
+        );
+        assert!(
+            python_generator
+                .repo_local_touch_risk
+                .executes
+                .iter()
+                .any(|path| path.ends_with("node_modules/.bin/scip-python")),
+            "scorecard should report the repo-local generator execution"
+        );
+        assert!(
+            python_generator.repo_local_touch_risk.may_patch.is_empty(),
+            "python generation should not report a repo-local patch risk"
+        );
 
         server.maybe_spawn_workspace_precise_generation_for_paths(
             &workspace,
@@ -664,7 +710,12 @@ printf '%s' "local-python-scip" > "${{6}}"
             generation.artifact_path.as_deref(),
             Some(expected_artifact_path.as_str())
         );
-        assert_eq!(generation.artifact_count, None);
+        assert!(generation.duration_ms.is_some());
+        assert_eq!(generation.artifact_count, Some(1));
+        assert_eq!(
+            generation.artifact_bytes,
+            Some("local-python-scip".len() as u64)
+        );
         assert!(generation.artifact_sample_paths.is_empty());
     });
 
@@ -808,7 +859,9 @@ printf '%s' "0123456789" > "${{6}}"
             generation.artifact_path.as_deref(),
             Some(expected_artifact_path.as_str())
         );
-        assert_eq!(generation.artifact_count, None);
+        assert!(generation.duration_ms.is_some());
+        assert_eq!(generation.artifact_count, Some(1));
+        assert_eq!(generation.artifact_bytes, Some(10));
         assert!(
             generation.artifact_sample_paths.is_empty(),
             "monolithic python generation should not report shard samples"
@@ -932,7 +985,9 @@ printf '%s' "root" > "${{6}}"
             generation.status,
             crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
         );
-        assert_eq!(generation.artifact_count, None);
+        assert!(generation.duration_ms.is_some());
+        assert_eq!(generation.artifact_count, Some(1));
+        assert_eq!(generation.artifact_bytes, Some("root".len() as u64));
         assert_eq!(generation.artifact_sample_paths.len(), 0);
         let expected_artifact_path =
             fs::canonicalize(workspace.root.join(".frigg/scip/python.scip"))
@@ -1126,6 +1181,8 @@ exit 63
             generation.recommended_action,
             Some(crate::mcp::types::WorkspaceRecommendedAction::CheckEnvironment)
         );
+        assert!(generation.duration_ms.is_some());
+        assert_eq!(generation.artifact_bytes, None);
     });
 
     let _ = fs::remove_dir_all(workspace_root);
