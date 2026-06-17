@@ -184,6 +184,8 @@ Frigg can also read:
 
 Frigg does not modify your source tree during session adoption. By default `workspace_attach` ensures stale or missing indexed state before returning, which may create or update `.frigg/storage.sqlite3`. Pass `index_mode=skip` to adopt the repository without attach-time indexing.
 
+For operator diagnosis of indexing, semantic, precise, and watch states, see the [Frigg Operator Runbook](docs/operator-runbook.md).
+
 ## Showcases
 
 The [showcases/](https://github.com/bnomei/frigg/tree/main/showcases) directory contains 52 public example catalogs for real repositories. Each JSON file records realistic questions and the kinds of paths a good Frigg answer should surface.
