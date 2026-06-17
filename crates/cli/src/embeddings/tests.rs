@@ -343,7 +343,7 @@ async fn provider_trait_display_helpers_include_expected_context() {
         )
     );
     assert_eq!(
-        append_request_diagnostics("invalid payload", &diagnostics),
+        append_request_diagnostics_with_secrets("invalid payload", &diagnostics, &[]),
         format!("invalid payload {}", diagnostics)
     );
 }

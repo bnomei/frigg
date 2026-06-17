@@ -112,13 +112,6 @@ impl HttpTransportError {
     }
 }
 
-pub(super) fn append_request_diagnostics(
-    message: impl AsRef<str>,
-    diagnostics: &HttpRequestDiagnostics,
-) -> String {
-    append_request_diagnostics_with_secrets(message, diagnostics, &[])
-}
-
 pub(super) fn append_request_diagnostics_with_secrets(
     message: impl AsRef<str>,
     diagnostics: &HttpRequestDiagnostics,
