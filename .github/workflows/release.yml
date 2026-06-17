@@ -85,6 +85,15 @@ jobs:
         shell: pwsh
         run: scripts/package-release.ps1 -Target ${{ matrix.target }} -Version ${{ steps.version.outputs.version }} -BinName ${{ env.BIN_NAME }}
 
+      - name: Smoke release artifact (unix)
+        if: runner.os != 'Windows'
+        run: TARGET=${{ matrix.target }} VERSION=${{ steps.version.outputs.version }} BIN_NAME=${{ env.BIN_NAME }} scripts/smoke-release.sh
+
+      - name: Smoke release artifact (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/smoke-release.ps1 -Target ${{ matrix.target }} -Version ${{ steps.version.outputs.version }} -BinName ${{ env.BIN_NAME }}
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
