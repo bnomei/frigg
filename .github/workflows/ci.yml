@@ -59,3 +59,24 @@ jobs:
           cache-on-failure: true
       - name: Run tests
         run: cargo test -p frigg --all-targets
+
+  scorecard:
+    name: Frigg Maintainability Scorecard
+    needs: [fmt]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ runner.os }}-${{ runner.arch }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+          cache-on-failure: true
+      - name: Run locked all-target tests
+        run: cargo test --locked -p frigg --all-targets
+      - name: Run documentation tests
+        run: cargo test --locked -p frigg --doc
+      - name: Compile benchmarks
+        run: cargo bench --locked -p frigg --no-run
