@@ -182,7 +182,7 @@ Frigg can also read:
 - your source files under the configured workspace roots
 - optional `.frigg/scip/*.scip` or `.frigg/scip/*.json` artifacts for more precise definitions, references, implementations, and call navigation
 
-Frigg does not modify your source tree during session adoption. By default `workspace_attach` ensures stale or missing indexed state before returning, which may create or update `.frigg/storage.sqlite3`. Pass `index_mode=skip` to adopt the repository without attach-time indexing.
+Frigg does not modify source files during session adoption. By default `workspace_attach` ensures stale or missing indexed state before returning, which may create or update `.frigg/storage.sqlite3`. Pass `index_mode=skip` to adopt the repository without attach-time lexical or semantic indexing. This does not make attach side-effect free: attach still records session/provenance state, reports current health, and may run precise-generator discovery or best-effort precise artifact generation unless no generator applies. Precise generation may write `.frigg/scip/` artifacts, execute repo-local generator tools, or apply generator-specific repo-local compatibility patches.
 
 For operator diagnosis of indexing, semantic, precise, and watch states, see the [Frigg Operator Runbook](docs/operator-runbook.md).
 
@@ -311,9 +311,9 @@ Status surfaces are separated on purpose:
 - `health.precise_ingest` reports whether Frigg could actually ingest those artifacts, with coverage mode, discovered or ingested byte counts, and sampled failed artifact reasons.
 - `workspace_current.precise` stays as the compact operator summary built on top of that ingest status.
 
-`workspace_attach` and `workspace_reindex` support `wait_for_precise` (defaults to `true`). By default they wait for precise generation to complete (or time out after 30s) before returning, so the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary. Pass `wait_for_precise=false` to get the previous non-blocking behavior.
+`workspace_attach` and `workspace_reindex` support `wait_for_precise` (defaults to `true`). By default they wait for precise generation to complete (or time out after 30s) before returning, so the response includes a terminal `precise_lifecycle.phase` when possible and a `last_generation` summary. Pass `wait_for_precise=false` to get the previous non-blocking behavior. This skips only the wait; it does not disable attach-time index refresh, generator discovery, or generation scheduling.
 
-`workspace_attach` also supports `index_mode`, `wait_for_index`, and `index_timeout_ms`. The default `index_mode=ensure` runs needed changed-only index refreshes and waits up to 30s so `repository.health.lexical` and semantic readiness are green when possible. `index_mode=defer` starts available recovery work and returns quickly; `index_mode=skip` performs no attach-time indexing and reports the current health plus a recommended action when indexed state is stale or missing.
+`workspace_attach` also supports `index_mode`, `wait_for_index`, and `index_timeout_ms`. The default `index_mode=ensure` runs needed changed-only index refreshes and waits up to 30s so `repository.health.lexical` and semantic readiness are green when possible. `index_mode=defer` starts available recovery work and returns quickly; `index_mode=skip` performs no attach-time lexical or semantic indexing and reports the current health plus a recommended action when indexed state is stale or missing. It still adopts the repository into the session, writes provenance when strict provenance is available, and may run precise generation if a repo-local or PATH generator is applicable.
 
 ## Built-In Watch Mode
 
@@ -416,7 +416,7 @@ Provider defaults:
 
 ## Safety And Boundaries
 
-- Frigg does not modify source files. Workspace/index maintenance tools (`workspace_prepare`, `workspace_reindex`) are confirm-gated and operate on Frigg state.
+- Frigg avoids editing project source files during normal indexing. Optional precise generators may write `.frigg/scip/` artifacts, execute repo-local tools, or apply generator-specific compatibility patches. Workspace/index maintenance tools (`workspace_prepare`, `workspace_reindex`) are confirm-gated and operate on Frigg state.
 - Frigg only reads inside configured workspace roots.
 - Frigg keeps its primary state locally in SQLite.
 - Optional semantic search may call an external embedding provider if you enable it.

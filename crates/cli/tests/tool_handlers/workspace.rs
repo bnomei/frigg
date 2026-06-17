@@ -271,6 +271,10 @@ async fn workspace_attach_ensures_missing_manifest_by_default() {
     assert!(response.index_lifecycle.waited_for_completion);
     assert!(response.index_lifecycle.lexical_ready);
     assert!(response.index_lifecycle.semantic_ready);
+    assert!(
+        !response.precise_lifecycle.waited_for_completion,
+        "wait_for_precise=false should skip only the precise wait, not attach-time index ensure"
+    );
     assert_eq!(
         response
             .repository

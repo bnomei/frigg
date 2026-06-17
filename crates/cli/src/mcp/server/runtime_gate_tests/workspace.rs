@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::mcp::types::{
+    WorkspaceAttachIndexMode, WorkspaceIndexAction, WorkspaceIndexLifecyclePhase,
     WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
     WorkspacePreciseLifecyclePhase,
 };
@@ -189,6 +190,197 @@ printf '%s' "local-python-scip" > "${{6}}"
         WorkspacePreciseGenerationStatus::Succeeded
     );
     assert!(last_generation.artifact_path.is_some());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn workspace_attach_wait_for_precise_false_still_schedules_precise_generation() {
+    let workspace_root = temp_workspace_root("attach-no-wait-precise-schedules");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create python src fixture");
+    fs::create_dir_all(workspace_root.join("node_modules/.bin"))
+        .expect("failed to create local node bin directory");
+    fs::write(
+        workspace_root.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\n",
+    )
+    .expect("failed to write pyproject fixture");
+    fs::write(
+        workspace_root.join("src/app.py"),
+        "def alpha():\n    return 1\n",
+    )
+    .expect("failed to write python source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    let expected_project_name = FriggMcpServer::derived_python_precise_project_name(&workspace);
+    let _local_scip_python = write_fake_precise_generator_script_with_body(
+        &workspace_root.join("node_modules/.bin"),
+        "scip-python",
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "--version" ] || [ "${{1:-}}" = "version" ]; then
+  printf '%s\n' "scip-python 0.6.6"
+  exit 0
+fi
+if [ "${{1:-}}" = "index" ] && [ "${{2:-}}" = "--help" ]; then
+  printf '%s\n' "usage: scip-python index"
+  exit 0
+fi
+if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ] || [ -n "${{7:-}}" ]; then
+  printf '%s\n' "unexpected python args: $*" >&2
+  exit 81
+fi
+printf '%s' "nonblocking-python-scip" > "${{6}}"
+"#
+        ),
+    );
+
+    let response = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
+            set_default: Some(true),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: Some(false),
+            index_mode: None,
+            wait_for_index: None,
+            index_timeout_ms: None,
+        }))
+        .await
+        .expect("workspace_attach should succeed")
+        .0;
+
+    assert!(!response.precise_lifecycle.waited_for_completion);
+    assert_eq!(
+        response.precise_lifecycle.generation_action,
+        WorkspacePreciseGenerationAction::Triggered
+    );
+
+    let expected_artifact = workspace_root.join(".frigg/scip/python.scip");
+    for _ in 0..200 {
+        let ready = fs::read(&expected_artifact)
+            .map(|contents| contents == b"nonblocking-python-scip")
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        fs::read(&expected_artifact).expect("non-blocking precise generation should publish"),
+        b"nonblocking-python-scip"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn workspace_attach_index_skip_still_reports_precise_generation_side_effect() {
+    let workspace_root = temp_workspace_root("attach-skip-precise-side-effect");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create python src fixture");
+    fs::create_dir_all(workspace_root.join("node_modules/.bin"))
+        .expect("failed to create local node bin directory");
+    fs::write(
+        workspace_root.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\n",
+    )
+    .expect("failed to write pyproject fixture");
+    fs::write(
+        workspace_root.join("src/app.py"),
+        "def alpha():\n    return 1\n",
+    )
+    .expect("failed to write python source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    let expected_project_name = FriggMcpServer::derived_python_precise_project_name(&workspace);
+    let _local_scip_python = write_fake_precise_generator_script_with_body(
+        &workspace_root.join("node_modules/.bin"),
+        "scip-python",
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "--version" ] || [ "${{1:-}}" = "version" ]; then
+  printf '%s\n' "scip-python 0.6.6"
+  exit 0
+fi
+if [ "${{1:-}}" = "index" ] && [ "${{2:-}}" = "--help" ]; then
+  printf '%s\n' "usage: scip-python index"
+  exit 0
+fi
+if [ "${{1:-}}" != "index" ] || [ "${{2:-}}" != "--quiet" ] || [ "${{3:-}}" != "--project-name" ] || [ "${{4:-}}" != "{expected_project_name}" ] || [ "${{5:-}}" != "--output" ] || [ -z "${{6:-}}" ] || [ -n "${{7:-}}" ]; then
+  printf '%s\n' "unexpected python args: $*" >&2
+  exit 81
+fi
+printf '%s' "skip-mode-python-scip" > "${{6}}"
+"#
+        ),
+    );
+
+    let response = server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
+            set_default: Some(true),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: Some(true),
+            index_mode: Some(WorkspaceAttachIndexMode::Skip),
+            wait_for_index: None,
+            index_timeout_ms: None,
+        }))
+        .await
+        .expect("workspace_attach should succeed")
+        .0;
+
+    assert_eq!(
+        response.index_lifecycle.mode,
+        WorkspaceAttachIndexMode::Skip
+    );
+    assert_eq!(
+        response.index_lifecycle.action_taken,
+        WorkspaceIndexAction::SkippedByRequest
+    );
+    assert_eq!(
+        response.index_lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Skipped
+    );
+    assert!(!response.index_lifecycle.waited_for_completion);
+    assert_eq!(
+        response.precise_lifecycle.generation_action,
+        WorkspacePreciseGenerationAction::Triggered
+    );
+    assert!(response.precise_lifecycle.waited_for_completion);
+    assert_eq!(
+        response.precise_lifecycle.phase,
+        WorkspacePreciseLifecyclePhase::Succeeded
+    );
+    let last_generation = response
+        .precise_lifecycle
+        .last_generation
+        .as_ref()
+        .expect("skip-mode attach should report completed precise generation when waiting");
+    assert_eq!(
+        last_generation.status,
+        WorkspacePreciseGenerationStatus::Succeeded
+    );
+    assert!(
+        last_generation.artifact_path.is_some(),
+        "skip-mode attach should preserve precise generation artifact diagnostics"
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }

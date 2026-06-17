@@ -25,6 +25,8 @@ This runbook describes the runtime states operators are most likely to see while
 | `skipped` | The caller requested `index_mode=skip`, so no attach-time indexing ran. | Use only when stale or missing index state is acceptable. Run `workspace_reindex` or attach with `ensure` when freshness matters. |
 | `unavailable` | Frigg could not evaluate index lifecycle for this repository. | Verify the repository is attached and storage is accessible, then retry attach or reindex. |
 
+`index_mode=skip` is scoped to lexical and semantic index refresh. It still adopts the repository into the MCP session, records provenance when strict provenance storage is available, returns current health, and may run precise-generator discovery or best-effort precise artifact generation. Use `wait_for_precise=false` when the caller wants to return without waiting for precise generation; that flag does not disable indexing or generation scheduling.
+
 Use `workspace_prepare` or `workspace_reindex` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on Frigg's local `.frigg/storage.sqlite3` state.
 
 ## Semantic degraded mode
@@ -55,7 +57,7 @@ Precise navigation comes from optional SCIP artifacts and best-effort automatic 
 | `failed` | Precise generation or ingest failed. `failure_tool`, `failure_class`, `failure_summary`, and `recommended_action` identify the likely cause when available. | Follow the recommended action: install missing tools, check environment, rerun reindex, or use heuristic mode until upstream tool failures are fixed. |
 | `unavailable` | No usable precise source is available for this repository or language. | This is expected for unsupported layouts or missing optional artifacts. Use heuristic/source-backed navigation or provide `.frigg/scip/` artifacts. |
 
-Precise lifecycle phases describe generation timing separately from the compact state: `running` and `timeout` mean generation may still be in progress or incomplete, while `failed` means it reached a terminal failure. `wait_for_precise=true` on attach/reindex waits for a terminal phase when possible.
+Precise lifecycle phases describe generation timing separately from the compact state: `running` and `timeout` mean generation may still be in progress or incomplete, while `failed` means it reached a terminal failure. `wait_for_precise=true` on attach/reindex waits for a terminal phase when possible; `wait_for_precise=false` skips only that wait and leaves generator scheduling behavior unchanged.
 
 ## Watch retries
 
