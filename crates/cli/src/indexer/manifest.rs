@@ -293,6 +293,47 @@ pub(super) fn normalize_repository_relative_path(
     })
 }
 
+pub(super) fn normalize_deleted_repository_relative_path(
+    workspace_root: &Path,
+    path: &Path,
+) -> FriggResult<Option<String>> {
+    if let Some(relative) = repository_relative_path_string(workspace_root, path) {
+        return Ok(Some(relative));
+    }
+
+    let root_canonical = workspace_root.canonicalize().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to canonicalize semantic workspace root '{}': {err}",
+            workspace_root.display()
+        ))
+    })?;
+    if let Some(relative) = repository_relative_path_string(&root_canonical, path) {
+        return Ok(Some(relative));
+    }
+
+    if path.is_relative()
+        && let Some(relative) = repository_relative_path_string_from_relative(path)
+    {
+        return Ok(Some(relative));
+    }
+
+    let path_canonical = match path.canonicalize() {
+        Ok(path_canonical) => path_canonical,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(FriggError::Internal(format!(
+                "failed to canonicalize semantic source path '{}': {err}",
+                path.display()
+            )));
+        }
+    };
+
+    Ok(repository_relative_path_string(
+        &root_canonical,
+        &path_canonical,
+    ))
+}
+
 fn repository_relative_path_string(base: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(base).ok()?;
     repository_relative_path_string_from_relative(relative)
@@ -513,6 +554,28 @@ mod tests {
         let normalized = normalize_repository_relative_path(Path::new("."), &absolute_missing)?;
 
         assert_eq!(normalized, missing_name);
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_deleted_repository_relative_path_skips_missing_path_outside_root()
+    -> FriggResult<()> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::current_dir().map_err(FriggError::Io)?;
+        let missing_outside_root =
+            std::env::temp_dir().join(format!("frigg-stale-deleted-source-{nonce}"));
+        assert!(
+            !missing_outside_root.exists(),
+            "test fixture path must not exist: {}",
+            missing_outside_root.display()
+        );
+
+        let normalized = normalize_deleted_repository_relative_path(&root, &missing_outside_root)?;
+
+        assert_eq!(normalized, None);
         Ok(())
     }
 }

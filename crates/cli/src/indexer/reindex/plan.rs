@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use super::super::ManifestBuilder;
-use super::super::manifest::deterministic_snapshot_id;
 #[cfg(test)]
 use super::super::manifest::diff;
+use super::super::manifest::{
+    deterministic_snapshot_id, normalize_deleted_repository_relative_path,
+    normalize_repository_relative_path,
+};
 use super::super::{FileDigest, ManifestBuildDiagnostic, ManifestDiagnosticKind, ManifestDiff};
 use super::semantic::build_semantic_refresh_plan;
 #[cfg(test)]
@@ -113,6 +116,8 @@ pub struct ReindexPlan {
     pub previous_snapshot_id: Option<String>,
     pub current_manifest: Vec<FileDigest>,
     pub manifest_diff: ManifestDiff,
+    pub changed_paths: Vec<String>,
+    pub deleted_paths: Vec<String>,
     pub snapshot_plan: ManifestSnapshotPlan,
     pub semantic_refresh: SemanticRefreshPlan,
     pub diagnostics: ReindexDiagnostics,
@@ -169,9 +174,10 @@ pub(super) fn build_reindex_plan(
         previous_snapshot_id.as_deref(),
         &current_manifest,
     )?;
+    let (changed_paths, deleted_paths) =
+        normalize_manifest_diff_paths(workspace_root, &manifest_diff)?;
     let semantic_refresh = build_semantic_refresh_plan(
         repository_id,
-        workspace_root,
         mode,
         semantic_runtime,
         previous_snapshot_id.as_deref(),
@@ -179,6 +185,8 @@ pub(super) fn build_reindex_plan(
         snapshot_plan.snapshot_id(),
         &current_manifest,
         &manifest_diff,
+        &changed_paths,
+        &deleted_paths,
         storage,
     )?;
 
@@ -188,6 +196,8 @@ pub(super) fn build_reindex_plan(
         previous_snapshot_id,
         current_manifest,
         manifest_diff,
+        changed_paths,
+        deleted_paths,
         snapshot_plan,
         semantic_refresh,
         diagnostics,
@@ -196,6 +206,36 @@ pub(super) fn build_reindex_plan(
         files_deleted,
         retained_manifest_snapshots: DEFAULT_RETAINED_MANIFEST_SNAPSHOTS,
     })
+}
+
+fn normalize_manifest_diff_paths(
+    workspace_root: &Path,
+    manifest_diff: &ManifestDiff,
+) -> FriggResult<(Vec<String>, Vec<String>)> {
+    let changed_paths = manifest_diff
+        .added
+        .iter()
+        .chain(manifest_diff.modified.iter())
+        .map(|digest| normalize_repository_relative_path(workspace_root, &digest.path))
+        .collect::<FriggResult<Vec<_>>>()?;
+
+    let deleted_paths = manifest_diff
+        .deleted
+        .iter()
+        .filter_map(|digest| {
+            normalize_deleted_repository_relative_path(workspace_root, &digest.path).transpose()
+        })
+        .collect::<FriggResult<Vec<_>>>()?;
+
+    Ok((dedup_paths(changed_paths), dedup_paths(deleted_paths)))
+}
+
+fn dedup_paths(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn build_manifest_snapshot_plan(

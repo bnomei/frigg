@@ -5,7 +5,7 @@ use crate::domain::{FriggError, FriggResult};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::Storage;
 
-use super::super::manifest::{diff, normalize_repository_relative_path};
+use super::super::manifest::diff;
 use super::super::semantic::{
     RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor,
     build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
@@ -180,8 +180,8 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
         files_scanned: plan.files_scanned,
         files_changed: plan.files_changed,
         files_deleted: plan.files_deleted,
-        changed_paths: plan.semantic_refresh.changed_paths,
-        deleted_paths: plan.semantic_refresh.deleted_paths,
+        changed_paths: plan.changed_paths,
+        deleted_paths: plan.deleted_paths,
         diagnostics: plan.diagnostics,
         duration_ms: started_at.elapsed().as_millis(),
     })
@@ -190,7 +190,6 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_semantic_refresh_plan(
     repository_id: &str,
-    workspace_root: &Path,
     mode: ReindexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     previous_snapshot_id: Option<&str>,
@@ -198,6 +197,8 @@ pub(crate) fn build_semantic_refresh_plan(
     snapshot_id: &str,
     current_manifest: &[FileDigest],
     manifest_diff: &super::super::ManifestDiff,
+    changed_paths: &[String],
+    deleted_paths: &[String],
     storage: Option<&Storage>,
 ) -> FriggResult<SemanticRefreshPlan> {
     if !semantic_runtime.enabled {
@@ -232,25 +233,25 @@ pub(crate) fn build_semantic_refresh_plan(
     };
     let requires_full_semantic_refresh = semantic_head_snapshot_id.as_deref() != Some(snapshot_id)
         && semantic_head_snapshot_id.as_deref() != previous_snapshot_id;
+    let has_unresolved_deleted_paths = manifest_diff.deleted.len() != deleted_paths.len();
 
-    let changed_paths = manifest_diff
-        .added
-        .iter()
-        .chain(manifest_diff.modified.iter())
-        .map(|digest| normalize_repository_relative_path(workspace_root, &digest.path))
-        .collect::<FriggResult<Vec<_>>>()?;
-    let deleted_paths = manifest_diff
-        .deleted
-        .iter()
-        .map(|digest| normalize_repository_relative_path(workspace_root, &digest.path))
-        .collect::<FriggResult<Vec<_>>>()?;
-
-    let (mode, records_manifest) = match mode {
-        ReindexMode::Full => (SemanticRefreshMode::FullRebuild, current_manifest.to_vec()),
-        ReindexMode::ChangedOnly if requires_full_semantic_refresh => (
-            SemanticRefreshMode::FullRebuildFromChangedOnly,
+    let (mode, records_manifest, changed_paths, deleted_paths) = match mode {
+        ReindexMode::Full => (
+            SemanticRefreshMode::FullRebuild,
             current_manifest.to_vec(),
+            Vec::new(),
+            Vec::new(),
         ),
+        ReindexMode::ChangedOnly
+            if requires_full_semantic_refresh || has_unresolved_deleted_paths =>
+        {
+            (
+                SemanticRefreshMode::FullRebuildFromChangedOnly,
+                current_manifest.to_vec(),
+                Vec::new(),
+                Vec::new(),
+            )
+        }
         ReindexMode::ChangedOnly
             if !changed_paths.is_empty() || !deleted_paths.is_empty() || !had_previous_manifest =>
         {
@@ -262,9 +263,16 @@ pub(crate) fn build_semantic_refresh_plan(
                     .chain(manifest_diff.modified.iter())
                     .cloned()
                     .collect(),
+                changed_paths.to_vec(),
+                deleted_paths.to_vec(),
             )
         }
-        ReindexMode::ChangedOnly => (SemanticRefreshMode::ReuseExisting, Vec::new()),
+        ReindexMode::ChangedOnly => (
+            SemanticRefreshMode::ReuseExisting,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
     };
 
     Ok(SemanticRefreshPlan {

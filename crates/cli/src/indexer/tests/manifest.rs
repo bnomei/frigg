@@ -658,6 +658,14 @@ fn incremental_roundtrip_changed_only_detects_modified_added_and_deleted_files()
     assert_eq!(changed_summary.files_scanned, 2);
     assert_eq!(changed_summary.files_changed, 2);
     assert_eq!(changed_summary.files_deleted, 1);
+    assert_eq!(
+        changed_summary.changed_paths,
+        vec!["README.md".to_owned(), "src/new.rs".to_owned()]
+    );
+    assert_eq!(
+        changed_summary.deleted_paths,
+        vec!["src/main.rs".to_owned()]
+    );
     assert_eq!(changed_summary.diagnostics.total_count(), 0);
     assert_ne!(changed_summary.snapshot_id, full_summary.snapshot_id);
 

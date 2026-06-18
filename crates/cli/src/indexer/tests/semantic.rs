@@ -77,6 +77,167 @@ fn semantic_indexing_reindex_persists_deterministic_embeddings_when_enabled() ->
 }
 
 #[test]
+fn semantic_full_reindex_skips_stale_deleted_absolute_paths_outside_workspace() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-full-stale-deleted-outside-root");
+    let workspace_root = temp_workspace_root("semantic-full-stale-deleted-outside-root");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            ("AGENTS.md", "# Workspace instructions\n"),
+            ("src/lib.rs", "pub fn current_workspace() {}\n"),
+        ],
+    )?;
+
+    let stale_root = temp_workspace_root("semantic-full-stale-old-root");
+    let stale_agents_path = stale_root.join("AGENTS.md");
+    assert!(
+        !stale_agents_path.exists(),
+        "stale manifest path must not exist: {}",
+        stale_agents_path.display()
+    );
+
+    let manifest_store = ManifestStore::new(&db_path);
+    manifest_store.initialize()?;
+    manifest_store.persist_snapshot_manifest(
+        "repo-001",
+        "snapshot-stale-root",
+        &[FileDigest {
+            path: stale_agents_path,
+            size_bytes: 21,
+            mtime_ns: Some(1),
+            hash_blake3_hex: "stale-agents-hash".to_owned(),
+        }],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &FixtureSemanticEmbeddingExecutor,
+    )?;
+
+    assert_eq!(summary.deleted_paths, Vec::<String>::new());
+    assert_eq!(
+        summary.changed_paths,
+        vec!["AGENTS.md".to_owned(), "src/lib.rs".to_owned()]
+    );
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+    assert!(
+        semantic_rows
+            .iter()
+            .any(|record| record.path == "AGENTS.md"),
+        "current AGENTS.md should be indexed after skipping the stale deleted path"
+    );
+    assert!(
+        semantic_rows
+            .iter()
+            .all(|record| !record.path.contains("semantic-full-stale-old-root")),
+        "stale absolute paths must not leak into semantic records"
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn semantic_changed_only_full_rebuilds_when_deleted_path_cannot_be_mapped() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-changed-stale-deleted-outside-root");
+    let old_workspace_root = temp_workspace_root("semantic-changed-stale-old-root");
+    prepare_workspace(
+        &old_workspace_root,
+        &[("legacy.rs", "pub fn legacy_workspace() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let old_summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &old_workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &FixtureSemanticEmbeddingExecutor,
+    )?;
+    let storage = Storage::new(&db_path);
+    let old_semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &old_summary.snapshot_id)?;
+    assert!(
+        old_semantic_rows
+            .iter()
+            .any(|record| record.path == "legacy.rs"),
+        "old semantic snapshot should contain the legacy path before simulating a moved workspace"
+    );
+    cleanup_workspace(&old_workspace_root);
+
+    let new_workspace_root = temp_workspace_root("semantic-changed-stale-new-root");
+    prepare_workspace(
+        &new_workspace_root,
+        &[("src/lib.rs", "pub fn current_workspace() {}\n")],
+    )?;
+
+    let plan = build_reindex_plan_for_tests(
+        "repo-001",
+        &new_workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &[],
+    )?;
+    assert_eq!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::FullRebuildFromChangedOnly
+    );
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    let new_summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &new_workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &credentials,
+        &FixtureSemanticEmbeddingExecutor,
+    )?;
+
+    assert_eq!(new_summary.files_deleted, 1);
+    assert!(new_summary.deleted_paths.is_empty());
+    let new_semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &new_summary.snapshot_id)?;
+    assert!(
+        new_semantic_rows
+            .iter()
+            .any(|record| record.path == "src/lib.rs"),
+        "new semantic snapshot should contain the current workspace path"
+    );
+    assert!(
+        new_semantic_rows
+            .iter()
+            .all(|record| record.path != "legacy.rs"),
+        "unmappable stale deleted paths should force a full rebuild instead of carrying old semantic rows forward"
+    );
+
+    cleanup_workspace(&new_workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-enabled-inside-runtime");
     let workspace_root = temp_workspace_root("semantic-enabled-inside-runtime");

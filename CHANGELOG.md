@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7 - 2026-06-18
+
+- Fixed semantic reindex recovery for stale deleted manifest paths from moved or removed workspace roots, preventing full rebuilds from failing on missing source path canonicalization and forcing safe full semantic rebuilds when changed-only deletes cannot be mapped to the current workspace.
+
 ## 0.4.6 - 2026-06-17
 
 - Added a Frigg CI scorecard workflow and release artifact smoke checks to improve release confidence.
