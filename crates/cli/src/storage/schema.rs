@@ -577,6 +577,278 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             ON path_anchor_sketch_projection (repository_id, snapshot_id, path, anchor_rank);
         "#,
     },
+    Migration {
+        version: 10,
+        sql: r#"
+            ALTER TABLE retrieval_projection_head RENAME TO retrieval_projection_head_v10_legacy;
+
+            CREATE TABLE retrieval_projection_head (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              family TEXT NOT NULL,
+              heuristic_version INTEGER NOT NULL,
+              input_modes_json TEXT NOT NULL,
+              row_count INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, family)
+            );
+
+            INSERT INTO retrieval_projection_head (
+                repository_id,
+                snapshot_id,
+                family,
+                heuristic_version,
+                input_modes_json,
+                row_count,
+                created_at,
+                updated_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                family,
+                heuristic_version,
+                input_modes_json,
+                row_count,
+                created_at,
+                updated_at
+            FROM retrieval_projection_head_v10_legacy AS legacy
+            WHERE EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = legacy.repository_id
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM snapshot
+                WHERE snapshot.snapshot_id = legacy.snapshot_id
+            );
+
+            DROP TABLE retrieval_projection_head_v10_legacy;
+
+            CREATE INDEX idx_retrieval_projection_head_repo_snapshot_family
+            ON retrieval_projection_head (repository_id, snapshot_id, family);
+
+            ALTER TABLE path_relation_projection RENAME TO path_relation_projection_v10_legacy;
+
+            CREATE TABLE path_relation_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              src_path TEXT NOT NULL,
+              dst_path TEXT NOT NULL,
+              relation_kind TEXT NOT NULL,
+              evidence_source TEXT NOT NULL,
+              src_symbol_id TEXT,
+              dst_symbol_id TEXT,
+              src_family_bits INTEGER NOT NULL DEFAULT 0,
+              dst_family_bits INTEGER NOT NULL DEFAULT 0,
+              shared_terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, src_path, dst_path, relation_kind)
+            );
+
+            INSERT INTO path_relation_projection (
+                repository_id,
+                snapshot_id,
+                src_path,
+                dst_path,
+                relation_kind,
+                evidence_source,
+                src_symbol_id,
+                dst_symbol_id,
+                src_family_bits,
+                dst_family_bits,
+                shared_terms_json,
+                score_hint,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                src_path,
+                dst_path,
+                relation_kind,
+                evidence_source,
+                src_symbol_id,
+                dst_symbol_id,
+                src_family_bits,
+                dst_family_bits,
+                shared_terms_json,
+                score_hint,
+                created_at
+            FROM path_relation_projection_v10_legacy AS legacy
+            WHERE EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = legacy.repository_id
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM snapshot
+                WHERE snapshot.snapshot_id = legacy.snapshot_id
+            );
+
+            DROP TABLE path_relation_projection_v10_legacy;
+
+            CREATE INDEX idx_path_relation_projection_repo_snapshot_src
+            ON path_relation_projection (repository_id, snapshot_id, src_path, relation_kind, dst_path);
+
+            CREATE INDEX idx_path_relation_projection_repo_snapshot_dst
+            ON path_relation_projection (repository_id, snapshot_id, dst_path, relation_kind, src_path);
+
+            ALTER TABLE subtree_coverage_projection RENAME TO subtree_coverage_projection_v10_legacy;
+
+            CREATE TABLE subtree_coverage_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              subtree_root TEXT NOT NULL,
+              family TEXT NOT NULL,
+              path_count INTEGER NOT NULL,
+              exemplar_path TEXT NOT NULL,
+              exemplar_score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, subtree_root, family)
+            );
+
+            INSERT INTO subtree_coverage_projection (
+                repository_id,
+                snapshot_id,
+                subtree_root,
+                family,
+                path_count,
+                exemplar_path,
+                exemplar_score_hint,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                subtree_root,
+                family,
+                path_count,
+                exemplar_path,
+                exemplar_score_hint,
+                created_at
+            FROM subtree_coverage_projection_v10_legacy AS legacy
+            WHERE EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = legacy.repository_id
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM snapshot
+                WHERE snapshot.snapshot_id = legacy.snapshot_id
+            );
+
+            DROP TABLE subtree_coverage_projection_v10_legacy;
+
+            CREATE INDEX idx_subtree_coverage_projection_repo_snapshot_subtree
+            ON subtree_coverage_projection (repository_id, snapshot_id, subtree_root, family);
+
+            ALTER TABLE path_surface_term_projection RENAME TO path_surface_term_projection_v10_legacy;
+
+            CREATE TABLE path_surface_term_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              term_weights_json TEXT NOT NULL,
+              exact_terms_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            INSERT INTO path_surface_term_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                term_weights_json,
+                exact_terms_json,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                path,
+                term_weights_json,
+                exact_terms_json,
+                created_at
+            FROM path_surface_term_projection_v10_legacy AS legacy
+            WHERE EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = legacy.repository_id
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM snapshot
+                WHERE snapshot.snapshot_id = legacy.snapshot_id
+            );
+
+            DROP TABLE path_surface_term_projection_v10_legacy;
+
+            CREATE INDEX idx_path_surface_term_projection_repo_snapshot_path
+            ON path_surface_term_projection (repository_id, snapshot_id, path);
+
+            ALTER TABLE path_anchor_sketch_projection RENAME TO path_anchor_sketch_projection_v10_legacy;
+
+            CREATE TABLE path_anchor_sketch_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES snapshot(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              anchor_rank INTEGER NOT NULL,
+              line INTEGER NOT NULL,
+              anchor_kind TEXT NOT NULL,
+              excerpt TEXT NOT NULL,
+              terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path, anchor_rank)
+            );
+
+            INSERT INTO path_anchor_sketch_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                anchor_rank,
+                line,
+                anchor_kind,
+                excerpt,
+                terms_json,
+                score_hint,
+                created_at
+            )
+            SELECT
+                repository_id,
+                snapshot_id,
+                path,
+                anchor_rank,
+                line,
+                anchor_kind,
+                excerpt,
+                terms_json,
+                score_hint,
+                created_at
+            FROM path_anchor_sketch_projection_v10_legacy AS legacy
+            WHERE EXISTS (
+                SELECT 1
+                FROM repository
+                WHERE repository.repository_id = legacy.repository_id
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM snapshot
+                WHERE snapshot.snapshot_id = legacy.snapshot_id
+            );
+
+            DROP TABLE path_anchor_sketch_projection_v10_legacy;
+
+            CREATE INDEX idx_path_anchor_sketch_projection_repo_snapshot_path
+            ON path_anchor_sketch_projection (repository_id, snapshot_id, path, anchor_rank);
+        "#,
+    },
 ];
 
 pub(crate) const REQUIRED_TABLES: &[&str] = &[

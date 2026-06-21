@@ -267,6 +267,81 @@ fn initialize_creates_hotpath_indexes_for_snapshot_and_provenance_queries() -> F
 }
 
 #[test]
+fn migration_10_repairs_projection_foreign_keys_rewritten_to_snapshot_v8() -> FriggResult<()> {
+    let db_path = temp_db_path("repair-snapshot-v8-projection-fks");
+    seed_v9_schema_with_snapshot_v8_projection_references(&db_path)?;
+
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+    storage.verify()?;
+
+    assert_eq!(
+        storage.schema_version()?,
+        MIGRATIONS
+            .last()
+            .expect("storage migrations should not be empty")
+            .version
+    );
+
+    let conn = open_test_connection(&db_path)?;
+    for table in [
+        "retrieval_projection_head",
+        "path_relation_projection",
+        "subtree_coverage_projection",
+        "path_surface_term_projection",
+        "path_anchor_sketch_projection",
+    ] {
+        let foreign_key_targets = foreign_key_targets(&conn, table)?;
+        assert!(
+            foreign_key_targets
+                .iter()
+                .any(|target| target == "snapshot"),
+            "expected {table} to reference snapshot, got {foreign_key_targets:?}"
+        );
+        assert!(
+            foreign_key_targets
+                .iter()
+                .all(|target| target != "snapshot_v8"),
+            "expected {table} to stop referencing snapshot_v8, got {foreign_key_targets:?}"
+        );
+        assert_eq!(
+            count_rows(&conn, table)?,
+            1,
+            "expected migration to preserve valid rows for {table}"
+        );
+    }
+
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| FriggError::Internal(format!("failed to enable FK checks: {err}")))?;
+    conn.execute(
+        "DELETE FROM snapshot WHERE snapshot_id = 'snapshot-manifest'",
+        [],
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to delete snapshot for repaired FK cascade assertion: {err}"
+        ))
+    })?;
+
+    for table in [
+        "retrieval_projection_head",
+        "path_relation_projection",
+        "subtree_coverage_projection",
+        "path_surface_term_projection",
+        "path_anchor_sketch_projection",
+    ] {
+        assert_eq!(
+            count_rows(&conn, table)?,
+            0,
+            "expected repaired FK cascade to remove rows for {table}"
+        );
+    }
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn migration_8_enforces_snapshot_repository_and_manifest_row_references() -> FriggResult<()> {
     let db_path = temp_db_path("fk-manifest-references");
     let storage = Storage::new(&db_path);
@@ -362,4 +437,313 @@ fn migration_8_enforces_snapshot_repository_and_manifest_row_references() -> Fri
 
     cleanup_db(&db_path);
     Ok(())
+}
+
+fn seed_v9_schema_with_snapshot_v8_projection_references(path: &Path) -> FriggResult<()> {
+    let mut conn = open_test_connection(path)?;
+    conn.execute_batch(
+        r#"
+            CREATE TABLE schema_version (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              version INTEGER NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            "#,
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to create schema_version table for snapshot_v8 FK fixture: {err}"
+        ))
+    })?;
+
+    {
+        let tx = conn.transaction().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to start migration seed transaction for snapshot_v8 FK fixture: {err}"
+            ))
+        })?;
+        for migration in MIGRATIONS
+            .iter()
+            .take_while(|migration| migration.version <= 8)
+        {
+            tx.execute_batch(migration.sql).map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to seed migration v{} for snapshot_v8 FK fixture: {err}",
+                    migration.version
+                ))
+            })?;
+        }
+        set_schema_version(&tx, 8)?;
+        tx.commit().map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to commit v8 seed transaction for snapshot_v8 FK fixture: {err}"
+            ))
+        })?;
+    }
+
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to disable FK checks for snapshot_v8 FK fixture: {err}"
+            ))
+        })?;
+
+    let tx = conn.transaction().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to start stale v9 seed transaction for snapshot_v8 FK fixture: {err}"
+        ))
+    })?;
+    tx.execute_batch(
+        r#"
+            ALTER TABLE path_witness_projection
+            ADD COLUMN file_stem TEXT NOT NULL DEFAULT '';
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN subtree_root TEXT;
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN family_bits INTEGER NOT NULL DEFAULT 0;
+
+            ALTER TABLE path_witness_projection
+            ADD COLUMN heuristic_version INTEGER NOT NULL DEFAULT 0;
+
+            CREATE TABLE retrieval_projection_head (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES "snapshot_v8"(snapshot_id) ON DELETE CASCADE,
+              family TEXT NOT NULL,
+              heuristic_version INTEGER NOT NULL,
+              input_modes_json TEXT NOT NULL,
+              row_count INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, family)
+            );
+
+            CREATE INDEX idx_retrieval_projection_head_repo_snapshot_family
+            ON retrieval_projection_head (repository_id, snapshot_id, family);
+
+            CREATE TABLE path_relation_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES "snapshot_v8"(snapshot_id) ON DELETE CASCADE,
+              src_path TEXT NOT NULL,
+              dst_path TEXT NOT NULL,
+              relation_kind TEXT NOT NULL,
+              evidence_source TEXT NOT NULL,
+              src_symbol_id TEXT,
+              dst_symbol_id TEXT,
+              src_family_bits INTEGER NOT NULL DEFAULT 0,
+              dst_family_bits INTEGER NOT NULL DEFAULT 0,
+              shared_terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, src_path, dst_path, relation_kind)
+            );
+
+            CREATE INDEX idx_path_relation_projection_repo_snapshot_src
+            ON path_relation_projection (repository_id, snapshot_id, src_path, relation_kind, dst_path);
+
+            CREATE INDEX idx_path_relation_projection_repo_snapshot_dst
+            ON path_relation_projection (repository_id, snapshot_id, dst_path, relation_kind, src_path);
+
+            CREATE TABLE subtree_coverage_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES "snapshot_v8"(snapshot_id) ON DELETE CASCADE,
+              subtree_root TEXT NOT NULL,
+              family TEXT NOT NULL,
+              path_count INTEGER NOT NULL,
+              exemplar_path TEXT NOT NULL,
+              exemplar_score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, subtree_root, family)
+            );
+
+            CREATE INDEX idx_subtree_coverage_projection_repo_snapshot_subtree
+            ON subtree_coverage_projection (repository_id, snapshot_id, subtree_root, family);
+
+            CREATE TABLE path_surface_term_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES "snapshot_v8"(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              term_weights_json TEXT NOT NULL,
+              exact_terms_json TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path)
+            );
+
+            CREATE INDEX idx_path_surface_term_projection_repo_snapshot_path
+            ON path_surface_term_projection (repository_id, snapshot_id, path);
+
+            CREATE TABLE path_anchor_sketch_projection (
+              repository_id TEXT NOT NULL REFERENCES repository(repository_id) ON DELETE CASCADE,
+              snapshot_id TEXT NOT NULL REFERENCES "snapshot_v8"(snapshot_id) ON DELETE CASCADE,
+              path TEXT NOT NULL,
+              anchor_rank INTEGER NOT NULL,
+              line INTEGER NOT NULL,
+              anchor_kind TEXT NOT NULL,
+              excerpt TEXT NOT NULL,
+              terms_json TEXT NOT NULL,
+              score_hint INTEGER NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (repository_id, snapshot_id, path, anchor_rank)
+            );
+
+            CREATE INDEX idx_path_anchor_sketch_projection_repo_snapshot_path
+            ON path_anchor_sketch_projection (repository_id, snapshot_id, path, anchor_rank);
+
+            INSERT INTO repository (repository_id, root_path, display_name, created_at)
+            VALUES ('repo-1', '/tmp/repo-1', 'Repo 1', '2026-03-11T00:00:00Z');
+
+            INSERT INTO snapshot (snapshot_id, repository_id, kind, revision, created_at)
+            VALUES ('snapshot-manifest', 'repo-1', 'manifest', NULL, '2026-03-11T00:00:00Z');
+
+            INSERT INTO retrieval_projection_head (
+                repository_id,
+                snapshot_id,
+                family,
+                heuristic_version,
+                input_modes_json,
+                row_count,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                'repo-1',
+                'snapshot-manifest',
+                'path_relation',
+                1,
+                '["manifest"]',
+                1,
+                '2026-03-11T00:00:00Z',
+                '2026-03-11T00:00:00Z'
+            );
+
+            INSERT INTO path_relation_projection (
+                repository_id,
+                snapshot_id,
+                src_path,
+                dst_path,
+                relation_kind,
+                evidence_source,
+                src_symbol_id,
+                dst_symbol_id,
+                src_family_bits,
+                dst_family_bits,
+                shared_terms_json,
+                score_hint,
+                created_at
+            )
+            VALUES (
+                'repo-1',
+                'snapshot-manifest',
+                'src/main.rs',
+                'src/lib.rs',
+                'imports',
+                'manifest',
+                NULL,
+                NULL,
+                1,
+                2,
+                '["src"]',
+                42,
+                '2026-03-11T00:00:00Z'
+            );
+
+            INSERT INTO subtree_coverage_projection (
+                repository_id,
+                snapshot_id,
+                subtree_root,
+                family,
+                path_count,
+                exemplar_path,
+                exemplar_score_hint,
+                created_at
+            )
+            VALUES (
+                'repo-1',
+                'snapshot-manifest',
+                'src',
+                'path_witness',
+                2,
+                'src/main.rs',
+                10,
+                '2026-03-11T00:00:00Z'
+            );
+
+            INSERT INTO path_surface_term_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                term_weights_json,
+                exact_terms_json,
+                created_at
+            )
+            VALUES (
+                'repo-1',
+                'snapshot-manifest',
+                'src/main.rs',
+                '{"main":1}',
+                '["main"]',
+                '2026-03-11T00:00:00Z'
+            );
+
+            INSERT INTO path_anchor_sketch_projection (
+                repository_id,
+                snapshot_id,
+                path,
+                anchor_rank,
+                line,
+                anchor_kind,
+                excerpt,
+                terms_json,
+                score_hint,
+                created_at
+            )
+            VALUES (
+                'repo-1',
+                'snapshot-manifest',
+                'src/main.rs',
+                0,
+                1,
+                'symbol',
+                'fn main() {}',
+                '["main"]',
+                20,
+                '2026-03-11T00:00:00Z'
+            );
+            "#,
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to seed stale v9 projection schema for snapshot_v8 FK fixture: {err}"
+        ))
+    })?;
+    set_schema_version(&tx, 9)?;
+    tx.commit().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to commit stale v9 seed transaction for snapshot_v8 FK fixture: {err}"
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn foreign_key_targets(conn: &Connection, table: &str) -> FriggResult<Vec<String>> {
+    let query = format!("PRAGMA foreign_key_list({table})");
+    let mut statement = conn.prepare(&query).map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to prepare FK target query for table '{table}': {err}"
+        ))
+    })?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(2))
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to query FK targets for table '{table}': {err}"
+            ))
+        })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to decode FK targets for table '{table}': {err}"
+        ))
+    })
 }
