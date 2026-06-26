@@ -135,9 +135,27 @@ impl FriggMcpServer {
                 .as_ref()
                 .cloned()
             {
-                watch_runtime
+                if let Err(err) = watch_runtime
                     .acquire_lease(workspace)
-                    .map_err(Self::map_frigg_error)?;
+                    .map_err(Self::map_frigg_error)
+                {
+                    // Lease acquisition failed after we claimed adoption. Roll the
+                    // adoption back so the failed attach is atomic: the session is
+                    // left un-adopted, global counts are not bumped, and a retry
+                    // re-enters the lease path (newly_adopted == true again).
+                    self.session_state
+                        .inner
+                        .adopted_repository_ids
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&workspace.repository_id);
+                    self.runtime_state
+                        .workspace_registry
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .mark_session_released(&workspace.repository_id);
+                    return Err(err);
+                }
             }
         }
 
