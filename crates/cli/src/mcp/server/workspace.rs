@@ -223,6 +223,19 @@ impl FriggMcpServer {
             .map(str::to_owned)
             .or_else(|| self.current_repository_id())
         {
+            // Session adoption is the access boundary: an explicit repository_id
+            // (or the session default) must be adopted in this session before it
+            // can be read, searched, or navigated. Without this gate a detached
+            // session could reach any startup-known repository.
+            if !adopted_repository_ids.iter().any(|id| id == &repository_id) {
+                return Err(Self::resource_not_found(
+                    "repository_id is not adopted for this session",
+                    Some(json!({
+                        "repository_id": repository_id,
+                        "hint": "call workspace_attach for this repository_id first",
+                    })),
+                ));
+            }
             if let Some(workspace) = registry.workspace_by_repository_id(&repository_id) {
                 return Ok(vec![workspace]);
             }

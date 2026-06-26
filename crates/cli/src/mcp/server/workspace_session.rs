@@ -904,7 +904,11 @@ impl FriggMcpServer {
     ) -> Result<(String, PathBuf, String), ErrorData> {
         let requested = PathBuf::from(&params.path);
         let roots = if requested.is_absolute() && params.repository_id.is_none() {
-            self.known_workspaces()
+            // Absolute paths with no repository_id are scoped to the repositories
+            // adopted in this session, not all startup-known workspaces. Using
+            // known_workspaces() here would let a detached session read any repo
+            // the operator registered at startup.
+            self.attached_workspaces()
                 .into_iter()
                 .map(|workspace| (workspace.repository_id, workspace.root))
                 .collect::<Vec<_>>()

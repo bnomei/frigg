@@ -454,3 +454,114 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_re
 
     let _ = fs::remove_dir_all(workspace_root);
 }
+
+#[tokio::test]
+async fn read_file_rejects_non_adopted_repository_for_detached_session() {
+    let workspace_root_a = temp_workspace_root("adoption-gate-repo-a");
+    let workspace_root_b = temp_workspace_root("adoption-gate-repo-b");
+    fs::create_dir_all(workspace_root_a.join("src"))
+        .expect("failed to create repo A fixture root");
+    fs::create_dir_all(workspace_root_b.join("src"))
+        .expect("failed to create repo B fixture root");
+    fs::write(workspace_root_a.join("src/lib.rs"), "pub struct A;\n")
+        .expect("failed to write repo A source");
+    fs::write(workspace_root_b.join("src/secret.rs"), "pub struct Secret;\n")
+        .expect("failed to write repo B secret source");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root_a.clone(), workspace_root_b.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    let canonical_a = workspace_root_a
+        .canonicalize()
+        .expect("repo A root should canonicalize");
+    let canonical_b = workspace_root_b
+        .canonicalize()
+        .expect("repo B root should canonicalize");
+    let workspaces = server.known_workspaces();
+    let workspace_a = workspaces
+        .iter()
+        .find(|workspace| {
+            workspace
+                .root
+                .canonicalize()
+                .map(|root| root == canonical_a)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("repo A should be globally known at startup");
+    let workspace_b = workspaces
+        .iter()
+        .find(|workspace| {
+            workspace
+                .root
+                .canonicalize()
+                .map(|root| root == canonical_b)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("repo B should be globally known at startup");
+
+    // A fresh session adopts only repo A.
+    let session = server.clone_for_new_session();
+    session
+        .adopt_workspace(&workspace_a, true)
+        .expect("session should adopt repo A");
+
+    // Explicit repository_id for the non-adopted repo B must be rejected.
+    let explicit = session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/secret.rs".to_owned(),
+            repository_id: Some(workspace_b.repository_id.clone()),
+            max_bytes: None,
+            line_start: None,
+            line_end: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+        })
+        .await;
+    assert!(
+        explicit.is_err(),
+        "detached session must not read a non-adopted repository by explicit repository_id"
+    );
+
+    // Absolute path under repo B with no repository_id must be rejected too.
+    let absolute_secret = workspace_root_b
+        .join("src/secret.rs")
+        .to_string_lossy()
+        .into_owned();
+    let absolute = session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: absolute_secret,
+            repository_id: None,
+            max_bytes: None,
+            line_start: None,
+            line_end: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+        })
+        .await;
+    assert!(
+        absolute.is_err(),
+        "detached session must not read a non-adopted repository by absolute path"
+    );
+
+    // The adopted repo A remains readable by absolute path.
+    let absolute_a = workspace_root_a
+        .join("src/lib.rs")
+        .to_string_lossy()
+        .into_owned();
+    let allowed = session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: absolute_a,
+            repository_id: None,
+            max_bytes: None,
+            line_start: None,
+            line_end: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+        })
+        .await
+        .expect("adopted repo A must remain readable");
+    assert!(allowed.content.contains("pub struct A"));
+
+    let _ = fs::remove_dir_all(workspace_root_a);
+    let _ = fs::remove_dir_all(workspace_root_b);
+}
