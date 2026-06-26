@@ -663,7 +663,17 @@ impl FriggMcpServer {
         let wait_for_index = params
             .wait_for_index
             .unwrap_or(matches!(index_mode, WorkspaceAttachIndexMode::Ensure));
-        let index_timeout = Duration::from_millis(params.index_timeout_ms.unwrap_or(30_000));
+        // Cap the client-supplied timeout so it can never overflow the timer
+        // arithmetic in the active-work wait loop (Instant::now() + timeout
+        // panics for absurd durations). One hour is far beyond any legitimate
+        // attach-time index wait.
+        const MAX_INDEX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
+        let index_timeout = Duration::from_millis(
+            params
+                .index_timeout_ms
+                .unwrap_or(30_000)
+                .min(MAX_INDEX_TIMEOUT_MS),
+        );
         let started_at = Instant::now();
         info!(
             requested_path = params.path.as_deref().unwrap_or(""),

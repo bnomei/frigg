@@ -332,7 +332,13 @@ impl FriggMcpServer {
     }
 
     async fn wait_for_repository_index_work(&self, repository_id: &str, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let now = tokio::time::Instant::now();
+        // Use checked arithmetic so an oversized timeout can never panic the timer.
+        // If the deadline is unrepresentable, fall back to a far-but-representable
+        // bound rather than overflowing.
+        let deadline = now
+            .checked_add(timeout)
+            .unwrap_or_else(|| now + Duration::from_secs(60 * 60));
         loop {
             if self.active_repository_index_tasks(repository_id).is_empty() {
                 return true;
