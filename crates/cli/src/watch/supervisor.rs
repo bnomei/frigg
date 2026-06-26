@@ -317,14 +317,18 @@ async fn run_supervisor(
             ..
         }) = scheduler.next_ready_refresh(now)
         {
-            let recent_paths = scheduler.mark_started(&repository_id, class);
+            // Resolve the live repository BEFORE consuming any scheduler state. If
+            // the watch lease was released (repo removed from the shared map) but
+            // the queued LeaseReleased command has not been handled yet, skip
+            // without draining dirty paths or marking success: the pending refresh
+            // must survive for a possible re-lease and must not be falsely reported
+            // as completed. LeaseReleased will remove the scheduler entry shortly.
             let repository = repositories
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&repository_id)
                 .cloned();
             let Some(repository) = repository else {
-                scheduler.mark_succeeded(&repository_id, class, now);
                 continue;
             };
             if class == WatchRefreshClass::SemanticFollowup {
@@ -347,6 +351,7 @@ async fn run_supervisor(
                     continue;
                 }
             }
+            let recent_paths = scheduler.mark_started(&repository_id, class);
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
