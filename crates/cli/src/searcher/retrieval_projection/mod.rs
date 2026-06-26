@@ -23,6 +23,43 @@ pub(crate) const SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 
+/// The required projection families paired with the heuristic version the current
+/// runtime produces for each. This is the single source of truth used both when
+/// building bundles and when deciding whether a reused snapshot's persisted heads
+/// are still current. Consumers reject heads whose version does not match these.
+pub(crate) fn required_retrieval_projection_versions() -> [(&'static str, i64); 7] {
+    [
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_WITNESS,
+            super::path_witness_projection::PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_TEST_SUBJECT,
+            TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_ENTRYPOINT_SURFACE,
+            ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
+            PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
+            SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
+            PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
+            PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION,
+        ),
+    ]
+}
+
 pub(crate) use ast::augment_path_relation_projection_records_with_ast_relation_evidence;
 pub(crate) use builders::{
     build_path_anchor_sketch_projection_records, build_path_relation_projection_records,

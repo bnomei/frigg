@@ -107,9 +107,10 @@ pub(super) fn startup_refresh_status(
             .snapshot_id
             .as_deref()
             .map(|snapshot_id| {
-                storage.missing_retrieval_projection_families_for_repository_snapshot(
+                storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(
                     &repository.repository_id,
                     snapshot_id,
+                    &crate::searcher::required_retrieval_projection_versions(),
                 )
             })
             .transpose()?
