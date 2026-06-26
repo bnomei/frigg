@@ -109,6 +109,92 @@ printf '%s' "fake-scip-rust"
 }
 
 #[test]
+fn precise_generation_failed_summary_does_not_suppress_retry() {
+    let workspace_root = temp_workspace_root("precise-failed-retry");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    // Register an active precise task so a "needs work" decision resolves to
+    // SkippedActiveTask (no real generation thread spawns) while a "no work"
+    // decision still short-circuits to SkippedNoWork.
+    let _active = server
+        .runtime_state
+        .runtime_task_registry
+        .write()
+        .expect("runtime task registry should not be poisoned")
+        .start_task(
+            RuntimeTaskKind::PreciseGenerate,
+            workspace.repository_id.clone(),
+            "precise_generation",
+            None,
+        );
+
+    let summary_with_status =
+        |status: crate::mcp::types::WorkspacePreciseGenerationStatus| {
+            crate::mcp::types::WorkspacePreciseGenerationSummary {
+                status,
+                generated_at_ms: 0,
+                duration_ms: None,
+                artifact_path: None,
+                artifact_count: None,
+                artifact_bytes: None,
+                artifact_sample_paths: Vec::new(),
+                failure_class: None,
+                recommended_action: None,
+                detail: None,
+            }
+        };
+
+    // A successful prior generation with no file changes is no work.
+    server.scip_cache_workspace_precise_generation(
+        &workspace.repository_id,
+        "rust",
+        summary_with_status(crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded),
+    );
+    let action = server.maybe_spawn_workspace_precise_generation(&workspace, &[], &[]);
+    assert!(
+        matches!(
+            action,
+            crate::mcp::types::WorkspacePreciseGenerationAction::SkippedNoWork
+        ),
+        "a succeeded summary with no changes should be SkippedNoWork, got {action:?}"
+    );
+
+    // A failed/missing-tool prior generation must allow a retry with no changes.
+    server.scip_cache_workspace_precise_generation(
+        &workspace.repository_id,
+        "rust",
+        summary_with_status(crate::mcp::types::WorkspacePreciseGenerationStatus::MissingTool),
+    );
+    let action = server.maybe_spawn_workspace_precise_generation(&workspace, &[], &[]);
+    assert!(
+        !matches!(
+            action,
+            crate::mcp::types::WorkspacePreciseGenerationAction::SkippedNoWork
+        ),
+        "a failed/missing-tool summary must not suppress retry, got {action:?}"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn precise_generation_records_dirty_paths_when_skipped_for_active_task() {
     let workspace_root = temp_workspace_root("precise-skip-records-dirty");
     let bin_dir = temp_workspace_root("precise-skip-records-dirty-bin");

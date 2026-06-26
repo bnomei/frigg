@@ -322,7 +322,7 @@ impl FriggMcpServer {
             .map(|cached| cached.summary.clone())
     }
 
-    fn scip_cache_workspace_precise_generation(
+    pub(in crate::mcp::server) fn scip_cache_workspace_precise_generation(
         &self,
         repository_id: &str,
         generator_id: &str,
@@ -941,12 +941,23 @@ impl FriggMcpServer {
             &precise_config.generation_excludes,
         );
         if changed_paths.is_empty() && deleted_paths.is_empty() {
-            return self
-                .scip_cached_workspace_precise_generation(
-                    &workspace.repository_id,
-                    spec.generator_id,
-                )
-                .is_none();
+            return match self.scip_cached_workspace_precise_generation(
+                &workspace.repository_id,
+                spec.generator_id,
+            ) {
+                // No prior attempt: generation is needed.
+                None => true,
+                // A prior attempt that failed for an environmental reason must be
+                // retryable on a plain attach/prepare (e.g. after the user installs
+                // the missing tool) even with no file changes. Terminal states
+                // (Succeeded/Skipped/Unsupported/NotConfigured) count as no work.
+                Some(summary) => matches!(
+                    summary.status,
+                    WorkspacePreciseGenerationStatus::Failed
+                        | WorkspacePreciseGenerationStatus::MissingTool
+                        | WorkspacePreciseGenerationStatus::Timeout
+                ),
+            };
         }
         changed_paths
             .iter()
