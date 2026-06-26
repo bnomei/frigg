@@ -258,6 +258,20 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && task.repository_id == repository_id)
     }
 
+    /// Returns true if any active task of `kind` is registered under *any* of the
+    /// supplied repository ids. Startup workspaces carry two ids (a stable hash and
+    /// a legacy `repo-NNN` runtime id); different subsystems register tasks under
+    /// different ids, so dedup must treat the ids as aliases for one workspace.
+    pub fn has_active_task_for_any_repository(
+        &self,
+        kind: RuntimeTaskKind,
+        repository_ids: &[&str],
+    ) -> bool {
+        self.active.values().any(|task| {
+            task.kind == kind && repository_ids.contains(&task.repository_id.as_str())
+        })
+    }
+
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }
@@ -339,6 +353,40 @@ mod tests {
         assert_eq!(recent[0].status, RuntimeTaskStatus::Failed);
         assert_eq!(recent[1].task_id, first);
         assert_eq!(recent[1].status, RuntimeTaskStatus::Succeeded);
+    }
+
+    #[test]
+    fn has_active_task_for_any_repository_treats_stable_and_runtime_ids_as_aliases() {
+        let mut registry = RuntimeTaskRegistry::new();
+        // Watch registers a semantic refresh under the legacy/runtime id.
+        let task = registry.start_task(
+            RuntimeTaskKind::SemanticRefresh,
+            "repo-001",
+            "watch_semantic_followup",
+            None,
+        );
+
+        // A prewarm guard keyed by the stable hash id must still observe it.
+        assert!(registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
+        // Single-id lookup under the other alias would have missed it (the bug).
+        assert!(!registry.has_active_task_for_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            "myrepo-abc123def456",
+        ));
+        // Wrong kind must not match.
+        assert!(!registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::WorkspaceReindex,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
+
+        registry.finish_task(&task, RuntimeTaskStatus::Succeeded, None);
+        assert!(!registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
     }
 }
 

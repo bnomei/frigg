@@ -327,17 +327,25 @@ async fn run_supervisor(
                 scheduler.mark_succeeded(&repository_id, class, now);
                 continue;
             };
-            if class == WatchRefreshClass::SemanticFollowup
-                && task_registry
+            if class == WatchRefreshClass::SemanticFollowup {
+                // Startup workspaces carry two ids: the watch supervisor keys tasks
+                // by the runtime/legacy id (repository.repository_id) while MCP
+                // attach prewarm keys SemanticRefresh by the stable hash id. Check
+                // both so a prewarm refresh already running under the stable id is
+                // not duplicated here, which would run two reindexes on one db.
+                let stable_repository_id =
+                    crate::domain::model::stable_repository_id_for_root(&repository.root).0;
+                let semantic_refresh_active = task_registry
                     .read()
                     .expect("watch runtime task registry poisoned")
-                    .has_active_task_for_repository(
+                    .has_active_task_for_any_repository(
                         RuntimeTaskKind::SemanticRefresh,
-                        &repository.repository_id,
-                    )
-            {
-                scheduler.mark_succeeded(&repository_id, class, now);
-                continue;
+                        &[&repository.repository_id, &stable_repository_id],
+                    );
+                if semantic_refresh_active {
+                    scheduler.mark_succeeded(&repository_id, class, now);
+                    continue;
+                }
             }
             info!(
                 repository_id = %repository.repository_id,

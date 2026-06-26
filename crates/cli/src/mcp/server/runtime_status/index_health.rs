@@ -846,15 +846,18 @@ impl FriggMcpServer {
             return;
         }
 
+        // Watch keys SemanticRefresh by the runtime/legacy id while prewarm keys it
+        // by the stable hash id; check both aliases so an in-flight watch semantic
+        // followup is observed here and we do not start a second reindex on one db.
         let semantic_refresh_already_running = should_refresh_semantic
             && self
                 .runtime_state
                 .runtime_task_registry
                 .read()
                 .expect("runtime task registry poisoned")
-                .has_active_task_for_repository(
+                .has_active_task_for_any_repository(
                     crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                    &workspace.repository_id,
+                    &[&workspace.repository_id, &workspace.runtime_repository_id],
                 );
 
         if should_refresh_semantic && !semantic_refresh_already_running {
