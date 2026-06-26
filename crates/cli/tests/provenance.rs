@@ -6,6 +6,7 @@ use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams, ReadFileParams,
     SearchHybridParams, SearchPatternType, SearchSymbolParams, SearchTextParams,
+    WorkspaceAttachIndexMode, WorkspaceAttachParams,
 };
 use frigg::settings::FriggConfig;
 use frigg::storage::Storage;
@@ -84,16 +85,49 @@ fn storage_path_for_workspace(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".frigg").join("storage.sqlite3")
 }
 
-fn server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
+async fn server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace fixture should produce valid config");
-    FriggMcpServer::new(config)
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    server
 }
 
-fn extended_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
+async fn extended_runtime_server_for_workspace(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace fixture should produce valid config");
-    FriggMcpServer::new_with_runtime_options(config, false, true)
+    let server = FriggMcpServer::new_with_runtime_options(config, false, true);
+    attach_session_repositories(&server).await;
+    server
+}
+
+/// Adopt every startup-known repository into the session via the public
+/// `workspace_attach` tool. Read, search, and navigation tools gate on session
+/// adoption, so provenance fixtures must attach before invoking them.
+async fn attach_session_repositories(server: &FriggMcpServer) {
+    let repository_ids = server
+        .list_repositories(Parameters(ListRepositoriesParams {}))
+        .await
+        .expect("list_repositories should succeed")
+        .0
+        .repositories
+        .into_iter()
+        .map(|repository| repository.repository_id);
+    for repository_id in repository_ids {
+        server
+            .workspace_attach(Parameters(WorkspaceAttachParams {
+                path: None,
+                repository_id: Some(repository_id),
+                set_default: Some(true),
+                resolve_mode: None,
+                wait_for_precise: Some(false),
+                index_mode: Some(WorkspaceAttachIndexMode::Skip),
+                wait_for_index: Some(false),
+                index_timeout_ms: None,
+            }))
+            .await
+            .expect("workspace_attach should adopt the startup repository");
+    }
 }
 
 fn cleanup_workspace(workspace_root: &Path) {
@@ -132,7 +166,7 @@ fn retryable_tag(error: &rmcp::ErrorData) -> Option<bool> {
 #[tokio::test]
 async fn provenance_core_tool_invocations_are_persisted() {
     let workspace_root = build_workspace_fixture("core-invocations");
-    let server = server_for_workspace(&workspace_root);
+    let server = server_for_workspace(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     server
@@ -238,7 +272,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
 #[tokio::test]
 async fn provenance_bounded_text_fields_are_truncated() {
     let workspace_root = build_workspace_fixture("bounded-fields");
-    let server = server_for_workspace(&workspace_root);
+    let server = server_for_workspace(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
     let long_query = "q".repeat(2_048);
 
@@ -281,7 +315,7 @@ async fn provenance_bounded_text_fields_are_truncated() {
 #[tokio::test]
 async fn provenance_search_symbol_records_baseline_language_queries() {
     let workspace_root = build_multilang_workspace_fixture("search-symbol-multilang");
-    let server = server_for_workspace(&workspace_root);
+    let server = server_for_workspace(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     server
@@ -415,7 +449,7 @@ async fn provenance_search_symbol_records_baseline_language_queries() {
 #[tokio::test]
 async fn provenance_invalid_repository_hint_is_not_attributed_to_default_repository() {
     let workspace_root = build_workspace_fixture("invalid-repository-hint");
-    let server = server_for_workspace(&workspace_root);
+    let server = server_for_workspace(&workspace_root).await;
     let invalid_repository_id = "repo-999";
 
     server
@@ -468,7 +502,12 @@ async fn provenance_persistence_failures_are_strict_by_default_with_typed_error_
     let workspace_root = build_workspace_fixture("strict-failure-default");
     fs::write(workspace_root.join(".frigg"), "blocked")
         .expect("failed to seed blocking provenance path fixture");
-    let server = server_for_workspace(&workspace_root);
+    // Build without session adoption: this test exercises strict provenance
+    // failure on a detached-allowed tool (`list_repositories`), and the blocked
+    // `.frigg` path would make an attach helper's own provenance write fail.
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
+        .expect("workspace fixture should produce valid config");
+    let server = FriggMcpServer::new(config);
 
     let error = server
         .list_repositories(Parameters(ListRepositoriesParams::default()))
@@ -526,7 +565,7 @@ async fn provenance_best_effort_mode_is_opt_in() {
 #[tokio::test]
 async fn provenance_extended_explore_invocations_include_scope_metadata() {
     let workspace_root = build_workspace_fixture("explore-runtime-provenance");
-    let server = extended_runtime_server_for_workspace(&workspace_root);
+    let server = extended_runtime_server_for_workspace(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     server
@@ -572,7 +611,7 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
 #[tokio::test]
 async fn provenance_search_hybrid_invocations_include_winning_anchor_metadata() {
     let workspace_root = build_workspace_fixture("search-hybrid-anchor-provenance");
-    let server = server_for_workspace(&workspace_root);
+    let server = server_for_workspace(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     server
