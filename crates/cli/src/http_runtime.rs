@@ -45,30 +45,25 @@ pub(super) fn resolve_http_runtime_config(
     let has_http_related_flags =
         cli.mcp_http_host.is_some() || cli.allow_remote_http || cli.mcp_http_auth_token.is_some();
 
-    if !has_http_port {
-        if serve_requested {
-            let bind_addr = SocketAddr::new(
-                cli.mcp_http_host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-                37_444,
-            );
-            return Ok(Some(HttpRuntimeConfig {
-                bind_addr,
-                auth_token: None,
-                allowed_authorities: allowed_authorities_for_bind(bind_addr),
-            }));
-        }
+    // Decide whether an HTTP runtime should start and on which port. The default
+    // `serve` port must flow through the same host/auth validation below as an
+    // explicit `--mcp-http-port`, otherwise a non-loopback bind could start
+    // without the remote override or a bearer token.
+    let port = if has_http_port {
+        cli.mcp_http_port
+            .expect("checked: mcp_http_port is set when has_http_port is true")
+    } else if serve_requested {
+        37_444
+    } else {
         if has_http_related_flags {
             return Err(Box::new(io::Error::other(
                 "HTTP transport flags require --mcp-http-port",
             )));
         }
         return Ok(None);
-    }
+    };
 
     let host = cli.mcp_http_host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    let port = cli
-        .mcp_http_port
-        .expect("checked: mcp_http_port is set when has_http_port is true");
     let bind_addr = SocketAddr::new(host, port);
 
     let auth_token = match cli.mcp_http_auth_token.as_deref() {
