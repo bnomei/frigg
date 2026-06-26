@@ -347,7 +347,13 @@ async fn run_supervisor(
                         &[&repository.repository_id, &stable_repository_id],
                     );
                 if semantic_refresh_active {
-                    scheduler.mark_succeeded(&repository_id, class, now);
+                    // Another SemanticRefresh is already running for this repo.
+                    // Defer the followup with backoff instead of marking it
+                    // succeeded: if the in-flight refresh fails or committed against
+                    // an older plan, dropping the followup would leave the semantic
+                    // head lagging the manifest with nothing re-queued. mark_failed
+                    // keeps it pending and re-checks once the deadline elapses.
+                    scheduler.mark_failed(&repository_id, class, now, retry);
                     continue;
                 }
             }
