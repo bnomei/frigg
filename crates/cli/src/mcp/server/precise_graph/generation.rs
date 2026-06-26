@@ -1383,6 +1383,45 @@ impl FriggMcpServer {
         finish(generation_result)
     }
 
+    pub(in crate::mcp::server) fn record_pending_precise_dirty_paths(
+        &self,
+        repository_id: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) {
+        if changed_paths.is_empty() && deleted_paths.is_empty() {
+            return;
+        }
+        let mut pending = self
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths poisoned");
+        let entry = pending
+            .entry(repository_id.to_owned())
+            .or_insert_with(|| (std::collections::BTreeSet::new(), std::collections::BTreeSet::new()));
+        entry.0.extend(changed_paths.iter().cloned());
+        entry.1.extend(deleted_paths.iter().cloned());
+    }
+
+    /// Drain the dirty paths recorded while a precise-generation task was active.
+    pub(in crate::mcp::server) fn take_pending_precise_dirty_paths(
+        &self,
+        repository_id: &str,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let mut pending = self
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths poisoned");
+        pending.remove(repository_id).map(|(changed, deleted)| {
+            (
+                changed.into_iter().collect::<Vec<_>>(),
+                deleted.into_iter().collect::<Vec<_>>(),
+            )
+        })
+    }
+
     pub(in crate::mcp::server) fn maybe_spawn_workspace_precise_generation(
         &self,
         workspace: &AttachedWorkspace,
@@ -1435,6 +1474,14 @@ impl FriggMcpServer {
                     .collect::<Vec<_>>()
                     .join(","),
                 "workspace precise generation skipped because a generation task is already active"
+            );
+            // Record the dirty paths so the active task's completion replays them;
+            // otherwise a change presented mid-generation (possibly after the
+            // running generator already read the old file) would be lost.
+            self.record_pending_precise_dirty_paths(
+                &workspace.repository_id,
+                changed_paths,
+                deleted_paths,
             );
             return WorkspacePreciseGenerationAction::SkippedActiveTask;
         }
@@ -1525,6 +1572,19 @@ impl FriggMcpServer {
                         },
                         detail,
                     );
+                // Replay any dirty paths that were presented while this task was
+                // active. finish_task ran first, so the active-task guard no longer
+                // sees this task and the follow-up generation can spawn (or, if a
+                // newer task is already active, it is re-queued for that task).
+                if let Some((pending_changed, pending_deleted)) =
+                    server.take_pending_precise_dirty_paths(&workspace.repository_id)
+                {
+                    server.maybe_spawn_workspace_precise_generation(
+                        &workspace,
+                        &pending_changed,
+                        &pending_deleted,
+                    );
+                }
             });
         if let Err(err) = spawn_result {
             self.runtime_state

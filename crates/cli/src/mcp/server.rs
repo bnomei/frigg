@@ -327,6 +327,12 @@ struct FriggMcpRuntimeState {
     runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
     precise_generation_status_cache:
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
+    /// Per-repository dirty paths that arrived while a precise-generation task was
+    /// already active (returned SkippedActiveTask). Replayed once the active task
+    /// completes so in-flight reruns are not silently dropped. Value is
+    /// (changed_paths, deleted_paths).
+    precise_generation_pending_dirty_paths:
+        Arc<RwLock<BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>>>,
 }
 
 #[derive(Clone)]
@@ -486,6 +492,7 @@ impl FriggMcpServer {
                 runtime_cache_registry: Arc::new(RwLock::new(RuntimeCacheRegistry::default())),
                 runtime_cache_telemetry: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generation_status_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                precise_generation_pending_dirty_paths: Arc::new(RwLock::new(BTreeMap::new())),
             },
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
