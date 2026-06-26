@@ -686,16 +686,25 @@ fn load_allowed_semantic_chunk_ids_for_snapshot_on_connection<'a>(
         .map(|idx| format!("?{}", idx + 6))
         .collect::<Vec<_>>()
         .join(", ");
+    // Liveness is defined by the head's covered snapshot, matching every sibling
+    // read (embeddings/payloads/previews/health). Filtering on
+    // `semantic_chunk.snapshot_id` instead would drop unchanged chunks after an
+    // incremental advance, since the advance leaves their snapshot stamp at the
+    // previous snapshot while only the head moves forward.
     let sql = format!(
         r#"
-        SELECT chunk_id
-        FROM semantic_chunk
-        WHERE repository_id = ?1
-          AND snapshot_id = ?2
-          AND provider = ?3
-          AND model = ?4
-          AND (?5 IS NULL OR language = ?5)
-          AND chunk_id IN ({placeholders})
+        SELECT chunk.chunk_id
+        FROM semantic_chunk AS chunk
+        INNER JOIN semantic_head AS head
+          ON head.repository_id = chunk.repository_id
+         AND head.provider = chunk.provider
+         AND head.model = chunk.model
+        WHERE chunk.repository_id = ?1
+          AND head.covered_snapshot_id = ?2
+          AND chunk.provider = ?3
+          AND chunk.model = ?4
+          AND (?5 IS NULL OR chunk.language = ?5)
+          AND chunk.chunk_id IN ({placeholders})
         "#
     );
     let mut statement = conn.prepare(&sql).map_err(|err| {

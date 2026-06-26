@@ -1054,6 +1054,102 @@ fn semantic_latest_manifest_snapshot_lookup_skips_non_manifest_head_snapshot() -
 }
 
 #[test]
+fn semantic_vector_topk_returns_unchanged_chunks_after_incremental_advance() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-vector-topk-advance-unchanged");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    replace_semantic_records(
+        &storage,
+        "repo-1",
+        "snapshot-001",
+        &[
+            semantic_record(
+                "chunk-keep",
+                "repo-1",
+                "snapshot-001",
+                "src/keep.rs",
+                "rust",
+                0,
+                1,
+                10,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-keep",
+                "fn keep() {}",
+                &[1.0, 0.0],
+            ),
+            semantic_record(
+                "chunk-change-old",
+                "repo-1",
+                "snapshot-001",
+                "src/change.rs",
+                "rust",
+                0,
+                1,
+                10,
+                "openai",
+                "text-embedding-3-small",
+                Some("trace-001"),
+                "hash-change-old",
+                "fn change_old() {}",
+                &[0.0, 1.0],
+            ),
+        ],
+    )?;
+
+    // Incremental advance: only src/change.rs changes; chunk-keep keeps its
+    // snapshot_id stamp of snapshot-001 while the head moves to snapshot-002.
+    advance_semantic_records(
+        &storage,
+        "repo-1",
+        Some("snapshot-001"),
+        "snapshot-002",
+        &["src/change.rs".to_owned()],
+        &[],
+        &[semantic_record(
+            "chunk-change-new",
+            "repo-1",
+            "snapshot-002",
+            "src/change.rs",
+            "rust",
+            0,
+            11,
+            20,
+            "openai",
+            "text-embedding-3-small",
+            Some("trace-002"),
+            "hash-change-new",
+            "fn change_new() {}",
+            &[0.0, 1.0],
+        )],
+    )?;
+
+    // Query close to chunk-keep's vector; it must survive the membership gate
+    // even though its snapshot_id is still snapshot-001.
+    let mut query_embedding = vec![1.0, 0.0];
+    query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
+    let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(
+        "repo-1",
+        "snapshot-002",
+        "openai",
+        "text-embedding-3-small",
+        &query_embedding,
+        5,
+        None,
+    )?;
+
+    assert!(
+        matches.iter().any(|entry| entry.chunk_id == "chunk-keep"),
+        "unchanged chunk must remain visible to semantic search after an incremental advance"
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_embedding_advance_preserves_unchanged_rows_and_replaces_changed_paths()
 -> FriggResult<()> {
     let db_path = temp_db_path("semantic-embedding-advance");
