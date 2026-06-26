@@ -665,6 +665,47 @@ async fn provider_adapters_openai_redacts_api_keys_and_raw_source_from_diagnosti
 }
 
 #[tokio::test]
+async fn provider_adapters_google_keeps_transient_status_retryable_despite_conflicting_code() {
+    // HTTP 503 with a gRPC status of UNAVAILABLE but a conflicting numeric code 400.
+    // The transient status must win: the failure stays retryable.
+    let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
+        status_code: 503,
+        body: json!({
+            "error": {
+                "status": "UNAVAILABLE",
+                "code": 400,
+                "message": "backend overloaded"
+            }
+        })
+        .to_string(),
+    })]));
+    let sleeper = Arc::new(MockSleeper::default());
+    let provider = google_provider_for_test(
+        http,
+        sleeper,
+        RetryPolicy {
+            max_retries: 0,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(10),
+        },
+    );
+
+    let error = provider
+        .embed(sample_request(EmbeddingPurpose::Document))
+        .await
+        .expect_err("expected provider failure");
+
+    let EmbeddingError::Provider(failure) = error else {
+        panic!("expected provider error, got {error:?}");
+    };
+    assert_eq!(
+        failure.retryability,
+        Retryability::Retryable,
+        "transient UNAVAILABLE status must not be downgraded by a conflicting numeric code"
+    );
+}
+
+#[tokio::test]
 async fn provider_adapters_google_redacts_key_bearing_urls_from_transport_diagnostics() {
     let source_snippet = "class PaymentSecret { const API_KEY = 'source-secret'; }";
     let http = Arc::new(MockHttpExecutor::new(vec![Err(

@@ -202,18 +202,26 @@ impl GoogleEmbeddingProvider {
                 message = error_message;
             }
 
+            let mut retryable_from_grpc_status = false;
             if let Some(error_status) = envelope.error.status {
                 if matches!(
                     error_status.as_str(),
                     "RESOURCE_EXHAUSTED" | "UNAVAILABLE" | "DEADLINE_EXCEEDED" | "ABORTED"
                 ) {
                     retryability = Retryability::Retryable;
+                    retryable_from_grpc_status = true;
                 }
                 code = Some(error_status);
             }
 
             if let Some(provider_status_code) = envelope.error.code {
-                retryability = status_retryability(provider_status_code);
+                // The numeric `code` must not downgrade a transient failure already
+                // identified by the gRPC `status` string. A conflicting code (e.g.
+                // 400 on an UNAVAILABLE/503 response) would otherwise turn a
+                // retryable outage into a single no-backoff attempt.
+                if !retryable_from_grpc_status {
+                    retryability = status_retryability(provider_status_code);
+                }
             }
         }
         let message =
