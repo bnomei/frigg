@@ -273,6 +273,19 @@ fn best_path_witness_anchor_in_bytes(
     bytes: &[u8],
     query_context: &HybridPathWitnessQueryContext,
 ) -> Option<(usize, String)> {
+    // Match the lexical channel: redact a leading markdown HTML comment (blanked
+    // while preserving line numbers) so a hidden leading comment is never surfaced
+    // verbatim as a path-witness excerpt. Falls back to the raw bytes if the file
+    // is not valid UTF-8 or does not require scrubbing.
+    let scrubbed = if super::content_scrub::should_scrub_leading_markdown_comment(path) {
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(|content| super::content_scrub::scrub_search_content(path, content).into_owned())
+    } else {
+        None
+    };
+    let bytes: &[u8] = scrubbed.as_deref().map(str::as_bytes).unwrap_or(bytes);
+
     let path_terms = hybrid_path_overlap_tokens(path);
     let max_score = max_path_witness_anchor_score(&path_terms, query_context);
     let mut first_non_empty: Option<(usize, String)> = None;
@@ -515,6 +528,35 @@ mod tests {
             best_path_witness_anchor_in_reader("guides/overview.md", source, &query_context);
 
         assert_eq!(anchor, Some((2, "header line".to_owned())));
+    }
+
+    #[test]
+    fn witness_anchor_scrubs_leading_markdown_html_comment() {
+        let query_context = HybridPathWitnessQueryContext::from_query_text("project overview");
+        let source = Cursor::new("<!-- frigg-internal: hidden note -->\n# Project\n");
+
+        let anchor = best_path_witness_anchor_in_reader("README.md", source, &query_context);
+
+        // The hidden leading HTML comment must not be surfaced as the excerpt;
+        // line numbers are preserved (the comment line is blanked, so the first
+        // non-empty line is the heading on line 2).
+        let (line, excerpt) = anchor.expect("anchor should resolve");
+        assert!(
+            !excerpt.contains("frigg-internal"),
+            "leading markdown comment must be scrubbed, got: {excerpt}"
+        );
+        assert_eq!((line, excerpt.as_str()), (2, "# Project"));
+    }
+
+    #[test]
+    fn witness_anchor_does_not_scrub_non_markdown_leading_comment() {
+        let query_context = HybridPathWitnessQueryContext::from_query_text("project overview");
+        // A non-markdown file is not subject to the leading-comment scrub.
+        let source = Cursor::new("<!-- not markdown -->\nbody\n");
+
+        let anchor = best_path_witness_anchor_in_reader("notes.txt", source, &query_context);
+
+        assert_eq!(anchor, Some((1, "<!-- not markdown -->".to_owned())));
     }
 
     #[test]
