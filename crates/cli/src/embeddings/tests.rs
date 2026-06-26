@@ -425,6 +425,78 @@ async fn provider_adapters_openai_retries_retryable_transport_then_succeeds() {
 }
 
 #[tokio::test]
+async fn provider_adapters_openai_reorders_out_of_order_data_by_index() {
+    // The OpenAI contract does not guarantee data[] is in input order; it is
+    // returned here reversed. Each vector must be re-associated by its `index`.
+    let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
+        status_code: 200,
+        body: json!({
+            "data": [
+                {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                {"index": 0, "embedding": [0.1, 0.2, 0.3]}
+            ],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 7, "total_tokens": 7}
+        })
+        .to_string(),
+    })]));
+    let sleeper = Arc::new(MockSleeper::default());
+    let provider = openai_provider_for_test(
+        http,
+        sleeper,
+        RetryPolicy {
+            max_retries: 0,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(100),
+        },
+    );
+
+    let response = provider
+        .embed(sample_request(EmbeddingPurpose::Document))
+        .await
+        .expect("expected success");
+
+    assert_eq!(response.vectors.len(), 2);
+    assert_eq!(response.vectors[0].index, 0);
+    assert_eq!(response.vectors[0].values, vec![0.1, 0.2, 0.3]);
+    assert_eq!(response.vectors[1].index, 1);
+    assert_eq!(response.vectors[1].values, vec![0.4, 0.5, 0.6]);
+}
+
+#[tokio::test]
+async fn provider_adapters_openai_rejects_incomplete_index_set() {
+    // A duplicated index leaves a gap (0..n not covered); the batch must error
+    // rather than silently dropping or mis-pairing a chunk.
+    let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
+        status_code: 200,
+        body: json!({
+            "data": [
+                {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                {"index": 0, "embedding": [0.4, 0.5, 0.6]}
+            ],
+            "model": "text-embedding-3-small"
+        })
+        .to_string(),
+    })]));
+    let sleeper = Arc::new(MockSleeper::default());
+    let provider = openai_provider_for_test(
+        http,
+        sleeper,
+        RetryPolicy {
+            max_retries: 0,
+            initial_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_millis(100),
+        },
+    );
+
+    let error = provider
+        .embed(sample_request(EmbeddingPurpose::Document))
+        .await
+        .expect_err("expected provider error for repeated index");
+    assert!(matches!(error, EmbeddingError::Provider(_)));
+}
+
+#[tokio::test]
 async fn provider_adapters_openai_stops_after_retry_budget() {
     let http = Arc::new(MockHttpExecutor::new(vec![
         Ok(HttpResponse {
