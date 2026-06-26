@@ -45,8 +45,15 @@ pub(crate) fn run_hybrid_playbook_command(
         std::fs::write(output_path, to_string_pretty(&summary)?)?;
     }
 
+    // A regression run with failing required witnesses (or failing targets when
+    // enforcement is requested) must fail the command so CI does not accept a
+    // broken retrieval suite.
+    let regressions_failed = summary.required_failures > 0
+        || (summary.enforce_targets && summary.target_failures > 0);
+    let status = if regressions_failed { "failed" } else { "ok" };
+
     println!(
-        "playbook summary status=ok playbooks={} required_failures={} target_failures={} enforce_targets={} output={} trace_root={}",
+        "playbook summary status={status} playbooks={} required_failures={} target_failures={} enforce_targets={} output={} trace_root={}",
         summary.playbook_count,
         summary.required_failures,
         summary.target_failures,
@@ -58,5 +65,12 @@ pub(crate) fn run_hybrid_playbook_command(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "-".to_owned())
     );
+
+    if regressions_failed {
+        return Err(Box::new(io::Error::other(format!(
+            "hybrid playbook regressions failed: required_failures={} target_failures={} enforce_targets={}",
+            summary.required_failures, summary.target_failures, summary.enforce_targets
+        ))));
+    }
     Ok(())
 }
