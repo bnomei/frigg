@@ -28,6 +28,64 @@ struct WorkloadCorpusExportRow {
     normalized_workload: Option<Value>,
 }
 
+const WORKLOAD_CORPUS_REDACTED: &str = "[REDACTED]";
+
+/// Object key fragments whose values are treated as secrets and redacted whole.
+const WORKLOAD_CORPUS_SECRET_KEY_FRAGMENTS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "authorization",
+    "client_secret",
+    "credential",
+    "password",
+    "passwd",
+    "private_key",
+    "secret",
+    "session_key",
+    "token",
+];
+
+/// Token prefixes that identify provider secrets regardless of surrounding key.
+const WORKLOAD_CORPUS_SECRET_TOKEN_PREFIXES: &[&str] = &[
+    "sk-",
+    "sk_",
+    "rk-",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "akia",
+    "asia",
+    "aiza",
+    "ya29.",
+    "eyj",
+    "npm_",
+    "shpat_",
+    "shpss_",
+];
+
+/// Bare keywords that introduce a secret in the following whitespace-delimited word.
+const WORKLOAD_CORPUS_SECRET_INTRODUCERS: &[&str] = &[
+    "bearer",
+    "token",
+    "authorization",
+    "apikey",
+    "password",
+    "secret",
+];
+
+const WORKLOAD_CORPUS_STRUCTURAL_PUNCT: &[char] =
+    &['"', '\'', ',', ';', '(', ')', '[', ']', '{', '}', '<', '>'];
+
 fn bounded_workload_corpus_text(value: &str) -> String {
     if value.chars().count() <= WORKLOAD_CORPUS_MAX_STRING_CHARS {
         return value.to_owned();
@@ -41,6 +99,142 @@ fn bounded_workload_corpus_text(value: &str) -> String {
     bounded
 }
 
+/// Sanitize a free-text value for export: redact secret-like content, then bound length.
+fn sanitized_workload_corpus_text(value: &str) -> String {
+    bounded_workload_corpus_text(&redact_workload_corpus_text(value))
+}
+
+fn workload_corpus_key_is_secret(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    WORKLOAD_CORPUS_SECRET_KEY_FRAGMENTS
+        .iter()
+        .any(|fragment| lowered.contains(fragment))
+}
+
+fn workload_corpus_token_is_secret_like(token: &str) -> bool {
+    let lowered = token.to_ascii_lowercase();
+    if WORKLOAD_CORPUS_SECRET_TOKEN_PREFIXES
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
+    {
+        return true;
+    }
+
+    // High-entropy base64/hex-like run: likely a raw key or token.
+    let len = token.chars().count();
+    let is_token_charset = token
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=' | '-' | '_' | '.'));
+    let has_digit = token.chars().any(|ch| ch.is_ascii_digit());
+    let has_alpha = token.chars().any(|ch| ch.is_ascii_alphabetic());
+    len >= 32 && is_token_charset && has_digit && has_alpha
+}
+
+/// Replace the token core with the redaction marker while preserving wrapping punctuation
+/// (quotes, commas, brackets) so the surrounding text structure is kept intact.
+fn redact_workload_corpus_token_core(word: &str) -> String {
+    let after_leading =
+        word.trim_start_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    let leading = &word[..word.len() - after_leading.len()];
+    let core = after_leading.trim_end_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    let trailing = &after_leading[core.len()..];
+    if core.is_empty() {
+        return word.to_owned();
+    }
+    format!("{leading}{WORKLOAD_CORPUS_REDACTED}{trailing}")
+}
+
+struct WorkloadCorpusWordRedaction {
+    text: String,
+    next_word_is_secret: bool,
+}
+
+fn redact_workload_corpus_word(
+    word: &str,
+    previous_word_introduces_secret: bool,
+) -> WorkloadCorpusWordRedaction {
+    let normalized = word
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    let is_introducer = WORKLOAD_CORPUS_SECRET_INTRODUCERS
+        .iter()
+        .any(|introducer| normalized == *introducer);
+
+    if previous_word_introduces_secret {
+        // A bare introducer keyword (e.g. `Bearer` after `Authorization:`) stays
+        // readable but keeps the chain alive so the real secret one word later is
+        // redacted; any other word here is the secret itself.
+        if is_introducer {
+            return WorkloadCorpusWordRedaction {
+                text: word.to_owned(),
+                next_word_is_secret: true,
+            };
+        }
+        return WorkloadCorpusWordRedaction {
+            text: redact_workload_corpus_token_core(word),
+            next_word_is_secret: false,
+        };
+    }
+
+    // Inline assignment such as `api_key=SECRET` or `token:SECRET` in a single word.
+    if let Some(separator_index) = word.find(['=', ':']) {
+        let key = &word[..separator_index];
+        if workload_corpus_key_is_secret(key) {
+            let prefix = &word[..=separator_index];
+            let value = &word[separator_index + 1..];
+            if value.is_empty() {
+                // The value is carried by the next whitespace-delimited word.
+                return WorkloadCorpusWordRedaction {
+                    text: word.to_owned(),
+                    next_word_is_secret: true,
+                };
+            }
+            return WorkloadCorpusWordRedaction {
+                text: format!("{prefix}{}", redact_workload_corpus_token_core(value)),
+                next_word_is_secret: false,
+            };
+        }
+    }
+
+    if workload_corpus_token_is_secret_like(word) {
+        return WorkloadCorpusWordRedaction {
+            text: redact_workload_corpus_token_core(word),
+            next_word_is_secret: false,
+        };
+    }
+
+    WorkloadCorpusWordRedaction {
+        text: word.to_owned(),
+        next_word_is_secret: is_introducer,
+    }
+}
+
+/// Redact secret-like content from free text: provider token prefixes, high-entropy
+/// tokens, inline `key=value` secrets, and `Bearer <token>` style introducers.
+fn redact_workload_corpus_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut previous_word_introduces_secret = false;
+
+    for chunk in value.split_inclusive(char::is_whitespace) {
+        let (word, trailing) = match chunk.char_indices().next_back() {
+            Some((index, ch)) if ch.is_whitespace() => (&chunk[..index], &chunk[index..]),
+            _ => (chunk, ""),
+        };
+
+        if word.is_empty() {
+            output.push_str(chunk);
+            continue;
+        }
+
+        let redaction = redact_workload_corpus_word(word, previous_word_introduces_secret);
+        output.push_str(&redaction.text);
+        output.push_str(trailing);
+        previous_word_introduces_secret = redaction.next_word_is_secret;
+    }
+
+    output
+}
+
 fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Value {
     if remaining_depth == 0 {
         return Value::String("[truncated-depth]".to_owned());
@@ -48,7 +242,7 @@ fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Valu
 
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => value.clone(),
-        Value::String(text) => Value::String(bounded_workload_corpus_text(text)),
+        Value::String(text) => Value::String(sanitized_workload_corpus_text(text)),
         Value::Array(items) => Value::Array(
             items
                 .iter()
@@ -66,6 +260,12 @@ fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Valu
                 .take(WORKLOAD_CORPUS_MAX_OBJECT_ENTRIES)
             {
                 if let Some(entry_value) = entries.get(&key) {
+                    // Redact the entire value subtree for secret-bearing keys.
+                    if workload_corpus_key_is_secret(&key) {
+                        sanitized
+                            .insert(key, Value::String(WORKLOAD_CORPUS_REDACTED.to_owned()));
+                        continue;
+                    }
                     sanitized.insert(
                         key,
                         sanitize_workload_corpus_value(entry_value, remaining_depth - 1),
@@ -125,7 +325,7 @@ pub(crate) fn run_workload_corpus_export_command(
             let payload = serde_json::from_str::<Value>(&row.payload_json).unwrap_or_else(|_| {
                 Value::Object(Map::from_iter([(
                     "payload_decode_error".to_owned(),
-                    Value::String(bounded_workload_corpus_text(&row.payload_json)),
+                    Value::String(sanitized_workload_corpus_text(&row.payload_json)),
                 )]))
             });
             let repository_id = payload
@@ -202,4 +402,54 @@ pub(crate) fn run_workload_corpus_export_command(
         limit
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn redacts_secret_bearing_object_keys() {
+        let value = json!({
+            "api_key": "value-should-not-survive",
+            "query": "find handler",
+            "nested": { "Authorization": "Bearer abc" }
+        });
+        let sanitized = sanitize_workload_corpus_value(&value, WORKLOAD_CORPUS_MAX_DEPTH);
+        assert_eq!(sanitized["api_key"], json!("[REDACTED]"));
+        assert_eq!(sanitized["query"], json!("find handler"));
+        assert_eq!(sanitized["nested"]["Authorization"], json!("[REDACTED]"));
+    }
+
+    #[test]
+    fn redacts_secret_like_tokens_in_free_text_values() {
+        // A user searching for a token leaves it in params under a non-secret key.
+        let value = json!({ "query": "look for sk-ant-api03-abcDEF123456ghIJKL7890mnopQRSTuv" });
+        let sanitized = sanitize_workload_corpus_value(&value, WORKLOAD_CORPUS_MAX_DEPTH);
+        let query = sanitized["query"].as_str().expect("query stays a string");
+        assert!(
+            !query.contains("sk-ant-api03"),
+            "secret-like token must be redacted: {query}"
+        );
+        assert!(query.contains("[REDACTED]"), "expected redaction marker: {query}");
+        assert!(query.contains("look for"), "non-secret words must survive: {query}");
+    }
+
+    #[test]
+    fn redacts_high_entropy_tokens_and_inline_assignments() {
+        assert!(redact_workload_corpus_text("token=abc123DEF456ghi789JKL012mno345PQR")
+            .contains("[REDACTED]"));
+        assert!(
+            !redact_workload_corpus_text("Authorization: Bearer abcDEF123456ghIJKL7890mnopq")
+                .contains("abcDEF123456"),
+            "bearer token must be redacted"
+        );
+    }
+
+    #[test]
+    fn preserves_ordinary_text_without_secrets() {
+        let text = "search for the parseToken function in module";
+        assert_eq!(redact_workload_corpus_text(text), text);
+    }
 }
