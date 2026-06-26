@@ -538,6 +538,48 @@ fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> 
 }
 
 #[test]
+fn php_source_evidence_resolves_aliases_per_namespace_block() -> FriggResult<()> {
+    // Two bracketed namespace blocks alias the same short name `Target` to
+    // different FQCNs. Each `new Target()` must resolve under its own block's
+    // `use` alias, not a merged file-wide context.
+    let path = Path::new("src/MultiNamespace.php");
+    let source = "<?php\n\
+namespace App\\A {\n\
+    use Vendor\\One\\Target;\n\
+    class AlphaService {\n\
+        public function run(): void { new Target(); }\n\
+    }\n\
+}\n\
+namespace App\\B {\n\
+    use Vendor\\Two\\Target;\n\
+    class BetaService {\n\
+        public function run(): void { new Target(); }\n\
+    }\n\
+}\n";
+    let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+    let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+    assert!(
+        evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::Instantiation
+                && entry.target_canonical_name == "Vendor\\One\\Target"
+        }),
+        "App\\A new Target() should resolve to Vendor\\One\\Target; got: {:?}",
+        evidence.target_evidence
+    );
+    assert!(
+        evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::Instantiation
+                && entry.target_canonical_name == "Vendor\\Two\\Target"
+        }),
+        "App\\B new Target() should resolve to Vendor\\Two\\Target; got: {:?}",
+        evidence.target_evidence
+    );
+
+    Ok(())
+}
+
+#[test]
 fn blade_source_evidence_extracts_relations_livewire_wire_and_flux_hints() -> FriggResult<()> {
     let path = Path::new("resources/views/dashboard/show.blade.php");
     let source = blade_source_evidence_fixture();

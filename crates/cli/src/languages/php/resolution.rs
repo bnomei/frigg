@@ -118,6 +118,30 @@ pub(crate) fn php_name_resolution_context_from_root(
     context
 }
 
+/// Build a name-resolution context scoped to a single bracketed `namespace X { ... }`
+/// block: its namespace and only the `use` aliases declared inside that block's body.
+/// `use` aliases are lexically scoped to their namespace block, so a file with
+/// multiple bracketed namespaces must resolve references under the block that
+/// contains them rather than a merged file-wide context.
+pub(crate) fn php_name_resolution_context_for_namespace_node(
+    source: &str,
+    namespace_node: Node<'_>,
+) -> PhpNameResolutionContext {
+    let mut context = PhpNameResolutionContext {
+        namespace: node_field_text(namespace_node, source, "name"),
+        ..PhpNameResolutionContext::default()
+    };
+    if let Some(body) = namespace_node.child_by_field_name("body") {
+        let mut body_cursor = body.walk();
+        for body_child in body.children(&mut body_cursor).filter(|node| node.is_named()) {
+            if body_child.kind() == "namespace_use_declaration" {
+                collect_php_namespace_use_declaration(source, body_child, &mut context);
+            }
+        }
+    }
+    context
+}
+
 fn php_is_builtin_type(raw_name: &str) -> bool {
     matches!(
         raw_name.trim().to_ascii_lowercase().as_str(),
