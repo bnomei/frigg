@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use rayon::prelude::*;
+use tracing::warn;
 
 use super::*;
 use crate::indexer::manifest::normalize_repository_relative_path;
@@ -328,9 +329,31 @@ pub(crate) fn build_semantic_chunk_candidates(
             let mut source = String::new();
             let mut file = match File::open(&entry.path) {
                 Ok(file) => file,
-                Err(_) => return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new()),
+                Err(err) => {
+                    // Skip this file but make the omission observable instead of
+                    // silently shrinking the semantic corpus: a semantic-eligible
+                    // manifest path that cannot be opened (permissions, delete
+                    // race, lock) would otherwise vanish from semantic search
+                    // after an apparently successful reindex.
+                    warn!(
+                        repository_id = %repository_id,
+                        path = %entry.path.display(),
+                        error = %err,
+                        "skipping semantic chunking for file that failed to open"
+                    );
+                    return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                }
             };
-            if file.read_to_string(&mut source).is_err() {
+            if let Err(err) = file.read_to_string(&mut source) {
+                // Non-UTF-8 content or a transient read error: skip this file (do
+                // not fail the whole refresh on one unreadable file) but log it so
+                // the manifest/semantic-corpus mismatch is not silent.
+                warn!(
+                    repository_id = %repository_id,
+                    path = %entry.path.display(),
+                    error = %err,
+                    "skipping semantic chunking for file that failed to read"
+                );
                 return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
             }
 
