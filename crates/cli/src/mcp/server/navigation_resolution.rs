@@ -700,7 +700,14 @@ impl FriggMcpServer {
         if bytes.is_empty() {
             return None;
         }
-        let offset = offset.min(bytes.len().saturating_sub(1));
+        // `offset` is a byte offset derived from a client-supplied column and
+        // clamped only to the byte length, so it can land inside a multibyte
+        // character. Snap it down to a UTF-8 char boundary before slicing to
+        // avoid a "byte index is not a char boundary" panic.
+        let mut offset = offset.min(bytes.len().saturating_sub(1));
+        while offset > 0 && !source.is_char_boundary(offset) {
+            offset -= 1;
+        }
         let line_start = source[..offset]
             .rfind('\n')
             .map(|index| index + 1)
@@ -1046,5 +1053,32 @@ mod tests {
             FriggMcpServer::php_helper_string_token_around_offset(source, offset),
             Some(("dashboard".to_owned(), NavigationPhpHelperKind::Route))
         );
+    }
+
+    #[test]
+    fn php_helper_string_token_does_not_panic_on_multibyte_line() {
+        // A client-supplied column that overshoots a line ending in a multibyte
+        // character produces a byte offset landing on a continuation byte. The
+        // helper must snap to a char boundary instead of panicking.
+        let source = "echo café";
+        let offset =
+            byte_offset_for_line_column(source, 1, 999).expect("offset should resolve");
+        // Must not panic; this line has no helper call, so None is expected.
+        assert_eq!(
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset),
+            None
+        );
+    }
+
+    #[test]
+    fn php_helper_string_token_handles_column_inside_multibyte_char() {
+        // Column pointing directly into the multibyte char at the start of the line.
+        let source = "é route('x')";
+        for column in 1..=source.chars().count() {
+            let offset = byte_offset_for_line_column(source, 1, column)
+                .expect("offset should resolve");
+            // Must never panic regardless of where the column lands.
+            let _ = FriggMcpServer::php_helper_string_token_around_offset(source, offset);
+        }
     }
 }
