@@ -179,6 +179,24 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
     assert_eq!(plan.latest_snapshot_id, "snapshot-002");
     assert_eq!(plan.reason, "semantic_snapshot_missing_for_active_model");
 
+    // Defer attach prewarm must actually start recovery work for a missing-model
+    // plan, not only for stale_manifest_snapshot. start_task runs synchronously
+    // before the worker thread is spawned, so the task is observable right away.
+    server.maybe_spawn_workspace_runtime_prewarm(&workspace);
+    let runtime = server.runtime_status_summary();
+    let spawned_semantic_refresh = runtime
+        .active_tasks
+        .iter()
+        .chain(runtime.recent_tasks.iter())
+        .any(|task| {
+            task.kind == RuntimeTaskKind::SemanticRefresh
+                && task.phase == "semantic_attach_refresh"
+        });
+    assert!(
+        spawned_semantic_refresh,
+        "missing-active-model plan should spawn a semantic refresh during defer prewarm"
+    );
+
     let _ = fs::remove_dir_all(workspace_root);
 }
 

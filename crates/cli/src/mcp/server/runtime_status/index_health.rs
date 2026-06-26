@@ -836,9 +836,12 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
     ) {
         let semantic_plan = self.workspace_semantic_refresh_plan(workspace);
-        let should_refresh_semantic = semantic_plan
-            .as_ref()
-            .is_some_and(|plan| plan.reason == "stale_manifest_snapshot");
+        // Any concrete refresh plan is actionable: refresh_workspace_semantic_snapshot_with_plan
+        // runs a full reindex regardless of reason, so a missing-active-model plan
+        // (semantic_snapshot_missing_for_active_model) must spawn work too, not only
+        // stale_manifest_snapshot. Gating on a single reason left defer attach
+        // reporting "Queued" while the missing-model recovery never started.
+        let should_refresh_semantic = semantic_plan.is_some();
         let should_prewarm_precise = !Self::collect_scip_artifact_digests(&workspace.root)
             .artifact_digests
             .is_empty();
