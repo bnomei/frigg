@@ -270,6 +270,46 @@ async fn provenance_core_tool_invocations_are_persisted() {
 }
 
 #[tokio::test]
+async fn provenance_persists_for_runtime_repository_id_alias() {
+    let workspace_root = build_workspace_fixture("runtime-id-alias");
+    let server = server_for_workspace(&workspace_root).await;
+
+    // MCP tools accept the legacy runtime id (repo-NNN) as a repository_id alias via
+    // workspace_by_any_repository_id. A successful call made with that alias must
+    // still persist a durable provenance event against the canonical workspace
+    // rather than silently skipping the write.
+    let stable_repository_id = public_repository_id(&server).await;
+    let runtime_repository_id = "repo-001".to_owned();
+    assert_ne!(
+        runtime_repository_id, stable_repository_id,
+        "test must exercise the runtime alias, not the stable id"
+    );
+
+    server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(runtime_repository_id),
+            max_bytes: None,
+            line_start: None,
+            line_end: None,
+            presentation_mode: None,
+        }))
+        .await
+        .expect("read_file should succeed via the runtime repository id alias");
+
+    let storage = Storage::new(storage_path_for_workspace(&workspace_root));
+    let read_rows = storage
+        .load_provenance_events_for_tool("read_file", 10)
+        .expect("expected read_file provenance rows");
+    assert!(
+        !read_rows.is_empty(),
+        "a tool call made with the runtime repository id alias must persist provenance"
+    );
+
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test]
 async fn provenance_bounded_text_fields_are_truncated() {
     let workspace_root = build_workspace_fixture("bounded-fields");
     let server = server_for_workspace(&workspace_root).await;
