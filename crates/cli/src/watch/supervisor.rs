@@ -357,6 +357,11 @@ async fn run_supervisor(
                                 current_epoch,
                                 "built-in watch mode ignoring stale reindex completion"
                             );
+                            invalidate_caches_for_stale_completion(
+                                &repository_id,
+                                &result,
+                                repository_cache_invalidation_callback.as_ref(),
+                            );
                         } else {
                             handle_reindex_completed(
                                 &repositories,
@@ -582,6 +587,30 @@ fn handle_notify_event(
     }
 }
 
+/// Invalidate repository-scoped MCP/search caches for a stale (epoch-mismatched)
+/// reindex completion.
+///
+/// The stale run still committed manifest/projection updates to SQLite before the
+/// epoch gate rejected it, and the `spawn_blocking` path only flushed the
+/// validated-manifest candidate cache. Without this, a detach/re-attach during an
+/// in-flight refresh could serve pre-reindex search/navigation results over a
+/// fresh DB snapshot. Only `Ok` completions mutated the index, and scheduler state
+/// is intentionally left untouched: the superseded lifecycle is not marked
+/// refreshed. Returns whether the invalidation callback was invoked.
+fn invalidate_caches_for_stale_completion(
+    repository_id: &str,
+    result: &Result<crate::indexer::ReindexSummary, String>,
+    repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
+) -> bool {
+    if result.is_ok()
+        && let Some(callback) = repository_cache_invalidation_callback
+    {
+        callback(repository_id);
+        return true;
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_reindex_completed(
     repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
@@ -740,6 +769,78 @@ mod tests {
         // A reindex dispatched under the re-attached lifecycle matches and applies.
         let fresh_dispatch_epoch = epochs.current("repo-001");
         assert_eq!(fresh_dispatch_epoch, epochs.current("repo-001"));
+    }
+
+    fn sample_reindex_summary() -> crate::indexer::ReindexSummary {
+        crate::indexer::ReindexSummary {
+            repository_id: "repo-001".to_owned(),
+            snapshot_id: "snap-1".to_owned(),
+            files_scanned: 1,
+            files_changed: 1,
+            files_deleted: 0,
+            changed_paths: vec!["src/lib.rs".to_owned()],
+            deleted_paths: Vec::new(),
+            diagnostics: Default::default(),
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn stale_successful_completion_invalidates_repository_caches() {
+        // A reindex that committed to SQLite but landed after a detach must still
+        // flush MCP/search caches so a re-attach does not serve pre-reindex data.
+        let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&invalidated);
+        let callback: RepositoryCacheInvalidationCallback =
+            Arc::new(move |repository_id: &str| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            });
+
+        let invoked = invalidate_caches_for_stale_completion(
+            "repo-001",
+            &Ok(sample_reindex_summary()),
+            Some(&callback),
+        );
+
+        assert!(invoked, "stale success must invalidate repository caches");
+        assert_eq!(
+            *invalidated.lock().expect("invalidation record poisoned"),
+            vec!["repo-001".to_owned()],
+        );
+    }
+
+    #[test]
+    fn stale_failed_completion_does_not_invalidate_repository_caches() {
+        // A failed stale reindex did not advance the on-disk index, so there is
+        // nothing to invalidate; doing so would needlessly cold-start caches.
+        let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&invalidated);
+        let callback: RepositoryCacheInvalidationCallback =
+            Arc::new(move |repository_id: &str| {
+                recorded
+                    .lock()
+                    .expect("invalidation record poisoned")
+                    .push(repository_id.to_owned());
+            });
+
+        let invoked = invalidate_caches_for_stale_completion(
+            "repo-001",
+            &Err("boom".to_owned()),
+            Some(&callback),
+        );
+
+        assert!(!invoked, "stale failure must not invalidate caches");
+        assert!(
+            invalidated
+                .lock()
+                .expect("invalidation record poisoned")
+                .is_empty()
+        );
     }
 
     #[test]
