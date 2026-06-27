@@ -398,31 +398,25 @@ async fn run_supervisor(
             let Some(repository) = repository else {
                 continue;
             };
-            if class == WatchRefreshClass::SemanticFollowup {
-                // Startup workspaces carry two ids: the watch supervisor keys tasks
-                // by the runtime/legacy id (repository.repository_id) while MCP
-                // attach prewarm keys SemanticRefresh by the stable hash id. Check
-                // both so a prewarm refresh already running under the stable id is
-                // not duplicated here, which would run two reindexes on one db.
-                let stable_repository_id =
-                    crate::domain::model::stable_repository_id_for_root(&repository.root).0;
-                let semantic_refresh_active = task_registry
+            let stable_repository_id =
+                crate::domain::model::stable_repository_id_for_root(&repository.root).0;
+            let refresh_task_active = active_refresh_task_running_for_repository(
+                &task_registry
                     .read()
-                    .expect("watch runtime task registry poisoned")
-                    .has_active_task_for_any_repository(
-                        RuntimeTaskKind::SemanticRefresh,
-                        &[&repository.repository_id, &stable_repository_id],
-                    );
-                if semantic_refresh_active {
-                    // Another SemanticRefresh is already running for this repo.
-                    // Defer the followup with backoff instead of marking it
-                    // succeeded: if the in-flight refresh fails or committed against
-                    // an older plan, dropping the followup would leave the semantic
-                    // head lagging the manifest with nothing re-queued. mark_failed
-                    // keeps it pending and re-checks once the deadline elapses.
-                    scheduler.mark_failed(&repository_id, class, now, retry);
-                    continue;
-                }
+                    .expect("watch runtime task registry poisoned"),
+                class,
+                &repository.repository_id,
+                &stable_repository_id,
+            );
+            if refresh_task_active {
+                // Another refresh task for this repository is already running outside
+                // the scheduler's current lifecycle. This can happen across
+                // detach/re-attach because remove_repository clears the scheduler
+                // in-flight set while the old blocking task continues. Keep this
+                // refresh pending with backoff instead of starting a duplicate writer
+                // or marking the work successful.
+                scheduler.mark_failed(&repository_id, class, now, retry);
+                continue;
             }
             let recent_paths = scheduler.mark_started(&repository_id, class);
             // Capture the lifecycle epoch this reindex is dispatched under so the
@@ -511,6 +505,23 @@ fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
         WatchRefreshClass::ManifestFast => RuntimeTaskKind::ChangedReindex,
         WatchRefreshClass::SemanticFollowup => RuntimeTaskKind::SemanticRefresh,
     }
+}
+
+fn active_refresh_task_running_for_repository(
+    registry: &RuntimeTaskRegistry,
+    class: WatchRefreshClass,
+    repository_id: &str,
+    stable_repository_id: &str,
+) -> bool {
+    // Startup and dynamically adopted workspaces may be addressed by a legacy
+    // runtime id or a stable root hash id. Different runtime paths register tasks
+    // under different ids, so refresh dedup must treat them as aliases.
+    let repository_ids = if repository_id == stable_repository_id {
+        vec![repository_id]
+    } else {
+        vec![repository_id, stable_repository_id]
+    };
+    registry.has_active_task_for_any_repository(watch_task_kind_for_class(class), &repository_ids)
 }
 
 fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
@@ -699,7 +710,11 @@ fn queue_semantic_followup_if_needed(
 
 #[cfg(test)]
 mod tests {
-    use super::RepositoryEpochs;
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
+    use super::*;
 
     #[test]
     fn repository_epochs_invalidate_stale_completion_across_detach_reattach() {
@@ -741,5 +756,79 @@ mod tests {
     fn repository_epochs_default_to_zero_for_unknown_repository() {
         let epochs = RepositoryEpochs::default();
         assert_eq!(epochs.current("never-seen"), 0);
+    }
+
+    #[test]
+    fn active_changed_reindex_defers_manifest_fast_without_draining_scheduler() {
+        let now = Instant::now();
+        let retry = Duration::from_millis(250);
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        scheduler.enqueue_initial_sync("repo-001", WatchRefreshClass::ManifestFast, now);
+
+        let mut registry = RuntimeTaskRegistry::new();
+        let task_id = registry.start_task(
+            RuntimeTaskKind::ChangedReindex,
+            "repo-001".to_owned(),
+            "watch_manifest_fast",
+            None,
+        );
+
+        let ready = scheduler
+            .next_ready_refresh(now)
+            .expect("manifest refresh should be ready");
+        assert_eq!(ready.class, WatchRefreshClass::ManifestFast);
+        assert!(active_refresh_task_running_for_repository(
+            &registry,
+            ready.class,
+            &ready.repository_id,
+            "stable-repo-001",
+        ));
+
+        scheduler.mark_failed(&ready.repository_id, ready.class, now, retry);
+        assert!(scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast));
+        assert!(
+            scheduler.next_ready_refresh(now).is_none(),
+            "pending manifest refresh should back off while old task is active"
+        );
+
+        registry.finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        assert!(!active_refresh_task_running_for_repository(
+            &registry,
+            ready.class,
+            &ready.repository_id,
+            "stable-repo-001",
+        ));
+        assert!(
+            scheduler.next_ready_refresh(now + retry).is_some(),
+            "manifest refresh should become ready after the active task finishes and retry elapses"
+        );
+    }
+
+    #[test]
+    fn refresh_task_dedup_uses_stable_and_runtime_aliases() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::SemanticRefresh,
+            "stable-repo".to_owned(),
+            "semantic_attach_refresh",
+            None,
+        );
+
+        assert!(active_refresh_task_running_for_repository(
+            &registry,
+            WatchRefreshClass::SemanticFollowup,
+            "repo-001",
+            "stable-repo",
+        ));
+        assert!(
+            !active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "stable-repo",
+            ),
+            "semantic refresh should not block manifest-fast changed reindex"
+        );
     }
 }
