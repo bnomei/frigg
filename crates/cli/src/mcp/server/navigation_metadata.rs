@@ -23,6 +23,10 @@ impl FriggMcpServer {
             root.join(&relative_path)
         };
 
+        if !Self::navigation_path_within_root(root, &absolute_path) {
+            return Vec::new();
+        }
+
         if !file_cache.contains_key(&absolute_path) {
             let source_file =
                 supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch)

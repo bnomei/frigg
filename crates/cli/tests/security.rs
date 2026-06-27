@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
+    ExploreOperation, ExploreParams, FindReferencesParams, GoToDefinitionParams,
+    ListRepositoriesParams,
     PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
     PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
     SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
@@ -651,6 +652,111 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
         "unexpected boundary error message: {}",
         error.message
     );
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+async fn security_go_to_definition_rejects_relative_path_traversal_outside_workspace() {
+    let workspace = temp_workspace_root("navigation-relative-traversal");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
+    // The repository also defines `outside_secret_token` so that, absent the
+    // containment guard, the token extracted from the out-of-tree file would
+    // resolve to an indexed symbol and surface in the navigation response.
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed fixture file");
+    fs::write(
+        workspace.join("outside.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed outside file");
+
+    let server = build_server_for_repo(&repo_root).await;
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
+
+    let result = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some(repository_id),
+            path: Some("../outside.rs".to_owned()),
+            line: Some(1),
+            column: Some(12),
+            include_follow_up_structural: None,
+            limit: None,
+            response_mode: None,
+        }))
+        .await;
+
+    match result {
+        Ok(response) => panic!(
+            "navigation must not read files outside workspace roots: resolved {} match(es)",
+            response.0.matches.len()
+        ),
+        Err(error) => {
+            // Token extraction from the out-of-tree file is skipped, so resolution
+            // falls back to the (non-indexed) requested path and finds nothing.
+            assert_ne!(
+                error_code_tag(&error),
+                Some("confirmation_required"),
+                "traversal rejection must not masquerade as a confirmation prompt"
+            );
+        }
+    }
+
+    cleanup_workspace(&workspace);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn security_go_to_definition_rejects_absolute_path_outside_workspace() {
+    let workspace = temp_workspace_root("navigation-absolute-traversal");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed fixture file");
+    let outside_path = workspace.join("outside.rs");
+    fs::write(&outside_path, "pub fn outside_secret_token() {}\n")
+        .expect("failed to seed outside file");
+
+    let server = build_server_for_repo(&repo_root).await;
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
+
+    let result = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some(repository_id),
+            path: Some(outside_path.display().to_string()),
+            line: Some(1),
+            column: Some(12),
+            include_follow_up_structural: None,
+            limit: None,
+            response_mode: None,
+        }))
+        .await;
+
+    if let Ok(response) = result {
+        panic!(
+            "navigation must not read absolute paths outside workspace roots: resolved {} match(es)",
+            response.0.matches.len()
+        );
+    }
 
     cleanup_workspace(&workspace);
 }

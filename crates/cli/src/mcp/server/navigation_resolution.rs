@@ -372,6 +372,25 @@ impl FriggMcpServer {
             .to_owned()
     }
 
+    /// Containment guard for navigation file reads.
+    ///
+    /// Navigation resolves caller-supplied `path` values against a corpus root and
+    /// reads the resulting file. Mirroring `resolve_file_path`, the candidate must
+    /// canonicalize to a location inside the canonical root; otherwise `..`
+    /// segments or absolute paths could escape the adopted repository.
+    pub(in crate::mcp::server) fn navigation_path_within_root(
+        root: &Path,
+        candidate: &Path,
+    ) -> bool {
+        let Ok(root_canonical) = root.canonicalize() else {
+            return false;
+        };
+        let Ok(candidate_canonical) = candidate.canonicalize() else {
+            return false;
+        };
+        candidate_canonical.starts_with(&root_canonical)
+    }
+
     pub(in crate::mcp::server) fn requested_location_path_for_corpus(
         corpus: &RepositorySymbolCorpus,
         raw_path: &str,
@@ -595,6 +614,9 @@ impl FriggMcpServer {
         for corpus in corpora {
             let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
             let absolute_path = corpus.root.join(&requested_path);
+            if !Self::navigation_path_within_root(&corpus.root, &absolute_path) {
+                continue;
+            }
             let language =
                 supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch);
             if language == Some(SymbolLanguage::Rust) {
