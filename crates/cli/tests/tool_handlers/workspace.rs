@@ -5,7 +5,7 @@ use frigg::mcp::types::{
 
 #[tokio::test]
 async fn core_list_repositories_is_deterministic() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
 
     let first = server
         .list_repositories(Parameters(ListRepositoriesParams {}))
@@ -611,7 +611,7 @@ async fn core_list_repositories_fails_with_typed_error_when_provenance_persisten
     fs::create_dir_all(&workspace_root).expect("failed to create temporary workspace root");
     fs::write(workspace_root.join(".frigg"), "blocked")
         .expect("failed to seed blocking provenance path fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let error = match server
         .list_repositories(Parameters(ListRepositoriesParams::default()))

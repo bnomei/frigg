@@ -13,7 +13,7 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
          pub fn use_user() { let _ = User; }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -93,7 +93,7 @@ async fn find_references_includes_definition_when_requested_by_default() {
          pub fn use_user() { let _ = User; }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -141,7 +141,7 @@ async fn find_references_opt_in_returns_follow_up_structural() {
          pub fn caller() { let _ = greeting(); }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -215,7 +215,7 @@ async fn precision_precedence_find_references_prefers_precise_matches() {
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -289,7 +289,7 @@ async fn precision_precedence_find_references_prefers_protobuf_scip_matches() {
     )
     .expect("failed to seed temporary fixture source");
     write_scip_protobuf_fixture(&workspace_root, "references.scip");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -385,7 +385,7 @@ async fn find_references_falls_back_to_direct_precise_symbol_when_corpus_symbol_
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -494,7 +494,7 @@ async fn find_references_falls_back_to_direct_precise_config_symbol_when_corpus_
                 controller_reference_column + "features.registration_enabled".len(),
         ),
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -639,7 +639,7 @@ it('keeps course submissions open state deterministic', function (): void {\n\
             php_reference_column_end = php_reference_column + "submissionsOpen".len(),
         ),
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -715,7 +715,7 @@ async fn precision_precedence_find_references_falls_back_to_heuristic_when_preci
          pub fn use_user() { let _ = User; }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -786,7 +786,7 @@ async fn find_references_reports_failed_scip_artifact_details_in_note_metadata()
     )
     .expect("failed to seed temporary fixture source");
     write_scip_fixture(&workspace_root, "broken.json", "{ invalid json");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -848,7 +848,7 @@ async fn find_references_reports_target_selection_metadata_for_ambiguous_symbol_
         .expect("failed to seed first source file");
     fs::write(src_root.join("b.rs"), "pub fn invalid_params() {}\n")
         .expect("failed to seed second source file");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -981,7 +981,7 @@ async fn find_references_precise_results_round_trip_through_stable_symbol_id() {
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let search = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "try_execute".to_owned(),
@@ -1108,7 +1108,7 @@ async fn find_references_matches_precise_typescript_symbols_without_display_name
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("requireServerUser".to_owned()),
@@ -1191,7 +1191,7 @@ async fn find_references_retains_precise_matches_when_other_scip_artifact_exceed
     );
     write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("User".to_owned()),
@@ -1258,7 +1258,7 @@ async fn find_references_falls_back_when_partial_precise_absence_is_non_authorit
     );
     write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("User".to_owned()),
@@ -1313,7 +1313,7 @@ async fn find_references_rejects_oversized_source_file_with_typed_timeout() {
     fs::write(src_root.join("zzz_large.rs"), "x".repeat(256))
         .expect("failed to seed oversized source file");
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8).await;
     let error = match server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("User".to_owned()),
@@ -1365,7 +1365,7 @@ async fn find_references_prefers_location_resolution_when_symbol_and_location_ar
         "<?php\nfunction alpha() {}\nfunction beta() {}\nalpha();\nbeta();\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -1410,7 +1410,7 @@ async fn find_references_resolves_location_only_requests() {
         "<?php\nfunction alpha() {}\nfunction beta() {}\nalpha();\nbeta();\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_references(Parameters(FindReferencesParams {
@@ -1447,7 +1447,7 @@ async fn find_references_resolves_location_only_requests() {
 
 #[tokio::test]
 async fn find_references_rejects_requests_without_symbol_or_location() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .find_references(Parameters(FindReferencesParams {
             symbol: None,

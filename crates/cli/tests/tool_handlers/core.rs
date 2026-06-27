@@ -3,7 +3,7 @@ use frigg::mcp::types::{ExploreResponse, ReadFileResponse, ReadMatchResponse};
 
 #[tokio::test]
 async fn core_read_file_returns_typed_not_found_error() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "missing-file.txt".to_owned(),
@@ -27,7 +27,7 @@ async fn core_read_file_returns_typed_not_found_error() {
 #[tokio::test]
 async fn core_read_file_returns_repository_relative_canonical_path() {
     let workspace_root = fresh_fixture_root("tool-handlers-core-read-file");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
     let absolute_path = workspace_root.join("src/lib.rs");
     let absolute_response = server
@@ -71,7 +71,7 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
 
 #[tokio::test]
 async fn core_read_file_supports_line_range_slicing() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .read_file(Parameters(ReadFileParams {
@@ -94,7 +94,7 @@ async fn core_read_file_supports_line_range_slicing() {
 
 #[tokio::test]
 async fn core_read_file_defaults_to_text_first_output() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let result = server
         .read_file(Parameters(ReadFileParams {
@@ -165,7 +165,7 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
         "abcdefghijklmnopqrstuvwxyz\nok\nabcdefghijklmnopqrstuvwxyz\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .read_file(Parameters(ReadFileParams {
@@ -196,7 +196,7 @@ async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
     )
     .expect("failed to seed temporary fixture source");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
@@ -217,7 +217,7 @@ async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
 
 #[tokio::test]
 async fn core_read_file_rejects_invalid_line_range_payload() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
@@ -244,7 +244,7 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
 
 #[tokio::test]
 async fn core_search_text_literal_scoped_to_repository() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -267,7 +267,7 @@ async fn core_search_text_literal_scoped_to_repository() {
 
 #[tokio::test]
 async fn core_search_text_regex_mode_executes_regex_search() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -289,7 +289,7 @@ async fn core_search_text_regex_mode_executes_regex_search() {
 
 #[tokio::test]
 async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -337,7 +337,7 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
 
 #[tokio::test]
 async fn core_read_match_defaults_to_text_first_output() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_text(Parameters(SearchTextParams {
             query: "hello from fixture".to_owned(),
@@ -423,7 +423,7 @@ async fn core_search_text_context_lines_and_per_file_limits_shape_results() {
         "fn gamma() {\n    target();\n}\n\nfn delta() {\n    target();\n}\n",
     )
     .expect("failed to seed second source file");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -477,7 +477,7 @@ async fn core_search_text_collapse_by_file_returns_one_hit_per_path() {
         "fn gamma() { target(); }\nfn delta() { target(); }\n",
     )
     .expect("failed to seed second source file");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_text(Parameters(SearchTextParams {
@@ -507,7 +507,7 @@ async fn core_search_text_collapse_by_file_returns_one_hit_per_path() {
 
 #[tokio::test]
 async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let first = server
         .search_hybrid(Parameters(SearchHybridParams {
@@ -789,7 +789,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
 
 #[tokio::test]
 async fn core_search_hybrid_defaults_to_compact_with_handles() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "hello from fixture".to_owned(),
@@ -837,7 +837,7 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
     .expect("failed to seed witness-style test file");
     fs::write(workspace_root.join(".gitignore"), "*.tmp\n").expect("failed to seed ignore file");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let full = server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "capture_screen".to_owned(),
@@ -911,7 +911,7 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
 
 #[tokio::test]
 async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "   ".to_owned(),
@@ -952,6 +952,7 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         config,
         SemanticRuntimeCredentials::default(),
     );
+    attach_session_repositories(&server).await;
 
     let response = server
         .search_hybrid(Parameters(SearchHybridParams {
@@ -1077,6 +1078,7 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
         strict_mode: false,
     };
     let server = server_for_config(config);
+    attach_session_repositories(&server).await;
 
     let response = server
         .search_hybrid(Parameters(SearchHybridParams {
@@ -1163,6 +1165,7 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
         strict_mode: true,
     };
     let server = server_for_config(config);
+    attach_session_repositories(&server).await;
 
     let error = match server
         .search_hybrid(Parameters(SearchHybridParams {
@@ -1195,7 +1198,7 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
 
 #[tokio::test]
 async fn core_search_text_rejects_abusive_path_regex_with_typed_invalid_params() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let abusive_path_regex = "a".repeat(600);
     let error = match server
         .search_text(Parameters(SearchTextParams {
@@ -1238,7 +1241,7 @@ async fn core_read_file_enforces_effective_max_bytes_clamp() {
     fs::write(src_root.join("lib.rs"), "0123456789")
         .expect("failed to seed temporary fixture source");
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 4);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 4).await;
     let error = match server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
@@ -1294,7 +1297,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
     )
     .expect("failed to seed explorer fixture");
 
-    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let server = extended_runtime_server_for_workspace_root(&workspace_root).await;
     let probe_params = ExploreParams {
         path: "src/lib.rs".to_owned(),
         repository_id: Some("repo-001".to_owned()),
@@ -1425,7 +1428,7 @@ async fn extended_explore_zoom_defaults_to_text_first_output() {
     )
     .expect("failed to seed explorer fixture");
 
-    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let server = extended_runtime_server_for_workspace_root(&workspace_root).await;
     let response = server
         .explore(Parameters(ExploreParams {
             path: "src/lib.rs".to_owned(),
@@ -1495,7 +1498,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
     fs::write(src_root.join("lib.rs"), "pub fn demo() {}\n")
         .expect("failed to seed explorer invalid fixture");
 
-    let server = extended_runtime_server_for_workspace_root(&workspace_root);
+    let server = extended_runtime_server_for_workspace_root(&workspace_root).await;
     let probe_error = server
         .explore(Parameters(ExploreParams {
             path: "src/lib.rs".to_owned(),

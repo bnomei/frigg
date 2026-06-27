@@ -35,7 +35,7 @@ async fn navigation_go_to_definition_prefers_precise_matches() {
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -115,7 +115,7 @@ async fn navigation_go_to_definition_defaults_to_compact_but_keeps_mode_and_hand
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -197,7 +197,7 @@ async fn navigation_go_to_definition_falls_back_to_direct_precise_symbol_when_co
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -271,7 +271,7 @@ async fn navigation_go_to_definition_uses_php_helper_literal_for_direct_precise_
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -348,7 +348,7 @@ async fn navigation_go_to_definition_uses_route_helper_literal_for_direct_precis
             route_definition_column_end = route_definition_column + "dashboard".len(),
         ),
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -434,7 +434,7 @@ async fn navigation_go_to_definition_uses_blade_attribute_route_helper_literal_f
             route_definition_column_end = route_definition_column + "dashboard".len(),
         ),
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -591,7 +591,7 @@ async fn navigation_go_to_definition_prefers_route_helper_precise_match_when_cur
             route_definition_column_end = route_definition_column + "dashboard".len(),
         ),
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -652,7 +652,7 @@ async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_att
     let route_definition_column = route_source
         .rfind("dashboard")
         .expect("route name should exist in definition");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -708,7 +708,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
     fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("alpha".to_owned()),
@@ -789,7 +789,7 @@ async fn navigation_go_to_definition_resolves_same_line_target_by_path_line_and_
         "<?php function alpha() {} function beta() {}\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -834,7 +834,7 @@ async fn navigation_go_to_definition_rust_use_path_prefers_imported_symbol_over_
         format!("pub fn helper() {{}}\n{use_line}pub fn call() {{ helper(); }}\n"),
     )
     .expect("failed to seed ambiguous import fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -881,7 +881,7 @@ async fn navigation_go_to_definition_rust_reexport_alias_resolves_underlying_sym
         format!("{reexport_line}pub fn local_helper() {{}}\n"),
     )
     .expect("failed to seed re-export alias fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -939,7 +939,7 @@ async fn navigation_go_to_definition_rust_method_call_prefers_impl_method_over_f
         ),
     )
     .expect("failed to seed rust method fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -989,7 +989,7 @@ async fn navigation_go_to_definition_requires_disambiguation_for_same_rank_symbo
     )
     .expect("failed to seed bench fixture source");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("try_execute".to_owned()),
@@ -1097,7 +1097,7 @@ async fn navigation_go_to_definition_precise_results_round_trip_through_stable_s
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let search = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "try_execute".to_owned(),
@@ -1210,7 +1210,7 @@ async fn navigation_go_to_definition_degrades_when_any_scip_artifact_exceeds_bud
     );
     write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("User".to_owned()),
@@ -1293,7 +1293,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
     );
     write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .go_to_definition(Parameters(GoToDefinitionParams {
             symbol: Some("User".to_owned()),
@@ -1332,7 +1332,7 @@ async fn navigation_go_to_definition_falls_back_when_partial_precise_has_no_targ
 
 #[tokio::test]
 async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_data() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .find_declarations(Parameters(FindDeclarationsParams {
@@ -1375,7 +1375,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
     fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .find_declarations(Parameters(FindDeclarationsParams {
             symbol: Some("alpha".to_owned()),
@@ -1457,7 +1457,7 @@ async fn navigation_location_tools_opt_in_return_follow_up_structural() {
          pub fn caller() { let _ = greeting(); }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let go_to_definition = server
         .go_to_definition(Parameters(GoToDefinitionParams {
@@ -1521,7 +1521,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
          impl Service for Impl {}\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let repository_id = public_repository_id(&server).await;
 
     let response = server
@@ -1643,7 +1643,7 @@ class NullAnalyticsRecorder implements AnalyticsRecorder\n\
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
@@ -1691,7 +1691,7 @@ async fn navigation_find_implementations_classifies_blanket_rust_impls_without_p
          impl<T> DeterministicDrawExt for Wrapper<T> {}\n",
     )
     .expect("failed to seed blanket impl fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
@@ -1775,7 +1775,7 @@ async fn navigation_find_implementations_degrades_when_scip_artifact_exceeds_bud
     );
     write_scip_fixture(&workspace_root, "oversized.json", &oversized_payload);
 
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 120).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
             symbol: Some("Service".to_owned()),
@@ -1884,7 +1884,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let implementations = server
         .find_implementations(Parameters(FindImplementationsParams {
@@ -2043,7 +2043,7 @@ async fn navigation_find_implementations_prefers_relationship_bearing_precise_ca
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
             symbol: Some("Service".to_owned()),
@@ -2148,7 +2148,7 @@ async fn navigation_phase_two_precise_tools_opt_in_return_follow_up_structural()
           ]
         }"#,
     );
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let implementations = server
         .find_implementations(Parameters(FindImplementationsParams {
@@ -2247,7 +2247,7 @@ async fn navigation_find_implementations_uses_precise_occurrences_when_relations
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .find_implementations(Parameters(FindImplementationsParams {
             symbol: Some("Service".to_owned()),
@@ -2340,7 +2340,7 @@ async fn navigation_incoming_calls_uses_precise_occurrences_when_relationships_a
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
             symbol: Some("Service".to_owned()),
@@ -2429,7 +2429,7 @@ async fn navigation_incoming_calls_marks_callable_precise_occurrences_as_calls()
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
             symbol: Some("callee".to_owned()),
@@ -2515,7 +2515,7 @@ async fn navigation_incoming_calls_matches_precise_typescript_symbols_without_di
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
             symbol: Some("requireServerUser".to_owned()),
@@ -2616,7 +2616,7 @@ async fn navigation_incoming_calls_marks_unspecified_typescript_occurrences_as_c
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .incoming_calls(Parameters(IncomingCallsParams {
             symbol: Some("requireServerUser".to_owned()),
@@ -2721,7 +2721,7 @@ async fn navigation_outgoing_calls_uses_precise_occurrences_when_relationships_a
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
             symbol: Some("caller".to_owned()),
@@ -2833,7 +2833,7 @@ async fn navigation_outgoing_calls_matches_typescript_callees_with_unspecified_k
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
             symbol: Some("handler".to_owned()),
@@ -2923,7 +2923,7 @@ async fn navigation_outgoing_calls_ignores_precise_callable_references_without_c
         }"#,
     );
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
             symbol: Some("caller".to_owned()),
@@ -2964,7 +2964,7 @@ async fn navigation_outgoing_calls_heuristic_fallback_keeps_empty_set_instead_of
     )
     .expect("failed to seed temporary fixture source");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
             symbol: Some("caller".to_owned()),

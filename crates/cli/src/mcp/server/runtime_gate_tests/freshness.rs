@@ -94,6 +94,9 @@ fn read_only_navigation_tool_execution_context_scopes_explicit_repository() {
         .into_iter()
         .next()
         .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
     seed_manifest_snapshot(
         &workspace_root,
         &workspace.runtime_repository_id,

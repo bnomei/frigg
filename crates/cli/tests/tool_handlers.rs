@@ -16,7 +16,7 @@ use frigg::mcp::types::{
     SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType,
     SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
     SearchSymbolResponse, SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem,
-    WorkspaceAttachAction, WorkspaceAttachParams, WorkspaceCurrentParams,
+    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams, WorkspaceCurrentParams,
     WorkspaceIndexComponentState, WorkspacePreciseState, WorkspaceResolveMode,
     WorkspaceStorageIndexState,
 };
@@ -70,11 +70,42 @@ fn fresh_fixture_root(test_name: &str) -> PathBuf {
     root
 }
 
-fn server_for_fixture() -> FriggMcpServer {
+async fn server_for_fixture() -> FriggMcpServer {
     let config =
         FriggConfig::from_workspace_roots(vec![fresh_fixture_root("tool-handlers-fixture-server")])
             .expect("fixture root must produce valid config");
-    FriggMcpServer::new(config)
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    server
+}
+
+/// Best-effort adopt every startup-known repository through the public
+/// `workspace_attach` tool so adoption-gated read/search/navigation tools can
+/// run in fixtures that model an attached session. Failures are intentionally
+/// ignored: fixtures that deliberately break provenance persistence or assert
+/// detached behaviour still observe their own tool call's outcome rather than a
+/// setup panic.
+async fn attach_session_repositories(server: &FriggMcpServer) {
+    let Ok(listed) = server
+        .list_repositories(Parameters(ListRepositoriesParams {}))
+        .await
+    else {
+        return;
+    };
+    for repository in listed.0.repositories {
+        let _ = server
+            .workspace_attach(Parameters(WorkspaceAttachParams {
+                path: None,
+                repository_id: Some(repository.repository_id),
+                set_default: Some(true),
+                resolve_mode: None,
+                wait_for_precise: Some(false),
+                index_mode: Some(WorkspaceAttachIndexMode::Skip),
+                wait_for_index: Some(false),
+                index_timeout_ms: None,
+            }))
+            .await;
+    }
 }
 
 async fn public_repository_id(server: &FriggMcpServer) -> String {
@@ -284,16 +315,20 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
-fn server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
+async fn server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace root must produce valid config");
-    FriggMcpServer::new(config)
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    server
 }
 
-fn extended_runtime_server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
+async fn extended_runtime_server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace root must produce valid config");
-    FriggMcpServer::new_with_runtime_options(config, false, true)
+    let server = FriggMcpServer::new_with_runtime_options(config, false, true);
+    attach_session_repositories(&server).await;
+    server
 }
 
 fn server_for_config(config: FriggConfig) -> FriggMcpServer {
@@ -313,7 +348,7 @@ fn server_for_config_with_semantic_runtime_credentials(
     FriggMcpServer::new_with_semantic_runtime_credentials(config, credentials)
 }
 
-fn server_for_workspace_root_with_max_file_bytes(
+async fn server_for_workspace_root_with_max_file_bytes(
     workspace_root: &Path,
     max_file_bytes: usize,
 ) -> FriggMcpServer {
@@ -321,7 +356,9 @@ fn server_for_workspace_root_with_max_file_bytes(
         .expect("workspace root must produce valid config");
     config.max_file_bytes = max_file_bytes;
     config.full_scip_ingest = false;
-    FriggMcpServer::new(config)
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    server
 }
 
 fn system_time_to_unix_nanos(system_time: SystemTime) -> Option<u64> {
