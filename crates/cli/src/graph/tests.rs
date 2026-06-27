@@ -550,6 +550,75 @@ fn scip_ingest_returns_typed_invalid_input_and_preserves_state() {
 }
 
 #[test]
+fn scip_ingest_rejects_document_paths_that_escape_repository_root() {
+    let mut graph = SymbolGraph::default();
+    let before = graph.precise_counts();
+
+    for (label, relative_path) in [
+        ("fixture:parent-escape.json", "../outside.rs"),
+        ("fixture:nested-parent-escape.json", "src/../../outside.rs"),
+        ("fixture:absolute-escape.json", "/etc/passwd"),
+        ("fixture:backslash-escape.json", r"..\\outside.rs"),
+    ] {
+        let payload = format!(
+            r#"{{
+              "documents": [
+                {{
+                  "relative_path": "{relative_path}",
+                  "occurrences": [
+                    {{ "symbol": "scip-rust pkg a#User", "range": [0, 7, 11], "symbol_roles": 1 }}
+                  ],
+                  "symbols": [
+                    {{ "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] }}
+                  ]
+                }}
+              ]
+            }}"#
+        );
+        let error = graph
+            .ingest_scip_json("repo-001", label, payload.as_bytes())
+            .expect_err("document path escaping the repository root should be rejected");
+        match error {
+            ScipIngestError::InvalidInput { diagnostic } => {
+                assert_eq!(diagnostic.artifact_label, label);
+                assert_eq!(diagnostic.code, ScipInvalidInputCode::InvalidDocumentPath);
+            }
+            other => panic!("expected typed invalid-document-path error, got {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        before,
+        graph.precise_counts(),
+        "rejected document paths must not mutate precise graph state"
+    );
+
+    // A `.`-relative path that stays within the root is normalized and accepted.
+    let normalized = br#"{
+          "documents": [
+            {
+              "relative_path": "./src/a.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg a#User", "range": [0, 7, 11], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                { "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] }
+              ]
+            }
+          ]
+        }"#;
+    graph
+        .ingest_scip_json("repo-001", "fixture:normalized.json", normalized)
+        .expect("repository-relative document path should ingest");
+    assert_eq!(
+        graph
+            .precise_occurrences_for_symbol("repo-001", "scip-rust pkg a#User")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn scip_ingest_rejects_payload_budget_overflow_with_typed_error() {
     let mut graph = SymbolGraph::default();
     let payload = br#"{
