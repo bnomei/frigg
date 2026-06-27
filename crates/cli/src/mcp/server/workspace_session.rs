@@ -413,12 +413,19 @@ impl FriggMcpServer {
             WorkspaceIndexLifecyclePhase::RefreshQueued
         } else if matches!(action_taken, WorkspaceIndexAction::Unavailable) {
             WorkspaceIndexLifecyclePhase::Unavailable
+        } else if matches!(action_taken, WorkspaceIndexAction::SkippedNoWork) {
+            // Not ready, no active/queued task, and the caller did not request a
+            // skip: the repository is stale and needs a reindex. This is distinct
+            // from `Skipped`, which the runbook documents as an intentional
+            // `index_mode=skip`. `workspace_current` reaches here for a dirty repo.
+            WorkspaceIndexLifecyclePhase::Stale
         } else {
             WorkspaceIndexLifecyclePhase::Skipped
         };
         let recommended_action = (!lexical_ready || !semantic_ready).then_some(match phase {
             WorkspaceIndexLifecyclePhase::Failed
             | WorkspaceIndexLifecyclePhase::Skipped
+            | WorkspaceIndexLifecyclePhase::Stale
             | WorkspaceIndexLifecyclePhase::Timeout
             | WorkspaceIndexLifecyclePhase::Unavailable => WorkspaceRecommendedAction::RerunReindex,
             WorkspaceIndexLifecyclePhase::Ready

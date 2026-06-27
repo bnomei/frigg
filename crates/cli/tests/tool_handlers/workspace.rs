@@ -1,6 +1,7 @@
 use super::*;
 use frigg::mcp::types::{
     WorkspaceAttachIndexMode, WorkspaceIndexLifecyclePhase, WorkspacePreciseLifecyclePhase,
+    WorkspaceRecommendedAction,
 };
 
 #[tokio::test]
@@ -282,6 +283,65 @@ async fn workspace_attach_ensures_missing_manifest_by_default() {
             .as_ref()
             .map(|health| health.lexical.state),
         Some(WorkspaceIndexComponentState::Ready)
+    );
+
+    fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");
+}
+
+#[tokio::test]
+async fn workspace_current_reports_stale_not_skipped_for_unindexed_repository() {
+    // A repository attached without indexing (not ready, no active task) must report
+    // index_lifecycle.phase = stale from workspace_current, NOT skipped. `skipped`
+    // is reserved for an intentional index_mode=skip and would mislead operators
+    // into reading a stale repo as a deliberate no-op.
+    let workspace_root = temp_workspace_root("workspace-current-stale-unindexed");
+    fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn unindexed() -> &'static str { \"fixture\" }\n",
+    )
+    .expect("workspace source file should be writable");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = server_for_config(config);
+
+    server
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
+            set_default: Some(true),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: None,
+            index_mode: Some(WorkspaceAttachIndexMode::Skip),
+            wait_for_index: None,
+            index_timeout_ms: None,
+        }))
+        .await
+        .expect("workspace_attach with skip should succeed")
+        .0;
+
+    let current = server
+        .workspace_current(Parameters(WorkspaceCurrentParams {}))
+        .await
+        .expect("workspace_current should succeed")
+        .0;
+    let lifecycle = current
+        .index_lifecycle
+        .as_ref()
+        .expect("workspace_current should expose index_lifecycle for the default repository");
+    assert!(
+        !lifecycle.lexical_ready,
+        "fixture repository should not be indexed for this scenario"
+    );
+    assert_eq!(
+        lifecycle.phase,
+        WorkspaceIndexLifecyclePhase::Stale,
+        "an unindexed, idle repository must report stale, not skipped"
+    );
+    assert_eq!(
+        lifecycle.recommended_action,
+        Some(WorkspaceRecommendedAction::RerunReindex)
     );
 
     fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");

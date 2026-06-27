@@ -189,6 +189,10 @@ pub enum WorkspaceIndexLifecyclePhase {
     Timeout,
     Failed,
     Skipped,
+    /// The index is not ready and no refresh is running or queued, but the caller
+    /// did not request a skip — the repository is stale and needs a reindex. Unlike
+    /// `Skipped` (an intentional `index_mode=skip`), this signals required work.
+    Stale,
     Unavailable,
 }
 
