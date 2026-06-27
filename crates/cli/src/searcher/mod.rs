@@ -135,7 +135,7 @@ pub(crate) use types::{
     HybridGraphFileAnalysis, HybridGraphFileAnalysisCacheKey, ManifestCandidateFilesBuild,
     NormalizedSearchFilters, RepositoryCandidateUniverse, SearchCandidateFile,
     SearchCandidateUniverse, SearchCandidateUniverseBuild, empty_channel_result,
-    hybrid_execution_note_from_channel_results, match_count_for_hits,
+    hybrid_execution_note_from_channel_results, hybrid_lexical_only_mode, match_count_for_hits,
     search_diagnostics_to_channel_diagnostics,
 };
 

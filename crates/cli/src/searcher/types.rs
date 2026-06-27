@@ -319,6 +319,21 @@ fn hybrid_semantic_status_from_channel_health(status: ChannelHealthStatus) -> Hy
     }
 }
 
+/// Whether a hybrid query effectively ran lexical-only: the semantic channel is
+/// not healthy, or it produced no hits to participate in fusion.
+///
+/// This intentionally keys on the pre-fusion semantic *hit* count, not the
+/// post-fusion *match* count. A healthy semantic channel whose hits all lost the
+/// fusion still contributed to ranking, so it is not lexical-only. Both the
+/// pipeline ranking guardrails and the client-facing `HybridExecutionNote` derive
+/// the flag through this helper so policy and reported state never disagree.
+pub(crate) fn hybrid_lexical_only_mode(
+    semantic_status: ChannelHealthStatus,
+    semantic_hit_count: usize,
+) -> bool {
+    semantic_status != ChannelHealthStatus::Ok || semantic_hit_count == 0
+}
+
 pub(crate) fn hybrid_execution_note_from_channel_results(
     query_semantic: Option<bool>,
     semantic_runtime_enabled: bool,
@@ -333,8 +348,7 @@ pub(crate) fn hybrid_execution_note_from_channel_results(
     let semantic_candidate_count = semantic.map_or(0, |result| result.stats.candidate_count);
     let semantic_hit_count = semantic.map_or(0, |result| result.stats.hit_count);
     let semantic_match_count = semantic.map_or(0, |result| result.stats.match_count);
-    let lexical_only_mode =
-        semantic_status != HybridSemanticStatus::Ok || semantic_match_count == 0;
+    let lexical_only_mode = hybrid_lexical_only_mode(semantic_status, semantic_hit_count);
 
     HybridExecutionNote {
         semantic_requested,
@@ -368,4 +382,57 @@ pub(crate) fn match_count_for_hits(
         .into_iter()
         .filter(|document| matched_documents.contains(document))
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn semantic_channel_result(
+        status: ChannelHealthStatus,
+        hit_count: usize,
+        match_count: usize,
+    ) -> ChannelResult {
+        ChannelResult::new(
+            EvidenceChannel::Semantic,
+            Vec::new(),
+            ChannelHealth::new(status, None),
+            Vec::new(),
+            ChannelStats {
+                candidate_count: hit_count,
+                hit_count,
+                match_count,
+            },
+        )
+    }
+
+    #[test]
+    fn lexical_only_mode_keys_on_pre_fusion_hits_not_post_fusion_matches() {
+        // Healthy semantic channel that produced hits which all lost fusion still
+        // contributed to ranking, so the query is NOT lexical-only. The note must
+        // agree with the pipeline guardrail (which uses pre-fusion hit count).
+        assert!(!hybrid_lexical_only_mode(ChannelHealthStatus::Ok, 5));
+        assert!(hybrid_lexical_only_mode(ChannelHealthStatus::Ok, 0));
+        assert!(hybrid_lexical_only_mode(ChannelHealthStatus::Disabled, 5));
+    }
+
+    #[test]
+    fn execution_note_lexical_only_mode_matches_pipeline_guardrail_on_dropped_hits() {
+        // Semantic Ok with 5 pre-fusion hits but 0 surviving fusion matches.
+        let channel_results = vec![semantic_channel_result(ChannelHealthStatus::Ok, 5, 0)];
+        let note = hybrid_execution_note_from_channel_results(Some(true), true, &channel_results);
+        assert_eq!(note.semantic_hit_count, 5);
+        assert_eq!(note.semantic_match_count, 0);
+        assert!(
+            !note.lexical_only_mode,
+            "a healthy semantic channel with pre-fusion hits is not lexical-only, matching guardrails"
+        );
+    }
+
+    #[test]
+    fn execution_note_lexical_only_mode_true_when_semantic_produced_no_hits() {
+        let channel_results = vec![semantic_channel_result(ChannelHealthStatus::Ok, 0, 0)];
+        let note = hybrid_execution_note_from_channel_results(Some(true), true, &channel_results);
+        assert!(note.lexical_only_mode);
+    }
 }

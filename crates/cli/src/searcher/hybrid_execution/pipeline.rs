@@ -21,7 +21,8 @@ use crate::searcher::{
     SearchStageAttribution, SearchStageSample, SearchTextQuery, TextSearcher,
     apply_post_selection_guardrails_with_trace, build_hybrid_lexical_recall_regex,
     build_hybrid_path_witness_hits_with_intent, build_regex_prefilter_plan, compile_safe_regex,
-    empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_recall_tokens,
+    empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_only_mode,
+    hybrid_lexical_recall_tokens,
     hybrid_path_has_exact_stem_match, merge_hybrid_lexical_search_output, normalize_search_filters,
     regex_error_to_frigg_error, search_graph_channel_hits, search_semantic_channel_hits,
 };
@@ -459,8 +460,10 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
         total_rank_input_count,
         &coverage_hints,
     )?;
-    let lexical_only_mode = semantic_channel_result.health.status != ChannelHealthStatus::Ok
-        || semantic_channel_result.hits.is_empty();
+    let lexical_only_mode = hybrid_lexical_only_mode(
+        semantic_channel_result.health.status,
+        semantic_channel_result.hits.len(),
+    );
     let (matches, post_selection_trace) = if capture_post_selection_trace {
         apply_post_selection_guardrails_with_trace(
             fusion_result.matches,
