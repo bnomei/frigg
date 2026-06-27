@@ -512,6 +512,30 @@ fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
     }
 }
 
+/// Runtime task kinds whose active execution must block a watch refresh of the
+/// given class, because they write the same repository database.
+///
+/// Both watch classes additionally defer to the MCP-owned `WorkspaceReindex` /
+/// `WorkspacePrepare` tasks, which the watch scheduler's own in-flight tracking
+/// cannot see. Without this, a notify-driven manifest-fast reindex could start
+/// while an MCP `workspace_reindex` is mid-write on the same `db_path`, mirroring
+/// the cross-task gate `repository_has_active_runtime_work` applies on the MCP
+/// side.
+fn conflicting_task_kinds_for_class(class: WatchRefreshClass) -> &'static [RuntimeTaskKind] {
+    match class {
+        WatchRefreshClass::ManifestFast => &[
+            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspacePrepare,
+        ],
+        WatchRefreshClass::SemanticFollowup => &[
+            RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspacePrepare,
+        ],
+    }
+}
+
 fn active_refresh_task_running_for_repository(
     registry: &RuntimeTaskRegistry,
     class: WatchRefreshClass,
@@ -526,7 +550,9 @@ fn active_refresh_task_running_for_repository(
     } else {
         vec![repository_id, stable_repository_id]
     };
-    registry.has_active_task_for_any_repository(watch_task_kind_for_class(class), &repository_ids)
+    conflicting_task_kinds_for_class(class)
+        .iter()
+        .any(|kind| registry.has_active_task_for_any_repository(*kind, &repository_ids))
 }
 
 fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
@@ -930,6 +956,60 @@ mod tests {
                 "stable-repo",
             ),
             "semantic refresh should not block manifest-fast changed reindex"
+        );
+    }
+
+    #[test]
+    fn manifest_fast_defers_to_active_mcp_workspace_reindex() {
+        // An MCP workspace_reindex writes the same db_path but is invisible to the
+        // watch scheduler's in-flight tracking. Watch manifest-fast dispatch must
+        // still defer to it via the runtime task registry, under either id alias.
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::WorkspaceReindex,
+            "stable-repo".to_owned(),
+            "workspace_reindex",
+            None,
+        );
+
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "stable-repo",
+            ),
+            "manifest-fast must defer to an active MCP workspace_reindex on the same db"
+        );
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::SemanticFollowup,
+                "repo-001",
+                "stable-repo",
+            ),
+            "semantic followup must also defer to an active MCP workspace_reindex"
+        );
+    }
+
+    #[test]
+    fn manifest_fast_defers_to_active_mcp_workspace_prepare() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::WorkspacePrepare,
+            "repo-001".to_owned(),
+            "workspace_prepare",
+            None,
+        );
+
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "repo-001",
+            ),
+            "manifest-fast must defer to an active MCP workspace_prepare on the same db"
         );
     }
 }
