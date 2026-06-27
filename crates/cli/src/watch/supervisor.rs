@@ -708,11 +708,30 @@ fn queue_startup_refresh_if_needed(
     semantic_credentials: &SemanticRuntimeCredentials,
     debounce_ms: u64,
 ) {
-    let Ok(startup_status) =
-        startup_refresh_status(repository, semantic_runtime, semantic_credentials)
-    else {
-        return;
-    };
+    let startup_status =
+        match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
+            Ok(status) => status,
+            Err(error) => {
+                // Freshness evaluation failed (storage I/O, projection-family query,
+                // or semantic validation). Do not silently leave the repository
+                // unindexed: surface the failure and conservatively queue a
+                // manifest-fast initial sync. The reindex re-derives state and runs
+                // lexical-only, so it makes progress even when the failure was a
+                // semantic credential problem.
+                warn!(
+                    repository_id = %repository.repository_id,
+                    root = %repository.root.display(),
+                    error = %error,
+                    "built-in watch mode failed to evaluate startup freshness; queueing manifest-fast refresh"
+                );
+                scheduler.enqueue_initial_sync(
+                    &repository.repository_id,
+                    WatchRefreshClass::ManifestFast,
+                    now,
+                );
+                return;
+            }
+        };
     if !startup_status.should_refresh {
         info!(
             repository_id = %repository.repository_id,
@@ -745,9 +764,22 @@ fn queue_semantic_followup_if_needed(
     semantic_runtime: &SemanticRuntimeConfig,
     semantic_credentials: &SemanticRuntimeCredentials,
 ) {
-    let Ok(status) = startup_refresh_status(repository, semantic_runtime, semantic_credentials)
-    else {
-        return;
+    let status = match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
+        Ok(status) => status,
+        Err(error) => {
+            // Manifest-fast already succeeded, but the semantic follow-up freshness
+            // check failed. Surface it instead of silently skipping. Do not blindly
+            // enqueue a semantic refresh here: if semantic is unavailable (e.g.
+            // missing credentials, the common cause of this Err) it would just fail
+            // in a retry loop.
+            warn!(
+                repository_id = %repository.repository_id,
+                root = %repository.root.display(),
+                error = %error,
+                "built-in watch mode failed to evaluate semantic follow-up freshness; skipping"
+            );
+            return;
+        }
     };
     if status.refresh_class != Some(WatchRefreshClass::SemanticFollowup) {
         return;
@@ -989,6 +1021,48 @@ mod tests {
                 "stable-repo",
             ),
             "semantic followup must also defer to an active MCP workspace_reindex"
+        );
+    }
+
+    #[test]
+    fn startup_refresh_eval_failure_queues_manifest_fast_instead_of_silent_drop() {
+        use super::super::repository::watched_repository_for_root;
+        use crate::settings::SemanticRuntimeProvider;
+
+        // An enabled semantic runtime with no credentials makes
+        // startup_refresh_status fail at validate_startup (before any filesystem
+        // access). The startup enqueue must surface this and still queue a lexical
+        // manifest-fast refresh rather than leaving the repository unindexed.
+        let now = Instant::now();
+        let repository = watched_repository_for_root(
+            "repo-001".to_owned(),
+            std::path::PathBuf::from("/nonexistent/frigg-watch-startup-eval"),
+            std::path::PathBuf::from("/nonexistent/frigg-watch-startup-eval/frigg.db"),
+        )
+        .expect("watched repository should build for a missing root");
+
+        let semantic_runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAi),
+            model: Some("text-embedding-3-small".to_owned()),
+            strict_mode: false,
+        };
+        let credentials = SemanticRuntimeCredentials::default();
+
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        queue_startup_refresh_if_needed(
+            &repository,
+            &mut scheduler,
+            now,
+            &semantic_runtime,
+            &credentials,
+            0,
+        );
+
+        assert!(
+            scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
+            "a startup freshness evaluation failure must still queue a manifest-fast refresh"
         );
     }
 
