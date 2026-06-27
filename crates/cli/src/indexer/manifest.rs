@@ -162,11 +162,23 @@ impl ManifestBuilder {
             let (size_bytes, digest) = match stream_file_blake3_digest(&metadata.path) {
                 Ok(result) => result,
                 Err(err) => {
+                    // A digest-read failure (e.g. transient EACCES/EBUSY) must not
+                    // drop a file the walk just discovered. Omitting it would make
+                    // diff() treat the still-present file as deleted, and
+                    // incremental semantic refresh would purge its embeddings. If
+                    // the path existed in the previous manifest, retain that entry
+                    // so it survives; the recorded diagnostic plus the unchanged
+                    // on-disk mtime trigger a re-hash on the next refresh. A brand
+                    // new file with no previous entry is simply deferred (it was
+                    // never in the old manifest, so diff() cannot mark it deleted).
                     diagnostics.push(ManifestBuildDiagnostic {
-                        path: Some(metadata.path),
+                        path: Some(metadata.path.clone()),
                         kind: ManifestDiagnosticKind::Read,
                         message: err.to_string(),
                     });
+                    if let Some(previous) = previous_by_path.get(&metadata.path) {
+                        entries.push(previous.clone());
+                    }
                     continue;
                 }
             };

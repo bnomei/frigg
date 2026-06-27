@@ -31,6 +31,62 @@ fn manifest_diff_classifies_added_modified_deleted_in_path_order() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<()> {
+    // A transient digest-read failure on a file the walk still discovers must not
+    // drop the file from the manifest: doing so would make diff() classify the
+    // still-present file as deleted and incremental semantic refresh would purge
+    // its embeddings. The previous entry must be retained so the path survives.
+    let root = temp_workspace_root("manifest-changed-only-read-failure-retains-entry");
+    prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
+
+    let builder = ManifestBuilder::default();
+    let previous = builder.build(&root)?;
+    let file_path = root.join("src/lib.rs");
+    let previous_entry = previous
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .cloned()
+        .expect("previous manifest should contain the seeded file");
+
+    // Change the file so its metadata no longer matches the previous digest,
+    // forcing build_changed_only to re-hash it (the path that would fail).
+    fs::write(&file_path, "pub fn modified_with_a_longer_body() {}\n").map_err(FriggError::Io)?;
+    // Force the digest read to fail while the file still exists on disk.
+    set_file_mode(&file_path, 0o000)?;
+
+    let output = builder.build_changed_only_with_diagnostics(&root, &previous)?;
+
+    // Restore permissions before any assertion can early-return and leak the mode.
+    set_file_mode(&file_path, 0o644)?;
+
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == ManifestDiagnosticKind::Read
+                && diagnostic.path.as_deref() == Some(file_path.as_path())),
+        "a Read diagnostic should be recorded for the unreadable file"
+    );
+    let retained = output
+        .entries
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .expect("file with a transient read failure must be retained, not dropped");
+    assert_eq!(
+        retained, &previous_entry,
+        "retained entry should reuse the previous digest verbatim"
+    );
+    assert!(
+        diff(&previous, &output.entries).deleted.is_empty(),
+        "a still-present file must not be classified as deleted after a read failure"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
 #[test]
 fn navigation_symbol_target_rank_is_stable_and_precedence_ordered() {
     let symbol = SymbolDefinition {
