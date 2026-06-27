@@ -340,7 +340,7 @@ fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResul
             "path_anchor_sketch",
         )?
         .expect("expected path anchor sketch head");
-    assert_eq!(path_anchor_sketch_head.heuristic_version, 1);
+    assert_eq!(path_anchor_sketch_head.heuristic_version, 2);
     assert_eq!(
         path_anchor_sketch_head.input_modes,
         vec!["ast".to_owned(), "path".to_owned()]

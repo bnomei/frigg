@@ -888,6 +888,20 @@ fn stale_or_missing_retrieval_projection_families_flags_version_mismatch() -> Fr
         )?,
         vec!["path_anchor_sketch".to_owned()]
     );
+    // The current runtime expects the scrubbed path-anchor-sketch generation, so
+    // an old v1 head must be treated as stale and rebuilt.
+    let current_path_anchor_version = crate::searcher::required_retrieval_projection_versions()
+        .into_iter()
+        .filter(|(family, _)| *family == "path_anchor_sketch")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+            "repo-1",
+            "snapshot-001",
+            &current_path_anchor_version,
+        )?,
+        vec!["path_anchor_sketch".to_owned()]
+    );
     // A family with no persisted head is reported as missing.
     assert_eq!(
         storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(

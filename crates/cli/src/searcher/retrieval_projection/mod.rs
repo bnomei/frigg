@@ -21,7 +21,7 @@ pub(crate) const ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_RELATION_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION: i64 = 1;
-pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 1;
+pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 2;
 
 /// The required projection families paired with the heuristic version the current
 /// runtime produces for each. This is the single source of truth used both when
