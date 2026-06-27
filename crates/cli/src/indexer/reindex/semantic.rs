@@ -318,13 +318,13 @@ pub(crate) fn execute_semantic_refresh_plan(
                 credentials,
                 executor,
             )
-            .and_then(|semantic_records| {
+            .and_then(|semantic_build| {
                 storage.replace_semantic_embeddings_for_repository(
                     repository_id,
                     snapshot_id,
                     provider,
                     model,
-                    &semantic_records,
+                    &semantic_build.records,
                 )
             })
         }
@@ -337,16 +337,26 @@ pub(crate) fn execute_semantic_refresh_plan(
             credentials,
             executor,
         )
-        .and_then(|semantic_records| {
+        .and_then(|semantic_build| {
+            // Paths whose source could not be opened/read produced no replacement
+            // chunks. Keep them out of the delete set so their existing live rows
+            // survive instead of being removed without replacement, which would
+            // silently shrink semantic coverage for files that remain on disk.
+            let retained_changed_paths = semantic_refresh
+                .changed_paths
+                .iter()
+                .filter(|path| !semantic_build.unreadable_paths.contains(path))
+                .cloned()
+                .collect::<Vec<_>>();
             storage.advance_semantic_embeddings_for_repository(
                 repository_id,
                 previous_snapshot_id,
                 snapshot_id,
                 provider,
                 model,
-                &semantic_refresh.changed_paths,
+                &retained_changed_paths,
                 &semantic_refresh.deleted_paths,
-                &semantic_records,
+                &semantic_build.records,
             )
         }),
     }

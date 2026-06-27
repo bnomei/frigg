@@ -147,7 +147,7 @@ pub fn benchmark_build_semantic_chunk_candidates(
     current_manifest: &[FileDigest],
 ) -> FriggResult<SemanticChunkBenchmarkSummary> {
     build_semantic_chunk_candidates(repository_id, workspace_root, snapshot_id, current_manifest)
-        .map(summarize_semantic_chunk_candidates)
+        .map(|build| summarize_semantic_chunk_candidates(build.candidates))
 }
 
 fn summarize_semantic_chunk_candidates(

@@ -197,7 +197,7 @@ pub(super) fn build_semantic_embedding_records(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
-) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
+) -> FriggResult<SemanticEmbeddingBuild> {
     semantic_runtime
         .validate_startup(credentials)
         .map_err(|err| {
@@ -213,7 +213,10 @@ pub(super) fn build_semantic_embedding_records(
     let model = semantic_runtime.normalized_model().ok_or_else(|| {
         FriggError::Internal("semantic runtime model missing after validation".to_owned())
     })?;
-    let chunks = build_semantic_chunk_candidates(
+    let SemanticChunkBuild {
+        candidates: chunks,
+        unreadable_paths,
+    } = build_semantic_chunk_candidates(
         repository_id,
         workspace_root,
         snapshot_id,
@@ -221,7 +224,10 @@ pub(super) fn build_semantic_embedding_records(
     )?;
 
     if chunks.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SemanticEmbeddingBuild {
+            records: Vec::new(),
+            unreadable_paths,
+        });
     }
 
     let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
@@ -305,7 +311,29 @@ pub(super) fn build_semantic_embedding_records(
             .then(left.chunk_index.cmp(&right.chunk_index))
             .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
     });
-    Ok(output)
+    Ok(SemanticEmbeddingBuild {
+        records: output,
+        unreadable_paths,
+    })
+}
+
+/// Result of building semantic embedding records for a manifest.
+pub(crate) struct SemanticEmbeddingBuild {
+    pub(crate) records: Vec<SemanticChunkEmbeddingRecord>,
+    /// Repo-relative, semantic-eligible paths skipped because the file could not be
+    /// opened or read. Forwarded from [`SemanticChunkBuild::unreadable_paths`] so an
+    /// incremental advance can retain their existing live rows.
+    pub(crate) unreadable_paths: Vec<String>,
+}
+
+/// Result of building semantic chunk candidates for a manifest.
+pub(crate) struct SemanticChunkBuild {
+    pub(crate) candidates: Vec<SemanticChunkCandidate>,
+    /// Repo-relative, semantic-eligible paths skipped because the file could not be
+    /// opened or read (permissions, delete/lock race, transient I/O). An
+    /// incremental advance must retain these paths' existing live rows instead of
+    /// deleting them without replacement, which would silently shrink the corpus.
+    pub(crate) unreadable_paths: Vec<String>,
 }
 
 pub(crate) fn build_semantic_chunk_candidates(
@@ -313,16 +341,17 @@ pub(crate) fn build_semantic_chunk_candidates(
     workspace_root: &Path,
     snapshot_id: &str,
     current_manifest: &[FileDigest],
-) -> FriggResult<Vec<SemanticChunkCandidate>> {
+) -> FriggResult<SemanticChunkBuild> {
+    type ChunkBuildPartial = (Vec<SemanticChunkCandidate>, Vec<String>);
     let repository_id = Arc::<str>::from(repository_id);
     let snapshot_id = Arc::<str>::from(snapshot_id);
     let estimated_capacity =
         estimate_semantic_chunk_capacity(current_manifest).max(current_manifest.len());
-    let mut output = current_manifest
+    let (mut output, mut unreadable_paths) = current_manifest
         .par_iter()
         .map(|entry| {
             let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
-                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                return Ok::<ChunkBuildPartial, FriggError>((Vec::new(), Vec::new()));
             };
             let repository_relative_path =
                 normalize_repository_relative_path(workspace_root, &entry.path)?;
@@ -341,7 +370,10 @@ pub(crate) fn build_semantic_chunk_candidates(
                         error = %err,
                         "skipping semantic chunking for file that failed to open"
                     );
-                    return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                    return Ok::<ChunkBuildPartial, FriggError>((
+                        Vec::new(),
+                        vec![repository_relative_path],
+                    ));
                 }
             };
             if let Err(err) = file.read_to_string(&mut source) {
@@ -354,7 +386,10 @@ pub(crate) fn build_semantic_chunk_candidates(
                     error = %err,
                     "skipping semantic chunking for file that failed to read"
                 );
-                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
+                return Ok::<ChunkBuildPartial, FriggError>((
+                    Vec::new(),
+                    vec![repository_relative_path],
+                ));
             }
 
             let mut chunks = Vec::new();
@@ -366,13 +401,14 @@ pub(crate) fn build_semantic_chunk_candidates(
                 language,
                 source.as_str(),
             );
-            Ok(chunks)
+            Ok((chunks, Vec::new()))
         })
         .try_reduce(
-            || Vec::with_capacity(estimated_capacity),
+            || (Vec::with_capacity(estimated_capacity), Vec::new()),
             |mut left, mut right| {
-                left.append(&mut right);
-                Ok::<Vec<SemanticChunkCandidate>, FriggError>(left)
+                left.0.append(&mut right.0);
+                left.1.append(&mut right.1);
+                Ok::<ChunkBuildPartial, FriggError>(left)
             },
         )?;
 
@@ -382,7 +418,12 @@ pub(crate) fn build_semantic_chunk_candidates(
             .then(left.chunk_index.cmp(&right.chunk_index))
             .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
     });
-    Ok(output)
+    unreadable_paths.sort();
+    unreadable_paths.dedup();
+    Ok(SemanticChunkBuild {
+        candidates: output,
+        unreadable_paths,
+    })
 }
 
 pub(crate) fn build_file_semantic_chunks(
