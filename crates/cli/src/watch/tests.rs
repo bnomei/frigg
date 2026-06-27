@@ -314,6 +314,55 @@ fn scheduler_failure_schedules_retry_without_parallel_restart() {
 }
 
 #[test]
+fn scheduler_path_change_preserves_failed_semantic_followup_retry() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+
+    // A semantic follow-up runs and fails, scheduling an independent retry.
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+    scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+    scheduler.mark_failed(0, WatchRefreshClass::SemanticFollowup, now, retry);
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
+
+    // An unrelated path change arms manifest-fast but must NOT wipe the scheduled
+    // semantic retry, which recovers from an error unrelated to this change.
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("unrelated.rs"),
+        now + Duration::from_millis(100),
+        Duration::from_millis(750),
+    );
+    assert!(
+        scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
+        "a failed semantic follow-up retry must survive an unrelated path change"
+    );
+}
+
+#[test]
+fn scheduler_path_change_supersedes_non_failed_semantic_followup() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+
+    // A pending-but-not-failed semantic follow-up (no retry scheduled) is correctly
+    // superseded by a fresh path change: a new manifest-fast will re-queue semantic
+    // work for the updated content on success.
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
+
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("changed.rs"),
+        now,
+        Duration::from_millis(750),
+    );
+    assert!(
+        !scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
+        "a non-failed pending semantic follow-up should be reset by a path change"
+    );
+}
+
+#[test]
 fn scheduler_passes_only_current_batch_recent_paths_to_started_refresh() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
