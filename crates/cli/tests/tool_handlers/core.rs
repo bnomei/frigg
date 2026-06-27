@@ -186,6 +186,52 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
 }
 
 #[tokio::test]
+async fn core_read_file_line_range_rejects_file_exceeding_max_file_bytes_before_read() {
+    // A line-window request must not load a file whose full size exceeds the
+    // configured max_file_bytes memory cap, even though only a small slice is
+    // returned. Previously the size gate was skipped for line ranges and the whole
+    // file was read before slicing.
+    let workspace_root = temp_workspace_root("read-file-line-range-max-file-bytes");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "abcdefghijklmnopqrstuvwxyz\nok\nabcdefghijklmnopqrstuvwxyz\n",
+    )
+    .expect("failed to seed temporary fixture source");
+
+    // max_file_bytes far below the ~55-byte file size.
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8).await;
+    let error = match server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            max_bytes: None,
+            line_start: Some(2),
+            line_end: Some(2),
+            presentation_mode: Some(ReadPresentationMode::Json),
+        }))
+        .await
+    {
+        Ok(_) => panic!("line-window read of an oversized file should be rejected before fs::read"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("max_file_bytes"))
+            .and_then(|value| value.as_u64()),
+        Some(8)
+    );
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
     let workspace_root = temp_workspace_root("read-file-line-range-lossy-utf8");
     let src_root = workspace_root.join("src");
