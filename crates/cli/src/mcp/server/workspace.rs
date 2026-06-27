@@ -1,3 +1,5 @@
+//! Workspace lifecycle tools: attach, detach, prepare, reindex, and index/precise readiness waits.
+
 use super::*;
 
 impl FriggMcpSessionState {
@@ -139,10 +141,6 @@ impl FriggMcpServer {
                     .acquire_lease(workspace)
                     .map_err(Self::map_frigg_error)
                 {
-                    // Lease acquisition failed after we claimed adoption. Roll the
-                    // adoption back so the failed attach is atomic: the session is
-                    // left un-adopted, global counts are not bumped, and a retry
-                    // re-enters the lease path (newly_adopted == true again).
                     self.session_state
                         .inner
                         .adopted_repository_ids
@@ -241,21 +239,12 @@ impl FriggMcpServer {
             .map(str::to_owned)
             .or_else(|| self.current_repository_id())
         {
-            // Resolve the workspace first so the adoption check is keyed on the
-            // workspace's canonical identity rather than the (possibly aliased)
-            // request id: a repository can be addressed by either its stable
-            // repository_id or its legacy runtime_repository_id, while adoption
-            // is always recorded under the stable repository_id.
             let Some(workspace) = registry.workspace_by_repository_id(&repository_id) else {
                 return Err(Self::resource_not_found(
                     "repository_id not found",
                     Some(json!({ "repository_id": repository_id })),
                 ));
             };
-            // Session adoption is the access boundary: the resolved repository
-            // (explicit request or session default) must be adopted in this
-            // session before it can be read, searched, or navigated. Without this
-            // gate a detached session could reach any startup-known repository.
             if !adopted_repository_ids
                 .iter()
                 .any(|id| id == &workspace.repository_id)

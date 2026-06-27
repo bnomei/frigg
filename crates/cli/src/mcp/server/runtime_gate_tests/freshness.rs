@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for repository freshness scopes that drive response-cache eligibility.
+
 use super::*;
 
 #[test]
@@ -182,9 +184,6 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
     assert_eq!(plan.latest_snapshot_id, "snapshot-002");
     assert_eq!(plan.reason, "semantic_snapshot_missing_for_active_model");
 
-    // Defer attach prewarm must actually start recovery work for a missing-model
-    // plan, not only for stale_manifest_snapshot. start_task runs synchronously
-    // before the worker thread is spawned, so the task is observable right away.
     server.maybe_spawn_workspace_runtime_prewarm(&workspace);
     let runtime = server.runtime_status_summary();
     let spawned_semantic_refresh = runtime
@@ -192,8 +191,7 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
         .iter()
         .chain(runtime.recent_tasks.iter())
         .any(|task| {
-            task.kind == RuntimeTaskKind::SemanticRefresh
-                && task.phase == "semantic_attach_refresh"
+            task.kind == RuntimeTaskKind::SemanticRefresh && task.phase == "semantic_attach_refresh"
         });
     assert!(
         spawned_semantic_refresh,

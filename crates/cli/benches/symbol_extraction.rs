@@ -1,3 +1,5 @@
+//! Criterion benchmarks for per-language symbol extraction from source files.
+
 #[path = "common/mod.rs"]
 mod support;
 

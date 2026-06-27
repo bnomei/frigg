@@ -1,3 +1,5 @@
+//! Workspace `.frigg/precise.json` configuration and external precise-generator probing.
+
 use super::*;
 
 #[cfg(test)]

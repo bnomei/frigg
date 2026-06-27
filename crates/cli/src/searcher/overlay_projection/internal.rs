@@ -1,3 +1,8 @@
+//! Overlay projection records, decoding, and recall boost accumulation.
+//!
+//! Encodes test-subject and entrypoint-surface links with scored flags, then merges overlay
+//! bonuses into path-witness candidate frontiers during hybrid search.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

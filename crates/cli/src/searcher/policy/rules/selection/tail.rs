@@ -1,3 +1,5 @@
+//! Selection tail-stage repairs: late multipliers for sparse or mis-ranked candidates.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for precise-graph generation tasks, timeouts, and cache reuse after reindex.
+
 use super::*;
 
 #[test]
@@ -130,9 +132,6 @@ fn precise_generation_failed_summary_does_not_suppress_retry() {
         .next()
         .expect("server should register workspace");
 
-    // Register an active precise task so a "needs work" decision resolves to
-    // SkippedActiveTask (no real generation thread spawns) while a "no work"
-    // decision still short-circuits to SkippedNoWork.
     let _active = server
         .runtime_state
         .runtime_task_registry
@@ -145,23 +144,21 @@ fn precise_generation_failed_summary_does_not_suppress_retry() {
             None,
         );
 
-    let summary_with_status =
-        |status: crate::mcp::types::WorkspacePreciseGenerationStatus| {
-            crate::mcp::types::WorkspacePreciseGenerationSummary {
-                status,
-                generated_at_ms: 0,
-                duration_ms: None,
-                artifact_path: None,
-                artifact_count: None,
-                artifact_bytes: None,
-                artifact_sample_paths: Vec::new(),
-                failure_class: None,
-                recommended_action: None,
-                detail: None,
-            }
-        };
+    let summary_with_status = |status: crate::mcp::types::WorkspacePreciseGenerationStatus| {
+        crate::mcp::types::WorkspacePreciseGenerationSummary {
+            status,
+            generated_at_ms: 0,
+            duration_ms: None,
+            artifact_path: None,
+            artifact_count: None,
+            artifact_bytes: None,
+            artifact_sample_paths: Vec::new(),
+            failure_class: None,
+            recommended_action: None,
+            detail: None,
+        }
+    };
 
-    // A successful prior generation with no file changes is no work.
     server.scip_cache_workspace_precise_generation(
         &workspace.repository_id,
         "rust",
@@ -176,7 +173,6 @@ fn precise_generation_failed_summary_does_not_suppress_retry() {
         "a succeeded summary with no changes should be SkippedNoWork, got {action:?}"
     );
 
-    // A failed/missing-tool prior generation must allow a retry with no changes.
     server.scip_cache_workspace_precise_generation(
         &workspace.repository_id,
         "rust",
@@ -231,7 +227,6 @@ printf '%s' "fake-scip-rust"
             .next()
             .expect("server should register workspace");
 
-        // Simulate an in-flight precise generation by registering an active task.
         let _active_task = server
             .runtime_state
             .runtime_task_registry
@@ -250,7 +245,10 @@ printf '%s' "fake-scip-rust"
             &[String::from("old/dropped.rs")],
         );
         assert!(
-            matches!(action, crate::mcp::types::WorkspacePreciseGenerationAction::SkippedActiveTask),
+            matches!(
+                action,
+                crate::mcp::types::WorkspacePreciseGenerationAction::SkippedActiveTask
+            ),
             "expected SkippedActiveTask while a precise generation is in flight, got {action:?}"
         );
 
@@ -259,7 +257,6 @@ printf '%s' "fake-scip-rust"
             .expect("skipped dirty paths must be recorded for replay");
         assert_eq!(pending.0, vec!["Cargo.toml".to_owned()]);
         assert_eq!(pending.1, vec!["old/dropped.rs".to_owned()]);
-        // The drain consumes the pending entry.
         assert!(
             server
                 .take_pending_precise_dirty_paths(&workspace.repository_id)

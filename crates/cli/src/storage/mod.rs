@@ -61,13 +61,19 @@ pub struct Storage {
     provenance_write_connection: Arc<OnceLock<Mutex<Connection>>>,
 }
 
+/// Default embedding width expected by semantic vector storage.
 pub const DEFAULT_VECTOR_DIMENSIONS: usize = 1_536;
+/// sqlite-vec table holding live semantic embedding vectors.
 pub const VECTOR_TABLE_NAME: &str = "embedding_vectors";
+/// Manifest snapshot epochs retained per repository after pruning.
 pub const DEFAULT_RETAINED_MANIFEST_SNAPSHOTS: usize = 8;
+/// Provenance events retained after append-time pruning.
 pub const DEFAULT_RETAINED_PROVENANCE_EVENTS: usize = 10_000;
 const SQLITE_VEC_MAX_KNN_LIMIT: usize = 4_096;
 const SQLITE_VEC_REQUIRED_VERSION: &str = "0.1.7-alpha.10";
+/// Hidden workspace directory containing durable Frigg storage artifacts.
 pub const PROVENANCE_STORAGE_DIR: &str = ".frigg";
+/// SQLite database filename under [`PROVENANCE_STORAGE_DIR`].
 pub const PROVENANCE_STORAGE_DB_FILE: &str = "storage.sqlite3";
 const PROVENANCE_CREATED_AT_MAX_RETRY_MS: i64 = 32;
 static SQLITE_VEC_AUTO_EXTENSION_REGISTRATION: OnceLock<Result<(), String>> = OnceLock::new();
@@ -82,6 +88,7 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
+/// Vector index backend backing semantic KNN queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VectorStoreBackend {
     SqliteVec,
@@ -95,6 +102,7 @@ impl VectorStoreBackend {
     }
 }
 
+/// Observed vector-store initialization state after extension registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VectorStoreStatus {
     pub backend: VectorStoreBackend,

@@ -1,3 +1,5 @@
+//! Regression tests for TypeScript/Node hybrid ranking across package manifests, server entrypoints, and config witnesses.
+
 use super::*;
 
 #[test]

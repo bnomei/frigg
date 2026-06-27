@@ -1,3 +1,5 @@
+//! Path-witness predicates over recall intent, query terms, and witness candidate shape.
+
 #![allow(dead_code)]
 
 use super::super::dsl::PredicateLeaf;

@@ -1,3 +1,5 @@
+//! Path-quality predicates over intent flags and candidate surface classification.
+
 #![allow(dead_code)]
 
 use super::super::dsl::PredicateLeaf;

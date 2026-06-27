@@ -1,3 +1,5 @@
+//! Deep-search MCP wire types for playbook run, replay, and citation composition tools.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,22 +16,26 @@ use crate::mcp::advanced::deep_search::{
     DeepSearchTraceStep as InternalDeepSearchTraceStep,
 };
 
+/// Parameters for `deep_search_run`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchRunParams {
     pub playbook: DeepSearchPlaybookContract,
 }
 
+/// Response from `deep_search_run` containing the executed trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchRunResponse {
     pub trace_artifact: DeepSearchTraceArtifactContract,
 }
 
+/// Parameters for `deep_search_replay`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchReplayParams {
     pub playbook: DeepSearchPlaybookContract,
     pub expected_trace_artifact: DeepSearchTraceArtifactContract,
 }
 
+/// Response from `deep_search_replay` comparing expected and replayed traces.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchReplayResponse {
     pub matches: bool,
@@ -37,17 +43,20 @@ pub struct DeepSearchReplayResponse {
     pub replayed_trace_artifact: DeepSearchTraceArtifactContract,
 }
 
+/// Parameters for `deep_search_compose_citations`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchComposeCitationsParams {
     pub trace_artifact: DeepSearchTraceArtifactContract,
     pub answer: Option<String>,
 }
 
+/// Response from `deep_search_compose_citations` with claim-linked file spans.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchComposeCitationsResponse {
     pub citation_payload: DeepSearchCitationPayloadContract,
 }
 
+/// MCP wire contract for a deep-search playbook.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchPlaybookContract {
     pub playbook_id: String,
@@ -62,6 +71,7 @@ pub struct DeepSearchPlaybookStepContract {
     pub params: Value,
 }
 
+/// MCP wire contract for a deep-search trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchTraceArtifactContract {
     pub trace_schema: String,

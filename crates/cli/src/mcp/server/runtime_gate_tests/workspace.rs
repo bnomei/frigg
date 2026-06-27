@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for workspace attach/prepare/reindex adoption and index lifecycle gates.
+
 use super::*;
 use crate::mcp::types::{
     WorkspaceAttachIndexMode, WorkspaceIndexAction, WorkspaceIndexLifecyclePhase,
@@ -459,14 +461,15 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_re
 async fn read_file_rejects_non_adopted_repository_for_detached_session() {
     let workspace_root_a = temp_workspace_root("adoption-gate-repo-a");
     let workspace_root_b = temp_workspace_root("adoption-gate-repo-b");
-    fs::create_dir_all(workspace_root_a.join("src"))
-        .expect("failed to create repo A fixture root");
-    fs::create_dir_all(workspace_root_b.join("src"))
-        .expect("failed to create repo B fixture root");
+    fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
+    fs::create_dir_all(workspace_root_b.join("src")).expect("failed to create repo B fixture root");
     fs::write(workspace_root_a.join("src/lib.rs"), "pub struct A;\n")
         .expect("failed to write repo A source");
-    fs::write(workspace_root_b.join("src/secret.rs"), "pub struct Secret;\n")
-        .expect("failed to write repo B secret source");
+    fs::write(
+        workspace_root_b.join("src/secret.rs"),
+        "pub struct Secret;\n",
+    )
+    .expect("failed to write repo B secret source");
 
     let server = FriggMcpServer::new(
         FriggConfig::from_workspace_roots(vec![workspace_root_a.clone(), workspace_root_b.clone()])
@@ -502,13 +505,11 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
         .cloned()
         .expect("repo B should be globally known at startup");
 
-    // A fresh session adopts only repo A.
     let session = server.clone_for_new_session();
     session
         .adopt_workspace(&workspace_a, true)
         .expect("session should adopt repo A");
 
-    // Explicit repository_id for the non-adopted repo B must be rejected.
     let explicit = session
         .read_file_impl(crate::mcp::types::ReadFileParams {
             path: "src/secret.rs".to_owned(),
@@ -524,7 +525,6 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
         "detached session must not read a non-adopted repository by explicit repository_id"
     );
 
-    // Absolute path under repo B with no repository_id must be rejected too.
     let absolute_secret = workspace_root_b
         .join("src/secret.rs")
         .to_string_lossy()
@@ -544,7 +544,6 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
         "detached session must not read a non-adopted repository by absolute path"
     );
 
-    // The adopted repo A remains readable by absolute path.
     let absolute_a = workspace_root_a
         .join("src/lib.rs")
         .to_string_lossy()

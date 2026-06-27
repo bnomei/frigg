@@ -1,3 +1,5 @@
+//! Criterion benchmarks for precise-graph generation and SCIP ingest on fixture repositories.
+
 #[path = "common/mod.rs"]
 mod support;
 

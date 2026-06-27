@@ -1,3 +1,5 @@
+//! Path-witness recall rules for runtime-config, Python, and Rust workspace artifacts.
+
 use super::*;
 
 pub(super) fn runtime_config_artifact_bonus(_ctx: &PathWitnessFacts) -> Option<PolicyEffect> {

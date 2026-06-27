@@ -1,3 +1,5 @@
+//! Provenance event recording, storage-handle cache budgets, and workload attribution payloads.
+
 use super::*;
 use crate::domain::{
     NormalizedWorkloadMetadata, WorkloadFallbackReason, WorkloadPrecisionMode,
@@ -263,11 +265,6 @@ impl FriggMcpServer {
             Some(repository_id) => self
                 .attached_workspaces()
                 .into_iter()
-                // MCP tools accept both the stable hash id and the legacy runtime id
-                // (repo-NNN) via workspace_by_any_repository_id. Match the same
-                // aliases here so a successful call made with a runtime id still
-                // records provenance against the canonical workspace target instead
-                // of silently skipping the durable event.
                 .find(|workspace| {
                     workspace.repository_id == repository_id
                         || workspace.runtime_repository_id == repository_id

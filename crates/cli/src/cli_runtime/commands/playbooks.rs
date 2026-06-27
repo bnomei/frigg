@@ -1,3 +1,5 @@
+//! CLI `playbook-hybrid-run` command: executes markdown hybrid playbooks and prints regression summaries.
+
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -45,11 +47,8 @@ pub(crate) fn run_hybrid_playbook_command(
         std::fs::write(output_path, to_string_pretty(&summary)?)?;
     }
 
-    // A regression run with failing required witnesses (or failing targets when
-    // enforcement is requested) must fail the command so CI does not accept a
-    // broken retrieval suite.
-    let regressions_failed = summary.required_failures > 0
-        || (summary.enforce_targets && summary.target_failures > 0);
+    let regressions_failed =
+        summary.required_failures > 0 || (summary.enforce_targets && summary.target_failures > 0);
     let status = if regressions_failed { "failed" } else { "ok" };
 
     println!(

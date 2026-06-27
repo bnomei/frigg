@@ -1,3 +1,5 @@
+//! Heuristic symbol registration and relation traversal on the in-memory graph.
+
 use petgraph::Direction;
 use petgraph::visit::EdgeRef;
 

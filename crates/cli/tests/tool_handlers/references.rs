@@ -1,3 +1,5 @@
+//! Integration tests for reference MCP handlers (`find_references`, `find_declarations`, and paging limits).
+
 use super::*;
 use frigg::mcp::types::NavigationTargetSelectionStatus;
 
@@ -19,8 +21,6 @@ async fn find_references_total_matches_equals_returned_page_under_limit() {
     .expect("failed to seed temporary fixture source");
     let server = server_for_workspace_root(&workspace_root).await;
 
-    // A generous limit must surface more references than the small page below, so
-    // the small-limit query genuinely truncates.
     let unlimited = server
         .find_references(Parameters(FindReferencesParams {
             symbol: Some("User".to_owned()),

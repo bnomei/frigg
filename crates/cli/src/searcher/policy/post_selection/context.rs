@@ -1,3 +1,5 @@
+//! Post-selection context and optional repair trace for guardrail transforms.
+
 use std::cell::RefCell;
 
 use super::super::super::HybridChannelHit;

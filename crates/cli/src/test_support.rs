@@ -1,7 +1,10 @@
+//! Lightweight test harness helpers for building `FriggConfig` from a single workspace root.
+
 use std::path::Path;
 
 use crate::settings::FriggConfig;
 
+/// Builds a default `FriggConfig` scoped to one workspace root for integration tests.
 pub fn config_for(root: &Path) -> FriggConfig {
     FriggConfig::from_workspace_roots(vec![root.to_path_buf()]).unwrap_or_default()
 }

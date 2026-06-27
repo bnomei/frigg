@@ -24,6 +24,7 @@ use scip_support::{
     apply_scip_documents, map_scip_documents, parse_scip_json, parse_scip_protobuf,
 };
 
+/// In-memory symbol node keyed by stable symbol id for graph navigation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolNode {
     pub symbol_id: String,
@@ -54,6 +55,7 @@ impl SymbolNode {
     }
 }
 
+/// Heuristic relation edge label used by the symbol graph substrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RelationKind {
     DefinedIn,
@@ -262,6 +264,7 @@ pub struct PreciseGraphCounts {
     pub relationships: usize,
 }
 
+/// Counts produced by a SCIP ingest or overlay pass into the symbol graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScipIngestSummary {
     pub artifact_label: String,
@@ -271,6 +274,7 @@ pub struct ScipIngestSummary {
     pub relationships_upserted: usize,
 }
 
+/// Resource ceilings enforced during SCIP decode and document application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScipResourceBudgets {
     pub max_payload_bytes: usize,
@@ -389,6 +393,7 @@ impl std::fmt::Display for ScipResourceBudgetDiagnostic {
     }
 }
 
+/// Failure modes for SCIP ingest bounded by input validation and resource budgets.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ScipIngestError {
     #[error("{diagnostic}")]

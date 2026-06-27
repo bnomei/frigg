@@ -1,3 +1,5 @@
+//! Watch and reindex freshness policy for long-lived MCP runtimes.
+
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -48,9 +50,8 @@ impl FromStr for WatchMode {
     }
 }
 
+/// Freshness policy for background watch-driven reindex after manifest changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// Freshness policy for long-lived runtimes that may want incremental reindexing in the
-/// background.
 pub struct WatchConfig {
     pub mode: WatchMode,
     pub debounce_ms: u64,
@@ -68,6 +69,7 @@ impl Default for WatchConfig {
 }
 
 impl WatchConfig {
+    /// Applies transport-specific defaults, disabling watch for stdio unless overridden.
     pub fn default_for_transport(transport: RuntimeTransportKind) -> Self {
         let mut watch = Self::default();
         if transport == RuntimeTransportKind::Stdio {
@@ -76,6 +78,7 @@ impl WatchConfig {
         watch
     }
 
+    /// Resolves whether watch should run for the given transport and mode.
     pub fn enabled_for_transport(&self, transport: RuntimeTransportKind) -> bool {
         match self.mode {
             WatchMode::On => true,

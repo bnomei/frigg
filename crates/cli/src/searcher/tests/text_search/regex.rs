@@ -1,3 +1,5 @@
+//! Regression tests for safe regex compilation limits, alternation budgets, and deterministic regex match ordering.
+
 use super::*;
 
 #[test]

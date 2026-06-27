@@ -1,6 +1,9 @@
+//! Provenance event append, load, and retention against durable storage.
+
 use super::*;
 
 impl Storage {
+    /// Appends a provenance event and prunes to the configured retention window.
     pub fn append_provenance_event(
         &self,
         trace_id: &str,

@@ -1,3 +1,5 @@
+//! `find_references` combining precise-graph and heuristic source evidence under resource budgets.
+
 use super::*;
 
 fn error_code_tag(error: &ErrorData) -> Option<&str> {
@@ -561,8 +563,6 @@ impl FriggMcpServer {
                                 let (metadata, note) = Self::metadata_note_pair(metadata);
 
                                 return Ok(Json(FindReferencesResponse {
-                                    // Response total reflects the returned page; the
-                                    // pre-limit count stays in metadata/provenance.
                                     total_matches: matches.len(),
                                     matches,
                                     result_handle: None,
@@ -884,8 +884,6 @@ impl FriggMcpServer {
                     let (metadata, note) = Self::metadata_note_pair(metadata);
 
                     return Ok(Json(FindReferencesResponse {
-                        // Response total reflects the returned page; the pre-limit
-                        // count stays in metadata/provenance.
                         total_matches: matches.len(),
                         matches,
                         result_handle: None,
@@ -1035,8 +1033,6 @@ impl FriggMcpServer {
                 resolution_precision = Some("heuristic".to_owned());
 
                 Ok(Json(FindReferencesResponse {
-                    // Response total reflects the returned page; the pre-limit count
-                    // stays in metadata/provenance.
                     total_matches: matches.len(),
                     matches,
                     result_handle: None,

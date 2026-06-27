@@ -1,3 +1,5 @@
+//! PHP declaration relations and graph source analysis for symbol extraction.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

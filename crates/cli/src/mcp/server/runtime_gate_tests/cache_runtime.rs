@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for runtime cache budgets, bypass rules, and repository invalidation.
+
 use super::*;
 
 #[test]

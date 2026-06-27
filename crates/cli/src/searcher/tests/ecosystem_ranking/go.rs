@@ -1,3 +1,5 @@
+//! Regression tests for Go hybrid ranking that surfaces `cmd/` entrypoints and package manifests over workflow noise.
+
 use super::*;
 
 #[test]

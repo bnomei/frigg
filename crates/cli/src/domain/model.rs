@@ -1,3 +1,5 @@
+//! Repository identity and match payloads exchanged between indexing, search, and MCP tools.
+
 use std::path::Path;
 
 use blake3::Hasher;
@@ -5,15 +7,18 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Stable repository identifier derived from a workspace root path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryId(pub String);
 
 impl RepositoryId {
+    /// Builds the canonical repository id for a filesystem root.
     pub fn for_root(root: &Path) -> Self {
         stable_repository_id_for_root(root)
     }
 }
 
+/// Repository metadata surfaced to workspace and MCP callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryRecord {
     pub repository_id: RepositoryId,
@@ -21,9 +26,11 @@ pub struct RepositoryRecord {
     pub root_path: String,
 }
 
+/// Opaque manifest snapshot identifier for a repository epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotId(pub String);
 
+/// Lexical text hit with repository path coordinates and optional witness provenance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TextMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,6 +138,7 @@ pub struct ReferenceMatch {
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
+/// Record of a single MCP tool invocation used for provenance and replay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolInvocation {
     pub tool_name: String,
@@ -139,6 +147,7 @@ pub struct ToolInvocation {
     pub finished_at: DateTime<Utc>,
 }
 
+/// Derives a stable slug-plus-hash repository id from a canonical workspace root.
 pub fn stable_repository_id_for_root(root: &Path) -> RepositoryId {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let display = canonical_root

@@ -1,3 +1,5 @@
+//! Criterion benchmarks for hybrid search latency across exact-symbol and natural-language queries.
+
 #[path = "common/mod.rs"]
 mod support;
 

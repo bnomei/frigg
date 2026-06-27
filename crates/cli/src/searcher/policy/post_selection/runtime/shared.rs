@@ -1,3 +1,5 @@
+//! Shared post-selection helpers for path classification and guardrail comparison.
+
 use super::*;
 
 pub(super) fn selected_match_for_path<'a>(

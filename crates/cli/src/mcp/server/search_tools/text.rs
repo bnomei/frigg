@@ -1,3 +1,5 @@
+//! `search_text` implementation with repository scoping and response-cache reuse.
+
 use super::*;
 
 impl FriggMcpServer {

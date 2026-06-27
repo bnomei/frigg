@@ -1,3 +1,5 @@
+//! Integration tests for durable MCP provenance across read, search, and navigation tools.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -101,9 +103,6 @@ async fn extended_runtime_server_for_workspace(workspace_root: &Path) -> FriggMc
     server
 }
 
-/// Adopt every startup-known repository into the session via the public
-/// `workspace_attach` tool. Read, search, and navigation tools gate on session
-/// adoption, so provenance fixtures must attach before invoking them.
 async fn attach_session_repositories(server: &FriggMcpServer) {
     let repository_ids = server
         .list_repositories(Parameters(ListRepositoriesParams {}))
@@ -274,10 +273,6 @@ async fn provenance_persists_for_runtime_repository_id_alias() {
     let workspace_root = build_workspace_fixture("runtime-id-alias");
     let server = server_for_workspace(&workspace_root).await;
 
-    // MCP tools accept the legacy runtime id (repo-NNN) as a repository_id alias via
-    // workspace_by_any_repository_id. A successful call made with that alias must
-    // still persist a durable provenance event against the canonical workspace
-    // rather than silently skipping the write.
     let stable_repository_id = public_repository_id(&server).await;
     let runtime_repository_id = "repo-001".to_owned();
     assert_ne!(
@@ -542,9 +537,6 @@ async fn provenance_persistence_failures_are_strict_by_default_with_typed_error_
     let workspace_root = build_workspace_fixture("strict-failure-default");
     fs::write(workspace_root.join(".frigg"), "blocked")
         .expect("failed to seed blocking provenance path fixture");
-    // Build without session adoption: this test exercises strict provenance
-    // failure on a detached-allowed tool (`list_repositories`), and the blocked
-    // `.frigg` path would make an attach helper's own provenance write fail.
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace fixture should produce valid config");
     let server = FriggMcpServer::new(config);

@@ -1,3 +1,5 @@
+//! PHP language adapter wiring namespace resolution, declaration relations, and graph evidence.
+
 use tree_sitter::Node;
 
 use crate::indexer::SymbolKind;

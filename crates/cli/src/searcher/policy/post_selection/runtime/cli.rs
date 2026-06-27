@@ -1,3 +1,5 @@
+//! CLI post-selection guardrails for entrypoint and CLI-specific test visibility.
+
 use super::*;
 
 pub(in crate::searcher::policy::post_selection) fn apply_cli_specific_test_visibility(

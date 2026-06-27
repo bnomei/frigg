@@ -1,3 +1,5 @@
+//! Manifest walk, content hashing, snapshot diffing, and repository-relative path normalization.
+
 use super::*;
 use crate::storage::ManifestEntry;
 use crate::workspace_ignores::{
@@ -7,6 +9,7 @@ use ignore::WalkState;
 use std::sync::{Arc, Mutex};
 
 impl ManifestBuilder {
+    /// Walks the workspace, hashes every discovered file, and returns a sorted manifest snapshot.
     pub fn build(&self, root: &Path) -> FriggResult<Vec<FileDigest>> {
         if !root.exists() {
             return Err(FriggError::InvalidInput(format!(
@@ -39,6 +42,7 @@ impl ManifestBuilder {
         Ok(out)
     }
 
+    /// Like [`Self::build`], but preserves walk and read diagnostics alongside manifest entries.
     pub fn build_with_diagnostics(&self, root: &Path) -> FriggResult<ManifestBuildOutput> {
         if !root.exists() {
             return Err(FriggError::InvalidInput(format!(
@@ -84,6 +88,7 @@ impl ManifestBuilder {
         })
     }
 
+    /// Collects size and mtime metadata without content hashing, plus walk diagnostics.
     pub fn build_metadata_with_diagnostics(
         &self,
         root: &Path,
@@ -127,6 +132,7 @@ impl ManifestBuilder {
         })
     }
 
+    /// Rehashes only files whose metadata changed since `previous_entries`.
     pub fn build_changed_only_with_diagnostics(
         &self,
         root: &Path,
@@ -135,6 +141,7 @@ impl ManifestBuilder {
         self.build_changed_only_with_hints_and_diagnostics(root, previous_entries, &[])
     }
 
+    /// Rehashes metadata-changed files and any paths listed in `dirty_path_hints`.
     pub fn build_changed_only_with_hints_and_diagnostics(
         &self,
         root: &Path,
@@ -162,15 +169,6 @@ impl ManifestBuilder {
             let (size_bytes, digest) = match stream_file_blake3_digest(&metadata.path) {
                 Ok(result) => result,
                 Err(err) => {
-                    // A digest-read failure (e.g. transient EACCES/EBUSY) must not
-                    // drop a file the walk just discovered. Omitting it would make
-                    // diff() treat the still-present file as deleted, and
-                    // incremental semantic refresh would purge its embeddings. If
-                    // the path existed in the previous manifest, retain that entry
-                    // so it survives; the recorded diagnostic plus the unchanged
-                    // on-disk mtime trigger a re-hash on the next refresh. A brand
-                    // new file with no previous entry is simply deferred (it was
-                    // never in the old manifest, so diff() cannot mark it deleted).
                     diagnostics.push(ManifestBuildDiagnostic {
                         path: Some(metadata.path.clone()),
                         kind: ManifestDiagnosticKind::Read,
@@ -393,6 +391,7 @@ fn stream_file_blake3_digest(path: &Path) -> std::io::Result<(u64, String)> {
     Ok((total_bytes, hasher.finalize().to_hex().to_string()))
 }
 
+/// Computes added, modified, and deleted file entries between two manifest snapshots.
 pub fn diff(old: &[FileDigest], new: &[FileDigest]) -> ManifestDiff {
     let old_by_path = manifest_by_path(old);
     let new_by_path = manifest_by_path(new);

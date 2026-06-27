@@ -1,3 +1,5 @@
+//! Regression tests for semantic chunking, embedding persistence across reindex, and runtime executor integration.
+
 use super::support::*;
 
 #[test]
@@ -567,10 +569,6 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
 #[test]
 fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read() -> FriggResult<()>
 {
-    // A file can be flagged as changed by the manifest (its raw-byte blake3 digest
-    // is read fine) yet fail semantic chunking, which reads it as UTF-8. Invalid
-    // UTF-8 content deterministically reproduces this split: the incremental advance
-    // must NOT delete the file's existing semantic rows without replacement.
     let db_path = temp_db_path("semantic-changed-only-unreadable-retains");
     let workspace_root = temp_workspace_root("semantic-changed-only-unreadable-retains");
     prepare_workspace(
@@ -598,9 +596,6 @@ fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read(
     )?;
     assert!(!first.snapshot_id.is_empty());
 
-    // Rewrite the .rs file with invalid UTF-8: still semantic-eligible by extension
-    // and digestible as raw bytes (so it is detected as modified), but unreadable as
-    // text for semantic chunking.
     fs::write(
         workspace_root.join("src/lib.rs"),
         b"pub fn changed() {} // \xff\xfe invalid utf8 \xff".as_slice(),
@@ -827,13 +822,9 @@ fn semantic_chunk_candidates_include_docs_and_fixture_text_sources() -> FriggRes
     )?;
 
     let manifest = ManifestBuilder::default().build(&workspace_root)?;
-    let chunks = build_semantic_chunk_candidates(
-        "repo-001",
-        &workspace_root,
-        "snapshot-001",
-        &manifest,
-    )?
-    .candidates;
+    let chunks =
+        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?
+            .candidates;
 
     assert!(
         chunks.iter().any(|chunk| {
@@ -880,13 +871,9 @@ fn semantic_chunk_candidates_include_playbook_markdown_under_generic_policy() ->
     )?;
 
     let manifest = ManifestBuilder::default().build(&workspace_root)?;
-    let chunks = build_semantic_chunk_candidates(
-        "repo-001",
-        &workspace_root,
-        "snapshot-001",
-        &manifest,
-    )?
-    .candidates;
+    let chunks =
+        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?
+            .candidates;
 
     assert!(
         chunks

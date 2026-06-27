@@ -1,3 +1,5 @@
+//! Regression tests for CLI-workflow hybrid queries that recover command dispatch and runtime config witnesses.
+
 use super::*;
 
 #[test]

@@ -1,7 +1,10 @@
+//! Path-quality facts: intent flags plus per-path surface classification for multiplier rules.
+
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::surfaces::HybridSourceClass;
 use super::{SharedIntentFacts, SharedPathFacts};
 
+/// Facts for path-quality multiplier rules derived from path surfaces and intent.
 pub(crate) struct PathQualityFacts {
     pub(crate) class: HybridSourceClass,
     pub(crate) base_multiplier: f32,

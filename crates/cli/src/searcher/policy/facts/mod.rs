@@ -1,3 +1,7 @@
+//! Normalized policy facts shared across path quality, path witness, and selection stages.
+//! [`SharedIntentFacts`] and [`SharedPathFacts`] keep predicates consistent; stage structs add
+//! query-match and coverage fields.
+
 mod path_quality;
 mod path_witness;
 mod selection;

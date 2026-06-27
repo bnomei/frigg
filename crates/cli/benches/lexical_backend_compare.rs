@@ -1,3 +1,5 @@
+//! Criterion benchmarks comparing native lexical search against ripgrep-backed recall.
+
 #[path = "common/mod.rs"]
 mod support;
 

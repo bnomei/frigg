@@ -1,5 +1,7 @@
 #![allow(clippy::panic, clippy::type_complexity)]
 
+//! Unit tests for embedding provider transports, retry policy, OpenAI/Google request shaping, and vector-dimension validation.
+
 use super::*;
 use axum::{Json, Router, body::Bytes, extract::State, http::HeaderMap, routing::post};
 use reqwest::Client;
@@ -426,8 +428,6 @@ async fn provider_adapters_openai_retries_retryable_transport_then_succeeds() {
 
 #[tokio::test]
 async fn provider_adapters_openai_reorders_out_of_order_data_by_index() {
-    // The OpenAI contract does not guarantee data[] is in input order; it is
-    // returned here reversed. Each vector must be re-associated by its `index`.
     let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
         status_code: 200,
         body: json!({
@@ -465,8 +465,6 @@ async fn provider_adapters_openai_reorders_out_of_order_data_by_index() {
 
 #[tokio::test]
 async fn provider_adapters_openai_rejects_incomplete_index_set() {
-    // A duplicated index leaves a gap (0..n not covered); the batch must error
-    // rather than silently dropping or mis-pairing a chunk.
     let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
         status_code: 200,
         body: json!({
@@ -666,8 +664,6 @@ async fn provider_adapters_openai_redacts_api_keys_and_raw_source_from_diagnosti
 
 #[tokio::test]
 async fn provider_adapters_google_keeps_transient_status_retryable_despite_conflicting_code() {
-    // HTTP 503 with a gRPC status of UNAVAILABLE but a conflicting numeric code 400.
-    // The transient status must win: the failure stays retryable.
     let http = Arc::new(MockHttpExecutor::new(vec![Ok(HttpResponse {
         status_code: 503,
         body: json!({

@@ -1,3 +1,8 @@
+//! Deterministic ordering for lexical matches and search diagnostics.
+//!
+//! Provides stable sort keys and bounded match retention heaps so repeated hybrid runs and test
+//! fixtures observe identical candidate ordering.
+
 use crate::domain::model::TextMatch;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;

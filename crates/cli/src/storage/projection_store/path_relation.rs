@@ -1,3 +1,5 @@
+//! Path relation projection load for graph-backed retrieval witnesses.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     PathRelationProjection, Storage, db_runtime::i64_to_u64, db_runtime::open_connection,

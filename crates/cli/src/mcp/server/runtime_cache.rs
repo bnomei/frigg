@@ -42,7 +42,6 @@ impl FriggMcpServer {
     }
 
     /// Trims a process-wide cache against its configured entry and byte budget.
-    ///
     /// The byte estimator is intentionally approximate; the goal is bounded residency for
     /// long-lived servers rather than exact heap accounting.
     pub(super) fn trim_runtime_cache_to_budget<K, V, F>(
@@ -115,15 +114,6 @@ impl FriggMcpServer {
         cached
     }
 
-    /// Read a file into memory, but reject it first if its on-disk size exceeds
-    /// `max_file_bytes`.
-    ///
-    /// Whole-file `read_file` stats and gates before loading, but line-window
-    /// `read_file`, `read_match`, and `explore` all funnel through
-    /// `file_content_snapshot_for_workspace`, which would otherwise `fs::read` the
-    /// entire file before slicing a small window — letting a bounded request force
-    /// an unbounded allocation. Stat-gating here bounds peak memory for every
-    /// snapshot caller.
     fn read_file_content_bytes_bounded(&self, canonical_path: &Path) -> Result<Vec<u8>, ErrorData> {
         let max_file_bytes = self.config.max_file_bytes;
         let metadata = fs::metadata(canonical_path).map_err(|err| {

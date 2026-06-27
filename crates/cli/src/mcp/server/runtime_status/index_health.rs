@@ -1,3 +1,5 @@
+//! Index-health and repository-response freshness assembly for workspace status reporting.
+
 use super::*;
 
 impl FriggMcpServer {
@@ -836,11 +838,6 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
     ) {
         let semantic_plan = self.workspace_semantic_refresh_plan(workspace);
-        // Any concrete refresh plan is actionable: refresh_workspace_semantic_snapshot_with_plan
-        // runs a full reindex regardless of reason, so a missing-active-model plan
-        // (semantic_snapshot_missing_for_active_model) must spawn work too, not only
-        // stale_manifest_snapshot. Gating on a single reason left defer attach
-        // reporting "Queued" while the missing-model recovery never started.
         let should_refresh_semantic = semantic_plan.is_some();
         let should_prewarm_precise = !Self::collect_scip_artifact_digests(&workspace.root)
             .artifact_digests
@@ -849,9 +846,6 @@ impl FriggMcpServer {
             return;
         }
 
-        // Watch keys SemanticRefresh by the runtime/legacy id while prewarm keys it
-        // by the stable hash id; check both aliases so an in-flight watch semantic
-        // followup is observed here and we do not start a second reindex on one db.
         let semantic_refresh_already_running = should_refresh_semantic
             && self
                 .runtime_state

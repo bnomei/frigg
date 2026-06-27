@@ -1,3 +1,5 @@
+//! Regression tests for per-language symbol extraction, PHP evidence edges, and tree-sitter definition metadata.
+
 use crate::languages::resolve_php_target_evidence_edges;
 
 use super::support::*;
@@ -539,9 +541,6 @@ fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> 
 
 #[test]
 fn php_source_evidence_resolves_aliases_per_namespace_block() -> FriggResult<()> {
-    // Two bracketed namespace blocks alias the same short name `Target` to
-    // different FQCNs. Each `new Target()` must resolve under its own block's
-    // `use` alias, not a merged file-wide context.
     let path = Path::new("src/MultiNamespace.php");
     let source = "<?php\n\
 namespace App\\A {\n\

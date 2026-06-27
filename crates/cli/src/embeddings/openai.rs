@@ -1,3 +1,5 @@
+//! OpenAI embeddings HTTP provider with retry and normalized response mapping.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -48,6 +50,7 @@ struct OpenAiErrorPayload {
     error_type: Option<String>,
 }
 
+/// OpenAI embeddings client implementing the shared [`EmbeddingProvider`] contract.
 pub struct OpenAiEmbeddingProvider {
     http: Arc<dyn HttpExecutor>,
     sleeper: Arc<dyn BackoffSleeper>,
@@ -196,11 +199,6 @@ impl OpenAiEmbeddingProvider {
             )));
         }
 
-        // The OpenAI /v1/embeddings contract does not guarantee that `data[]` is
-        // returned in input order; each element carries an `index` precisely so
-        // callers can re-associate. Reorder by `index` (validating it forms a
-        // complete 0..n permutation) so the i-th vector is the i-th input chunk's
-        // embedding. Consuming by array position would silently mis-pair chunks.
         let expected_len = parsed.data.len();
         let mut slots: Vec<Option<Vec<f32>>> = (0..expected_len).map(|_| None).collect();
         for item in parsed.data {

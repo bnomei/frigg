@@ -1,3 +1,5 @@
+//! Integration tests for `search_structural` tree-sitter queries, anchor selection, and deterministic match replay.
+
 use super::*;
 use frigg::mcp::types::{StructuralAnchorSelection, StructuralResultMode};
 

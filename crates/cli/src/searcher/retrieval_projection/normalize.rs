@@ -1,3 +1,8 @@
+//! Deterministic normalization and per-path caps for retrieval projection rows.
+//!
+//! Sorts, deduplicates, and bounds relation, anchor-sketch, and surface-term projections before
+//! they are persisted or loaded into the projection service cache.
+
 use crate::storage::{
     PathAnchorSketchProjection, PathRelationProjection, PathSurfaceTermProjection,
 };

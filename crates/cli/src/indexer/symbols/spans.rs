@@ -1,3 +1,5 @@
+//! Byte-offset and tree-sitter span helpers shared by symbol extraction and structural search.
+
 use super::*;
 
 pub(crate) fn source_span_from_offsets(

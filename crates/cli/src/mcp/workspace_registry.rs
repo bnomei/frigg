@@ -1,3 +1,8 @@
+//! Process-wide workspace catalog keyed by canonical repository root.
+//!
+//! Tracks stable `repository_id` values, provenance storage paths, and per-session adoption
+//! refcounts so watch leases and cache invalidation can outlive individual MCP sessions.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -100,6 +105,7 @@ impl WorkspaceRegistry {
         )
     }
 
+    // Session adoption boundary: increment active-session refcount for watch lease sharing.
     pub(crate) fn mark_session_adopted(&mut self, repository_id: &str) -> usize {
         let count = self
             .active_session_counts
@@ -109,6 +115,7 @@ impl WorkspaceRegistry {
         *count
     }
 
+    // Session adoption boundary: decrement refcount and drop tracking at zero remaining sessions.
     pub(crate) fn mark_session_released(&mut self, repository_id: &str) -> usize {
         let Some(count) = self.active_session_counts.get_mut(repository_id) else {
             return 0;

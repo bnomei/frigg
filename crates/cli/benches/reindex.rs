@@ -1,3 +1,5 @@
+//! Criterion benchmarks for incremental and full repository reindex throughput.
+
 #[path = "common/mod.rs"]
 mod support;
 

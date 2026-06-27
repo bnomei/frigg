@@ -1,3 +1,5 @@
+//! Unit tests for symbol-graph relation traversal, heuristic hints, SCIP ingest validation, and precise navigation selection.
+
 use protobuf::{EnumOrUnknown, Message};
 
 use super::*;
@@ -593,7 +595,6 @@ fn scip_ingest_rejects_document_paths_that_escape_repository_root() {
         "rejected document paths must not mutate precise graph state"
     );
 
-    // A `.`-relative path that stays within the root is normalized and accepted.
     let normalized = br#"{
           "documents": [
             {

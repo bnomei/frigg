@@ -1,3 +1,8 @@
+//! Graph channel expansion from lexical anchors and retrieval projections.
+//!
+//! Builds a bounded candidate pool by walking symbol definitions, PHP/Blade evidence edges, and
+//! projected path relations, then emits graph-channel hits with deterministic ordering.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};

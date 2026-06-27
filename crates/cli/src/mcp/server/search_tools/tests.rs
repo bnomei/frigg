@@ -1,3 +1,5 @@
+//! Regression tests for hybrid search warning metadata and lexical-only fallback response shaping.
+
 use super::*;
 
 fn match_fixture(

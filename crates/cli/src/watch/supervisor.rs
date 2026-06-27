@@ -1,3 +1,6 @@
+//! Watch supervisor: leases repository roots to MCP sessions, dispatches debounced reindex work,
+//! and uses per-repository epochs to drop stale completions after a lease is released.
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -29,6 +32,7 @@ use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState}
 
 const WATCH_TICK_MS: u64 = 50;
 
+/// Callback invoked when watch-driven reindex work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 enum SupervisorCommand {
@@ -41,38 +45,23 @@ enum SupervisorCommand {
     },
     ReindexCompleted {
         repository_id: String,
-        // Monotonic per-repository lifecycle epoch captured when this reindex was
-        // dispatched. A detach bumps the repository's epoch, so a completion from
-        // a reindex that was in flight before a detach/re-attach of the same
-        // repository_id no longer matches the current epoch and is ignored.
         epoch: u64,
         class: WatchRefreshClass,
         result: Result<crate::indexer::ReindexSummary, String>,
     },
 }
 
-/// Per-repository lifecycle epochs for the watch supervisor.
-///
-/// A reindex dispatched under epoch `N` is only allowed to mutate scheduler state
-/// when the repository is still at epoch `N` as its completion lands. Because
-/// `repository_id` values are reused across a detach and a subsequent re-attach,
-/// the epoch is bumped on every lease release so a completion produced by a run
-/// that was in flight before the detach no longer matches the re-attached
-/// lifecycle and is ignored.
 #[derive(Debug, Default)]
 struct RepositoryEpochs {
     epochs: BTreeMap<String, u64>,
 }
 
 impl RepositoryEpochs {
-    /// Ensure a repository has an epoch entry (on lease acquisition) without
-    /// disturbing an existing value carried over from a prior lifecycle.
     fn ensure(&mut self, repository_id: &str) {
         self.epochs.entry(repository_id.to_owned()).or_insert(0);
     }
 
-    /// Advance a repository's epoch on lease release so in-flight reindexes from
-    /// the released lifecycle become stale.
+    // Epoch bump invalidates in-flight reindex completions after lease release.
     fn bump(&mut self, repository_id: &str) {
         self.epochs
             .entry(repository_id.to_owned())
@@ -80,12 +69,12 @@ impl RepositoryEpochs {
             .or_insert(0);
     }
 
-    /// The repository's current epoch (0 for an id never seen).
     fn current(&self, repository_id: &str) -> u64 {
         self.epochs.get(repository_id).copied().unwrap_or(0)
     }
 }
 
+/// Lease snapshot for a repository root watched by the shared supervisor.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WatchLeaseStatus {
     pub active: bool,
@@ -103,6 +92,7 @@ pub struct WatchRuntime {
 }
 
 impl WatchRuntime {
+    // Lease boundary: first holder registers the recursive watcher and queues startup refresh.
     pub(crate) fn acquire_lease(&self, workspace: &AttachedWorkspace) -> FriggResult<usize> {
         let repository = watched_repository_for_workspace(workspace)?;
 
@@ -149,6 +139,7 @@ impl WatchRuntime {
         Ok(lease_count)
     }
 
+    // Lease boundary: last holder unregisters the watcher and bumps the repository epoch.
     pub(crate) fn release_lease(&self, repository_id: &str) -> usize {
         let remaining = {
             let mut lease_counts = self
@@ -293,10 +284,6 @@ async fn run_supervisor(
     let debounce = Duration::from_millis(watch_config.debounce_ms);
     let retry = Duration::from_millis(watch_config.retry_ms);
     let mut scheduler = WatchSchedulerState::new(0);
-    // Per-repository lifecycle epoch. Bumped on every lease release (detach) so a
-    // reindex completion produced by a run dispatched before the detach can be
-    // distinguished from the freshly re-attached lifecycle of the same
-    // repository_id, even though ids are reused across detach/re-attach.
     let mut repository_epochs = RepositoryEpochs::default();
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -331,9 +318,7 @@ async fn run_supervisor(
                         );
                     }
                     SupervisorCommand::LeaseReleased { repository_id } => {
-                        // Bump the epoch so any reindex still in flight under the
-                        // released lifecycle is recognised as stale if the same
-                        // repository_id is re-attached before its completion lands.
+                        // Lease released: advance epoch before dropping scheduler state.
                         repository_epochs.bump(&repository_id);
                         scheduler.remove_repository(&repository_id);
                     }
@@ -344,12 +329,8 @@ async fn run_supervisor(
                         result,
                     } => {
                         let current_epoch = repository_epochs.current(&repository_id);
+                        // Epoch mismatch: ignore stale reindex side effects from a prior lease.
                         if epoch != current_epoch {
-                            // Stale completion from a run dispatched before a
-                            // detach/re-attach of this repository_id. Ignoring it
-                            // preserves the refresh the re-attach just queued and
-                            // avoids falsely reporting the current lifecycle as
-                            // refreshed.
                             warn!(
                                 repository_id = %repository_id,
                                 refresh_class = %class.as_str(),
@@ -389,12 +370,6 @@ async fn run_supervisor(
             ..
         }) = scheduler.next_ready_refresh(now)
         {
-            // Resolve the live repository BEFORE consuming any scheduler state. If
-            // the watch lease was released (repo removed from the shared map) but
-            // the queued LeaseReleased command has not been handled yet, skip
-            // without draining dirty paths or marking success: the pending refresh
-            // must survive for a possible re-lease and must not be falsely reported
-            // as completed. LeaseReleased will remove the scheduler entry shortly.
             let repository = repositories
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -414,18 +389,11 @@ async fn run_supervisor(
                 &stable_repository_id,
             );
             if refresh_task_active {
-                // Another refresh task for this repository is already running outside
-                // the scheduler's current lifecycle. This can happen across
-                // detach/re-attach because remove_repository clears the scheduler
-                // in-flight set while the old blocking task continues. Keep this
-                // refresh pending with backoff instead of starting a duplicate writer
-                // or marking the work successful.
                 scheduler.mark_failed(&repository_id, class, now, retry);
                 continue;
             }
             let recent_paths = scheduler.mark_started(&repository_id, class);
-            // Capture the lifecycle epoch this reindex is dispatched under so the
-            // completion can be matched against the repository's current epoch.
+            // Capture dispatch epoch so completion handlers can detect lease churn.
             let dispatch_epoch = repository_epochs.current(&repository.repository_id);
             info!(
                 repository_id = %repository.repository_id,
@@ -453,6 +421,7 @@ async fn run_supervisor(
             let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
+            // Side effect: blocking reindex runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
                 let result = match class {
                     WatchRefreshClass::ManifestFast => {
@@ -512,15 +481,6 @@ fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
     }
 }
 
-/// Runtime task kinds whose active execution must block a watch refresh of the
-/// given class, because they write the same repository database.
-///
-/// Both watch classes additionally defer to the MCP-owned `WorkspaceReindex` /
-/// `WorkspacePrepare` tasks, which the watch scheduler's own in-flight tracking
-/// cannot see. Without this, a notify-driven manifest-fast reindex could start
-/// while an MCP `workspace_reindex` is mid-write on the same `db_path`, mirroring
-/// the cross-task gate `repository_has_active_runtime_work` applies on the MCP
-/// side.
 fn conflicting_task_kinds_for_class(class: WatchRefreshClass) -> &'static [RuntimeTaskKind] {
     match class {
         WatchRefreshClass::ManifestFast => &[
@@ -542,9 +502,6 @@ fn active_refresh_task_running_for_repository(
     repository_id: &str,
     stable_repository_id: &str,
 ) -> bool {
-    // Startup and dynamically adopted workspaces may be addressed by a legacy
-    // runtime id or a stable root hash id. Different runtime paths register tasks
-    // under different ids, so refresh dedup must treat them as aliases.
     let repository_ids = if repository_id == stable_repository_id {
         vec![repository_id]
     } else {
@@ -613,16 +570,6 @@ fn handle_notify_event(
     }
 }
 
-/// Invalidate repository-scoped MCP/search caches for a stale (epoch-mismatched)
-/// reindex completion.
-///
-/// The stale run still committed manifest/projection updates to SQLite before the
-/// epoch gate rejected it, and the `spawn_blocking` path only flushed the
-/// validated-manifest candidate cache. Without this, a detach/re-attach during an
-/// in-flight refresh could serve pre-reindex search/navigation results over a
-/// fresh DB snapshot. Only `Ok` completions mutated the index, and scheduler state
-/// is intentionally left untouched: the superseded lifecycle is not marked
-/// refreshed. Returns whether the invalidation callback was invoked.
 fn invalidate_caches_for_stale_completion(
     repository_id: &str,
     result: &Result<crate::indexer::ReindexSummary, String>,
@@ -708,30 +655,27 @@ fn queue_startup_refresh_if_needed(
     semantic_credentials: &SemanticRuntimeCredentials,
     debounce_ms: u64,
 ) {
-    let startup_status =
-        match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
-            Ok(status) => status,
-            Err(error) => {
-                // Freshness evaluation failed (storage I/O, projection-family query,
-                // or semantic validation). Do not silently leave the repository
-                // unindexed: surface the failure and conservatively queue a
-                // manifest-fast initial sync. The reindex re-derives state and runs
-                // lexical-only, so it makes progress even when the failure was a
-                // semantic credential problem.
-                warn!(
-                    repository_id = %repository.repository_id,
-                    root = %repository.root.display(),
-                    error = %error,
-                    "built-in watch mode failed to evaluate startup freshness; queueing manifest-fast refresh"
-                );
-                scheduler.enqueue_initial_sync(
-                    &repository.repository_id,
-                    WatchRefreshClass::ManifestFast,
-                    now,
-                );
-                return;
-            }
-        };
+    let startup_status = match startup_refresh_status(
+        repository,
+        semantic_runtime,
+        semantic_credentials,
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            warn!(
+                repository_id = %repository.repository_id,
+                root = %repository.root.display(),
+                error = %error,
+                "built-in watch mode failed to evaluate startup freshness; queueing manifest-fast refresh"
+            );
+            scheduler.enqueue_initial_sync(
+                &repository.repository_id,
+                WatchRefreshClass::ManifestFast,
+                now,
+            );
+            return;
+        }
+    };
     if !startup_status.should_refresh {
         info!(
             repository_id = %repository.repository_id,
@@ -767,11 +711,6 @@ fn queue_semantic_followup_if_needed(
     let status = match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
         Ok(status) => status,
         Err(error) => {
-            // Manifest-fast already succeeded, but the semantic follow-up freshness
-            // check failed. Surface it instead of silently skipping. Do not blindly
-            // enqueue a semantic refresh here: if semantic is unavailable (e.g.
-            // missing credentials, the common cause of this Err) it would just fail
-            // in a retry loop.
             warn!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -807,24 +746,17 @@ mod tests {
     fn repository_epochs_invalidate_stale_completion_across_detach_reattach() {
         let mut epochs = RepositoryEpochs::default();
 
-        // Lease acquired: first lifecycle dispatches a reindex at epoch 0.
         epochs.ensure("repo-001");
         let dispatch_epoch = epochs.current("repo-001");
         assert_eq!(dispatch_epoch, 0);
 
-        // Detach bumps the epoch; the in-flight reindex from the released
-        // lifecycle keeps its captured epoch of 0.
         epochs.bump("repo-001");
 
-        // Re-attach reuses the same repository_id without resetting the epoch.
         epochs.ensure("repo-001");
         assert_eq!(epochs.current("repo-001"), 1);
 
-        // The stale completion (epoch 0) no longer matches the current epoch and
-        // must be ignored so the re-attached refresh survives.
         assert_ne!(dispatch_epoch, epochs.current("repo-001"));
 
-        // A reindex dispatched under the re-attached lifecycle matches and applies.
         let fresh_dispatch_epoch = epochs.current("repo-001");
         assert_eq!(fresh_dispatch_epoch, epochs.current("repo-001"));
     }
@@ -845,18 +777,15 @@ mod tests {
 
     #[test]
     fn stale_successful_completion_invalidates_repository_caches() {
-        // A reindex that committed to SQLite but landed after a detach must still
-        // flush MCP/search caches so a re-attach does not serve pre-reindex data.
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback =
-            Arc::new(move |repository_id: &str| {
-                recorded
-                    .lock()
-                    .expect("invalidation record poisoned")
-                    .push(repository_id.to_owned());
-            });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+            recorded
+                .lock()
+                .expect("invalidation record poisoned")
+                .push(repository_id.to_owned());
+        });
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
@@ -873,18 +802,15 @@ mod tests {
 
     #[test]
     fn stale_failed_completion_does_not_invalidate_repository_caches() {
-        // A failed stale reindex did not advance the on-disk index, so there is
-        // nothing to invalidate; doing so would needlessly cold-start caches.
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
-        let callback: RepositoryCacheInvalidationCallback =
-            Arc::new(move |repository_id: &str| {
-                recorded
-                    .lock()
-                    .expect("invalidation record poisoned")
-                    .push(repository_id.to_owned());
-            });
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+            recorded
+                .lock()
+                .expect("invalidation record poisoned")
+                .push(repository_id.to_owned());
+        });
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
@@ -906,8 +832,6 @@ mod tests {
         let mut epochs = RepositoryEpochs::default();
         epochs.ensure("repo-001");
         let dispatch_epoch = epochs.current("repo-001");
-        // No detach occurred, so a completion dispatched at this epoch still
-        // matches the current epoch and is applied.
         assert_eq!(dispatch_epoch, epochs.current("repo-001"));
     }
 
@@ -993,9 +917,6 @@ mod tests {
 
     #[test]
     fn manifest_fast_defers_to_active_mcp_workspace_reindex() {
-        // An MCP workspace_reindex writes the same db_path but is invisible to the
-        // watch scheduler's in-flight tracking. Watch manifest-fast dispatch must
-        // still defer to it via the runtime task registry, under either id alias.
         let mut registry = RuntimeTaskRegistry::new();
         let _task_id = registry.start_task(
             RuntimeTaskKind::WorkspaceReindex,
@@ -1029,10 +950,6 @@ mod tests {
         use super::super::repository::watched_repository_for_root;
         use crate::settings::SemanticRuntimeProvider;
 
-        // An enabled semantic runtime with no credentials makes
-        // startup_refresh_status fail at validate_startup (before any filesystem
-        // access). The startup enqueue must surface this and still queue a lexical
-        // manifest-fast refresh rather than leaving the repository unindexed.
         let now = Instant::now();
         let repository = watched_repository_for_root(
             "repo-001".to_owned(),

@@ -1,3 +1,5 @@
+//! Path-quality rules for docs, readme, onboarding, and contract/error-taxonomy intent.
+
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;
 use crate::searcher::policy::kernel::PolicyProgram;

@@ -1,3 +1,5 @@
+//! Regression tests for Roc hybrid ranking that surfaces app manifests and platform entrypoints over fixture noise.
+
 use super::*;
 
 #[test]

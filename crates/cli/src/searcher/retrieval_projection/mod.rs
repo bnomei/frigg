@@ -1,4 +1,7 @@
-//! Retrieval projection assembly for manifest-driven search heuristics.
+//! Retrieval projection assembly for manifest-driven hybrid search heuristics.
+//!
+//! Builds snapshot-scoped projection families (path witness, relations, surface terms, anchor
+//! sketches, subtree coverage) from path heuristics, AST evidence, and optional SCIP inputs.
 
 mod ast;
 mod builders;
@@ -23,10 +26,6 @@ pub(crate) const SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 2;
 
-/// The required projection families paired with the heuristic version the current
-/// runtime produces for each. This is the single source of truth used both when
-/// building bundles and when deciding whether a reused snapshot's persisted heads
-/// are still current. Consumers reject heads whose version does not match these.
 pub(crate) fn required_retrieval_projection_versions() -> [(&'static str, i64); 7] {
     [
         (

@@ -1,3 +1,5 @@
+//! Integration tests for navigation MCP handlers (go-to-definition, implementations, and call hierarchy).
+
 use super::*;
 use frigg::mcp::types::NavigationTargetSelectionStatus;
 

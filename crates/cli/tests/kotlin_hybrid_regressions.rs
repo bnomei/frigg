@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration regressions for Kotlin/Android hybrid retrieval across activity entrypoints and UI module witnesses.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

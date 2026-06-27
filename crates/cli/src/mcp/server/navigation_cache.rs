@@ -1,3 +1,5 @@
+//! Navigation response cache invalidation and freshness-scoped reuse for read-only tools.
+
 use super::*;
 use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 

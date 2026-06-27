@@ -1,3 +1,5 @@
+//! Retrieval projection persistence split by projection family.
+
 #[path = "projection_store/bundle.rs"]
 mod bundle;
 #[path = "projection_store/common.rs"]

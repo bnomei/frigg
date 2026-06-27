@@ -1,3 +1,5 @@
+//! Semantic corpus write paths, health probes, and snapshot retention.
+
 use crate::domain::{FriggError, FriggResult};
 
 use super::vector_store::{
@@ -30,6 +32,7 @@ use semantic_store_support::{
 };
 
 impl Storage {
+    /// Replaces the live semantic corpus for a repository provider-model partition.
     pub fn replace_semantic_embeddings_for_repository(
         &self,
         repository_id: &str,
@@ -108,6 +111,7 @@ impl Storage {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Incrementally advances semantic embeddings to a new manifest snapshot.
     pub fn advance_semantic_embeddings_for_repository(
         &self,
         repository_id: &str,

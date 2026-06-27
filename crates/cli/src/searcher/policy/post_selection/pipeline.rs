@@ -1,3 +1,5 @@
+//! Post-selection pipeline facts and intent predicates that gate guardrail rules.
+
 use super::super::super::HybridRankedEvidence;
 use super::super::super::query_terms::hybrid_query_mentions_cli_command;
 use super::super::dsl::PredicateLeaf;

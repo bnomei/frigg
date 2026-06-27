@@ -1,3 +1,5 @@
+//! PHP type and target evidence extraction for graph edge construction.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -146,10 +148,6 @@ fn collect_source_evidence(
     let mut next_namespace = current_namespace.map(ToOwned::to_owned);
     let mut next_class_canonical_name = current_class_canonical_name.map(ToOwned::to_owned);
     let mut next_owner_symbol_id = current_owner_symbol_id.map(ToOwned::to_owned);
-    // For a bracketed `namespace X { ... }` block, resolve references inside the
-    // block under a namespace-local context (this block's `use` aliases only),
-    // since aliases are scoped to their namespace block. Non-bracketed namespaces
-    // (no body) keep using the inherited file-wide context.
     let mut namespace_local_context: Option<PhpNameResolutionContext> = None;
 
     match node.kind() {

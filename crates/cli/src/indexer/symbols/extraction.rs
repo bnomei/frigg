@@ -1,6 +1,9 @@
+//! Tree-sitter-backed symbol extraction for single sources and parallel path batches.
+
 use super::*;
 use rayon::prelude::*;
 
+/// Extracts symbol definitions from parsed source for a known language adapter.
 pub fn extract_symbols_from_source(
     language: SymbolLanguage,
     path: &Path,
@@ -19,6 +22,7 @@ pub fn extract_symbols_from_source(
     Ok(symbols)
 }
 
+/// Reads a file from disk and extracts symbol definitions when the extension is supported.
 pub fn extract_symbols_from_file(path: &Path) -> FriggResult<Vec<SymbolDefinition>> {
     let language = SymbolLanguage::from_path(path).ok_or_else(|| {
         FriggError::InvalidInput(format!(
@@ -30,6 +34,7 @@ pub fn extract_symbols_from_file(path: &Path) -> FriggResult<Vec<SymbolDefinitio
     extract_symbols_from_source(language, path, &source)
 }
 
+/// Extracts symbols for many paths in parallel, collecting per-file diagnostics.
 pub fn extract_symbols_for_paths(paths: &[PathBuf]) -> SymbolExtractionOutput {
     let mut ordered_paths = paths.to_vec();
     ordered_paths.sort();

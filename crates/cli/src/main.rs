@@ -1,3 +1,6 @@
+//! Frigg binary entrypoint: builds the tokio runtime, initializes tracing, and hands off to CLI
+//! dispatch for serve, utility commands, and HTTP runtime startup.
+
 use frigg::settings::RuntimeTransportKind;
 use std::error::Error;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -75,8 +78,7 @@ fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'stati
 fn init_tracing(default_filter: &str) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    // MCP stdio transport requires stdout to carry protocol frames only.
-    // Force tracing output to stderr so logs never corrupt stdio framing.
+    // Side effect: MCP stdio transport requires stdout for protocol frames only.
     let _ = fmt()
         .with_env_filter(filter)
         .with_target(false)

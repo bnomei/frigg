@@ -1,3 +1,6 @@
+//! Shared execution-state types for the MCP server: symbol corpora, precise graph cache keys,
+//! navigation target resolution envelopes, and per-tool execution result bundles.
+
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -258,18 +261,14 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && task.repository_id == repository_id)
     }
 
-    /// Returns true if any active task of `kind` is registered under *any* of the
-    /// supplied repository ids. Startup workspaces carry two ids (a stable hash and
-    /// a legacy `repo-NNN` runtime id); different subsystems register tasks under
-    /// different ids, so dedup must treat the ids as aliases for one workspace.
     pub fn has_active_task_for_any_repository(
         &self,
         kind: RuntimeTaskKind,
         repository_ids: &[&str],
     ) -> bool {
-        self.active.values().any(|task| {
-            task.kind == kind && repository_ids.contains(&task.repository_id.as_str())
-        })
+        self.active
+            .values()
+            .any(|task| task.kind == kind && repository_ids.contains(&task.repository_id.as_str()))
     }
 
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
@@ -358,7 +357,6 @@ mod tests {
     #[test]
     fn has_active_task_for_any_repository_treats_stable_and_runtime_ids_as_aliases() {
         let mut registry = RuntimeTaskRegistry::new();
-        // Watch registers a semantic refresh under the legacy/runtime id.
         let task = registry.start_task(
             RuntimeTaskKind::SemanticRefresh,
             "repo-001",
@@ -366,17 +364,14 @@ mod tests {
             None,
         );
 
-        // A prewarm guard keyed by the stable hash id must still observe it.
         assert!(registry.has_active_task_for_any_repository(
             RuntimeTaskKind::SemanticRefresh,
             &["myrepo-abc123def456", "repo-001"],
         ));
-        // Single-id lookup under the other alias would have missed it (the bug).
         assert!(!registry.has_active_task_for_repository(
             RuntimeTaskKind::SemanticRefresh,
             "myrepo-abc123def456",
         ));
-        // Wrong kind must not match.
         assert!(!registry.has_active_task_for_any_repository(
             RuntimeTaskKind::WorkspaceReindex,
             &["myrepo-abc123def456", "repo-001"],

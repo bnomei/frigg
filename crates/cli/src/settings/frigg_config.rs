@@ -1,3 +1,5 @@
+//! Top-level Frigg configuration for workspace roots, budgets, and runtime subsystems.
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -13,8 +15,8 @@ pub const DEFAULT_WORKSPACE_ROOT: &str = ".";
 pub const DEFAULT_MAX_SEARCH_RESULTS: usize = 200;
 pub const DEFAULT_MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Top-level configuration shared by indexing, retrieval, watch, and MCP serving.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FriggConfig {
     pub workspace_roots: Vec<PathBuf>,
     pub max_search_results: usize,
@@ -82,6 +84,7 @@ impl FriggConfig {
         self.validate_with_root_requirement(true)
     }
 
+    /// Validates configuration for MCP serving, allowing empty workspace roots.
     pub fn validate_for_serving(&self) -> FriggResult<()> {
         self.validate_with_root_requirement(false)
     }
@@ -140,6 +143,7 @@ impl FriggConfig {
         Ok(())
     }
 
+    /// Materializes repository records from configured workspace roots.
     pub fn repositories(&self) -> Vec<RepositoryRecord> {
         self.workspace_roots
             .iter()
@@ -156,6 +160,7 @@ impl FriggConfig {
             .collect()
     }
 
+    /// Resolves a workspace root by stable, legacy, or display repository id.
     pub fn root_by_repository_id(&self, repository_id: &str) -> Option<&Path> {
         self.repositories()
             .into_iter()

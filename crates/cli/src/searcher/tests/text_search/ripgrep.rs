@@ -1,3 +1,5 @@
+//! Regression tests for ripgrep backend availability, manifest candidate filtering, and JSON stream parsing.
+
 use super::*;
 
 #[test]

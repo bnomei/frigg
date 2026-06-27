@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for navigation tool modes, result handles, and precise partial coverage.
+
 use super::*;
 
 #[test]

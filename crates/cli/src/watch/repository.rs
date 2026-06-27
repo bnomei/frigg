@@ -1,3 +1,6 @@
+//! Repository-scoped watch helpers: root identity, path filtering, and startup freshness probes
+//! that decide whether the supervisor should queue an initial reindex after a lease is acquired.
+
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::Gitignore;
@@ -83,6 +86,7 @@ pub(super) struct StartupRefreshStatus {
     pub refresh_class: Option<WatchRefreshClass>,
 }
 
+// Startup probe: decide whether a leased repository needs manifest-fast or semantic-followup reindex.
 pub(super) fn startup_refresh_status(
     repository: &WatchedRepository,
     semantic_runtime: &SemanticRuntimeConfig,

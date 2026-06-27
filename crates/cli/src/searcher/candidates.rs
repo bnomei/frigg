@@ -1,3 +1,8 @@
+//! Candidate file discovery for lexical and hybrid search.
+//!
+//! Walks repository trees (or manifest digests) to build the candidate universe that downstream
+//! lexical scans, path-witness recall, and retrieval projections consume.
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -180,6 +185,7 @@ fn search_walk_builder(root: &Path) -> WalkBuilder {
     builder
 }
 
+// Parallel walk workers append through a mutex; results are sorted and deduped before return.
 fn collect_candidate_files_parallel(
     repository_id: &str,
     root: &Path,

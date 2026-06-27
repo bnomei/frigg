@@ -1,3 +1,5 @@
+//! CLI-to-config resolution for serve startup and per-command operating profiles.
+
 use std::error::Error;
 use std::io;
 

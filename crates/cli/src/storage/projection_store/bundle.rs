@@ -1,3 +1,5 @@
+//! Atomic retrieval projection bundle replace, load, and freshness checks.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     RetrievalProjectionBundle, RetrievalProjectionHeadRecord, Storage,
@@ -18,6 +20,7 @@ const REQUIRED_RETRIEVAL_PROJECTION_FAMILIES: &[&str] = &[
 ];
 
 impl Storage {
+    /// Atomically replaces all retrieval projection families for a manifest snapshot.
     pub fn replace_retrieval_projection_bundle_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -547,12 +550,7 @@ impl Storage {
             .collect())
     }
 
-    /// Returns the projection families that need a rebuild for a reused snapshot:
-    /// a family is stale-or-missing when no head exists for it OR the persisted
-    /// head's `heuristic_version` differs from the version the current runtime
-    /// produces. Without the version check a runtime upgrade leaves consumers
-    /// rejecting the persisted (version-mismatched) heads while reindex believes
-    /// the snapshot is projection-complete.
+    /// Returns projection families that are absent or behind the requested heuristic epoch.
     pub fn stale_or_missing_retrieval_projection_families_for_repository_snapshot(
         &self,
         repository_id: &str,

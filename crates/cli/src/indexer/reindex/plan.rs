@@ -1,3 +1,8 @@
+//! Reindex planning: manifest diffing, snapshot selection, and semantic refresh assembly.
+//!
+//! Plans record which repository paths changed, which manifest snapshot to advance from,
+//! and whether semantic embedding work stays incremental or must run as a full refresh.
+
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;

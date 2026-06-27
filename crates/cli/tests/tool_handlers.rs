@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration tests for MCP tool handlers wired through the production server stack.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -79,12 +81,6 @@ async fn server_for_fixture() -> FriggMcpServer {
     server
 }
 
-/// Best-effort adopt every startup-known repository through the public
-/// `workspace_attach` tool so adoption-gated read/search/navigation tools can
-/// run in fixtures that model an attached session. Failures are intentionally
-/// ignored: fixtures that deliberately break provenance persistence or assert
-/// detached behaviour still observe their own tool call's outcome rather than a
-/// setup panic.
 async fn attach_session_repositories(server: &FriggMcpServer) {
     let Ok(listed) = server
         .list_repositories(Parameters(ListRepositoriesParams {}))

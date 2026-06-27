@@ -1,3 +1,5 @@
+//! Integration tests for `search_symbol` handler tree-sitter matching, path filters, and response modes.
+
 use super::*;
 
 #[tokio::test]

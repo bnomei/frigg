@@ -1,3 +1,5 @@
+//! Precise SCIP query surface for symbols, occurrences, and navigation selection.
+
 use super::*;
 
 impl SymbolGraph {

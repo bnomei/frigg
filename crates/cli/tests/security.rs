@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration tests for session adoption boundaries and repository escape prevention.
+
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
@@ -9,11 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, GoToDefinitionParams,
-    ListRepositoriesParams,
-    PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
-    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
-    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
-    WorkspaceAttachIndexMode, WorkspaceAttachParams,
+    ListRepositoriesParams, PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES,
+    PUBLIC_TOOL_NAMES, PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse,
+    ReadPresentationMode, SearchPatternType, SearchSymbolParams, SearchTextParams,
+    WRITE_CONFIRM_PARAM, WorkspaceAttachIndexMode, WorkspaceAttachParams,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -56,10 +57,6 @@ fn cleanup_workspace(root: &Path) {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Adopt every startup-known repository into the session via the public
-/// `workspace_attach` tool. Read, search, and navigation tools gate on session
-/// adoption, so boundary-enforcement tests must first attach the workspace they
-/// then try (and must fail) to escape from.
 async fn attach_session_repositories(server: &FriggMcpServer) {
     for repository_id in public_repository_ids(server).await {
         server
@@ -662,9 +659,6 @@ async fn security_go_to_definition_rejects_relative_path_traversal_outside_works
     let repo_root = workspace.join("repo");
     let src_root = repo_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
-    // The repository also defines `outside_secret_token` so that, absent the
-    // containment guard, the token extracted from the out-of-tree file would
-    // resolve to an indexed symbol and surface in the navigation response.
     fs::write(
         src_root.join("lib.rs"),
         "pub fn outside_secret_token() {}\n",
@@ -702,8 +696,6 @@ async fn security_go_to_definition_rejects_relative_path_traversal_outside_works
             response.0.matches.len()
         ),
         Err(error) => {
-            // Token extraction from the out-of-tree file is skipped, so resolution
-            // falls back to the (non-indexed) requested path and finds nothing.
             assert_ne!(
                 error_code_tag(&error),
                 Some("confirmation_required"),

@@ -1,3 +1,5 @@
+//! Google Gemini embeddings HTTP provider with batch request mapping.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -85,6 +87,7 @@ struct GoogleErrorPayload {
     status: Option<String>,
 }
 
+/// Google embeddings client implementing the shared [`EmbeddingProvider`] contract.
 pub struct GoogleEmbeddingProvider {
     http: Arc<dyn HttpExecutor>,
     sleeper: Arc<dyn BackoffSleeper>,
@@ -215,10 +218,6 @@ impl GoogleEmbeddingProvider {
             }
 
             if let Some(provider_status_code) = envelope.error.code {
-                // The numeric `code` must not downgrade a transient failure already
-                // identified by the gRPC `status` string. A conflicting code (e.g.
-                // 400 on an UNAVAILABLE/503 response) would otherwise turn a
-                // retryable outage into a single no-backoff attempt.
                 if !retryable_from_grpc_status {
                     retryability = status_retryability(provider_status_code);
                 }

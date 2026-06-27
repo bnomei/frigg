@@ -1,3 +1,5 @@
+//! Criterion benchmarks for symbol search ranking latency across query shapes.
+
 #[path = "common/mod.rs"]
 mod support;
 

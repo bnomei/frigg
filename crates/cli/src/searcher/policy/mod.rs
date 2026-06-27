@@ -1,3 +1,7 @@
+//! Hybrid retrieval policy: path quality multipliers, path witness recall, selection scoring,
+//! post-selection guardrails, and frontier sizing. Facts are normalized once; predicates and DSL
+//! rules apply stage-specific effects through the shared policy kernel.
+
 mod dsl;
 mod facts;
 mod frontier;
@@ -16,6 +20,7 @@ pub(super) use facts::{
 pub(super) use frontier::plan_path_witness_frontier;
 pub(crate) use post_selection::PostSelectionTrace;
 
+/// Path-quality multiplier for a single path under the given retrieval intent.
 pub(super) fn hybrid_path_quality_multiplier_with_intent(
     path: &str,
     intent: &HybridRankingIntent,
@@ -24,14 +29,17 @@ pub(super) fn hybrid_path_quality_multiplier_with_intent(
     rules::path_quality::score(&ctx)
 }
 
+/// Path-witness recall score when facts pass eligibility; `None` when the path is ineligible.
 pub(super) fn hybrid_path_witness_recall_score_from_context(ctx: &PathWitnessFacts) -> Option<f32> {
     rules::path_witness::score(ctx)
 }
 
+/// Selection policy score for one ranked candidate given facts and coverage state.
 pub(super) fn hybrid_selection_score_from_context(ctx: &SelectionFacts) -> f32 {
     rules::selection::score(ctx)
 }
 
+/// Run post-selection guardrails on the final match list up to `limit`.
 pub(super) fn apply_post_selection_guardrails(
     matches: Vec<super::HybridRankedEvidence>,
     candidate_pool: &[super::HybridRankedEvidence],

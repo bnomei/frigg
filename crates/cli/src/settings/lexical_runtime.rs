@@ -1,3 +1,5 @@
+//! Lexical search backend selection for manifest-backed text retrieval.
+
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -44,6 +46,7 @@ impl FromStr for LexicalBackendMode {
     }
 }
 
+/// Lexical backend mode and optional ripgrep executable override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct LexicalRuntimeConfig {
     pub backend: LexicalBackendMode,

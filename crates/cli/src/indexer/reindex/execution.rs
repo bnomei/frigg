@@ -1,3 +1,5 @@
+//! Ordered reindex execution across manifest persistence, retrieval projections, and semantic refresh.
+
 use std::path::Path;
 
 use crate::domain::{FriggError, FriggResult};

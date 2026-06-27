@@ -1,3 +1,8 @@
+//! Hybrid search pipeline: candidate intake through channel fan-out.
+//!
+//! Runs lexical seeding, path-witness frontier expansion, graph and semantic channels, then hands
+//! channel hits to fusion with stage attribution samples.
+
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
@@ -22,9 +27,9 @@ use crate::searcher::{
     apply_post_selection_guardrails_with_trace, build_hybrid_lexical_recall_regex,
     build_hybrid_path_witness_hits_with_intent, build_regex_prefilter_plan, compile_safe_regex,
     empty_channel_result, hybrid_execution_note_from_channel_results, hybrid_lexical_only_mode,
-    hybrid_lexical_recall_tokens,
-    hybrid_path_has_exact_stem_match, merge_hybrid_lexical_search_output, normalize_search_filters,
-    regex_error_to_frigg_error, search_graph_channel_hits, search_semantic_channel_hits,
+    hybrid_lexical_recall_tokens, hybrid_path_has_exact_stem_match,
+    merge_hybrid_lexical_search_output, normalize_search_filters, regex_error_to_frigg_error,
+    search_graph_channel_hits, search_semantic_channel_hits,
 };
 use crate::settings::SemanticRuntimeCredentials;
 

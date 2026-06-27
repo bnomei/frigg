@@ -1,5 +1,9 @@
+//! Mutable score accumulator for retrieval policy rules. Applies additive and multiplicative
+//! effects in declaration order and optionally records a per-rule trace for debugging.
+
 use super::trace::{PolicyEffect, PolicyEvaluation, PolicyRuleTrace, PolicyStage, PolicyTrace};
 
+/// Running policy evaluation: base score plus optional rule trace.
 pub(crate) struct PolicyProgram {
     score: f32,
     trace: Option<Vec<PolicyRuleTrace>>,

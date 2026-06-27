@@ -1,3 +1,8 @@
+//! Semantic chunk construction and embedding provider bridge.
+//!
+//! Turns manifest entries into bounded text chunks, assigns deterministic chunk ids, and batches
+//! embedding requests through the configured semantic runtime.
+
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
@@ -317,22 +322,13 @@ pub(super) fn build_semantic_embedding_records(
     })
 }
 
-/// Result of building semantic embedding records for a manifest.
 pub(crate) struct SemanticEmbeddingBuild {
     pub(crate) records: Vec<SemanticChunkEmbeddingRecord>,
-    /// Repo-relative, semantic-eligible paths skipped because the file could not be
-    /// opened or read. Forwarded from [`SemanticChunkBuild::unreadable_paths`] so an
-    /// incremental advance can retain their existing live rows.
     pub(crate) unreadable_paths: Vec<String>,
 }
 
-/// Result of building semantic chunk candidates for a manifest.
 pub(crate) struct SemanticChunkBuild {
     pub(crate) candidates: Vec<SemanticChunkCandidate>,
-    /// Repo-relative, semantic-eligible paths skipped because the file could not be
-    /// opened or read (permissions, delete/lock race, transient I/O). An
-    /// incremental advance must retain these paths' existing live rows instead of
-    /// deleting them without replacement, which would silently shrink the corpus.
     pub(crate) unreadable_paths: Vec<String>,
 }
 
@@ -359,11 +355,6 @@ pub(crate) fn build_semantic_chunk_candidates(
             let mut file = match File::open(&entry.path) {
                 Ok(file) => file,
                 Err(err) => {
-                    // Skip this file but make the omission observable instead of
-                    // silently shrinking the semantic corpus: a semantic-eligible
-                    // manifest path that cannot be opened (permissions, delete
-                    // race, lock) would otherwise vanish from semantic search
-                    // after an apparently successful reindex.
                     warn!(
                         repository_id = %repository_id,
                         path = %entry.path.display(),
@@ -377,9 +368,6 @@ pub(crate) fn build_semantic_chunk_candidates(
                 }
             };
             if let Err(err) = file.read_to_string(&mut source) {
-                // Non-UTF-8 content or a transient read error: skip this file (do
-                // not fail the whole refresh on one unreadable file) but log it so
-                // the manifest/semantic-corpus mismatch is not silent.
                 warn!(
                     repository_id = %repository_id,
                     path = %entry.path.display(),

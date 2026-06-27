@@ -1,3 +1,5 @@
+//! Integration tests for `document_symbols` outline extraction and follow-up structural capture options.
+
 use super::*;
 
 #[tokio::test]

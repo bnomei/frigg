@@ -1,3 +1,5 @@
+//! Storage initialization, verification, and vector-store lifecycle entry points.
+
 use super::*;
 
 impl Storage {
@@ -16,6 +18,7 @@ impl Storage {
         &self.db_path
     }
 
+    /// Opens storage, applies migrations, and initializes the vector extension.
     pub fn initialize(&self) -> FriggResult<()> {
         self.initialize_with_vector_store(true)
     }
@@ -74,6 +77,7 @@ impl Storage {
         read_schema_version(&conn)
     }
 
+    /// Verifies schema version, required tables, and storage invariants.
     pub fn verify(&self) -> FriggResult<()> {
         let mut conn = open_connection(&self.db_path)?;
 

@@ -1,3 +1,5 @@
+//! Evidence-channel contracts for multi-source retrieval, health reporting, and replay.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,7 @@ impl EvidenceChannel {
     }
 }
 
+/// Repository document coordinate referenced by an evidence hit.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -64,6 +67,7 @@ pub enum EvidenceAnchorKind {
     PathWitness,
 }
 
+/// Span or symbol anchor within a document for citation and replay.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -101,6 +105,7 @@ impl EvidenceAnchor {
     }
 }
 
+/// Single scored hit from one evidence channel with provenance linkage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct EvidenceHit {
     pub channel: EvidenceChannel,
@@ -183,6 +188,7 @@ pub struct ChannelStats {
     pub match_count: usize,
 }
 
+/// Per-channel retrieval outcome with health, diagnostics, and hit payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelResult {
     pub channel: EvidenceChannel,

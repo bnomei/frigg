@@ -1,3 +1,5 @@
+//! Selection predicates over candidate class, path shape, overlap, and Laravel surface flags.
+
 use super::{PredicateLeaf, SelectionFacts};
 use crate::searcher::surfaces::HybridSourceClass;
 

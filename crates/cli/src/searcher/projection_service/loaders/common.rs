@@ -1,3 +1,8 @@
+//! Shared loader helpers for manifest- and candidate-backed projection source paths.
+//!
+//! Chooses the path set used to build or repair retrieval projections, preferring validated
+//! manifest digests when they cover the active candidate universe.
+
 use std::path::Path;
 
 use crate::searcher::RepositoryCandidateUniverse;

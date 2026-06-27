@@ -1,3 +1,5 @@
+//! Runtime post-selection guardrails: config surfaces, companions, CLI, and workflows.
+
 use std::collections::BTreeSet;
 
 use super::super::super::query_terms::hybrid_query_has_kotlin_android_ui_terms;

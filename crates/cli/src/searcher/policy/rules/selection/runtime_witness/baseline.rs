@@ -1,3 +1,5 @@
+//! Baseline runtime-witness selection multipliers for runtime class and overlap tiers.
+
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;
 use super::super::super::super::predicates::selection as pred;

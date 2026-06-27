@@ -1,3 +1,5 @@
+//! Integration tests for workspace MCP handlers (attach, prepare, current status, and repository listing).
+
 use super::*;
 use frigg::mcp::types::{
     WorkspaceAttachIndexMode, WorkspaceIndexLifecyclePhase, WorkspacePreciseLifecyclePhase,
@@ -290,10 +292,6 @@ async fn workspace_attach_ensures_missing_manifest_by_default() {
 
 #[tokio::test]
 async fn workspace_current_reports_stale_not_skipped_for_unindexed_repository() {
-    // A repository attached without indexing (not ready, no active task) must report
-    // index_lifecycle.phase = stale from workspace_current, NOT skipped. `skipped`
-    // is reserved for an intentional index_mode=skip and would mislead operators
-    // into reading a stale repo as a deliberate no-op.
     let workspace_root = temp_workspace_root("workspace-current-stale-unindexed");
     fs::create_dir_all(workspace_root.join("src")).expect("workspace src dir should be creatable");
     fs::write(

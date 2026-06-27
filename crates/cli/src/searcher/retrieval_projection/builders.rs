@@ -1,3 +1,8 @@
+//! Path-heuristic builders for retrieval projection families.
+//!
+//! Derives test-subject links, entrypoint surfaces, path relations, subtree coverage, surface
+//! terms, and anchor sketches from stored path-witness projections and overlay records.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;

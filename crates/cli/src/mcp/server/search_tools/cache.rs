@@ -1,3 +1,5 @@
+//! Search response cache lookup, insertion, and repository-scoped invalidation.
+
 use super::*;
 use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 

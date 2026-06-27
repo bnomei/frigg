@@ -1,3 +1,5 @@
+//! Search and exploration MCP wire types: text, hybrid, symbol, structural, and `explore` contracts.
+
 use std::collections::BTreeMap;
 
 use super::{MetadataObject, ReadPresentationMode, ResponseMode};
@@ -70,6 +72,8 @@ pub struct ExploreMetadata {
     pub effective_max_matches: usize,
 }
 
+/// Parameters for the extended `explore` tool.
+/// Parameters for the extended `explore` tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreParams {
     /// Artifact path using the same canonical repository-relative semantics as `read_file`.
@@ -115,6 +119,7 @@ pub struct ExploreResponse {
     pub metadata: ExploreMetadata,
 }
 
+/// Parameters for `search_text`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
     /// Text or regex pattern to search for. Leading and trailing whitespace is trimmed.
@@ -138,6 +143,7 @@ pub struct SearchTextParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Response from `search_text` with optional `result_handle` for `read_match`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextResponse {
     pub total_matches: usize,
@@ -170,6 +176,7 @@ pub struct SearchHybridChannelWeightsParams {
     pub semantic: Option<f32>,
 }
 
+/// Parameters for `search_hybrid`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
     /// Broad natural-language or exact-phrase repository query.
@@ -435,6 +442,7 @@ pub struct SearchHybridMetadata {
     pub freshness_basis: ResponseFreshnessBasisMetadata,
 }
 
+/// Response from `search_hybrid` including channel health and navigation hints.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
@@ -462,6 +470,7 @@ pub struct SearchHybridResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `search_symbol`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolParams {
     /// API, type, or function name to search in indexed symbols.

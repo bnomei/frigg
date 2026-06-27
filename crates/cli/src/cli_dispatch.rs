@@ -1,3 +1,6 @@
+//! Async CLI dispatch: utility commands, startup gates, watch supervisor attach, and serve over
+//! stdio or HTTP runtime.
+
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
@@ -123,6 +126,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         Arc::clone(&runtime_task_registry),
         Arc::clone(&validated_manifest_candidate_cache),
     );
+    // Watch supervisor starts only when the resolved transport enables incremental freshness.
     let watch_runtime = maybe_start_watch_runtime(
         &watch_runtime_config,
         transport_kind,
@@ -134,6 +138,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     server.set_watch_runtime(_watch_runtime.clone());
     if let Some(runtime) = http_runtime {
         startup_trace(startup_trace_enabled, "async_main: serving http");
+        // HTTP runtime path: loopback or remote MCP over streamable HTTP.
         serve_http(runtime, server).await?;
     } else {
         startup_trace(startup_trace_enabled, "async_main: serving stdio");

@@ -1,6 +1,14 @@
 //! Playbook parsing and regression tracing for repeatable search evaluation. This layer turns
 //! retrieval expectations into executable probes so ranking changes can be measured without
 //! coupling that logic to the MCP runtime.
+//!
+//! Semantic map:
+//! - `model` — hybrid playbook metadata, witness groups, and run outcome types.
+//! - `parser` — markdown metadata header extraction and normalization.
+//! - `loader` — filesystem discovery of executable hybrid playbooks.
+//! - `runner` — hybrid search probes and regression aggregation.
+//! - `trace` — per-playbook trace packet serialization for ranking forensics.
+//! - `witness` — path witness matching and semantic-status gating.
 
 mod loader;
 mod model;

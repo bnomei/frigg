@@ -1,3 +1,5 @@
+//! Path-quality rule pipeline: class and surface multipliers applied in fixed stage order.
+
 use super::super::facts::PathQualityFacts;
 use super::super::kernel::PolicyProgram;
 use super::super::trace::PolicyEvaluation;
@@ -19,6 +21,7 @@ mod runtime;
 #[path = "path_quality/runtime_config.rs"]
 mod runtime_config;
 
+/// Evaluate all path-quality rule sets; optionally record a per-rule trace.
 pub(crate) fn evaluate(ctx: &PathQualityFacts, trace: bool) -> PolicyEvaluation {
     let mut program = PolicyProgram::with_optional_trace(ctx.base_multiplier, trace);
     docs_contracts::apply(&mut program, ctx);

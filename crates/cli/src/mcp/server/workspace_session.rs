@@ -1,3 +1,6 @@
+//! Per-session workspace adoption, default-repository selection, watch lease refcounting, and
+//! session-local `result_handle` storage for `read_match`.
+
 use super::*;
 
 impl FriggMcpServer {
@@ -333,9 +336,6 @@ impl FriggMcpServer {
 
     async fn wait_for_repository_index_work(&self, repository_id: &str, timeout: Duration) -> bool {
         let now = tokio::time::Instant::now();
-        // Use checked arithmetic so an oversized timeout can never panic the timer.
-        // If the deadline is unrepresentable, fall back to a far-but-representable
-        // bound rather than overflowing.
         let deadline = now
             .checked_add(timeout)
             .unwrap_or_else(|| now + Duration::from_secs(60 * 60));
@@ -414,10 +414,6 @@ impl FriggMcpServer {
         } else if matches!(action_taken, WorkspaceIndexAction::Unavailable) {
             WorkspaceIndexLifecyclePhase::Unavailable
         } else if matches!(action_taken, WorkspaceIndexAction::SkippedNoWork) {
-            // Not ready, no active/queued task, and the caller did not request a
-            // skip: the repository is stale and needs a reindex. This is distinct
-            // from `Skipped`, which the runbook documents as an intentional
-            // `index_mode=skip`. `workspace_current` reaches here for a dirty repo.
             WorkspaceIndexLifecyclePhase::Stale
         } else {
             WorkspaceIndexLifecyclePhase::Skipped
@@ -917,10 +913,6 @@ impl FriggMcpServer {
     ) -> Result<(String, PathBuf, String), ErrorData> {
         let requested = PathBuf::from(&params.path);
         let roots = if requested.is_absolute() && params.repository_id.is_none() {
-            // Absolute paths with no repository_id are scoped to the repositories
-            // adopted in this session, not all startup-known workspaces. Using
-            // known_workspaces() here would let a detached session read any repo
-            // the operator registered at startup.
             self.attached_workspaces()
                 .into_iter()
                 .map(|workspace| (workspace.repository_id, workspace.root))

@@ -1,3 +1,5 @@
+//! Unit tests for indexer symbol extraction, manifest diffing, structural queries, and semantic reindex persistence.
+
 mod support;
 
 mod language;

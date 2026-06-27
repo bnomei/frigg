@@ -1,3 +1,6 @@
+//! Selection predicates split by candidate shape, query signals, intent, Laravel surfaces, and
+//! rolling selection state.
+
 #![allow(dead_code)]
 
 pub(super) use super::super::dsl::PredicateLeaf;

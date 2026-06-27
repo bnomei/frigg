@@ -1,3 +1,5 @@
+//! Deep-search playbook and trace-artifact contracts used by advanced trace-oriented MCP tools.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -54,12 +56,14 @@ pub(crate) fn allowed_step_tools() -> &'static [&'static str] {
     &ALLOWED_STEP_TOOLS
 }
 
+/// Ordered sequence of MCP tool calls agents can run and replay as a trace workflow.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchPlaybook {
     pub playbook_id: String,
     pub steps: Vec<DeepSearchPlaybookStep>,
 }
 
+/// One playbook step referencing a whitelisted MCP tool name and JSON params.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchPlaybookStep {
     pub step_id: String,
@@ -68,6 +72,7 @@ pub struct DeepSearchPlaybookStep {
     pub params: Value,
 }
 
+/// Serialized trace of playbook execution suitable for replay and citation composition.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchTraceArtifact {
     pub trace_schema: String,
@@ -76,6 +81,7 @@ pub struct DeepSearchTraceArtifact {
     pub steps: Vec<DeepSearchTraceStep>,
 }
 
+/// Per-step trace record capturing params and the normalized tool outcome.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchTraceStep {
     pub step_index: usize,
@@ -86,6 +92,7 @@ pub struct DeepSearchTraceStep {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Normalized success or transport error outcome for one traced MCP tool call.
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DeepSearchTraceOutcome {
     Ok {
@@ -98,6 +105,7 @@ pub enum DeepSearchTraceOutcome {
     },
 }
 
+/// Result of replaying a playbook against an expected trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchReplayCheck {
     pub matches: bool,
@@ -105,6 +113,7 @@ pub struct DeepSearchReplayCheck {
     pub replayed: DeepSearchTraceArtifact,
 }
 
+/// Answer text with claim and file-span citations derived from a trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchCitationPayload {
     pub answer_schema: String,
@@ -139,6 +148,7 @@ pub struct DeepSearchFileSpan {
     pub end_column: usize,
 }
 
+/// Runs deep-search playbooks against a dedicated MCP server instance.
 #[derive(Clone)]
 pub struct DeepSearchHarness {
     server: FriggMcpServer,

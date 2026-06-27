@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Hybrid retrieval regression suite for PHP repositories and Laravel path-witness behavior.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

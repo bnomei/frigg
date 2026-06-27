@@ -1,7 +1,13 @@
+//! Per-stage timing and cardinality samples for hybrid search execution.
+//!
+//! Attribution records how many candidates entered each pipeline stage and how many records left,
+//! so MCP surfaces can explain latency without re-running retrieval.
+
 use std::time::Instant;
 
 use serde::Serialize;
 
+/// Elapsed microseconds and input/output counts for one hybrid-search pipeline stage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SearchStageSample {
     pub elapsed_us: u64,
@@ -19,6 +25,8 @@ impl SearchStageSample {
     }
 }
 
+/// Stage-by-stage attribution for a full hybrid retrieval run, from candidate intake through
+/// final diversification.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SearchStageAttribution {
     pub candidate_intake: SearchStageSample,

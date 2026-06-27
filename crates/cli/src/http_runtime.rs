@@ -1,3 +1,5 @@
+//! HTTP runtime for MCP serve: bind resolution, bearer auth, and streamable HTTP transport wiring.
+
 use std::error::Error;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -45,10 +47,6 @@ pub(super) fn resolve_http_runtime_config(
     let has_http_related_flags =
         cli.mcp_http_host.is_some() || cli.allow_remote_http || cli.mcp_http_auth_token.is_some();
 
-    // Decide whether an HTTP runtime should start and on which port. The default
-    // `serve` port must flow through the same host/auth validation below as an
-    // explicit `--mcp-http-port`, otherwise a non-loopback bind could start
-    // without the remote override or a bearer token.
     let port = if has_http_port {
         cli.mcp_http_port
             .expect("checked: mcp_http_port is set when has_http_port is true")
@@ -137,6 +135,7 @@ pub(super) async fn serve_http(
             bearer_auth_middleware,
         ));
 
+    // Side effect: ctrl-c cancels the streamable HTTP service before axum shuts down.
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;

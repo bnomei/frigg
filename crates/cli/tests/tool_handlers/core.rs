@@ -1,3 +1,5 @@
+//! Integration tests for core MCP handlers (`read_file`, `read_match`, `explore`, and hybrid/text search tools).
+
 use super::*;
 use frigg::mcp::types::{ExploreResponse, ReadFileResponse, ReadMatchResponse};
 
@@ -187,10 +189,6 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
 
 #[tokio::test]
 async fn core_read_file_line_range_rejects_file_exceeding_max_file_bytes_before_read() {
-    // A line-window request must not load a file whose full size exceeds the
-    // configured max_file_bytes memory cap, even though only a small slice is
-    // returned. Previously the size gate was skipped for line ranges and the whole
-    // file was read before slicing.
     let workspace_root = temp_workspace_root("read-file-line-range-max-file-bytes");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -200,7 +198,6 @@ async fn core_read_file_line_range_rejects_file_exceeding_max_file_bytes_before_
     )
     .expect("failed to seed temporary fixture source");
 
-    // max_file_bytes far below the ~55-byte file size.
     let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8).await;
     let error = match server
         .read_file(Parameters(ReadFileParams {

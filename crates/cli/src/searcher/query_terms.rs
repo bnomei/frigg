@@ -1,3 +1,8 @@
+//! Query term extraction and overlap helpers for hybrid ranking.
+//!
+//! Normalizes exact terms, overlap tokens, path stems, and witness-specific term filters used by
+//! lexical alignment, path-witness recall, semantic retention, and reranker diversification.
+
 use std::collections::BTreeSet;
 use std::path::Path;
 

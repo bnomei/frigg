@@ -1,3 +1,5 @@
+//! Selection novelty bonuses and repeat penalties by source class and Laravel surface.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

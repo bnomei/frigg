@@ -1,6 +1,9 @@
+//! Search planner vocabulary for path classes, source bias, and intent routing.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Repository path tier used to rank lexical and witness candidates.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -38,6 +41,7 @@ impl PathClass {
     }
 }
 
+/// File-origin classification that steers retrieval bias and witness selection.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -97,6 +101,7 @@ impl SourceClass {
     }
 }
 
+/// High-level retrieval objective that selects planner rules and channel mix.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -177,6 +182,7 @@ pub enum PlaybookReferencePolicy {
     AllowSelfReference,
 }
 
+/// Stable identifier for a search-intent term bundle in the planner.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]

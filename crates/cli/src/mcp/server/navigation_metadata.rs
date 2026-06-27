@@ -1,3 +1,5 @@
+//! Navigation response metadata, structural follow-up derivation, and compact selection notes.
+
 use super::*;
 use crate::languages::rust_implementation_candidates_from_facts;
 

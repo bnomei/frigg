@@ -1,3 +1,8 @@
+//! Query-time projection lookups for path-witness recall and graph context.
+//!
+//! Scores path-witness candidates from cached projections, applies overlay boosts, and assembles
+//! the read-only graph adjacency view used by the graph channel.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

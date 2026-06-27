@@ -1,3 +1,5 @@
+//! Background precise-artifact generation tasks spawned after index refresh or workspace attach.
+
 use super::*;
 
 const PRECISE_GENERATION_EXCLUDED_DIRECTORY_NAMES: &[&str] = &[
@@ -945,12 +947,7 @@ impl FriggMcpServer {
                 &workspace.repository_id,
                 spec.generator_id,
             ) {
-                // No prior attempt: generation is needed.
                 None => true,
-                // A prior attempt that failed for an environmental reason must be
-                // retryable on a plain attach/prepare (e.g. after the user installs
-                // the missing tool) even with no file changes. Terminal states
-                // (Succeeded/Skipped/Unsupported/NotConfigured) count as no work.
                 Some(summary) => matches!(
                     summary.status,
                     WorkspacePreciseGenerationStatus::Failed
@@ -1408,14 +1405,16 @@ impl FriggMcpServer {
             .precise_generation_pending_dirty_paths
             .write()
             .expect("precise generation pending dirty paths poisoned");
-        let entry = pending
-            .entry(repository_id.to_owned())
-            .or_insert_with(|| (std::collections::BTreeSet::new(), std::collections::BTreeSet::new()));
+        let entry = pending.entry(repository_id.to_owned()).or_insert_with(|| {
+            (
+                std::collections::BTreeSet::new(),
+                std::collections::BTreeSet::new(),
+            )
+        });
         entry.0.extend(changed_paths.iter().cloned());
         entry.1.extend(deleted_paths.iter().cloned());
     }
 
-    /// Drain the dirty paths recorded while a precise-generation task was active.
     pub(in crate::mcp::server) fn take_pending_precise_dirty_paths(
         &self,
         repository_id: &str,
@@ -1486,9 +1485,6 @@ impl FriggMcpServer {
                     .join(","),
                 "workspace precise generation skipped because a generation task is already active"
             );
-            // Record the dirty paths so the active task's completion replays them;
-            // otherwise a change presented mid-generation (possibly after the
-            // running generator already read the old file) would be lost.
             self.record_pending_precise_dirty_paths(
                 &workspace.repository_id,
                 changed_paths,
@@ -1583,10 +1579,6 @@ impl FriggMcpServer {
                         },
                         detail,
                     );
-                // Replay any dirty paths that were presented while this task was
-                // active. finish_task ran first, so the active-task guard no longer
-                // sees this task and the follow-up generation can spawn (or, if a
-                // newer task is already active, it is re-queued for that task).
                 if let Some((pending_changed, pending_deleted)) =
                     server.take_pending_precise_dirty_paths(&workspace.repository_id)
                 {

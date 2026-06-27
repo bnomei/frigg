@@ -1,3 +1,5 @@
+//! Repository and manifest snapshot persistence.
+
 use super::*;
 
 impl Storage {

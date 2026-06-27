@@ -1,3 +1,5 @@
+//! Regression tests that literal, regex, and hybrid search modes return identical ordering across repeated runs.
+
 use super::*;
 
 #[test]

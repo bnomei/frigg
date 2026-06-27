@@ -1,9 +1,9 @@
+//! `read_file`, `read_match`, and `explore` implementations with path containment and runtime
+//! file-content window reuse.
+
 use super::*;
 use serde::Serialize;
 
-/// Provenance descriptor threaded through [`FriggMcpServer::read_file_impl_with_provenance`]
-/// so that delegated reads record the public tool that was actually invoked (e.g. `read_match`)
-/// together with its handle-based input contract, instead of always persisting `read_file`.
 #[derive(Clone)]
 pub(super) struct ReadFileProvenanceContext {
     tool_name: &'static str,
@@ -53,8 +53,8 @@ impl FriggMcpServer {
         params: ReadFileParams,
         provenance: ReadFileProvenanceContext,
     ) -> Result<ReadFileResponse, ErrorData> {
-        let execution_context =
-            self.read_only_tool_execution_context(provenance.tool_name, params.repository_id.clone());
+        let execution_context = self
+            .read_only_tool_execution_context(provenance.tool_name, params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let provenance_for_blocking = provenance.clone();

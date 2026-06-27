@@ -1,3 +1,5 @@
+//! Shared HTTP transport, retry backoff, and diagnostic redaction for embedding providers.
+
 use std::time::Duration;
 
 use async_trait::async_trait;

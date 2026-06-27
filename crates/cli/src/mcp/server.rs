@@ -1,3 +1,6 @@
+//! MCP server orchestration: tool routing, session-scoped workspace adoption, runtime caches,
+//! provenance recording, and the public tool handlers agents invoke over streamable HTTP or stdio.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -156,6 +159,7 @@ mod symbol_index;
 mod workspace;
 mod workspace_session;
 
+/// Aggregate counts from building repository symbol corpora for diagnostics benchmarks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SymbolCorpusBenchmarkSummary {
     pub repository_count: usize,
@@ -165,6 +169,7 @@ pub struct SymbolCorpusBenchmarkSummary {
     pub blade_evidence_files: usize,
 }
 
+/// Aggregate counts from building or reusing a workspace precise graph for diagnostics benchmarks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreciseGraphBenchmarkSummary {
     pub artifact_count: usize,
@@ -327,10 +332,6 @@ struct FriggMcpRuntimeState {
     runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
     precise_generation_status_cache:
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
-    /// Per-repository dirty paths that arrived while a precise-generation task was
-    /// already active (returned SkippedActiveTask). Replayed once the active task
-    /// completes so in-flight reruns are not silently dropped. Value is
-    /// (changed_paths, deleted_paths).
     precise_generation_pending_dirty_paths:
         Arc<RwLock<BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>>>,
 }
@@ -340,6 +341,8 @@ struct FriggMcpSessionState {
     inner: Arc<FriggMcpSessionStateInner>,
 }
 
+// Session adoption boundary: per-transport session tracks adopted repository_ids separately
+// from the process-wide workspace registry and watch lease refcounts.
 struct FriggMcpSessionStateInner {
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
@@ -670,10 +673,6 @@ impl FriggMcpServer {
         let wait_for_index = params
             .wait_for_index
             .unwrap_or(matches!(index_mode, WorkspaceAttachIndexMode::Ensure));
-        // Cap the client-supplied timeout so it can never overflow the timer
-        // arithmetic in the active-work wait loop (Instant::now() + timeout
-        // panics for absurd durations). One hour is far beyond any legitimate
-        // attach-time index wait.
         const MAX_INDEX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
         let index_timeout = Duration::from_millis(
             params

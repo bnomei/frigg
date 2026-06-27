@@ -1,3 +1,6 @@
+//! Path-witness recall rules gated by eligibility predicates, then scored by overlap, entrypoint,
+//! Laravel, example, and runtime-config rule sets.
+
 use super::super::dsl::{
     Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets, predicate_matches,
 };
@@ -12,6 +15,7 @@ mod laravel;
 mod runtime_config;
 mod source;
 
+// Witness paths must match at least one structural or overlap signal before scoring rules run.
 const PATH_WITNESS_ELIGIBILITY_ANY: &[super::super::dsl::PredicateLeaf<PathWitnessFacts>] = &[
     pred::path_overlap_leaf(),
     pred::specific_path_overlap_leaf(),

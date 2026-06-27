@@ -1,3 +1,5 @@
+//! Manifest persistence adapter that maps indexer manifest operations onto storage tables.
+
 use std::path::{Path, PathBuf};
 
 use crate::domain::FriggResult;
@@ -14,16 +16,19 @@ pub struct ManifestStore {
 }
 
 impl ManifestStore {
+    /// Opens a manifest store backed by the provenance database at `db_path`.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             storage: Storage::new(db_path),
         }
     }
 
+    /// Initializes all storage tables required for manifest and semantic persistence.
     pub fn initialize(&self) -> FriggResult<()> {
         self.storage.initialize()
     }
 
+    /// Registers or updates repository metadata before snapshot writes.
     pub fn upsert_repository(
         &self,
         repository_id: &str,
@@ -42,6 +47,7 @@ impl ManifestStore {
         }
     }
 
+    /// Persists one manifest snapshot for a repository.
     pub fn persist_snapshot_manifest(
         &self,
         repository_id: &str,
@@ -56,6 +62,7 @@ impl ManifestStore {
             .upsert_manifest(repository_id, snapshot_id, &manifest_entries)
     }
 
+    /// Loads the file digest set stored under `snapshot_id`.
     pub fn load_snapshot_manifest(&self, snapshot_id: &str) -> FriggResult<Vec<FileDigest>> {
         self.storage
             .load_manifest_for_snapshot(snapshot_id)
@@ -67,6 +74,7 @@ impl ManifestStore {
             })
     }
 
+    /// Returns the newest manifest snapshot recorded for `repository_id`.
     pub fn load_latest_manifest_for_repository(
         &self,
         repository_id: &str,
@@ -86,6 +94,7 @@ impl ManifestStore {
             })
     }
 
+    /// Deletes one manifest snapshot and any dependent rows retained by storage policy.
     pub fn delete_snapshot(&self, snapshot_id: &str) -> FriggResult<()> {
         self.storage.delete_snapshot(snapshot_id)
     }

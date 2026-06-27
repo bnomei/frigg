@@ -2,6 +2,11 @@
 //! indexing and storage build durable repository artifacts, search and graph layers answer
 //! retrieval questions from those artifacts, and MCP plus watch turn the whole system into a
 //! long-lived agent-facing service.
+//!
+//! Semantic map:
+//! - `watch` — lease-gated filesystem supervisor and debounced reindex scheduler.
+//! - `playbooks` — hybrid search regression probes and trace packets.
+//! - `test_support` — lightweight config helpers for integration tests.
 
 /// Shared domain vocabulary reused across indexing, retrieval, provenance, and MCP responses so
 /// each layer can exchange the same evidence model without translation glue.

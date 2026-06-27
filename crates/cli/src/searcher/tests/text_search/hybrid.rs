@@ -1,3 +1,5 @@
+//! Regression tests for hybrid path-witness recall that supplements manifest candidates with hidden workflow files.
+
 use super::*;
 
 #[test]

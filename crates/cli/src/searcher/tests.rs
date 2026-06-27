@@ -1,3 +1,5 @@
+//! Regression suite for hybrid search ranking, path-witness projection, lexical recall, and ecosystem-specific witness ordering.
+
 use std::env;
 use std::fs;
 use std::future::Future;

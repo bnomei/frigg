@@ -1,3 +1,5 @@
+//! Precise-generation lifecycle summaries and background task coordination per `repository_id`.
+
 use super::*;
 use std::process::{Command, Stdio};
 use std::thread;

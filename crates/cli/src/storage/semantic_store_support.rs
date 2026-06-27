@@ -1,3 +1,5 @@
+//! Internal semantic partition sync, vector row maintenance, and head bookkeeping.
+
 use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Transaction, params_from_iter};

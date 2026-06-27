@@ -1,3 +1,8 @@
+//! Hybrid fusion: ranker blending, document aggregation, and diversification.
+//!
+//! Merges lexical, path-witness, graph, and semantic channel hits into ranked anchors, builds a
+//! coverage-grouped pool, and produces the final diversified match list.
+
 use std::collections::BTreeSet;
 use std::time::Instant;
 

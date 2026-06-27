@@ -1,3 +1,5 @@
+//! Integration tests that gate MCP runtime behavior across workspace, cache, navigation, and freshness.
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

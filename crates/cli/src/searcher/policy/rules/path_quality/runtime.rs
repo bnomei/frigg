@@ -1,3 +1,5 @@
+//! Path-quality rules for runtime, MCP, benchmark, test, and fixture intent alignment.
+
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;
 use crate::searcher::policy::kernel::PolicyProgram;

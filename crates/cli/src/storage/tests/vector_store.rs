@@ -1,3 +1,5 @@
+//! Regression tests for sqlite-vec table initialization, dimension verification, and nearest-neighbor query behavior.
+
 use super::support::*;
 
 #[test]

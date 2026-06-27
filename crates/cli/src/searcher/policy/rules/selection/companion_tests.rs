@@ -1,3 +1,5 @@
+//! Selection rules promoting runtime-adjacent test and CLI test companions.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

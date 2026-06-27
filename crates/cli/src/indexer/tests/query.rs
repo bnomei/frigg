@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for structural tree-sitter search captures, grouped anchors, and deterministic query replay.
+
 use super::support::*;
 use crate::indexer::{StructuralQueryAnchorSelection, search_structural_grouped_in_source};
 

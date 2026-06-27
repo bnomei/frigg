@@ -1,3 +1,5 @@
+//! Playbook loader that discovers executable hybrid markdown playbooks under a root directory.
+
 use std::fs;
 use std::path::Path;
 
@@ -5,6 +7,7 @@ use crate::domain::{FriggError, FriggResult};
 
 use super::{LoadedHybridPlaybookRegression, PlaybookDocument, parse_playbook_document};
 
+/// Loads and parses one markdown playbook from disk.
 pub fn load_playbook_document(path: &Path) -> FriggResult<PlaybookDocument> {
     let raw = fs::read_to_string(path).map_err(FriggError::Io)?;
     parse_playbook_document(&raw).map_err(|err| {
@@ -15,6 +18,7 @@ pub fn load_playbook_document(path: &Path) -> FriggResult<PlaybookDocument> {
     })
 }
 
+/// Discovers and loads all executable hybrid playbooks under a root directory.
 pub fn load_hybrid_playbook_regressions(
     playbooks_root: &Path,
 ) -> FriggResult<Vec<LoadedHybridPlaybookRegression>> {

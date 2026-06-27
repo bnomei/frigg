@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration regressions for Lua hybrid retrieval that ranks CLI entrypoints above test-init fixture noise.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

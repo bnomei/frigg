@@ -1,8 +1,12 @@
+//! Path-witness facts: projection-backed recall signals merged with live path detection and
+//! query overlap for path witness scoring rules.
+
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::path_witness_projection::StoredPathWitnessProjection;
 use super::super::super::surfaces::HybridSourceClass;
 use super::{PolicyQueryContext, SharedIntentFacts, SharedPathFacts};
 
+/// Facts for path-witness recall rules from projection, live path shape, and query overlap.
 pub(crate) struct PathWitnessFacts {
     pub(crate) path_overlap: usize,
     pub(crate) specific_path_overlap: usize,

@@ -1,3 +1,5 @@
+//! Runtime companion guardrails: surface rescue, test companions, and mixed-support repair.
+
 use super::*;
 
 pub(in crate::searcher::policy::post_selection) fn apply_runtime_companion_surface_visibility(

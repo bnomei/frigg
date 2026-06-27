@@ -1,3 +1,5 @@
+//! Regression tests for semantic chunk embedding replace/load roundtrips and read-trace accounting.
+
 use super::support::*;
 
 #[test]
@@ -1099,8 +1101,6 @@ fn semantic_vector_topk_returns_unchanged_chunks_after_incremental_advance() -> 
         ],
     )?;
 
-    // Incremental advance: only src/change.rs changes; chunk-keep keeps its
-    // snapshot_id stamp of snapshot-001 while the head moves to snapshot-002.
     advance_semantic_records(
         &storage,
         "repo-1",
@@ -1126,8 +1126,6 @@ fn semantic_vector_topk_returns_unchanged_chunks_after_incremental_advance() -> 
         )],
     )?;
 
-    // Query close to chunk-keep's vector; it must survive the membership gate
-    // even though its snapshot_id is still snapshot-001.
     let mut query_embedding = vec![1.0, 0.0];
     query_embedding.resize(DEFAULT_VECTOR_DIMENSIONS, 0.0);
     let matches = storage.load_semantic_vector_topk_for_repository_snapshot_model(

@@ -1,3 +1,8 @@
+//! Path-witness retrieval projection encoding and surface-family classification.
+//!
+//! Classifies repository paths into witness flags and generic surface families that drive
+//! path-quality scoring, candidate supplements, and retrieval projection bundle assembly.
+
 use std::path::Path;
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};

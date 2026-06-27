@@ -1,5 +1,9 @@
+//! Serializable policy trace types for path quality, path witness, selection, and post-selection
+//! stages. Used by rule-trace helpers and optional post-selection diagnostics.
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// Stage label attached to each applied retrieval-policy rule.
 pub(crate) enum PolicyStage {
     PathQuality,
     PathWitness,

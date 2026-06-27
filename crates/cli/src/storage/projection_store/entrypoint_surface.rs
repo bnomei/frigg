@@ -1,3 +1,5 @@
+//! Entrypoint surface projection replace and load.
+
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::storage::{EntrypointSurfaceProjection, Storage, db_runtime::open_connection};
 

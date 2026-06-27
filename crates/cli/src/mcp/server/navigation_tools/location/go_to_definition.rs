@@ -1,3 +1,5 @@
+//! `go_to_definition` and `find_declarations` shared resolution and response assembly.
+
 use super::*;
 
 fn error_code_tag(error: &ErrorData) -> Option<&str> {

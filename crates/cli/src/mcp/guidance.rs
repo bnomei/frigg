@@ -1,3 +1,6 @@
+//! MCP policy resources and routing prompts that describe language support, tool-surface profiles,
+//! and when agents should prefer Frigg tools over shell reads.
+
 use rmcp::model::{
     AnnotateAble, GetPromptResult, Prompt, PromptArgument, PromptMessage, PromptMessageRole,
     RawResource, ReadResourceResult, Resource, ResourceContents,

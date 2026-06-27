@@ -1,3 +1,5 @@
+//! Unit tests for search-intent rule activation across docs, contract, runtime-config, and test-witness query shapes.
+
 use crate::domain::{
     ArtifactBias, FrameworkHint, PlannerStrictness, PlaybookReferencePolicy, SearchGoal,
     SearchIntentRuleId,

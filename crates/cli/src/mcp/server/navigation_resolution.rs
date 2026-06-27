@@ -1,3 +1,5 @@
+//! Symbol and cursor target resolution for navigation tools across corpora and source evidence.
+
 use super::*;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -372,12 +374,6 @@ impl FriggMcpServer {
             .to_owned()
     }
 
-    /// Containment guard for navigation file reads.
-    ///
-    /// Navigation resolves caller-supplied `path` values against a corpus root and
-    /// reads the resulting file. Mirroring `resolve_file_path`, the candidate must
-    /// canonicalize to a location inside the canonical root; otherwise `..`
-    /// segments or absolute paths could escape the adopted repository.
     pub(in crate::mcp::server) fn navigation_path_within_root(
         root: &Path,
         candidate: &Path,
@@ -722,10 +718,6 @@ impl FriggMcpServer {
         if bytes.is_empty() {
             return None;
         }
-        // `offset` is a byte offset derived from a client-supplied column and
-        // clamped only to the byte length, so it can land inside a multibyte
-        // character. Snap it down to a UTF-8 char boundary before slicing to
-        // avoid a "byte index is not a char boundary" panic.
         let mut offset = offset.min(bytes.len().saturating_sub(1));
         while offset > 0 && !source.is_char_boundary(offset) {
             offset -= 1;
@@ -1079,13 +1071,8 @@ mod tests {
 
     #[test]
     fn php_helper_string_token_does_not_panic_on_multibyte_line() {
-        // A client-supplied column that overshoots a line ending in a multibyte
-        // character produces a byte offset landing on a continuation byte. The
-        // helper must snap to a char boundary instead of panicking.
         let source = "echo café";
-        let offset =
-            byte_offset_for_line_column(source, 1, 999).expect("offset should resolve");
-        // Must not panic; this line has no helper call, so None is expected.
+        let offset = byte_offset_for_line_column(source, 1, 999).expect("offset should resolve");
         assert_eq!(
             FriggMcpServer::php_helper_string_token_around_offset(source, offset),
             None
@@ -1094,12 +1081,10 @@ mod tests {
 
     #[test]
     fn php_helper_string_token_handles_column_inside_multibyte_char() {
-        // Column pointing directly into the multibyte char at the start of the line.
         let source = "é route('x')";
         for column in 1..=source.chars().count() {
-            let offset = byte_offset_for_line_column(source, 1, column)
-                .expect("offset should resolve");
-            // Must never panic regardless of where the column lands.
+            let offset =
+                byte_offset_for_line_column(source, 1, column).expect("offset should resolve");
             let _ = FriggMcpServer::php_helper_string_token_around_offset(source, offset);
         }
     }

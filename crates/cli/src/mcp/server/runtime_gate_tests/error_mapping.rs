@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests that Frigg error codes map to stable MCP transport errors for agents.
+
 use super::*;
 
 #[test]

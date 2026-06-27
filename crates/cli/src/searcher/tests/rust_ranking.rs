@@ -1,3 +1,5 @@
+//! Regression tests for Rust hybrid ranking that rescues Cargo manifests and config witnesses from path-noise queries.
+
 use super::*;
 
 #[test]

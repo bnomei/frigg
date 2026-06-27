@@ -1,8 +1,11 @@
+//! Navigation MCP wire types: references, definitions, declarations, implementations, and call hierarchy.
+
 use super::{MetadataObject, ResponseMode};
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Parameters for `find_references`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesParams {
     /// Optional symbol query. Omit when resolving the target by source location.
@@ -24,6 +27,7 @@ pub struct FindReferencesParams {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Precision mode reported by navigation tools for the resolved target and match set.
 #[serde(rename_all = "snake_case")]
 pub enum NavigationMode {
     Precise,
@@ -52,6 +56,7 @@ pub struct NavigationTargetSelectionSummary {
     pub candidates: Vec<crate::domain::model::SymbolMatch>,
 }
 
+/// Response from `find_references` with navigation mode and optional target-selection notes.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesResponse {
     pub total_matches: usize,
@@ -103,6 +108,7 @@ pub struct NavigationLocation {
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
+/// Response from `go_to_definition`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionResponse {
     pub matches: Vec<NavigationLocation>,
@@ -403,6 +409,7 @@ pub enum StructuralAnchorSelection {
     CaptureRow,
 }
 
+/// Parameters for `search_structural`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchStructuralParams {
     pub query: String,

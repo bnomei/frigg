@@ -1,3 +1,5 @@
+//! Symbol extraction, structural search, heuristic references, and graph registration.
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +40,7 @@ pub(crate) use spans::{
     byte_offset_for_line_column, line_column_for_offset, source_span, source_span_from_offsets,
 };
 
+/// Registers extracted symbol definitions into the repository symbol graph.
 pub fn register_symbol_definitions(
     graph: &mut SymbolGraph,
     repository_id: &str,
@@ -55,6 +58,7 @@ pub fn register_symbol_definitions(
     }));
 }
 
+/// Ranks how closely a symbol definition matches a navigation query string.
 pub fn navigation_symbol_target_rank(symbol: &SymbolDefinition, symbol_query: &str) -> Option<u8> {
     if symbol.stable_id == symbol_query {
         return Some(0);

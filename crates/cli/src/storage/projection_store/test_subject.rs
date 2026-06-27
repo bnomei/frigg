@@ -1,3 +1,5 @@
+//! Test-to-subject path projection replace and load.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     Storage, TestSubjectProjection, db_runtime::i64_to_u64, db_runtime::open_connection,

@@ -152,6 +152,7 @@ impl Default for HybridChannelWeights {
 }
 
 impl HybridChannelWeights {
+    /// Rejects negative weights and the all-zero configuration that would leave fusion with no channel signal.
     pub fn validate(self) -> FriggResult<Self> {
         if self.lexical < 0.0 || self.graph < 0.0 || self.semantic < 0.0 {
             return Err(FriggError::InvalidInput(
@@ -319,14 +320,6 @@ fn hybrid_semantic_status_from_channel_health(status: ChannelHealthStatus) -> Hy
     }
 }
 
-/// Whether a hybrid query effectively ran lexical-only: the semantic channel is
-/// not healthy, or it produced no hits to participate in fusion.
-///
-/// This intentionally keys on the pre-fusion semantic *hit* count, not the
-/// post-fusion *match* count. A healthy semantic channel whose hits all lost the
-/// fusion still contributed to ranking, so it is not lexical-only. Both the
-/// pipeline ranking guardrails and the client-facing `HybridExecutionNote` derive
-/// the flag through this helper so policy and reported state never disagree.
 pub(crate) fn hybrid_lexical_only_mode(
     semantic_status: ChannelHealthStatus,
     semantic_hit_count: usize,
@@ -408,9 +401,6 @@ mod tests {
 
     #[test]
     fn lexical_only_mode_keys_on_pre_fusion_hits_not_post_fusion_matches() {
-        // Healthy semantic channel that produced hits which all lost fusion still
-        // contributed to ranking, so the query is NOT lexical-only. The note must
-        // agree with the pipeline guardrail (which uses pre-fusion hit count).
         assert!(!hybrid_lexical_only_mode(ChannelHealthStatus::Ok, 5));
         assert!(hybrid_lexical_only_mode(ChannelHealthStatus::Ok, 0));
         assert!(hybrid_lexical_only_mode(ChannelHealthStatus::Disabled, 5));
@@ -418,7 +408,6 @@ mod tests {
 
     #[test]
     fn execution_note_lexical_only_mode_matches_pipeline_guardrail_on_dropped_hits() {
-        // Semantic Ok with 5 pre-fusion hits but 0 surviving fusion matches.
         let channel_results = vec![semantic_channel_result(ChannelHealthStatus::Ok, 5, 0)];
         let note = hybrid_execution_note_from_channel_results(Some(true), true, &channel_results);
         assert_eq!(note.semantic_hit_count, 5);

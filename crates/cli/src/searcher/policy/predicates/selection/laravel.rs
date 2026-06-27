@@ -1,3 +1,5 @@
+//! Selection predicates for Laravel UI surfaces, providers, routes, and bootstrap entrypoints.
+
 use super::{PredicateLeaf, SelectionFacts};
 use crate::searcher::laravel::LaravelUiSurfaceClass;
 

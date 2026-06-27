@@ -1,3 +1,8 @@
+//! Bounded regex compilation and trigram prefiltering for lexical search.
+//!
+//! Enforces pattern budgets before `regex` compilation and builds optional file-level prefilter
+//! plans so expensive patterns skip non-matching candidates early.
+
 use regex::{Regex, RegexBuilder};
 use thiserror::Error;
 
@@ -118,6 +123,7 @@ impl TrigramBitmap {
     }
 }
 
+/// Validation or compilation failure for a user-supplied regex search pattern.
 #[derive(Debug, Error)]
 pub enum RegexSearchError {
     #[error("regex pattern must not be empty")]
@@ -147,6 +153,7 @@ impl RegexSearchError {
     }
 }
 
+/// Compiles a regex after enforcing Frigg's pattern-size and structural budgets.
 pub fn compile_safe_regex(pattern: &str) -> Result<Regex, RegexSearchError> {
     validate_regex_budget(pattern)?;
 

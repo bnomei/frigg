@@ -1,3 +1,5 @@
+//! Tree-sitter structural queries, syntax-tree inspection, and generated follow-up suggestions.
+
 use super::*;
 use crate::domain::model::{
     GeneratedStructuralFollowUp, GeneratedStructuralFollowUpBasis,
@@ -48,6 +50,7 @@ struct StructuralQueryCaptureNode<'tree> {
     item: StructuralQueryCapture,
 }
 
+/// Runs a tree-sitter structural query and returns capture-oriented matches.
 pub fn search_structural_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -65,6 +68,7 @@ pub fn search_structural_in_source(
     )
 }
 
+/// Runs a structural query and attaches generated follow-up suggestions per match.
 pub fn search_structural_with_follow_up_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -87,6 +91,7 @@ pub fn search_structural_with_follow_up_in_source(
     )
 }
 
+/// Runs a structural query and groups captures by query match row.
 pub fn search_structural_grouped_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -105,6 +110,7 @@ pub fn search_structural_grouped_in_source(
     )
 }
 
+/// Groups structural captures and attaches generated follow-up suggestions per match.
 pub fn search_structural_grouped_with_follow_up_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -128,6 +134,7 @@ pub fn search_structural_grouped_with_follow_up_in_source(
     )
 }
 
+/// Inspects the syntax-tree neighborhood around one byte offset in source.
 pub fn inspect_syntax_tree_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -151,6 +158,7 @@ pub fn inspect_syntax_tree_in_source(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Inspects a syntax-tree neighborhood and proposes follow-up structural searches.
 pub fn inspect_syntax_tree_with_follow_up_in_source(
     language: SymbolLanguage,
     path: &Path,
@@ -233,6 +241,7 @@ pub fn generated_follow_up_structural_for_location_in_source(
     )
 }
 
+/// Generates follow-up structural query suggestions for one source location.
 pub fn generated_follow_up_structural_at_location_in_source(
     language: SymbolLanguage,
     path: &Path,

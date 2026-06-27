@@ -1,3 +1,12 @@
+//! CLI runtime helpers that resolve configuration, run startup gates, and dispatch utility
+//! commands without pulling watch or HTTP transport wiring into every handler.
+//!
+//! Semantic map:
+//! - `config_resolution` — maps CLI flags into `FriggConfig` for serve and utility commands.
+//! - `startup_gates` — semantic-runtime and vector-readiness checks before serving or reindex.
+//! - `storage_paths` — provenance database path resolution for workspace roots.
+//! - `commands` — init, verify, reindex, storage maintenance, playbook, and workload corpus.
+
 mod commands;
 mod config_resolution;
 mod startup_gates;

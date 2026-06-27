@@ -1,3 +1,8 @@
+//! Support, test, and documentation surface classification.
+//!
+//! Maps repository paths to `SourceClass` values and support-surface predicates that tune path
+//! quality, witness recall, and diversification guardrails.
+
 use std::path::Path;
 
 use crate::domain::{PathClass, SourceClass};

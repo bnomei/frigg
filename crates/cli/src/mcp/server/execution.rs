@@ -1,3 +1,5 @@
+//! Read-only tool execution scoping, blocking offload, and normalized workload metadata assembly.
+
 use super::*;
 use rmcp::model::ProgressNotificationParam;
 

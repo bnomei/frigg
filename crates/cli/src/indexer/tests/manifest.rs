@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for manifest diff classification, builder diagnostics, and file-digest ordering invariants.
+
 use super::support::*;
 
 #[test]
@@ -34,10 +36,6 @@ fn manifest_diff_classifies_added_modified_deleted_in_path_order() {
 #[cfg(unix)]
 #[test]
 fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<()> {
-    // A transient digest-read failure on a file the walk still discovers must not
-    // drop the file from the manifest: doing so would make diff() classify the
-    // still-present file as deleted and incremental semantic refresh would purge
-    // its embeddings. The previous entry must be retained so the path survives.
     let root = temp_workspace_root("manifest-changed-only-read-failure-retains-entry");
     prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
 
@@ -50,15 +48,11 @@ fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<(
         .cloned()
         .expect("previous manifest should contain the seeded file");
 
-    // Change the file so its metadata no longer matches the previous digest,
-    // forcing build_changed_only to re-hash it (the path that would fail).
     fs::write(&file_path, "pub fn modified_with_a_longer_body() {}\n").map_err(FriggError::Io)?;
-    // Force the digest read to fail while the file still exists on disk.
     set_file_mode(&file_path, 0o000)?;
 
     let output = builder.build_changed_only_with_diagnostics(&root, &previous)?;
 
-    // Restore permissions before any assertion can early-return and leak the mode.
     set_file_mode(&file_path, 0o644)?;
 
     assert!(

@@ -1,3 +1,5 @@
+//! Selection predicates over query text signals (CLI mentions, anchors, excerpt matches).
+
 use super::{PredicateLeaf, SelectionFacts};
 
 fn query_mentions_cli(ctx: &SelectionFacts) -> bool {

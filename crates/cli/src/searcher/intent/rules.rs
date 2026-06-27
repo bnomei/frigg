@@ -1,3 +1,8 @@
+//! Ordered search-intent rules keyed on normalized query phrases.
+//!
+//! Each rule contributes goals, framework hints, or witness flags when its phrase predicates match
+//! the query context built by `intent/context.rs`.
+
 use crate::domain::{ArtifactBias, PlannerStrictness, SearchGoal, SearchIntentRuleId};
 
 use super::{QueryContext, SearchIntentBuilder};

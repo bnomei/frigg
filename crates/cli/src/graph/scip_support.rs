@@ -1,3 +1,5 @@
+//! SCIP payload decode, normalization, and document application into the symbol graph.
+
 use super::*;
 use protobuf::Message;
 
@@ -164,11 +166,6 @@ fn map_scip_document(
             "document.relative_path must not be empty",
         ));
     }
-    // SCIP `relative_path` values must follow the same repository-relative
-    // containment contract as manifest and read-file paths: precise navigation
-    // results are later consumed as repository-relative `read_file` paths, so an
-    // absolute or parent-escaping document path would yield an off-root
-    // navigation result that `read_match` cannot open. Reject it at ingest.
     let Some(path) = normalize_scip_document_relative_path(&raw_path) else {
         return Err(invalid_input(
             artifact_label,
@@ -232,12 +229,6 @@ fn map_scip_document(
     })
 }
 
-/// Normalize a SCIP `relative_path` to a repository-relative, forward-slash
-/// path, returning `None` when it is absolute or escapes the repository root via
-/// a parent-directory component. Mirrors the manifest path containment contract
-/// (`indexer::manifest`): backslashes are folded to `/` first so Windows-style
-/// escapes are detected on every platform, `.` segments are collapsed, and any
-/// `..`, root, or drive-prefix component rejects the path outright.
 fn normalize_scip_document_relative_path(path: &str) -> Option<String> {
     let candidate = path.replace('\\', "/");
     let mut normalized = std::path::PathBuf::new();
