@@ -1,15 +1,63 @@
 use super::*;
 use serde::Serialize;
 
+/// Provenance descriptor threaded through [`FriggMcpServer::read_file_impl_with_provenance`]
+/// so that delegated reads record the public tool that was actually invoked (e.g. `read_match`)
+/// together with its handle-based input contract, instead of always persisting `read_file`.
+#[derive(Clone)]
+pub(super) struct ReadFileProvenanceContext {
+    tool_name: &'static str,
+    extra_params: Value,
+}
+
+impl ReadFileProvenanceContext {
+    pub(super) fn read_file() -> Self {
+        Self {
+            tool_name: "read_file",
+            extra_params: Value::Null,
+        }
+    }
+
+    pub(super) fn read_match(result_handle: &str, match_id: &str) -> Self {
+        Self {
+            tool_name: "read_match",
+            extra_params: json!({
+                "result_handle": result_handle,
+                "match_id": match_id,
+            }),
+        }
+    }
+
+    fn merge_extra_params(&self, params: &mut Value) {
+        let (Some(target), Some(extra)) = (params.as_object_mut(), self.extra_params.as_object())
+        else {
+            return;
+        };
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
 impl FriggMcpServer {
     pub(super) async fn read_file_impl(
         &self,
         params: ReadFileParams,
     ) -> Result<ReadFileResponse, ErrorData> {
+        self.read_file_impl_with_provenance(params, ReadFileProvenanceContext::read_file())
+            .await
+    }
+
+    pub(super) async fn read_file_impl_with_provenance(
+        &self,
+        params: ReadFileParams,
+        provenance: ReadFileProvenanceContext,
+    ) -> Result<ReadFileResponse, ErrorData> {
         let execution_context =
-            self.read_only_tool_execution_context("read_file", params.repository_id.clone());
+            self.read_only_tool_execution_context(provenance.tool_name, params.repository_id.clone());
         let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
+        let provenance_for_blocking = provenance.clone();
         let server = self.clone();
         let execution = self
             .run_read_only_tool_blocking(&execution_context, move || {
@@ -177,19 +225,21 @@ impl FriggMcpServer {
                     }),
                     normalized_workload,
                 );
+                let mut provenance_params = json!({
+                    "repository_id": execution_context_for_blocking.repository_hint,
+                    "path": Self::bounded_text(&params_for_blocking.path),
+                    "max_bytes": params_for_blocking.max_bytes,
+                    "line_start": params_for_blocking.line_start,
+                    "line_end": params_for_blocking.line_end,
+                    "effective_max_bytes": effective_max_bytes,
+                    "effective_line_start": effective_line_start,
+                    "effective_line_end": effective_line_end,
+                });
+                provenance_for_blocking.merge_extra_params(&mut provenance_params);
                 let provenance_result = server.record_provenance_with_outcome_and_metadata(
-                    "read_file",
+                    provenance_for_blocking.tool_name,
                     execution_context_for_blocking.repository_hint.as_deref(),
-                    json!({
-                        "repository_id": execution_context_for_blocking.repository_hint,
-                        "path": Self::bounded_text(&params_for_blocking.path),
-                        "max_bytes": params_for_blocking.max_bytes,
-                        "line_start": params_for_blocking.line_start,
-                        "line_end": params_for_blocking.line_end,
-                        "effective_max_bytes": effective_max_bytes,
-                        "effective_line_start": effective_line_start,
-                        "effective_line_end": effective_line_end,
-                    }),
+                    provenance_params,
                     finalization.source_refs,
                     Self::provenance_outcome(&result),
                     finalization.normalized_workload,
@@ -233,7 +283,12 @@ impl FriggMcpServer {
             line_end: Some(line_end),
             presentation_mode: Some(ReadPresentationMode::Json),
         };
-        let read = self.read_file_impl(read_params).await?;
+        let read = self
+            .read_file_impl_with_provenance(
+                read_params,
+                ReadFileProvenanceContext::read_match(&params.result_handle, &params.match_id),
+            )
+            .await?;
         Ok(ReadMatchResponse {
             repository_id: read.repository_id,
             path: read.path,

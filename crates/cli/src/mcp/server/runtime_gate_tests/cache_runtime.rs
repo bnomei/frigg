@@ -1330,3 +1330,116 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     tokio::time::sleep(Duration::from_millis(25)).await;
     let _ = fs::remove_dir_all(workspace_root);
 }
+
+#[tokio::test]
+async fn read_match_records_read_match_provenance_not_read_file() {
+    let workspace_root = temp_workspace_root("read-match-provenance");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn unique_marker_alpha() {}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("runtime gate tests should build a valid FriggConfig");
+    let declared_repository = config
+        .repositories()
+        .into_iter()
+        .next()
+        .expect("read_match provenance test should define one repository");
+    let declared_root = PathBuf::from(&declared_repository.root_path);
+    let db_path = crate::storage::ensure_provenance_db_parent_dir(&declared_root)
+        .expect("provenance storage path should resolve");
+    Storage::new(&db_path)
+        .initialize()
+        .expect("provenance storage should initialize");
+    crate::indexer::reindex_repository_with_runtime_config(
+        &declared_repository.repository_id.0,
+        &declared_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::default(),
+    )
+    .expect("baseline changed-only reindex should succeed");
+
+    let server = FriggMcpServer::new(config);
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let search = server
+        .search_text_impl(crate::mcp::types::SearchTextParams {
+            query: "unique_marker_alpha".to_owned(),
+            pattern_type: None,
+            repository_id: Some(workspace.repository_id.clone()),
+            path_regex: None,
+            limit: None,
+            context_lines: None,
+            max_matches_per_file: None,
+            collapse_by_file: None,
+            response_mode: None,
+        })
+        .await
+        .expect("search_text should succeed")
+        .0;
+    let result_handle = search
+        .result_handle
+        .expect("search_text should return a result handle");
+    let match_id = search
+        .matches
+        .first()
+        .and_then(|found| found.match_id.clone())
+        .expect("search_text match should carry a match id");
+
+    server
+        .read_match_impl(crate::mcp::types::ReadMatchParams {
+            result_handle: result_handle.clone(),
+            match_id: match_id.clone(),
+            before: None,
+            after: None,
+            presentation_mode: None,
+        })
+        .await
+        .expect("read_match should succeed");
+
+    let storage = Storage::new(&db_path);
+    let read_match_events = storage
+        .load_provenance_events_for_tool("read_match", 8)
+        .expect("read_match provenance query should succeed");
+    assert_eq!(
+        read_match_events.len(),
+        1,
+        "read_match should persist exactly one durable provenance event"
+    );
+    let payload: Value = serde_json::from_str(&read_match_events[0].payload_json)
+        .expect("read_match provenance payload should be valid json");
+    assert_eq!(payload["tool_name"], serde_json::json!("read_match"));
+    assert_eq!(
+        payload["params"]["result_handle"],
+        serde_json::json!(result_handle),
+        "read_match provenance must preserve the result_handle input contract"
+    );
+    assert_eq!(
+        payload["params"]["match_id"],
+        serde_json::json!(match_id),
+        "read_match provenance must preserve the match_id input contract"
+    );
+
+    let read_file_events = storage
+        .load_provenance_events_for_tool("read_file", 8)
+        .expect("read_file provenance query should succeed");
+    assert!(
+        read_file_events.is_empty(),
+        "read_match must not masquerade as a read_file provenance event"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
