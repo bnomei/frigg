@@ -2,6 +2,71 @@ use super::*;
 use frigg::mcp::types::NavigationTargetSelectionStatus;
 
 #[tokio::test]
+async fn find_references_total_matches_equals_returned_page_under_limit() {
+    let workspace_root = temp_workspace_root("find-references-limit-page");
+    let src_root = workspace_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub struct User;\n\
+         pub fn a() { let _ = User; }\n\
+         pub fn b() { let _ = User; }\n\
+         pub fn c() { let _ = User; }\n\
+         pub fn d() { let _ = User; }\n\
+         pub fn e() { let _ = User; }\n\
+         pub fn f() { let _ = User; }\n",
+    )
+    .expect("failed to seed temporary fixture source");
+    let server = server_for_workspace_root(&workspace_root).await;
+
+    // A generous limit must surface more references than the small page below, so
+    // the small-limit query genuinely truncates.
+    let unlimited = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("User".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            include_follow_up_structural: None,
+            limit: Some(50),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("find_references should return heuristic references")
+        .0;
+    assert!(
+        unlimited.matches.len() > 2,
+        "fixture must expose more than the truncated page size, got {}",
+        unlimited.matches.len()
+    );
+
+    let limited = server
+        .find_references(Parameters(FindReferencesParams {
+            symbol: Some("User".to_owned()),
+            repository_id: Some("repo-001".to_owned()),
+            path: None,
+            line: None,
+            column: None,
+            include_definition: Some(false),
+            include_follow_up_structural: None,
+            limit: Some(2),
+            response_mode: Some(ResponseMode::Full),
+        }))
+        .await
+        .expect("find_references should return heuristic references")
+        .0;
+
+    assert_eq!(limited.matches.len(), 2, "limit must truncate the page");
+    assert_eq!(
+        limited.total_matches,
+        limited.matches.len(),
+        "total_matches must equal the returned page size, not the pre-limit total"
+    );
+}
+
+#[tokio::test]
 async fn core_find_references_returns_heuristic_metadata_and_matches() {
     let workspace_root = temp_workspace_root("find-references");
     let src_root = workspace_root.join("src");
