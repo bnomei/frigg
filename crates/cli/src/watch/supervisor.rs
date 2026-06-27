@@ -41,9 +41,49 @@ enum SupervisorCommand {
     },
     ReindexCompleted {
         repository_id: String,
+        // Monotonic per-repository lifecycle epoch captured when this reindex was
+        // dispatched. A detach bumps the repository's epoch, so a completion from
+        // a reindex that was in flight before a detach/re-attach of the same
+        // repository_id no longer matches the current epoch and is ignored.
+        epoch: u64,
         class: WatchRefreshClass,
         result: Result<crate::indexer::ReindexSummary, String>,
     },
+}
+
+/// Per-repository lifecycle epochs for the watch supervisor.
+///
+/// A reindex dispatched under epoch `N` is only allowed to mutate scheduler state
+/// when the repository is still at epoch `N` as its completion lands. Because
+/// `repository_id` values are reused across a detach and a subsequent re-attach,
+/// the epoch is bumped on every lease release so a completion produced by a run
+/// that was in flight before the detach no longer matches the re-attached
+/// lifecycle and is ignored.
+#[derive(Debug, Default)]
+struct RepositoryEpochs {
+    epochs: BTreeMap<String, u64>,
+}
+
+impl RepositoryEpochs {
+    /// Ensure a repository has an epoch entry (on lease acquisition) without
+    /// disturbing an existing value carried over from a prior lifecycle.
+    fn ensure(&mut self, repository_id: &str) {
+        self.epochs.entry(repository_id.to_owned()).or_insert(0);
+    }
+
+    /// Advance a repository's epoch on lease release so in-flight reindexes from
+    /// the released lifecycle become stale.
+    fn bump(&mut self, repository_id: &str) {
+        self.epochs
+            .entry(repository_id.to_owned())
+            .and_modify(|epoch| *epoch = epoch.wrapping_add(1))
+            .or_insert(0);
+    }
+
+    /// The repository's current epoch (0 for an id never seen).
+    fn current(&self, repository_id: &str) -> u64 {
+        self.epochs.get(repository_id).copied().unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -253,6 +293,11 @@ async fn run_supervisor(
     let debounce = Duration::from_millis(watch_config.debounce_ms);
     let retry = Duration::from_millis(watch_config.retry_ms);
     let mut scheduler = WatchSchedulerState::new(0);
+    // Per-repository lifecycle epoch. Bumped on every lease release (detach) so a
+    // reindex completion produced by a run dispatched before the detach can be
+    // distinguished from the freshly re-attached lifecycle of the same
+    // repository_id, even though ids are reused across detach/re-attach.
+    let mut repository_epochs = RepositoryEpochs::default();
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -274,6 +319,7 @@ async fn run_supervisor(
                         debounce,
                     ),
                     SupervisorCommand::LeaseAcquired { repository } => {
+                        repository_epochs.ensure(&repository.repository_id);
                         scheduler.add_repository(&repository.repository_id);
                         queue_startup_refresh_if_needed(
                             &repository,
@@ -285,25 +331,46 @@ async fn run_supervisor(
                         );
                     }
                     SupervisorCommand::LeaseReleased { repository_id } => {
+                        // Bump the epoch so any reindex still in flight under the
+                        // released lifecycle is recognised as stale if the same
+                        // repository_id is re-attached before its completion lands.
+                        repository_epochs.bump(&repository_id);
                         scheduler.remove_repository(&repository_id);
                     }
                     SupervisorCommand::ReindexCompleted {
                         repository_id,
+                        epoch,
                         class,
                         result,
                     } => {
-                        handle_reindex_completed(
-                            &repositories,
-                            &mut scheduler,
-                            &repository_id,
-                            class,
-                            result,
-                            repository_cache_invalidation_callback.as_ref(),
-                            now,
-                            retry,
-                            &semantic_runtime,
-                            &semantic_credentials,
-                        );
+                        let current_epoch = repository_epochs.current(&repository_id);
+                        if epoch != current_epoch {
+                            // Stale completion from a run dispatched before a
+                            // detach/re-attach of this repository_id. Ignoring it
+                            // preserves the refresh the re-attach just queued and
+                            // avoids falsely reporting the current lifecycle as
+                            // refreshed.
+                            warn!(
+                                repository_id = %repository_id,
+                                refresh_class = %class.as_str(),
+                                completion_epoch = epoch,
+                                current_epoch,
+                                "built-in watch mode ignoring stale reindex completion"
+                            );
+                        } else {
+                            handle_reindex_completed(
+                                &repositories,
+                                &mut scheduler,
+                                &repository_id,
+                                class,
+                                result,
+                                repository_cache_invalidation_callback.as_ref(),
+                                now,
+                                retry,
+                                &semantic_runtime,
+                                &semantic_credentials,
+                            );
+                        }
                     }
                 }
             }
@@ -358,6 +425,9 @@ async fn run_supervisor(
                 }
             }
             let recent_paths = scheduler.mark_started(&repository_id, class);
+            // Capture the lifecycle epoch this reindex is dispatched under so the
+            // completion can be matched against the repository's current epoch.
+            let dispatch_epoch = repository_epochs.current(&repository.repository_id);
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -427,6 +497,7 @@ async fn run_supervisor(
                     .finish_task(&task_id, status, detail);
                 let _ = completion_tx.send(SupervisorCommand::ReindexCompleted {
                     repository_id: repository.repository_id.clone(),
+                    epoch: dispatch_epoch,
                     class,
                     result,
                 });
@@ -624,4 +695,51 @@ fn queue_semantic_followup_if_needed(
         snapshot_id = status.snapshot_id.as_deref().unwrap_or("-"),
         "built-in watch mode queued semantic follow-up after manifest refresh"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepositoryEpochs;
+
+    #[test]
+    fn repository_epochs_invalidate_stale_completion_across_detach_reattach() {
+        let mut epochs = RepositoryEpochs::default();
+
+        // Lease acquired: first lifecycle dispatches a reindex at epoch 0.
+        epochs.ensure("repo-001");
+        let dispatch_epoch = epochs.current("repo-001");
+        assert_eq!(dispatch_epoch, 0);
+
+        // Detach bumps the epoch; the in-flight reindex from the released
+        // lifecycle keeps its captured epoch of 0.
+        epochs.bump("repo-001");
+
+        // Re-attach reuses the same repository_id without resetting the epoch.
+        epochs.ensure("repo-001");
+        assert_eq!(epochs.current("repo-001"), 1);
+
+        // The stale completion (epoch 0) no longer matches the current epoch and
+        // must be ignored so the re-attached refresh survives.
+        assert_ne!(dispatch_epoch, epochs.current("repo-001"));
+
+        // A reindex dispatched under the re-attached lifecycle matches and applies.
+        let fresh_dispatch_epoch = epochs.current("repo-001");
+        assert_eq!(fresh_dispatch_epoch, epochs.current("repo-001"));
+    }
+
+    #[test]
+    fn repository_epochs_match_for_undisturbed_lifecycle() {
+        let mut epochs = RepositoryEpochs::default();
+        epochs.ensure("repo-001");
+        let dispatch_epoch = epochs.current("repo-001");
+        // No detach occurred, so a completion dispatched at this epoch still
+        // matches the current epoch and is applied.
+        assert_eq!(dispatch_epoch, epochs.current("repo-001"));
+    }
+
+    #[test]
+    fn repository_epochs_default_to_zero_for_unknown_repository() {
+        let epochs = RepositoryEpochs::default();
+        assert_eq!(epochs.current("never-seen"), 0);
+    }
 }
