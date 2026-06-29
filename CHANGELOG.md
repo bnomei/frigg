@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 - 2026-06-29
+
+- Hardened MCP workspace adoption, path containment, provenance, workload-corpus redaction, and HTTP auth handling to close security and data-leak edge cases.
+- Improved index, watch, semantic refresh, precise-generation, and cache lifecycle handling across detach/reattach races, stale snapshots, unreadable files, active tasks, and startup recovery.
+- Fixed user-facing tool contracts for `find_references` totals, bounded line-window reads, hybrid lexical-only metadata, playbook regression exit status, and stale index lifecycle reporting.
+
 ## 0.4.7 - 2026-06-18
 
 - Fixed semantic reindex recovery for stale deleted manifest paths from moved or removed workspace roots, preventing full rebuilds from failing on missing source path canonicalization and forcing safe full semantic rebuilds when changed-only deletes cannot be mapped to the current workspace.
