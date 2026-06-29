@@ -1,3 +1,5 @@
+//! Regression tests for per-language symbol extraction, PHP evidence edges, and tree-sitter definition metadata.
+
 use crate::languages::resolve_php_target_evidence_edges;
 
 use super::support::*;
@@ -532,6 +534,45 @@ fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> 
             entry.array_keys.is_empty() && entry.named_arguments == vec!["handler".to_owned()]
         }),
         "expected named-argument evidence"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn php_source_evidence_resolves_aliases_per_namespace_block() -> FriggResult<()> {
+    let path = Path::new("src/MultiNamespace.php");
+    let source = "<?php\n\
+namespace App\\A {\n\
+    use Vendor\\One\\Target;\n\
+    class AlphaService {\n\
+        public function run(): void { new Target(); }\n\
+    }\n\
+}\n\
+namespace App\\B {\n\
+    use Vendor\\Two\\Target;\n\
+    class BetaService {\n\
+        public function run(): void { new Target(); }\n\
+    }\n\
+}\n";
+    let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+    let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+    assert!(
+        evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::Instantiation
+                && entry.target_canonical_name == "Vendor\\One\\Target"
+        }),
+        "App\\A new Target() should resolve to Vendor\\One\\Target; got: {:?}",
+        evidence.target_evidence
+    );
+    assert!(
+        evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::Instantiation
+                && entry.target_canonical_name == "Vendor\\Two\\Target"
+        }),
+        "App\\B new Target() should resolve to Vendor\\Two\\Target; got: {:?}",
+        evidence.target_evidence
     );
 
     Ok(())

@@ -1,3 +1,6 @@
+//! Watch supervisor: leases repository roots to MCP sessions, dispatches debounced reindex work,
+//! and uses per-repository epochs to drop stale completions after a lease is released.
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -29,6 +32,7 @@ use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState}
 
 const WATCH_TICK_MS: u64 = 50;
 
+/// Callback invoked when watch-driven reindex work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 enum SupervisorCommand {
@@ -41,11 +45,36 @@ enum SupervisorCommand {
     },
     ReindexCompleted {
         repository_id: String,
+        epoch: u64,
         class: WatchRefreshClass,
         result: Result<crate::indexer::ReindexSummary, String>,
     },
 }
 
+#[derive(Debug, Default)]
+struct RepositoryEpochs {
+    epochs: BTreeMap<String, u64>,
+}
+
+impl RepositoryEpochs {
+    fn ensure(&mut self, repository_id: &str) {
+        self.epochs.entry(repository_id.to_owned()).or_insert(0);
+    }
+
+    // Epoch bump invalidates in-flight reindex completions after lease release.
+    fn bump(&mut self, repository_id: &str) {
+        self.epochs
+            .entry(repository_id.to_owned())
+            .and_modify(|epoch| *epoch = epoch.wrapping_add(1))
+            .or_insert(0);
+    }
+
+    fn current(&self, repository_id: &str) -> u64 {
+        self.epochs.get(repository_id).copied().unwrap_or(0)
+    }
+}
+
+/// Lease snapshot for a repository root watched by the shared supervisor.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WatchLeaseStatus {
     pub active: bool,
@@ -63,6 +92,7 @@ pub struct WatchRuntime {
 }
 
 impl WatchRuntime {
+    // Lease boundary: first holder registers the recursive watcher and queues startup refresh.
     pub(crate) fn acquire_lease(&self, workspace: &AttachedWorkspace) -> FriggResult<usize> {
         let repository = watched_repository_for_workspace(workspace)?;
 
@@ -109,6 +139,7 @@ impl WatchRuntime {
         Ok(lease_count)
     }
 
+    // Lease boundary: last holder unregisters the watcher and bumps the repository epoch.
     pub(crate) fn release_lease(&self, repository_id: &str) -> usize {
         let remaining = {
             let mut lease_counts = self
@@ -253,6 +284,7 @@ async fn run_supervisor(
     let debounce = Duration::from_millis(watch_config.debounce_ms);
     let retry = Duration::from_millis(watch_config.retry_ms);
     let mut scheduler = WatchSchedulerState::new(0);
+    let mut repository_epochs = RepositoryEpochs::default();
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -274,6 +306,7 @@ async fn run_supervisor(
                         debounce,
                     ),
                     SupervisorCommand::LeaseAcquired { repository } => {
+                        repository_epochs.ensure(&repository.repository_id);
                         scheduler.add_repository(&repository.repository_id);
                         queue_startup_refresh_if_needed(
                             &repository,
@@ -285,25 +318,45 @@ async fn run_supervisor(
                         );
                     }
                     SupervisorCommand::LeaseReleased { repository_id } => {
+                        // Lease released: advance epoch before dropping scheduler state.
+                        repository_epochs.bump(&repository_id);
                         scheduler.remove_repository(&repository_id);
                     }
                     SupervisorCommand::ReindexCompleted {
                         repository_id,
+                        epoch,
                         class,
                         result,
                     } => {
-                        handle_reindex_completed(
-                            &repositories,
-                            &mut scheduler,
-                            &repository_id,
-                            class,
-                            result,
-                            repository_cache_invalidation_callback.as_ref(),
-                            now,
-                            retry,
-                            &semantic_runtime,
-                            &semantic_credentials,
-                        );
+                        let current_epoch = repository_epochs.current(&repository_id);
+                        // Epoch mismatch: ignore stale reindex side effects from a prior lease.
+                        if epoch != current_epoch {
+                            warn!(
+                                repository_id = %repository_id,
+                                refresh_class = %class.as_str(),
+                                completion_epoch = epoch,
+                                current_epoch,
+                                "built-in watch mode ignoring stale reindex completion"
+                            );
+                            invalidate_caches_for_stale_completion(
+                                &repository_id,
+                                &result,
+                                repository_cache_invalidation_callback.as_ref(),
+                            );
+                        } else {
+                            handle_reindex_completed(
+                                &repositories,
+                                &mut scheduler,
+                                &repository_id,
+                                class,
+                                result,
+                                repository_cache_invalidation_callback.as_ref(),
+                                now,
+                                retry,
+                                &semantic_runtime,
+                                &semantic_credentials,
+                            );
+                        }
                     }
                 }
             }
@@ -317,28 +370,31 @@ async fn run_supervisor(
             ..
         }) = scheduler.next_ready_refresh(now)
         {
-            let recent_paths = scheduler.mark_started(&repository_id, class);
             let repository = repositories
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&repository_id)
                 .cloned();
             let Some(repository) = repository else {
-                scheduler.mark_succeeded(&repository_id, class, now);
                 continue;
             };
-            if class == WatchRefreshClass::SemanticFollowup
-                && task_registry
+            let stable_repository_id =
+                crate::domain::model::stable_repository_id_for_root(&repository.root).0;
+            let refresh_task_active = active_refresh_task_running_for_repository(
+                &task_registry
                     .read()
-                    .expect("watch runtime task registry poisoned")
-                    .has_active_task_for_repository(
-                        RuntimeTaskKind::SemanticRefresh,
-                        &repository.repository_id,
-                    )
-            {
-                scheduler.mark_succeeded(&repository_id, class, now);
+                    .expect("watch runtime task registry poisoned"),
+                class,
+                &repository.repository_id,
+                &stable_repository_id,
+            );
+            if refresh_task_active {
+                scheduler.mark_failed(&repository_id, class, now, retry);
                 continue;
             }
+            let recent_paths = scheduler.mark_started(&repository_id, class);
+            // Capture dispatch epoch so completion handlers can detect lease churn.
+            let dispatch_epoch = repository_epochs.current(&repository.repository_id);
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -365,6 +421,7 @@ async fn run_supervisor(
             let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
+            // Side effect: blocking reindex runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
                 let result = match class {
                     WatchRefreshClass::ManifestFast => {
@@ -408,6 +465,7 @@ async fn run_supervisor(
                     .finish_task(&task_id, status, detail);
                 let _ = completion_tx.send(SupervisorCommand::ReindexCompleted {
                     repository_id: repository.repository_id.clone(),
+                    epoch: dispatch_epoch,
                     class,
                     result,
                 });
@@ -421,6 +479,37 @@ fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
         WatchRefreshClass::ManifestFast => RuntimeTaskKind::ChangedReindex,
         WatchRefreshClass::SemanticFollowup => RuntimeTaskKind::SemanticRefresh,
     }
+}
+
+fn conflicting_task_kinds_for_class(class: WatchRefreshClass) -> &'static [RuntimeTaskKind] {
+    match class {
+        WatchRefreshClass::ManifestFast => &[
+            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspacePrepare,
+        ],
+        WatchRefreshClass::SemanticFollowup => &[
+            RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspacePrepare,
+        ],
+    }
+}
+
+fn active_refresh_task_running_for_repository(
+    registry: &RuntimeTaskRegistry,
+    class: WatchRefreshClass,
+    repository_id: &str,
+    stable_repository_id: &str,
+) -> bool {
+    let repository_ids = if repository_id == stable_repository_id {
+        vec![repository_id]
+    } else {
+        vec![repository_id, stable_repository_id]
+    };
+    conflicting_task_kinds_for_class(class)
+        .iter()
+        .any(|kind| registry.has_active_task_for_any_repository(*kind, &repository_ids))
 }
 
 fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
@@ -479,6 +568,20 @@ fn handle_notify_event(
             "built-in watch mode accepted path change"
         );
     }
+}
+
+fn invalidate_caches_for_stale_completion(
+    repository_id: &str,
+    result: &Result<crate::indexer::ReindexSummary, String>,
+    repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
+) -> bool {
+    if result.is_ok()
+        && let Some(callback) = repository_cache_invalidation_callback
+    {
+        callback(repository_id);
+        return true;
+    }
+    false
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -552,10 +655,26 @@ fn queue_startup_refresh_if_needed(
     semantic_credentials: &SemanticRuntimeCredentials,
     debounce_ms: u64,
 ) {
-    let Ok(startup_status) =
-        startup_refresh_status(repository, semantic_runtime, semantic_credentials)
-    else {
-        return;
+    let startup_status = match startup_refresh_status(
+        repository,
+        semantic_runtime,
+        semantic_credentials,
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            warn!(
+                repository_id = %repository.repository_id,
+                root = %repository.root.display(),
+                error = %error,
+                "built-in watch mode failed to evaluate startup freshness; queueing manifest-fast refresh"
+            );
+            scheduler.enqueue_initial_sync(
+                &repository.repository_id,
+                WatchRefreshClass::ManifestFast,
+                now,
+            );
+            return;
+        }
     };
     if !startup_status.should_refresh {
         info!(
@@ -589,9 +708,17 @@ fn queue_semantic_followup_if_needed(
     semantic_runtime: &SemanticRuntimeConfig,
     semantic_credentials: &SemanticRuntimeCredentials,
 ) {
-    let Ok(status) = startup_refresh_status(repository, semantic_runtime, semantic_credentials)
-    else {
-        return;
+    let status = match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
+        Ok(status) => status,
+        Err(error) => {
+            warn!(
+                repository_id = %repository.repository_id,
+                root = %repository.root.display(),
+                error = %error,
+                "built-in watch mode failed to evaluate semantic follow-up freshness; skipping"
+            );
+            return;
+        }
     };
     if status.refresh_class != Some(WatchRefreshClass::SemanticFollowup) {
         return;
@@ -605,4 +732,275 @@ fn queue_semantic_followup_if_needed(
         snapshot_id = status.snapshot_id.as_deref().unwrap_or("-"),
         "built-in watch mode queued semantic follow-up after manifest refresh"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
+    use super::*;
+
+    #[test]
+    fn repository_epochs_invalidate_stale_completion_across_detach_reattach() {
+        let mut epochs = RepositoryEpochs::default();
+
+        epochs.ensure("repo-001");
+        let dispatch_epoch = epochs.current("repo-001");
+        assert_eq!(dispatch_epoch, 0);
+
+        epochs.bump("repo-001");
+
+        epochs.ensure("repo-001");
+        assert_eq!(epochs.current("repo-001"), 1);
+
+        assert_ne!(dispatch_epoch, epochs.current("repo-001"));
+
+        let fresh_dispatch_epoch = epochs.current("repo-001");
+        assert_eq!(fresh_dispatch_epoch, epochs.current("repo-001"));
+    }
+
+    fn sample_reindex_summary() -> crate::indexer::ReindexSummary {
+        crate::indexer::ReindexSummary {
+            repository_id: "repo-001".to_owned(),
+            snapshot_id: "snap-1".to_owned(),
+            files_scanned: 1,
+            files_changed: 1,
+            files_deleted: 0,
+            changed_paths: vec!["src/lib.rs".to_owned()],
+            deleted_paths: Vec::new(),
+            diagnostics: Default::default(),
+            duration_ms: 1,
+        }
+    }
+
+    #[test]
+    fn stale_successful_completion_invalidates_repository_caches() {
+        let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&invalidated);
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+            recorded
+                .lock()
+                .expect("invalidation record poisoned")
+                .push(repository_id.to_owned());
+        });
+
+        let invoked = invalidate_caches_for_stale_completion(
+            "repo-001",
+            &Ok(sample_reindex_summary()),
+            Some(&callback),
+        );
+
+        assert!(invoked, "stale success must invalidate repository caches");
+        assert_eq!(
+            *invalidated.lock().expect("invalidation record poisoned"),
+            vec!["repo-001".to_owned()],
+        );
+    }
+
+    #[test]
+    fn stale_failed_completion_does_not_invalidate_repository_caches() {
+        let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&invalidated);
+        let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+            recorded
+                .lock()
+                .expect("invalidation record poisoned")
+                .push(repository_id.to_owned());
+        });
+
+        let invoked = invalidate_caches_for_stale_completion(
+            "repo-001",
+            &Err("boom".to_owned()),
+            Some(&callback),
+        );
+
+        assert!(!invoked, "stale failure must not invalidate caches");
+        assert!(
+            invalidated
+                .lock()
+                .expect("invalidation record poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repository_epochs_match_for_undisturbed_lifecycle() {
+        let mut epochs = RepositoryEpochs::default();
+        epochs.ensure("repo-001");
+        let dispatch_epoch = epochs.current("repo-001");
+        assert_eq!(dispatch_epoch, epochs.current("repo-001"));
+    }
+
+    #[test]
+    fn repository_epochs_default_to_zero_for_unknown_repository() {
+        let epochs = RepositoryEpochs::default();
+        assert_eq!(epochs.current("never-seen"), 0);
+    }
+
+    #[test]
+    fn active_changed_reindex_defers_manifest_fast_without_draining_scheduler() {
+        let now = Instant::now();
+        let retry = Duration::from_millis(250);
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        scheduler.enqueue_initial_sync("repo-001", WatchRefreshClass::ManifestFast, now);
+
+        let mut registry = RuntimeTaskRegistry::new();
+        let task_id = registry.start_task(
+            RuntimeTaskKind::ChangedReindex,
+            "repo-001".to_owned(),
+            "watch_manifest_fast",
+            None,
+        );
+
+        let ready = scheduler
+            .next_ready_refresh(now)
+            .expect("manifest refresh should be ready");
+        assert_eq!(ready.class, WatchRefreshClass::ManifestFast);
+        assert!(active_refresh_task_running_for_repository(
+            &registry,
+            ready.class,
+            &ready.repository_id,
+            "stable-repo-001",
+        ));
+
+        scheduler.mark_failed(&ready.repository_id, ready.class, now, retry);
+        assert!(scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast));
+        assert!(
+            scheduler.next_ready_refresh(now).is_none(),
+            "pending manifest refresh should back off while old task is active"
+        );
+
+        registry.finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        assert!(!active_refresh_task_running_for_repository(
+            &registry,
+            ready.class,
+            &ready.repository_id,
+            "stable-repo-001",
+        ));
+        assert!(
+            scheduler.next_ready_refresh(now + retry).is_some(),
+            "manifest refresh should become ready after the active task finishes and retry elapses"
+        );
+    }
+
+    #[test]
+    fn refresh_task_dedup_uses_stable_and_runtime_aliases() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::SemanticRefresh,
+            "stable-repo".to_owned(),
+            "semantic_attach_refresh",
+            None,
+        );
+
+        assert!(active_refresh_task_running_for_repository(
+            &registry,
+            WatchRefreshClass::SemanticFollowup,
+            "repo-001",
+            "stable-repo",
+        ));
+        assert!(
+            !active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "stable-repo",
+            ),
+            "semantic refresh should not block manifest-fast changed reindex"
+        );
+    }
+
+    #[test]
+    fn manifest_fast_defers_to_active_mcp_workspace_reindex() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::WorkspaceReindex,
+            "stable-repo".to_owned(),
+            "workspace_reindex",
+            None,
+        );
+
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "stable-repo",
+            ),
+            "manifest-fast must defer to an active MCP workspace_reindex on the same db"
+        );
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::SemanticFollowup,
+                "repo-001",
+                "stable-repo",
+            ),
+            "semantic followup must also defer to an active MCP workspace_reindex"
+        );
+    }
+
+    #[test]
+    fn startup_refresh_eval_failure_queues_manifest_fast_instead_of_silent_drop() {
+        use super::super::repository::watched_repository_for_root;
+        use crate::settings::SemanticRuntimeProvider;
+
+        let now = Instant::now();
+        let repository = watched_repository_for_root(
+            "repo-001".to_owned(),
+            std::path::PathBuf::from("/nonexistent/frigg-watch-startup-eval"),
+            std::path::PathBuf::from("/nonexistent/frigg-watch-startup-eval/frigg.db"),
+        )
+        .expect("watched repository should build for a missing root");
+
+        let semantic_runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::OpenAi),
+            model: Some("text-embedding-3-small".to_owned()),
+            strict_mode: false,
+        };
+        let credentials = SemanticRuntimeCredentials::default();
+
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        queue_startup_refresh_if_needed(
+            &repository,
+            &mut scheduler,
+            now,
+            &semantic_runtime,
+            &credentials,
+            0,
+        );
+
+        assert!(
+            scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
+            "a startup freshness evaluation failure must still queue a manifest-fast refresh"
+        );
+    }
+
+    #[test]
+    fn manifest_fast_defers_to_active_mcp_workspace_prepare() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let _task_id = registry.start_task(
+            RuntimeTaskKind::WorkspacePrepare,
+            "repo-001".to_owned(),
+            "workspace_prepare",
+            None,
+        );
+
+        assert!(
+            active_refresh_task_running_for_repository(
+                &registry,
+                WatchRefreshClass::ManifestFast,
+                "repo-001",
+                "repo-001",
+            ),
+            "manifest-fast must defer to an active MCP workspace_prepare on the same db"
+        );
+    }
 }

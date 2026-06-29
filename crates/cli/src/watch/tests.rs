@@ -1,3 +1,5 @@
+//! Unit tests for watch scheduler debouncing, refresh coalescing, repository invalidation, and supervisor-driven reindex cycles.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -310,6 +312,49 @@ fn scheduler_failure_schedules_retry_without_parallel_restart() {
             repository_id: "repo-000".to_owned(),
             class: WatchRefreshClass::ManifestFast,
         })
+    );
+}
+
+#[test]
+fn scheduler_path_change_preserves_failed_semantic_followup_retry() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+    scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+    scheduler.mark_failed(0, WatchRefreshClass::SemanticFollowup, now, retry);
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
+
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("unrelated.rs"),
+        now + Duration::from_millis(100),
+        Duration::from_millis(750),
+    );
+    assert!(
+        scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
+        "a failed semantic follow-up retry must survive an unrelated path change"
+    );
+}
+
+#[test]
+fn scheduler_path_change_supersedes_non_failed_semantic_followup() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
+
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("changed.rs"),
+        now,
+        Duration::from_millis(750),
+    );
+    assert!(
+        !scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup),
+        "a non-failed pending semantic follow-up should be reset by a path change"
     );
 }
 

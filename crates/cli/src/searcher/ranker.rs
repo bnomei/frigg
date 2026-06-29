@@ -1,3 +1,8 @@
+//! Hybrid ranker: multi-channel evidence blending into ranked anchors.
+//!
+//! Accumulates lexical, path-witness, graph, and semantic scores per document anchor, applies
+//! channel weights, and produces the ranked pool consumed by fusion and diversification.
+
 use std::collections::BTreeMap;
 
 use crate::domain::{EvidenceAnchor, EvidenceChannel, FriggResult};
@@ -39,6 +44,7 @@ fn excerpt_channel_priority(channel: EvidenceChannel) -> usize {
     }
 }
 
+/// Blends channel hits into a weighted, limit-bounded ranked anchor list.
 pub fn rank_hybrid_evidence(
     lexical_hits: &[HybridChannelHit],
     graph_hits: &[HybridChannelHit],

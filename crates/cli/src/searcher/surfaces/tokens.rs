@@ -1,3 +1,8 @@
+//! Identifier tokenization helpers for hybrid query and excerpt overlap.
+//!
+//! Splits camelCase, snake_case, and path stems into normalized tokens shared by lexical recall,
+//! path-witness scoring, and semantic retention.
+
 pub(super) fn hybrid_identifier_tokens(raw: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();

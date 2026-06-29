@@ -1,3 +1,5 @@
+//! Google Gemini embeddings HTTP provider with batch request mapping.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -85,6 +87,7 @@ struct GoogleErrorPayload {
     status: Option<String>,
 }
 
+/// Google embeddings client implementing the shared [`EmbeddingProvider`] contract.
 pub struct GoogleEmbeddingProvider {
     http: Arc<dyn HttpExecutor>,
     sleeper: Arc<dyn BackoffSleeper>,
@@ -202,18 +205,22 @@ impl GoogleEmbeddingProvider {
                 message = error_message;
             }
 
+            let mut retryable_from_grpc_status = false;
             if let Some(error_status) = envelope.error.status {
                 if matches!(
                     error_status.as_str(),
                     "RESOURCE_EXHAUSTED" | "UNAVAILABLE" | "DEADLINE_EXCEEDED" | "ABORTED"
                 ) {
                     retryability = Retryability::Retryable;
+                    retryable_from_grpc_status = true;
                 }
                 code = Some(error_status);
             }
 
             if let Some(provider_status_code) = envelope.error.code {
-                retryability = status_retryability(provider_status_code);
+                if !retryable_from_grpc_status {
+                    retryability = status_retryability(provider_status_code);
+                }
             }
         }
         let message =

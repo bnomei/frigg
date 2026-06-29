@@ -1,3 +1,8 @@
+//! Query intent inference for hybrid ranking and path-witness recall.
+//!
+//! Applies ordered phrase rules to derive witness goals, artifact biases, and channel preferences
+//! that tune candidate supplements, path-quality multipliers, and reranker guardrails.
+
 use std::collections::BTreeSet;
 
 use crate::domain::{

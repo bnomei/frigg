@@ -1,3 +1,5 @@
+//! Shared repository-snapshot id normalization for projection writes.
+
 use crate::domain::{FriggError, FriggResult};
 
 pub(super) fn normalize_repository_snapshot_ids(

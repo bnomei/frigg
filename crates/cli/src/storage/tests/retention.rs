@@ -1,3 +1,5 @@
+//! Regression tests for snapshot and provenance pruning that keep storage bounded across reindex cycles.
+
 use super::support::*;
 
 #[test]

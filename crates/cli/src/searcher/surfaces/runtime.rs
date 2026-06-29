@@ -1,3 +1,8 @@
+//! Language-specific runtime entrypoint and UI surface predicates.
+//!
+//! Detects executable entrypoints and framework runtime modules used by path-witness recall and
+//! graph-channel anchor selection.
+
 use std::path::Path;
 
 use crate::domain::PathClass;

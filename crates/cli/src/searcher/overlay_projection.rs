@@ -1,3 +1,8 @@
+//! Overlay retrieval projections for test subjects and entrypoint surfaces.
+//!
+//! Builds companion-path links and entrypoint-surface records that augment path-witness recall and
+//! graph-channel seeding beyond raw lexical matches.
+
 use super::*;
 
 use super::path_witness_projection::{

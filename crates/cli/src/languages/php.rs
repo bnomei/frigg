@@ -1,3 +1,5 @@
+//! PHP language adapter wiring namespace resolution, declaration relations, and graph evidence.
+
 use tree_sitter::Node;
 
 use crate::indexer::SymbolKind;
@@ -28,8 +30,8 @@ pub(crate) use evidence::{
 #[allow(unused_imports)]
 pub(crate) use resolution::{
     PhpNameResolutionContext, PhpSymbolLookup, php_class_like_name_candidates,
-    php_name_resolution_context_from_root, php_relation_targets_symbol_name,
-    resolve_php_declaration_relation_indices,
+    php_name_resolution_context_for_namespace_node, php_name_resolution_context_from_root,
+    php_relation_targets_symbol_name, resolve_php_declaration_relation_indices,
 };
 
 pub(super) fn symbol_from_node(source: &str, node: Node<'_>) -> Option<(SymbolKind, String)> {

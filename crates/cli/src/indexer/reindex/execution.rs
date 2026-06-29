@@ -1,7 +1,9 @@
+//! Ordered reindex execution across manifest persistence, retrieval projections, and semantic refresh.
+
 use std::path::Path;
 
 use crate::domain::{FriggError, FriggResult};
-use crate::searcher::build_retrieval_projection_bundle;
+use crate::searcher::{build_retrieval_projection_bundle, required_retrieval_projection_versions};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::Storage;
 
@@ -98,9 +100,10 @@ fn execute_retrieval_projection_phase(
     let should_refresh = match &plan.snapshot_plan {
         ManifestSnapshotPlan::PersistNew { .. } => true,
         ManifestSnapshotPlan::ReuseExisting { .. } => !storage
-            .missing_retrieval_projection_families_for_repository_snapshot(
+            .stale_or_missing_retrieval_projection_families_for_repository_snapshot(
                 repository_id,
                 snapshot_id,
+                &required_retrieval_projection_versions(),
             )
             .map_err(|err| {
                 wrap_reindex_phase_error(ReindexExecutionPhase::RefreshRetrievalProjections, err)

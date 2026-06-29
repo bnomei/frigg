@@ -1,3 +1,5 @@
+//! Hybrid playbook runner that executes search probes and aggregates regression pass/fail counts.
+
 use std::path::Path;
 use std::time::Instant;
 
@@ -29,6 +31,7 @@ fn failed_group_outcomes(
         .collect()
 }
 
+/// Executes one hybrid playbook regression probe against the provided searcher.
 pub fn run_hybrid_playbook_regression(
     searcher: &TextSearcher,
     regression: &LoadedHybridPlaybookRegression,
@@ -123,6 +126,7 @@ pub fn run_hybrid_playbook_regression(
     }
 }
 
+/// Executes every hybrid playbook under a root and aggregates pass/fail counts.
 pub fn run_hybrid_playbook_regressions(
     searcher: &TextSearcher,
     playbooks_root: &Path,

@@ -1,3 +1,5 @@
+//! Regression tests for Python hybrid ranking that keeps entrypoint witnesses above frontend and docs noise.
+
 use super::*;
 
 #[test]

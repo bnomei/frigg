@@ -1,3 +1,5 @@
+//! Regression tests for provenance event append, load-for-tool replay, and trace ordering in SQLite storage.
+
 use super::support::*;
 
 #[test]

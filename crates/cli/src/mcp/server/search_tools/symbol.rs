@@ -1,3 +1,5 @@
+//! `search_symbol` implementation over cached repository symbol corpora.
+
 use super::*;
 
 impl FriggMcpServer {

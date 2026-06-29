@@ -1,3 +1,5 @@
+//! Ecosystem-specific hybrid-ranking regressions for real-world repository layouts and entrypoint witness recovery.
+
 use super::*;
 
 mod cli_workflows;

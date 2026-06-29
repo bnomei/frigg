@@ -1,3 +1,5 @@
+//! Path witness projection replace and load for a manifest snapshot.
+
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::storage::{
     PathWitnessProjection, Storage, db_runtime::i64_to_u64, db_runtime::open_connection,

@@ -1,8 +1,11 @@
+//! Shared symbol, structural-query, and heuristic-reference types for indexer outputs.
+
 use super::*;
 use crate::domain::model::GeneratedStructuralFollowUp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Normalized symbol categories shared across language adapters.
 pub enum SymbolKind {
     Module,
     Component,
@@ -54,6 +57,7 @@ impl SymbolKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Byte and line/column bounds for one source excerpt.
 pub struct SourceSpan {
     pub start_byte: usize,
     pub end_byte: usize,
@@ -64,6 +68,7 @@ pub struct SourceSpan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One extracted symbol with stable id, language, kind, and source location.
 pub struct SymbolDefinition {
     pub stable_id: String,
     pub language: SymbolLanguage,
@@ -82,6 +87,7 @@ pub struct SymbolExtractionDiagnostic {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Batch symbol extraction result with per-file diagnostics.
 pub struct SymbolExtractionOutput {
     pub symbols: Vec<SymbolDefinition>,
     pub diagnostics: Vec<SymbolExtractionDiagnostic>,
@@ -112,6 +118,7 @@ pub struct StructuralQueryCapture {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One structural query hit with anchor capture metadata and optional follow-up suggestions.
 pub struct StructuralQueryMatch {
     pub path: PathBuf,
     pub span: SourceSpan,
@@ -131,6 +138,7 @@ pub struct SyntaxTreeInspectionNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Focused syntax-tree neighborhood around one source location.
 pub struct SyntaxTreeInspection {
     pub language: SymbolLanguage,
     pub focus: SyntaxTreeInspectionNode,
@@ -169,6 +177,7 @@ pub enum HeuristicReferenceEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Probabilistic reference to a symbol discovered outside precise graph resolution.
 pub struct HeuristicReference {
     pub repository_id: String,
     pub symbol_id: String,

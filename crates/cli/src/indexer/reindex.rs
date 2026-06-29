@@ -1,3 +1,5 @@
+//! Reindex orchestration: planning, phased execution, semantic refresh, and manifest persistence.
+
 mod execution;
 mod plan;
 mod semantic;

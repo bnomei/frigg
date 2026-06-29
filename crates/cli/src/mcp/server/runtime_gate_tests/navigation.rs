@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for navigation tool modes, result handles, and precise partial coverage.
+
 use super::*;
 
 #[test]
@@ -26,6 +28,9 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
         .into_iter()
         .next()
         .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
 
     let _ = server.prewarm_precise_graph_for_workspace(&workspace);
 
@@ -71,6 +76,9 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
         .into_iter()
         .next()
         .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
 
     let response = server
         .try_precise_definition_fast_path(
@@ -118,6 +126,9 @@ fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
         .into_iter()
         .next()
         .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
     assert_ne!(workspace.repository_id, workspace.runtime_repository_id);
     seed_manifest_snapshot(
         &workspace_root,
@@ -180,7 +191,7 @@ async fn inspect_syntax_tree_returns_focus_and_ancestor_stack() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
     );
-    let repository_id = server
+    let workspace = server
         .runtime_state
         .workspace_registry
         .read()
@@ -188,8 +199,11 @@ async fn inspect_syntax_tree_returns_focus_and_ancestor_stack() {
         .known_workspaces()
         .into_iter()
         .next()
-        .expect("server should register workspace")
-        .repository_id;
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
     let response = server
         .inspect_syntax_tree(rmcp::handler::server::wrapper::Parameters(
             InspectSyntaxTreeParams {
@@ -242,7 +256,7 @@ async fn inspect_syntax_tree_normalizes_punctuation_focus_to_useful_named_node()
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
     );
-    let repository_id = server
+    let workspace = server
         .runtime_state
         .workspace_registry
         .read()
@@ -250,8 +264,11 @@ async fn inspect_syntax_tree_normalizes_punctuation_focus_to_useful_named_node()
         .known_workspaces()
         .into_iter()
         .next()
-        .expect("server should register workspace")
-        .repository_id;
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
     let response = server
         .inspect_syntax_tree(rmcp::handler::server::wrapper::Parameters(
             InspectSyntaxTreeParams {
@@ -297,7 +314,7 @@ async fn inspect_syntax_tree_opt_in_returns_follow_up_structural() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
     );
-    let repository_id = server
+    let workspace = server
         .runtime_state
         .workspace_registry
         .read()
@@ -305,8 +322,11 @@ async fn inspect_syntax_tree_opt_in_returns_follow_up_structural() {
         .known_workspaces()
         .into_iter()
         .next()
-        .expect("server should register workspace")
-        .repository_id;
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
     let response = server
         .inspect_syntax_tree(rmcp::handler::server::wrapper::Parameters(
             InspectSyntaxTreeParams {
@@ -355,7 +375,7 @@ async fn search_structural_invalid_query_returns_recovery_guidance() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
     );
-    let repository_id = server
+    let workspace = server
         .runtime_state
         .workspace_registry
         .read()
@@ -363,8 +383,11 @@ async fn search_structural_invalid_query_returns_recovery_guidance() {
         .known_workspaces()
         .into_iter()
         .next()
-        .expect("server should register workspace")
-        .repository_id;
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
     let error = match server
         .search_structural(rmcp::handler::server::wrapper::Parameters(
             SearchStructuralParams {
@@ -424,7 +447,7 @@ fn location_navigation_prefers_token_under_cursor_before_enclosing_symbol() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
     );
-    let repository_id = server
+    let workspace = server
         .runtime_state
         .workspace_registry
         .read()
@@ -432,8 +455,11 @@ fn location_navigation_prefers_token_under_cursor_before_enclosing_symbol() {
         .known_workspaces()
         .into_iter()
         .next()
-        .expect("server should register workspace")
-        .repository_id;
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
     let corpora = server
         .collect_repository_symbol_corpora(Some(&repository_id))
         .expect("symbol corpus collection should succeed");

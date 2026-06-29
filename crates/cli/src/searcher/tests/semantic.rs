@@ -1,3 +1,5 @@
+//! Regression tests for hybrid semantic-channel ranking across docs, runtime, test, and contract witness surfaces.
+
 use super::*;
 
 #[test]

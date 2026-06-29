@@ -1,3 +1,8 @@
+//! SCIP-backed enrichment for retrieval projection bundles.
+//!
+//! Applies bounded SCIP artifact ingestion to augment path relations and surface terms when live
+//! symbol graphs are available alongside manifest path witnesses.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

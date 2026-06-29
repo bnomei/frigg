@@ -1,3 +1,5 @@
+//! Subtree coverage projection load for navigation fallbacks.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     Storage, SubtreeCoverageProjection, db_runtime::i64_to_u64, db_runtime::open_connection,

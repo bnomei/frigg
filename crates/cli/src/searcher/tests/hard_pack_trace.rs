@@ -1,3 +1,5 @@
+//! Regression tests that serialize hard-pack hybrid ranking traces for offline diffing of witness and policy behavior.
+
 use serde::Serialize;
 
 use crate::domain::{EvidenceChannel, FriggError, FriggResult};

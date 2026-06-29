@@ -1,3 +1,5 @@
+//! Line-preserving scrubbing of leading HTML and metadata comment blocks.
+
 use std::borrow::Cow;
 
 pub(crate) fn leading_html_comment_bounds(raw: &str) -> Option<(usize, usize)> {

@@ -1,3 +1,5 @@
+//! Shared PHP hybrid regression harness helpers and top-k witness-group assertions for provider-style queries.
+
 use super::*;
 
 #[test]

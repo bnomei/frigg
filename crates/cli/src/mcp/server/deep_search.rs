@@ -1,3 +1,5 @@
+//! Deep-search MCP tool handlers: run, replay, and citation composition over trace artifacts.
+
 use super::*;
 
 impl FriggMcpServer {

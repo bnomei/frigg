@@ -1,3 +1,8 @@
+//! Repository surface classification for hybrid search heuristics.
+//!
+//! Aggregates path predicates that label runtime, support, artifact, and config surfaces so
+//! intent rules, path witnesses, and ranker diversification share one vocabulary.
+
 use crate::domain::SourceClass;
 
 #[path = "surfaces/artifacts.rs"]

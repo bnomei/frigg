@@ -1,8 +1,10 @@
+//! Integration tests for `search_symbol` handler tree-sitter matching, path filters, and response modes.
+
 use super::*;
 
 #[tokio::test]
 async fn core_search_symbol_returns_tree_sitter_matches() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -37,7 +39,7 @@ async fn core_search_symbol_returns_tree_sitter_matches() {
 
 #[tokio::test]
 async fn core_search_symbol_defaults_to_compact_with_handles() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "greeting".to_owned(),
@@ -79,7 +81,7 @@ async fn search_symbol_preserves_exact_case_prefix_and_infix_rank_order() {
          pub fn other_target() {}\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -120,7 +122,7 @@ async fn search_symbol_returns_blade_symbols_from_runtime_corpus() {
          <livewire:orders.table />\n",
     )
     .expect("failed to seed temporary blade fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -165,7 +167,7 @@ async fn search_symbol_returns_typescript_symbols_from_runtime_corpus() {
          }\n",
     )
     .expect("failed to seed temporary typescript fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -211,7 +213,7 @@ async fn search_symbol_returns_python_symbols_from_runtime_corpus() {
         ),
     )
     .expect("failed to seed temporary python fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -288,7 +290,7 @@ async fn search_symbol_returns_additional_language_symbols_from_runtime_corpus()
         concat!("UserId := U64\n", "rocGreet = \\name -> name\n",),
     )
     .expect("failed to seed temporary roc fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     for (query, expected_kind, expected_path) in [
         ("GoService", "struct", "src/main.go"),
@@ -343,7 +345,7 @@ async fn search_symbol_resolves_php_canonical_queries() {
          }\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let class_response = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -415,7 +417,7 @@ async fn search_symbol_prefers_runtime_paths_within_same_lexical_rank() {
     fs::write(workspace_root.join("benches/bench.rs"), "pub fn run() {}\n")
         .expect("failed to write bench symbol fixture");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "run".to_owned(),
@@ -463,7 +465,7 @@ async fn search_symbol_runtime_queries_filter_inline_rust_test_symbols() {
     )
     .expect("failed to write rust fixture");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let runtime_response = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "simulator".to_owned(),
@@ -545,7 +547,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
     fs::write(workspace_root.join("tests/support.rs"), "pub fn run() {}\n")
         .expect("failed to write support source");
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let support_only = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "run".to_owned(),
@@ -581,7 +583,7 @@ async fn search_symbol_filters_by_path_class_and_path_regex() {
 
 #[tokio::test]
 async fn core_search_symbol_rejects_abusive_path_regex_with_typed_invalid_params() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let abusive_path_regex = "a".repeat(600);
 
     let error = match server
@@ -624,7 +626,7 @@ async fn search_symbol_rebuilds_stale_manifest_snapshot_before_reusing_cached_co
         .expect("failed to seed temporary fixture source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "old_name".to_owned(),
@@ -683,7 +685,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
     fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .search_symbol(Parameters(SearchSymbolParams {
             query: "alpha".to_owned(),
@@ -742,7 +744,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .search_text(Parameters(SearchTextParams {
             query: "alpha".to_owned(),
@@ -803,7 +805,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     fs::write(&lib_path, "pub fn alpha() {}\n").expect("failed to seed initial source");
     seed_manifest_snapshot(&workspace_root, "repo-001", "snapshot-001", &["src/lib.rs"]);
 
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
     let first = server
         .search_hybrid(Parameters(SearchHybridParams {
             query: "alpha".to_owned(),

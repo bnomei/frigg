@@ -1,4 +1,7 @@
-//! Retrieval projection assembly for manifest-driven search heuristics.
+//! Retrieval projection assembly for manifest-driven hybrid search heuristics.
+//!
+//! Builds snapshot-scoped projection families (path witness, relations, surface terms, anchor
+//! sketches, subtree coverage) from path heuristics, AST evidence, and optional SCIP inputs.
 
 mod ast;
 mod builders;
@@ -21,7 +24,40 @@ pub(crate) const ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_RELATION_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION: i64 = 1;
 pub(crate) const PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION: i64 = 1;
-pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 1;
+pub(crate) const PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION: i64 = 2;
+
+pub(crate) fn required_retrieval_projection_versions() -> [(&'static str, i64); 7] {
+    [
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_WITNESS,
+            super::path_witness_projection::PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_TEST_SUBJECT,
+            TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_ENTRYPOINT_SURFACE,
+            ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
+            PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
+            SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
+            PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION,
+        ),
+        (
+            RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
+            PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION,
+        ),
+    ]
+}
 
 pub(crate) use ast::augment_path_relation_projection_records_with_ast_relation_evidence;
 pub(crate) use builders::{

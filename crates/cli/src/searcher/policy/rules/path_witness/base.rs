@@ -1,3 +1,5 @@
+//! Core path-witness recall bonuses: entrypoints, CI workflows, and overlap tiers.
+
 use super::*;
 
 pub(super) fn path_witness_entrypoint_bonus(_ctx: &PathWitnessFacts) -> Option<PolicyEffect> {

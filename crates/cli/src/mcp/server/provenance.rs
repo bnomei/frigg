@@ -1,3 +1,5 @@
+//! Provenance event recording, storage-handle cache budgets, and workload attribution payloads.
+
 use super::*;
 use crate::domain::{
     NormalizedWorkloadMetadata, WorkloadFallbackReason, WorkloadPrecisionMode,
@@ -263,10 +265,14 @@ impl FriggMcpServer {
             Some(repository_id) => self
                 .attached_workspaces()
                 .into_iter()
-                .find(|workspace| workspace.repository_id == repository_id)
+                .find(|workspace| {
+                    workspace.repository_id == repository_id
+                        || workspace.runtime_repository_id == repository_id
+                })
                 .or_else(|| {
                     self.known_workspaces().into_iter().find(|workspace| {
-                        workspace.repository_id == repository_id
+                        (workspace.repository_id == repository_id
+                            || workspace.runtime_repository_id == repository_id)
                             && self.known_workspace_can_bootstrap_provenance(workspace)
                     })
                 })

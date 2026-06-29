@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for manifest diff classification, builder diagnostics, and file-digest ordering invariants.
+
 use super::support::*;
 
 #[test]
@@ -29,6 +31,54 @@ fn manifest_diff_classifies_added_modified_deleted_in_path_order() {
         manifest_diff.deleted,
         vec![digest("repo/alpha.rs", 1, Some(1), "hash-a")]
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<()> {
+    let root = temp_workspace_root("manifest-changed-only-read-failure-retains-entry");
+    prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
+
+    let builder = ManifestBuilder::default();
+    let previous = builder.build(&root)?;
+    let file_path = root.join("src/lib.rs");
+    let previous_entry = previous
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .cloned()
+        .expect("previous manifest should contain the seeded file");
+
+    fs::write(&file_path, "pub fn modified_with_a_longer_body() {}\n").map_err(FriggError::Io)?;
+    set_file_mode(&file_path, 0o000)?;
+
+    let output = builder.build_changed_only_with_diagnostics(&root, &previous)?;
+
+    set_file_mode(&file_path, 0o644)?;
+
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == ManifestDiagnosticKind::Read
+                && diagnostic.path.as_deref() == Some(file_path.as_path())),
+        "a Read diagnostic should be recorded for the unreadable file"
+    );
+    let retained = output
+        .entries
+        .iter()
+        .find(|entry| entry.path == file_path)
+        .expect("file with a transient read failure must be retained, not dropped");
+    assert_eq!(
+        retained, &previous_entry,
+        "retained entry should reuse the previous digest verbatim"
+    );
+    assert!(
+        diff(&previous, &output.entries).deleted.is_empty(),
+        "a still-present file must not be classified as deleted after a read failure"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
 }
 
 #[test]
@@ -340,7 +390,7 @@ fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResul
             "path_anchor_sketch",
         )?
         .expect("expected path anchor sketch head");
-    assert_eq!(path_anchor_sketch_head.heuristic_version, 1);
+    assert_eq!(path_anchor_sketch_head.heuristic_version, 2);
     assert_eq!(
         path_anchor_sketch_head.input_modes,
         vec!["ast".to_owned(), "path".to_owned()]

@@ -1,3 +1,5 @@
+//! Regression tests for literal text search match ordering, path filters, and manifest-scoped candidate limits.
+
 use super::*;
 
 #[test]

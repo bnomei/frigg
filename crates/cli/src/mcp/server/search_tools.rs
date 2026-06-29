@@ -1,3 +1,5 @@
+//! Search-oriented MCP tools: text, hybrid, symbol, structural, syntax inspection, and document outlines.
+
 use super::*;
 use crate::domain::{ChannelHealthStatus, SourceClass};
 use crate::mcp::types::{

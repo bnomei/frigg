@@ -348,6 +348,7 @@ impl LanguageSupportCapability {
     }
 }
 
+/// Canonical language key used by symbol extraction, structural search, and semantic chunk routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolLanguage {

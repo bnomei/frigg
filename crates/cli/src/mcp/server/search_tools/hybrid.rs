@@ -1,3 +1,5 @@
+//! `search_hybrid` implementation combining lexical, graph, and optional semantic channels.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 

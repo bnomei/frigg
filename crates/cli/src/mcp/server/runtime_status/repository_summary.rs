@@ -1,3 +1,5 @@
+//! `RepositorySummary` assembly with short-TTL caching for list and workspace tools.
+
 use super::*;
 use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 

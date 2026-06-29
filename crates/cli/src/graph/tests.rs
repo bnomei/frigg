@@ -1,3 +1,5 @@
+//! Unit tests for symbol-graph relation traversal, heuristic hints, SCIP ingest validation, and precise navigation selection.
+
 use protobuf::{EnumOrUnknown, Message};
 
 use super::*;
@@ -541,6 +543,76 @@ fn scip_ingest_returns_typed_invalid_input_and_preserves_state() {
         before, after,
         "failed ingest must not mutate precise graph state"
     );
+    assert_eq!(
+        graph
+            .precise_occurrences_for_symbol("repo-001", "scip-rust pkg a#User")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn scip_ingest_rejects_document_paths_that_escape_repository_root() {
+    let mut graph = SymbolGraph::default();
+    let before = graph.precise_counts();
+
+    for (label, relative_path) in [
+        ("fixture:parent-escape.json", "../outside.rs"),
+        ("fixture:nested-parent-escape.json", "src/../../outside.rs"),
+        ("fixture:absolute-escape.json", "/etc/passwd"),
+        ("fixture:backslash-escape.json", r"..\\outside.rs"),
+    ] {
+        let payload = format!(
+            r#"{{
+              "documents": [
+                {{
+                  "relative_path": "{relative_path}",
+                  "occurrences": [
+                    {{ "symbol": "scip-rust pkg a#User", "range": [0, 7, 11], "symbol_roles": 1 }}
+                  ],
+                  "symbols": [
+                    {{ "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] }}
+                  ]
+                }}
+              ]
+            }}"#
+        );
+        let error = graph
+            .ingest_scip_json("repo-001", label, payload.as_bytes())
+            .expect_err("document path escaping the repository root should be rejected");
+        assert!(
+            matches!(
+                error,
+                ScipIngestError::InvalidInput { ref diagnostic }
+                    if diagnostic.artifact_label == label
+                        && diagnostic.code == ScipInvalidInputCode::InvalidDocumentPath
+            ),
+            "expected typed invalid-document-path error, got {error:?}"
+        );
+    }
+
+    assert_eq!(
+        before,
+        graph.precise_counts(),
+        "rejected document paths must not mutate precise graph state"
+    );
+
+    let normalized = br#"{
+          "documents": [
+            {
+              "relative_path": "./src/a.rs",
+              "occurrences": [
+                { "symbol": "scip-rust pkg a#User", "range": [0, 7, 11], "symbol_roles": 1 }
+              ],
+              "symbols": [
+                { "symbol": "scip-rust pkg a#User", "display_name": "User", "kind": "struct", "relationships": [] }
+              ]
+            }
+          ]
+        }"#;
+    graph
+        .ingest_scip_json("repo-001", "fixture:normalized.json", normalized)
+        .expect("repository-relative document path should ingest");
     assert_eq!(
         graph
             .precise_occurrences_for_symbol("repo-001", "scip-rust pkg a#User")

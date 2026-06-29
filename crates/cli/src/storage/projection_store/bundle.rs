@@ -1,3 +1,5 @@
+//! Atomic retrieval projection bundle replace, load, and freshness checks.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     RetrievalProjectionBundle, RetrievalProjectionHeadRecord, Storage,
@@ -18,6 +20,7 @@ const REQUIRED_RETRIEVAL_PROJECTION_FAMILIES: &[&str] = &[
 ];
 
 impl Storage {
+    /// Atomically replaces all retrieval projection families for a manifest snapshot.
     pub fn replace_retrieval_projection_bundle_for_repository_snapshot(
         &self,
         repository_id: &str,
@@ -544,6 +547,55 @@ impl Storage {
             .iter()
             .filter(|family| !present_families.contains(**family))
             .map(|family| (*family).to_owned())
+            .collect())
+    }
+
+    /// Returns projection families that are absent or behind the requested heuristic epoch.
+    pub fn stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        expected_versions: &[(&str, i64)],
+    ) -> FriggResult<Vec<String>> {
+        let (repository_id, snapshot_id) =
+            normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
+
+        let conn = open_connection(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT family, heuristic_version
+                FROM retrieval_projection_head
+                WHERE repository_id = ?1 AND snapshot_id = ?2
+                "#,
+            )
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare retrieval projection version query for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+        let present_versions = stmt
+            .query_map((repository_id.as_str(), snapshot_id.as_str()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to query retrieval projection versions for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?
+            .collect::<Result<std::collections::BTreeMap<String, i64>, _>>()
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to decode retrieval projection versions for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
+                ))
+            })?;
+
+        Ok(expected_versions
+            .iter()
+            .filter(|(family, expected_version)| {
+                present_versions.get(*family) != Some(expected_version)
+            })
+            .map(|(family, _)| (*family).to_owned())
             .collect())
     }
 }

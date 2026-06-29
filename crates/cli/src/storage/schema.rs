@@ -1,3 +1,5 @@
+//! Versioned SQLite schema migrations for repository storage.
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Migration {
     pub version: i64,

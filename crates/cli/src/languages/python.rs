@@ -1,3 +1,5 @@
+//! Python language adapter for tree-sitter symbol extraction.
+
 use std::path::Path;
 
 use tree_sitter::Node;

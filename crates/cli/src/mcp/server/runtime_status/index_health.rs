@@ -1,3 +1,5 @@
+//! Index-health and repository-response freshness assembly for workspace status reporting.
+
 use super::*;
 
 impl FriggMcpServer {
@@ -836,9 +838,7 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
     ) {
         let semantic_plan = self.workspace_semantic_refresh_plan(workspace);
-        let should_refresh_semantic = semantic_plan
-            .as_ref()
-            .is_some_and(|plan| plan.reason == "stale_manifest_snapshot");
+        let should_refresh_semantic = semantic_plan.is_some();
         let should_prewarm_precise = !Self::collect_scip_artifact_digests(&workspace.root)
             .artifact_digests
             .is_empty();
@@ -852,9 +852,9 @@ impl FriggMcpServer {
                 .runtime_task_registry
                 .read()
                 .expect("runtime task registry poisoned")
-                .has_active_task_for_repository(
+                .has_active_task_for_any_repository(
                     crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                    &workspace.repository_id,
+                    &[&workspace.repository_id, &workspace.runtime_repository_id],
                 );
 
         if should_refresh_semantic && !semantic_refresh_already_running {

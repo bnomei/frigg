@@ -1,3 +1,5 @@
+//! Markdown playbook parser for the `<!-- frigg-playbook` metadata header and scrubbed body text.
+
 use std::borrow::Cow;
 
 use crate::domain::{FriggError, FriggResult};
@@ -12,10 +14,12 @@ use super::{
 
 const PLAYBOOK_METADATA_MARKER: &str = "<!-- frigg-playbook";
 
+/// Returns playbook text with the executable metadata header scrubbed but line numbers preserved.
 pub fn scrub_playbook_metadata_header(raw: &str) -> Cow<'_, str> {
     scrub_leading_metadata_comment(raw, PLAYBOOK_METADATA_MARKER)
 }
 
+/// Parses a markdown playbook into normalized metadata and body text.
 pub fn parse_playbook_document(raw: &str) -> FriggResult<PlaybookDocument> {
     let raw = raw.trim_start_matches('\u{feff}');
     let Some((header_start, header_end)) =

@@ -1,3 +1,6 @@
+//! Executes deep-search playbooks by dispatching a fixed subset of MCP tools and assembling trace
+//! artifacts suitable for replay and citation composition.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

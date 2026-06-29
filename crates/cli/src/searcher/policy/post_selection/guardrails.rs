@@ -1,3 +1,5 @@
+//! Guardrail candidate selection, insertion, and selection-score comparison helpers.
+
 use std::cmp::Ordering;
 
 use super::super::super::HybridChannelHit;

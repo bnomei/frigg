@@ -1,3 +1,5 @@
+//! `find_implementations` across precise, Rust-fact, and language-specific heuristic strategies.
+
 use super::*;
 
 impl FriggMcpServer {

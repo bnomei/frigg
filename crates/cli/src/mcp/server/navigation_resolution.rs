@@ -1,3 +1,5 @@
+//! Symbol and cursor target resolution for navigation tools across corpora and source evidence.
+
 use super::*;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -372,6 +374,19 @@ impl FriggMcpServer {
             .to_owned()
     }
 
+    pub(in crate::mcp::server) fn navigation_path_within_root(
+        root: &Path,
+        candidate: &Path,
+    ) -> bool {
+        let Ok(root_canonical) = root.canonicalize() else {
+            return false;
+        };
+        let Ok(candidate_canonical) = candidate.canonicalize() else {
+            return false;
+        };
+        candidate_canonical.starts_with(&root_canonical)
+    }
+
     pub(in crate::mcp::server) fn requested_location_path_for_corpus(
         corpus: &RepositorySymbolCorpus,
         raw_path: &str,
@@ -595,6 +610,9 @@ impl FriggMcpServer {
         for corpus in corpora {
             let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
             let absolute_path = corpus.root.join(&requested_path);
+            if !Self::navigation_path_within_root(&corpus.root, &absolute_path) {
+                continue;
+            }
             let language =
                 supported_language_for_path(&absolute_path, LanguageCapability::StructuralSearch);
             if language == Some(SymbolLanguage::Rust) {
@@ -700,7 +718,10 @@ impl FriggMcpServer {
         if bytes.is_empty() {
             return None;
         }
-        let offset = offset.min(bytes.len().saturating_sub(1));
+        let mut offset = offset.min(bytes.len().saturating_sub(1));
+        while offset > 0 && !source.is_char_boundary(offset) {
+            offset -= 1;
+        }
         let line_start = source[..offset]
             .rfind('\n')
             .map(|index| index + 1)
@@ -1046,5 +1067,25 @@ mod tests {
             FriggMcpServer::php_helper_string_token_around_offset(source, offset),
             Some(("dashboard".to_owned(), NavigationPhpHelperKind::Route))
         );
+    }
+
+    #[test]
+    fn php_helper_string_token_does_not_panic_on_multibyte_line() {
+        let source = "echo café";
+        let offset = byte_offset_for_line_column(source, 1, 999).expect("offset should resolve");
+        assert_eq!(
+            FriggMcpServer::php_helper_string_token_around_offset(source, offset),
+            None
+        );
+    }
+
+    #[test]
+    fn php_helper_string_token_handles_column_inside_multibyte_char() {
+        let source = "é route('x')";
+        for column in 1..=source.chars().count() {
+            let offset =
+                byte_offset_for_line_column(source, 1, column).expect("offset should resolve");
+            let _ = FriggMcpServer::php_helper_string_token_around_offset(source, offset);
+        }
     }
 }

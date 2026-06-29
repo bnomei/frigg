@@ -1,3 +1,5 @@
+//! Regression tests for manifest-snapshot preference when discovering lexical and hybrid search candidates.
+
 use super::*;
 
 #[test]

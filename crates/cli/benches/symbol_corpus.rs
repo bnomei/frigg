@@ -1,3 +1,5 @@
+//! Criterion benchmarks for building and querying the in-memory symbol corpus.
+
 #[path = "common/mod.rs"]
 mod support;
 

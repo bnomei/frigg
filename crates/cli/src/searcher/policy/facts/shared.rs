@@ -1,3 +1,6 @@
+//! Shared intent, query, path, and selection-coverage facts. Single source of truth for flags
+//! that predicates and rules must agree on across retrieval-policy stages.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -130,6 +133,7 @@ impl SharedIntentFacts {
 }
 
 #[derive(Debug, Clone)]
+/// Normalized query terms and overlap helpers shared across policy stages.
 pub(crate) struct PolicyQueryContext {
     pub(crate) exact_terms: Vec<String>,
     pub(crate) query_overlap_terms: Vec<String>,

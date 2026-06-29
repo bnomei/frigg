@@ -1,3 +1,8 @@
+//! Build, package, and workspace-config surface path predicates.
+//!
+//! Identifies manifest roots, nested runtime config paths, and package-surface files that hybrid
+//! search treats as first-class retrieval targets.
+
 use std::path::Path;
 
 pub(in crate::searcher) const NESTED_ROOT_SCOPED_RUNTIME_CONFIG_PATHS: &[&str] = &[

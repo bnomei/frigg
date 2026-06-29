@@ -1,3 +1,5 @@
+//! Regression tests for semantic chunking, embedding persistence across reindex, and runtime executor integration.
+
 use super::support::*;
 
 #[test]
@@ -565,6 +567,77 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
 }
 
 #[test]
+fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read() -> FriggResult<()>
+{
+    let db_path = temp_db_path("semantic-changed-only-unreadable-retains");
+    let workspace_root = temp_workspace_root("semantic-changed-only-unreadable-retains");
+    prepare_workspace(
+        &workspace_root,
+        &[
+            ("src/main.rs", "pub fn main_api() { println!(\"main\"); }\n"),
+            ("src/lib.rs", "pub fn stable_lib() -> u64 { 7 }\n"),
+        ],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+
+    let first = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &CountingSemanticEmbeddingExecutor::default(),
+    )?;
+    assert!(!first.snapshot_id.is_empty());
+
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        b"pub fn changed() {} // \xff\xfe invalid utf8 \xff".as_slice(),
+    )
+    .map_err(FriggError::Io)?;
+
+    let second = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::ChangedOnly,
+        &semantic_runtime,
+        &credentials,
+        &CountingSemanticEmbeddingExecutor::default(),
+    )?;
+    assert_eq!(
+        second.files_changed, 1,
+        "the invalid-utf8 rewrite should be detected as a manifest change"
+    );
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?;
+    assert!(
+        semantic_rows
+            .iter()
+            .any(|record| record.path == "src/lib.rs" && record.content_text.contains("stable_lib")),
+        "existing semantic rows for a changed file that fails to read must be retained, not deleted"
+    );
+    assert!(
+        semantic_rows
+            .iter()
+            .any(|record| record.path == "src/main.rs"),
+        "unrelated semantic rows must remain intact"
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-changed-only-bounded");
     let workspace_root = temp_workspace_root("semantic-changed-only-bounded");
@@ -750,7 +823,8 @@ fn semantic_chunk_candidates_include_docs_and_fixture_text_sources() -> FriggRes
 
     let manifest = ManifestBuilder::default().build(&workspace_root)?;
     let chunks =
-        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?;
+        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?
+            .candidates;
 
     assert!(
         chunks.iter().any(|chunk| {
@@ -798,7 +872,8 @@ fn semantic_chunk_candidates_include_playbook_markdown_under_generic_policy() ->
 
     let manifest = ManifestBuilder::default().build(&workspace_root)?;
     let chunks =
-        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?;
+        build_semantic_chunk_candidates("repo-001", &workspace_root, "snapshot-001", &manifest)?
+            .candidates;
 
     assert!(
         chunks

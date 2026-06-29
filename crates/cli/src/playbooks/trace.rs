@@ -1,3 +1,5 @@
+//! Trace packet writer for hybrid playbook runs, capturing channel and ranking forensics.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

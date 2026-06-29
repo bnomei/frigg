@@ -1,3 +1,6 @@
+//! MCP server orchestration: tool routing, session-scoped workspace adoption, runtime caches,
+//! provenance recording, and the public tool handlers agents invoke over streamable HTTP or stdio.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -156,6 +159,7 @@ mod symbol_index;
 mod workspace;
 mod workspace_session;
 
+/// Aggregate counts from building repository symbol corpora for diagnostics benchmarks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SymbolCorpusBenchmarkSummary {
     pub repository_count: usize,
@@ -165,6 +169,7 @@ pub struct SymbolCorpusBenchmarkSummary {
     pub blade_evidence_files: usize,
 }
 
+/// Aggregate counts from building or reusing a workspace precise graph for diagnostics benchmarks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PreciseGraphBenchmarkSummary {
     pub artifact_count: usize,
@@ -300,6 +305,9 @@ pub(in crate::mcp::server) struct NavigationLocationTokenHint {
 /// Concrete streamable HTTP service type used when Frigg is exposed over MCP transport.
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
+type PendingPreciseDirtyPathSets = (BTreeSet<String>, BTreeSet<String>);
+type PendingPreciseDirtyPathMap = Arc<RwLock<BTreeMap<String, PendingPreciseDirtyPathSets>>>;
+
 #[derive(Clone)]
 /// Orchestrates Frigg's public MCP tool surface over shared config, caches, session state,
 /// provenance, and optional watch-backed freshness.
@@ -327,6 +335,7 @@ struct FriggMcpRuntimeState {
     runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
     precise_generation_status_cache:
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
+    precise_generation_pending_dirty_paths: PendingPreciseDirtyPathMap,
 }
 
 #[derive(Clone)]
@@ -334,6 +343,8 @@ struct FriggMcpSessionState {
     inner: Arc<FriggMcpSessionStateInner>,
 }
 
+// Session adoption boundary: per-transport session tracks adopted repository_ids separately
+// from the process-wide workspace registry and watch lease refcounts.
 struct FriggMcpSessionStateInner {
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
@@ -486,6 +497,7 @@ impl FriggMcpServer {
                 runtime_cache_registry: Arc::new(RwLock::new(RuntimeCacheRegistry::default())),
                 runtime_cache_telemetry: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generation_status_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                precise_generation_pending_dirty_paths: Arc::new(RwLock::new(BTreeMap::new())),
             },
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
@@ -663,7 +675,13 @@ impl FriggMcpServer {
         let wait_for_index = params
             .wait_for_index
             .unwrap_or(matches!(index_mode, WorkspaceAttachIndexMode::Ensure));
-        let index_timeout = Duration::from_millis(params.index_timeout_ms.unwrap_or(30_000));
+        const MAX_INDEX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
+        let index_timeout = Duration::from_millis(
+            params
+                .index_timeout_ms
+                .unwrap_or(30_000)
+                .min(MAX_INDEX_TIMEOUT_MS),
+        );
         let started_at = Instant::now();
         info!(
             requested_path = params.path.as_deref().unwrap_or(""),

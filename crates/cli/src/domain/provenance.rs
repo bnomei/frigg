@@ -1,3 +1,5 @@
+//! Normalized workload and provenance metadata emitted by MCP tool invocations.
+
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -146,6 +148,7 @@ impl WorkloadToolClass {
     }
 }
 
+/// Precision tier reported for a workload after graph and semantic fallbacks.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -332,6 +335,7 @@ impl Default for WorkloadStageSample {
     }
 }
 
+/// Stage-level timing and cardinality samples for deep-search attribution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadStageAttribution {
     pub candidate_intake: WorkloadStageSample,
@@ -464,6 +468,7 @@ impl Default for WorkloadStageAttribution {
     }
 }
 
+/// Canonical workload summary attached to provenance events and MCP responses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NormalizedWorkloadMetadata {
     pub tool_family: WorkloadToolFamily,
@@ -569,6 +574,7 @@ pub struct SourceRef {
     pub detail: String,
 }
 
+/// Persisted provenance record tying a tool invocation to source references.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProvenanceEvent {
     pub trace_id: String,

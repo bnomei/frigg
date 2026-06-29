@@ -1,10 +1,14 @@
+//! Workspace-scoped provenance database path resolution and boundary checks.
+
 use super::*;
 
+/// Resolves the canonical `.frigg/storage.sqlite3` path for a workspace root.
 pub fn resolve_provenance_db_path(workspace_root: &Path) -> FriggResult<PathBuf> {
     let (_root_canonical, db_path) = resolve_provenance_db_path_with_root(workspace_root)?;
     Ok(db_path)
 }
 
+/// Creates the provenance storage parent directory when missing and verifies root boundary.
 pub fn ensure_provenance_db_parent_dir(workspace_root: &Path) -> FriggResult<PathBuf> {
     let (root_canonical, db_path) = resolve_provenance_db_path_with_root(workspace_root)?;
     let parent = db_path.parent().ok_or_else(|| {

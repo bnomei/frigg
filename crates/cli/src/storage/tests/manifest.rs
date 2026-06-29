@@ -1,3 +1,5 @@
+//! Regression tests for manifest upsert/load roundtrips, snapshot isolation, and retrieval projection persistence.
+
 use super::support::*;
 use std::collections::BTreeMap;
 
@@ -825,6 +827,86 @@ fn delete_snapshot_removes_retrieval_projection_bundle_rows() -> FriggResult<()>
         storage
             .load_path_anchor_sketch_projections_for_repository_snapshot("repo-1", "snapshot-001",)?
             .is_empty()
+    );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn stale_or_missing_retrieval_projection_families_flags_version_mismatch() -> FriggResult<()> {
+    let db_path = temp_db_path("retrieval-projection-stale-version");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/main.rs", "hash-main", 10, Some(100))],
+    )?;
+    storage.replace_retrieval_projection_bundle_for_repository_snapshot(
+        "repo-1",
+        "snapshot-001",
+        RetrievalProjectionBundle {
+            heads: vec![RetrievalProjectionHeadRecord {
+                family: "path_anchor_sketch".to_owned(),
+                heuristic_version: 1,
+                input_modes: vec!["path".to_owned()],
+                row_count: 1,
+            }],
+            path_witness: Vec::new(),
+            test_subject: Vec::new(),
+            entrypoint_surface: Vec::new(),
+            path_relations: Vec::new(),
+            subtree_coverage: Vec::new(),
+            path_surface_terms: Vec::new(),
+            path_anchor_sketches: vec![PathAnchorSketchProjection {
+                path: "src/main.rs".to_owned(),
+                anchor_rank: 0,
+                line: 1,
+                anchor_kind: "line_excerpt".to_owned(),
+                excerpt: "fn main() {}".to_owned(),
+                terms: vec!["main".to_owned()],
+                score_hint: 18,
+            }],
+        },
+    )?;
+
+    assert!(
+        storage
+            .stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+                "repo-1",
+                "snapshot-001",
+                &[("path_anchor_sketch", 1)],
+            )?
+            .is_empty()
+    );
+    assert_eq!(
+        storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+            "repo-1",
+            "snapshot-001",
+            &[("path_anchor_sketch", 2)],
+        )?,
+        vec!["path_anchor_sketch".to_owned()]
+    );
+    let current_path_anchor_version = crate::searcher::required_retrieval_projection_versions()
+        .into_iter()
+        .filter(|(family, _)| *family == "path_anchor_sketch")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+            "repo-1",
+            "snapshot-001",
+            &current_path_anchor_version,
+        )?,
+        vec!["path_anchor_sketch".to_owned()]
+    );
+    assert_eq!(
+        storage.stale_or_missing_retrieval_projection_families_for_repository_snapshot(
+            "repo-1",
+            "snapshot-001",
+            &[("path_witness", 1)],
+        )?,
+        vec!["path_witness".to_owned()]
     );
 
     cleanup_db(&db_path);

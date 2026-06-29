@@ -1,3 +1,5 @@
+//! Blade view and component symbol extraction plus Flux relation evidence.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;

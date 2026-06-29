@@ -1,3 +1,5 @@
+//! Shared fixtures and helpers for indexer unit tests (workspaces, digests, semantic executors, and symbol assertions).
+
 pub(super) use std::collections::BTreeMap;
 pub(super) use std::env;
 pub(super) use std::future::Future;

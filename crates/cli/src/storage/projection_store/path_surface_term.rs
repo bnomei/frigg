@@ -1,3 +1,5 @@
+//! Path surface term projection load for lexical witness scoring.
+
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{PathSurfaceTermProjection, Storage, db_runtime::open_connection};
 

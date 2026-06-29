@@ -1,9 +1,11 @@
+//! Integration tests for `search_structural` tree-sitter queries, anchor selection, and deterministic match replay.
+
 use super::*;
 use frigg::mcp::types::{StructuralAnchorSelection, StructuralResultMode};
 
 #[tokio::test]
 async fn search_structural_returns_deterministic_rust_matches() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let first = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -101,7 +103,7 @@ async fn search_structural_returns_deterministic_blade_matches() {
          <flux:button wire:click=\"save\" wire:model.live=\"state\" />\n",
     )
     .expect("failed to seed temporary blade fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let first = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -177,7 +179,7 @@ async fn search_structural_returns_typescript_tsx_matches() {
          }\n",
     )
     .expect("failed to seed temporary tsx fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -224,7 +226,7 @@ async fn search_structural_returns_python_matches() {
         ),
     )
     .expect("failed to seed temporary python fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -301,7 +303,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
         concat!("proc helper(): string =\n", "  \"ok\"\n",),
     )
     .expect("failed to seed temporary nim fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let go_response = server
         .search_structural(Parameters(SearchStructuralParams {
@@ -428,7 +430,7 @@ async fn search_structural_returns_additional_baseline_language_matches() {
 
 #[tokio::test]
 async fn search_structural_rejects_unsupported_language_with_typed_error() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item) @fn".to_owned(),
@@ -469,7 +471,7 @@ async fn search_structural_rejects_unsupported_language_with_typed_error() {
 
 #[tokio::test]
 async fn search_structural_rejects_invalid_query_with_typed_error() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item @broken".to_owned(),
@@ -499,7 +501,7 @@ async fn search_structural_rejects_invalid_query_with_typed_error() {
 
 #[tokio::test]
 async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item) @fn".to_owned(),
@@ -537,7 +539,7 @@ async fn search_structural_opt_in_returns_per_match_follow_up_structural() {
 
 #[tokio::test]
 async fn search_structural_defaults_to_grouped_match_rows_for_multi_capture_query() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item name: (identifier) @name) @match".to_owned(),
@@ -578,7 +580,7 @@ async fn search_structural_defaults_to_grouped_match_rows_for_multi_capture_quer
 
 #[tokio::test]
 async fn search_structural_capture_mode_remains_available_for_debugging() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .search_structural(Parameters(SearchStructuralParams {
             query: "(function_item name: (identifier) @name) @match".to_owned(),

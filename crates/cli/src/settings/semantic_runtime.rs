@@ -1,3 +1,5 @@
+//! Semantic runtime configuration, credential validation, and provider defaults.
+
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,7 @@ pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
 pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
 
+/// Embedding provider selected for semantic indexing and recall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticRuntimeProvider {
@@ -60,8 +63,8 @@ impl FromStr for SemanticRuntimeProvider {
     }
 }
 
+/// Controls whether semantic indexing and recall participate in the runtime contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-/// Controls whether semantic indexing and semantic recall are part of the runtime contract.
 pub struct SemanticRuntimeConfig {
     pub enabled: bool,
     pub provider: Option<SemanticRuntimeProvider>,
@@ -69,6 +72,7 @@ pub struct SemanticRuntimeConfig {
     pub strict_mode: bool,
 }
 
+/// Process-environment API keys consumed during semantic runtime startup.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SemanticRuntimeCredentials {
     pub openai_api_key: Option<String>,

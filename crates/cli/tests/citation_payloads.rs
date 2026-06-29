@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration tests for deep-search citation payload shape and trace artifact contracts.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 

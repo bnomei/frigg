@@ -1,3 +1,5 @@
+//! Integration regressions for PHP transport/runtime hybrid queries that surface README, builder docs, and server witnesses.
+
 use super::*;
 
 #[test]

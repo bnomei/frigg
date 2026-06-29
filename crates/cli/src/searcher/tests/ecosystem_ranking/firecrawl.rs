@@ -1,3 +1,5 @@
+//! Regression tests for Firecrawl repository hybrid ranking across API routes, workers, and docs witnesses.
+
 use super::*;
 
 #[test]

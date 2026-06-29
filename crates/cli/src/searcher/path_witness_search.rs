@@ -1,3 +1,8 @@
+//! Path-witness recall search over the candidate universe.
+//!
+//! Ranks path-only candidates from retrieval projections and overlay seeds, resolves in-file
+//! anchor lines, and emits path-witness channel hits for ranker fusion.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

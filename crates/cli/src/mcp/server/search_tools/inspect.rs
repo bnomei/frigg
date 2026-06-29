@@ -1,3 +1,5 @@
+//! `inspect_syntax_tree` and `search_structural` Tree-sitter query tools.
+
 use super::*;
 use crate::indexer::{
     search_structural_grouped_in_source, search_structural_grouped_with_follow_up_in_source,

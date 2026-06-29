@@ -1,3 +1,5 @@
+//! Regression tests for Nim hybrid ranking across CLI dispatch, module entrypoints, and test-init noise separation.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,5 @@
+//! Precise-graph-backed navigation when SCIP artifacts provide symbol coverage for a workspace.
+
 use super::*;
 
 pub(in crate::mcp::server) struct DirectPreciseNavigationTarget {

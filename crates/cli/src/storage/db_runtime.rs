@@ -1,3 +1,5 @@
+//! SQLite connection helpers, manifest loaders, and schema bookkeeping.
+
 #[cfg(test)]
 use std::cell::RefCell;
 use std::path::Path;

@@ -1,11 +1,16 @@
+//! Path witness frontier sizing from retrieval intent. Wider `top_k` pools feed selection and
+//! post-selection guardrails when surface-heavy queries need companion repair passes.
+
 use super::super::intent::HybridRankingIntent;
 
+/// Planned path-witness frontier width and how many hits to materialize for selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PathWitnessFrontierPlan {
     pub(crate) top_k: usize,
     pub(crate) materialized_limit: usize,
 }
 
+/// Size the path-witness frontier from retrieval intent and result limit.
 pub(crate) fn plan_path_witness_frontier(
     intent: &HybridRankingIntent,
     limit: usize,
@@ -28,8 +33,8 @@ pub(crate) fn plan_path_witness_frontier(
     } else {
         limit.saturating_mul(2).max(16)
     };
+    // Surface-heavy intents materialize the full frontier so guardrails can repair later.
     let materialized_limit = if widen_runtime_config_witness_pool || widen_surface_witness_pool {
-        // Surface-heavy queries rely on downstream selection and guardrail repair passes.
         top_k
     } else {
         limit.saturating_add(2).max(8).min(top_k)

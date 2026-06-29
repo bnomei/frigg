@@ -1,3 +1,5 @@
+//! Unit tests for post-selection guardrails that rescue runtime witnesses, diversify surfaces, and enforce result limits.
+
 use super::*;
 use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceChannel, EvidenceDocumentRef};
 use crate::searcher::HybridRankingIntent;

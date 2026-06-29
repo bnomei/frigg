@@ -1,3 +1,5 @@
+//! Integration regressions for Laravel PHP hybrid retrieval across Livewire components, Blade views, and UI witnesses.
+
 use super::*;
 
 #[test]

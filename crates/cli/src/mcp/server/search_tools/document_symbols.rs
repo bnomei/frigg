@@ -1,3 +1,5 @@
+//! `document_symbols` outline extraction for a single supported source file.
+
 use super::*;
 
 impl FriggMcpServer {

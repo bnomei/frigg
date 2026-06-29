@@ -1,3 +1,8 @@
+//! Hybrid match surface classification helpers.
+//!
+//! Exposes path-derived source class, surface families, and navigation-pivot predicates used by
+//! ranker diversification and MCP delivery contracts.
+
 use std::path::Path;
 
 use crate::domain::SourceClass;

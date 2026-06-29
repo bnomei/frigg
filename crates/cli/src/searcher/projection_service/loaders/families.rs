@@ -1,3 +1,8 @@
+//! Per-family projection load and build implementations.
+//!
+//! Each loader resolves cache keys, reads persisted bundles from provenance storage, or rebuilds
+//! missing families on demand before inserting them into bounded in-process caches.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

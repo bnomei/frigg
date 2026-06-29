@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests for `workspace_current` and repository summary precise/index status fields.
+
 use super::*;
 use crate::mcp::types::{
     WorkspacePreciseCoverageMode, WorkspacePreciseIngestState, WorkspacePreciseState,

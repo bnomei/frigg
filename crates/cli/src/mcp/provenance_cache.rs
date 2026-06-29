@@ -1,3 +1,5 @@
+//! Provenance storage connection cache keys and persistence-stage labels for best-effort auditing.
+
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

@@ -1,5 +1,8 @@
+//! Storage record types for manifests, semantic chunks, and retrieval projections.
+
 use super::*;
 
+/// Single file row in a repository manifest snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
     pub path: String,
@@ -8,6 +11,7 @@ pub struct ManifestEntry {
     pub mtime_ns: Option<u64>,
 }
 
+/// Full manifest snapshot with content hashes for a repository epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryManifestSnapshot {
     pub repository_id: String,
@@ -37,6 +41,7 @@ pub struct ProvenanceEventRow {
     pub created_at: String,
 }
 
+/// Semantic chunk with embedding payload persisted for a repository model partition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticChunkEmbeddingRecord {
     pub chunk_id: String,
@@ -95,6 +100,7 @@ pub(crate) struct SemanticChunkPreview {
     pub preview_text: String,
 }
 
+/// Path-surface witness row used by lexical and hybrid retrieval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathWitnessProjection {
     pub path: String,
@@ -176,6 +182,7 @@ pub struct PathAnchorSketchProjection {
     pub score_hint: usize,
 }
 
+/// Atomic bundle of retrieval projection families written per manifest snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RetrievalProjectionBundle {
     pub heads: Vec<RetrievalProjectionHeadRecord>,
@@ -188,6 +195,7 @@ pub struct RetrievalProjectionBundle {
     pub path_anchor_sketches: Vec<PathAnchorSketchProjection>,
 }
 
+/// Live semantic corpus head for a repository provider-model partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticHeadRecord {
     pub repository_id: String,
@@ -198,6 +206,7 @@ pub struct SemanticHeadRecord {
     pub last_refresh_reason: Option<String>,
 }
 
+/// Consistency summary for semantic rows, vectors, and retained manifest snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticStorageHealth {
     pub repository_id: String,

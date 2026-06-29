@@ -1,3 +1,5 @@
+//! Background precise-artifact generation tasks spawned after index refresh or workspace attach.
+
 use super::*;
 
 const PRECISE_GENERATION_EXCLUDED_DIRECTORY_NAMES: &[&str] = &[
@@ -322,7 +324,7 @@ impl FriggMcpServer {
             .map(|cached| cached.summary.clone())
     }
 
-    fn scip_cache_workspace_precise_generation(
+    pub(in crate::mcp::server) fn scip_cache_workspace_precise_generation(
         &self,
         repository_id: &str,
         generator_id: &str,
@@ -941,12 +943,18 @@ impl FriggMcpServer {
             &precise_config.generation_excludes,
         );
         if changed_paths.is_empty() && deleted_paths.is_empty() {
-            return self
-                .scip_cached_workspace_precise_generation(
-                    &workspace.repository_id,
-                    spec.generator_id,
-                )
-                .is_none();
+            return match self.scip_cached_workspace_precise_generation(
+                &workspace.repository_id,
+                spec.generator_id,
+            ) {
+                None => true,
+                Some(summary) => matches!(
+                    summary.status,
+                    WorkspacePreciseGenerationStatus::Failed
+                        | WorkspacePreciseGenerationStatus::MissingTool
+                        | WorkspacePreciseGenerationStatus::Timeout
+                ),
+            };
         }
         changed_paths
             .iter()
@@ -1383,6 +1391,47 @@ impl FriggMcpServer {
         finish(generation_result)
     }
 
+    pub(in crate::mcp::server) fn record_pending_precise_dirty_paths(
+        &self,
+        repository_id: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) {
+        if changed_paths.is_empty() && deleted_paths.is_empty() {
+            return;
+        }
+        let mut pending = self
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths poisoned");
+        let entry = pending.entry(repository_id.to_owned()).or_insert_with(|| {
+            (
+                std::collections::BTreeSet::new(),
+                std::collections::BTreeSet::new(),
+            )
+        });
+        entry.0.extend(changed_paths.iter().cloned());
+        entry.1.extend(deleted_paths.iter().cloned());
+    }
+
+    pub(in crate::mcp::server) fn take_pending_precise_dirty_paths(
+        &self,
+        repository_id: &str,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let mut pending = self
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths poisoned");
+        pending.remove(repository_id).map(|(changed, deleted)| {
+            (
+                changed.into_iter().collect::<Vec<_>>(),
+                deleted.into_iter().collect::<Vec<_>>(),
+            )
+        })
+    }
+
     pub(in crate::mcp::server) fn maybe_spawn_workspace_precise_generation(
         &self,
         workspace: &AttachedWorkspace,
@@ -1435,6 +1484,11 @@ impl FriggMcpServer {
                     .collect::<Vec<_>>()
                     .join(","),
                 "workspace precise generation skipped because a generation task is already active"
+            );
+            self.record_pending_precise_dirty_paths(
+                &workspace.repository_id,
+                changed_paths,
+                deleted_paths,
             );
             return WorkspacePreciseGenerationAction::SkippedActiveTask;
         }
@@ -1525,6 +1579,15 @@ impl FriggMcpServer {
                         },
                         detail,
                     );
+                if let Some((pending_changed, pending_deleted)) =
+                    server.take_pending_precise_dirty_paths(&workspace.repository_id)
+                {
+                    server.maybe_spawn_workspace_precise_generation(
+                        &workspace,
+                        &pending_changed,
+                        &pending_deleted,
+                    );
+                }
             });
         if let Err(err) = spawn_result {
             self.runtime_state

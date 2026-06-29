@@ -101,7 +101,9 @@ use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
 use reranker::diversify_hybrid_ranked_evidence;
 #[cfg(test)]
 pub(crate) use retrieval_projection::TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION;
-pub(crate) use retrieval_projection::build_retrieval_projection_bundle;
+pub(crate) use retrieval_projection::{
+    build_retrieval_projection_bundle, required_retrieval_projection_versions,
+};
 #[cfg(test)]
 pub(crate) use ripgrep_backend::clear_ripgrep_availability_cache;
 use ripgrep_backend::{
@@ -133,7 +135,7 @@ pub(crate) use types::{
     HybridGraphFileAnalysis, HybridGraphFileAnalysisCacheKey, ManifestCandidateFilesBuild,
     NormalizedSearchFilters, RepositoryCandidateUniverse, SearchCandidateFile,
     SearchCandidateUniverse, SearchCandidateUniverseBuild, empty_channel_result,
-    hybrid_execution_note_from_channel_results, match_count_for_hits,
+    hybrid_execution_note_from_channel_results, hybrid_lexical_only_mode, match_count_for_hits,
     search_diagnostics_to_channel_diagnostics,
 };
 

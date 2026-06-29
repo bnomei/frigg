@@ -1,8 +1,10 @@
+//! Integration tests for `document_symbols` outline extraction and follow-up structural capture options.
+
 use super::*;
 
 #[tokio::test]
 async fn document_symbols_returns_outline_for_supported_files() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -93,7 +95,7 @@ async fn document_symbols_returns_php_metadata_evidence_counts() {
          }\n",
     )
     .expect("failed to seed temporary php fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -143,7 +145,7 @@ async fn document_symbols_returns_php_metadata_evidence_counts() {
 
 #[tokio::test]
 async fn document_symbols_opt_in_returns_follow_up_structural() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
             path: "src/lib.rs".to_owned(),
@@ -185,7 +187,7 @@ async fn document_symbols_returns_typescript_outline_for_tsx_files() {
          }\n",
     )
     .expect("failed to seed temporary typescript fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -240,7 +242,7 @@ async fn document_symbols_returns_python_outline() {
         ),
     )
     .expect("failed to seed temporary python fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -336,7 +338,7 @@ async fn document_symbols_returns_additional_baseline_language_outlines() {
         ),
     )
     .expect("failed to seed temporary nim fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let go_response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -527,7 +529,7 @@ async fn document_symbols_returns_hierarchy_for_nested_symbols() {
         "mod inner {\n    pub fn nested() {}\n}\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -563,7 +565,7 @@ async fn document_symbols_top_level_only_defaults_to_compact_and_clears_children
         "mod inner {\n    pub fn nested() {}\n}\n",
     )
     .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -613,7 +615,7 @@ async fn document_symbols_returns_blade_outline() {
          <flux:button wire:click=\"save\" wire:model.live=\"state\" />\n",
     )
     .expect("failed to seed temporary blade fixture");
-    let server = server_for_workspace_root(&workspace_root);
+    let server = server_for_workspace_root(&workspace_root).await;
 
     let response = server
         .document_symbols(Parameters(DocumentSymbolsParams {
@@ -680,7 +682,7 @@ async fn document_symbols_returns_blade_outline() {
 
 #[tokio::test]
 async fn document_symbols_rejects_unsupported_extension_with_typed_error() {
-    let server = server_for_fixture();
+    let server = server_for_fixture().await;
     let error = match server
         .document_symbols(Parameters(DocumentSymbolsParams {
             path: "README.md".to_owned(),
@@ -726,7 +728,7 @@ async fn document_symbols_rejects_over_budget_source_with_typed_error() {
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
     fs::write(src_root.join("lib.rs"), "pub fn oversized_symbol() {}\n")
         .expect("failed to seed temporary fixture source");
-    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8);
+    let server = server_for_workspace_root_with_max_file_bytes(&workspace_root, 8).await;
 
     let error = match server
         .document_symbols(Parameters(DocumentSymbolsParams {

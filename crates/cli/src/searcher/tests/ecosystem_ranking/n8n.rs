@@ -1,3 +1,5 @@
+//! Regression tests for n8n workflow hybrid ranking across node packages, CLI entrypoints, and editor witnesses.
+
 use super::*;
 
 #[ignore = "open TS path-locality escalation target"]

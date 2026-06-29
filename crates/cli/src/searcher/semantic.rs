@@ -1,3 +1,8 @@
+//! Semantic retrieval channel backed by manifest snapshot embeddings.
+//!
+//! Embeds the query, runs vector top-k against provenance storage, retains chunk candidates with
+//! relative score floors, and reports channel health when embeddings or snapshots are missing.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::Path;
@@ -629,6 +634,7 @@ pub(super) fn retain_semantic_hits_for_query(
         return (Vec::new(), 0);
     }
 
+    // Relative floor drops distant vector hits unless overlap or runtime-witness rules preserve them.
     let retain_floor = best_raw_score * HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR;
     let query_exact_terms = hybrid_query_exact_terms(query_text);
     let retained_document_limit = limit

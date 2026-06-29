@@ -1,3 +1,5 @@
+//! CLI `export-workload-corpus` command: deterministic sanitized provenance export for evaluation.
+
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -28,6 +30,61 @@ struct WorkloadCorpusExportRow {
     normalized_workload: Option<Value>,
 }
 
+const WORKLOAD_CORPUS_REDACTED: &str = "[REDACTED]";
+
+const WORKLOAD_CORPUS_SECRET_KEY_FRAGMENTS: &[&str] = &[
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "authorization",
+    "client_secret",
+    "credential",
+    "password",
+    "passwd",
+    "private_key",
+    "secret",
+    "session_key",
+    "token",
+];
+
+const WORKLOAD_CORPUS_SECRET_TOKEN_PREFIXES: &[&str] = &[
+    "sk-",
+    "sk_",
+    "rk-",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "akia",
+    "asia",
+    "aiza",
+    "ya29.",
+    "eyj",
+    "npm_",
+    "shpat_",
+    "shpss_",
+];
+
+const WORKLOAD_CORPUS_SECRET_INTRODUCERS: &[&str] = &[
+    "bearer",
+    "token",
+    "authorization",
+    "apikey",
+    "password",
+    "secret",
+];
+
+const WORKLOAD_CORPUS_STRUCTURAL_PUNCT: &[char] =
+    &['"', '\'', ',', ';', '(', ')', '[', ']', '{', '}', '<', '>'];
+
 fn bounded_workload_corpus_text(value: &str) -> String {
     if value.chars().count() <= WORKLOAD_CORPUS_MAX_STRING_CHARS {
         return value.to_owned();
@@ -41,6 +98,148 @@ fn bounded_workload_corpus_text(value: &str) -> String {
     bounded
 }
 
+fn sanitized_workload_corpus_text(value: &str) -> String {
+    bounded_workload_corpus_text(&redact_workload_corpus_text(value))
+}
+
+fn workload_corpus_key_is_secret(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    WORKLOAD_CORPUS_SECRET_KEY_FRAGMENTS
+        .iter()
+        .any(|fragment| lowered.contains(fragment))
+}
+
+fn workload_corpus_token_core(token: &str) -> &str {
+    let after_leading =
+        token.trim_start_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    after_leading.trim_end_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch))
+}
+
+fn workload_corpus_token_is_secret_like(token: &str) -> bool {
+    let token = workload_corpus_token_core(token);
+    if token.is_empty() {
+        return false;
+    }
+
+    let lowered = token.to_ascii_lowercase();
+    if WORKLOAD_CORPUS_SECRET_TOKEN_PREFIXES
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
+    {
+        return true;
+    }
+
+    let len = token.chars().count();
+    let is_token_charset = token
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=' | '-' | '_' | '.'));
+    let has_digit = token.chars().any(|ch| ch.is_ascii_digit());
+    let has_alpha = token.chars().any(|ch| ch.is_ascii_alphabetic());
+    len >= 32 && is_token_charset && has_digit && has_alpha
+}
+
+fn redact_workload_corpus_token_core(word: &str) -> String {
+    let after_leading =
+        word.trim_start_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    let leading = &word[..word.len() - after_leading.len()];
+    let core =
+        after_leading.trim_end_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    let trailing = &after_leading[core.len()..];
+    if core.is_empty() {
+        return word.to_owned();
+    }
+    format!("{leading}{WORKLOAD_CORPUS_REDACTED}{trailing}")
+}
+
+fn workload_corpus_word_is_secret_introducer(word: &str) -> bool {
+    let normalized = word
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    WORKLOAD_CORPUS_SECRET_INTRODUCERS
+        .iter()
+        .any(|introducer| normalized == *introducer)
+}
+
+struct WorkloadCorpusWordRedaction {
+    text: String,
+    next_word_is_secret: bool,
+}
+
+fn redact_workload_corpus_word(
+    word: &str,
+    previous_word_introduces_secret: bool,
+) -> WorkloadCorpusWordRedaction {
+    let is_introducer = workload_corpus_word_is_secret_introducer(word);
+
+    if previous_word_introduces_secret {
+        if is_introducer {
+            return WorkloadCorpusWordRedaction {
+                text: word.to_owned(),
+                next_word_is_secret: true,
+            };
+        }
+        return WorkloadCorpusWordRedaction {
+            text: redact_workload_corpus_token_core(word),
+            next_word_is_secret: false,
+        };
+    }
+
+    if let Some(separator_index) = word.find(['=', ':']) {
+        let key = &word[..separator_index];
+        if workload_corpus_key_is_secret(key) {
+            let prefix = &word[..=separator_index];
+            let value = &word[separator_index + 1..];
+            if value.is_empty() {
+                return WorkloadCorpusWordRedaction {
+                    text: word.to_owned(),
+                    next_word_is_secret: true,
+                };
+            }
+            let value_introduces_secret = workload_corpus_word_is_secret_introducer(value);
+            return WorkloadCorpusWordRedaction {
+                text: format!("{prefix}{}", redact_workload_corpus_token_core(value)),
+                next_word_is_secret: value_introduces_secret,
+            };
+        }
+    }
+
+    if workload_corpus_token_is_secret_like(word) {
+        return WorkloadCorpusWordRedaction {
+            text: redact_workload_corpus_token_core(word),
+            next_word_is_secret: false,
+        };
+    }
+
+    WorkloadCorpusWordRedaction {
+        text: word.to_owned(),
+        next_word_is_secret: is_introducer,
+    }
+}
+
+fn redact_workload_corpus_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut previous_word_introduces_secret = false;
+
+    for chunk in value.split_inclusive(char::is_whitespace) {
+        let (word, trailing) = match chunk.char_indices().next_back() {
+            Some((index, ch)) if ch.is_whitespace() => (&chunk[..index], &chunk[index..]),
+            _ => (chunk, ""),
+        };
+
+        if word.is_empty() {
+            output.push_str(chunk);
+            continue;
+        }
+
+        let redaction = redact_workload_corpus_word(word, previous_word_introduces_secret);
+        output.push_str(&redaction.text);
+        output.push_str(trailing);
+        previous_word_introduces_secret = redaction.next_word_is_secret;
+    }
+
+    output
+}
+
 fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Value {
     if remaining_depth == 0 {
         return Value::String("[truncated-depth]".to_owned());
@@ -48,7 +247,7 @@ fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Valu
 
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => value.clone(),
-        Value::String(text) => Value::String(bounded_workload_corpus_text(text)),
+        Value::String(text) => Value::String(sanitized_workload_corpus_text(text)),
         Value::Array(items) => Value::Array(
             items
                 .iter()
@@ -66,6 +265,10 @@ fn sanitize_workload_corpus_value(value: &Value, remaining_depth: usize) -> Valu
                 .take(WORKLOAD_CORPUS_MAX_OBJECT_ENTRIES)
             {
                 if let Some(entry_value) = entries.get(&key) {
+                    if workload_corpus_key_is_secret(&key) {
+                        sanitized.insert(key, Value::String(WORKLOAD_CORPUS_REDACTED.to_owned()));
+                        continue;
+                    }
                     sanitized.insert(
                         key,
                         sanitize_workload_corpus_value(entry_value, remaining_depth - 1),
@@ -125,7 +328,7 @@ pub(crate) fn run_workload_corpus_export_command(
             let payload = serde_json::from_str::<Value>(&row.payload_json).unwrap_or_else(|_| {
                 Value::Object(Map::from_iter([(
                     "payload_decode_error".to_owned(),
-                    Value::String(bounded_workload_corpus_text(&row.payload_json)),
+                    Value::String(sanitized_workload_corpus_text(&row.payload_json)),
                 )]))
             });
             let repository_id = payload
@@ -202,4 +405,88 @@ pub(crate) fn run_workload_corpus_export_command(
         limit
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn redacts_secret_bearing_object_keys() {
+        let value = json!({
+            "api_key": "value-should-not-survive",
+            "query": "find handler",
+            "nested": { "Authorization": "Bearer abc" }
+        });
+        let sanitized = sanitize_workload_corpus_value(&value, WORKLOAD_CORPUS_MAX_DEPTH);
+        assert_eq!(sanitized["api_key"], json!("[REDACTED]"));
+        assert_eq!(sanitized["query"], json!("find handler"));
+        assert_eq!(sanitized["nested"]["Authorization"], json!("[REDACTED]"));
+    }
+
+    #[test]
+    fn redacts_secret_like_tokens_in_free_text_values() {
+        let value = json!({ "query": "look for sk-ant-api03-abcDEF123456ghIJKL7890mnopQRSTuv" });
+        let sanitized = sanitize_workload_corpus_value(&value, WORKLOAD_CORPUS_MAX_DEPTH);
+        let query = sanitized["query"].as_str().expect("query stays a string");
+        assert!(
+            !query.contains("sk-ant-api03"),
+            "secret-like token must be redacted: {query}"
+        );
+        assert!(
+            query.contains("[REDACTED]"),
+            "expected redaction marker: {query}"
+        );
+        assert!(
+            query.contains("look for"),
+            "non-secret words must survive: {query}"
+        );
+    }
+
+    #[test]
+    fn redacts_high_entropy_tokens_and_inline_assignments() {
+        assert!(
+            redact_workload_corpus_text("token=abc123DEF456ghi789JKL012mno345PQR")
+                .contains("[REDACTED]")
+        );
+        assert!(
+            !redact_workload_corpus_text("Authorization: Bearer abcDEF123456ghIJKL7890mnopq")
+                .contains("abcDEF123456"),
+            "bearer token must be redacted"
+        );
+    }
+
+    #[test]
+    fn classifies_secret_like_tokens_after_trimming_structural_delimiters() {
+        let sanitized = redact_workload_corpus_text(
+            "look for \"sk-live-reviewToken\" and (ghp_reviewToken123)",
+        );
+        assert!(
+            !sanitized.contains("sk-live-reviewToken"),
+            "quoted token prefix must be redacted: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("ghp_reviewToken123"),
+            "bracketed token prefix must be redacted: {sanitized}"
+        );
+        assert_eq!(sanitized, "look for \"[REDACTED]\" and ([REDACTED])");
+    }
+
+    #[test]
+    fn redacts_token_after_inline_authorization_scheme() {
+        let sanitized =
+            redact_workload_corpus_text("Authorization:Bearer shortOpaqueToken request");
+        assert!(
+            !sanitized.contains("shortOpaqueToken"),
+            "token after inline bearer scheme must be redacted: {sanitized}"
+        );
+        assert_eq!(sanitized, "Authorization:[REDACTED] [REDACTED] request");
+    }
+
+    #[test]
+    fn preserves_ordinary_text_without_secrets() {
+        let text = "search for the parseToken function in module";
+        assert_eq!(redact_workload_corpus_text(text), text);
+    }
 }

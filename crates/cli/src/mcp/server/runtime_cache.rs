@@ -42,7 +42,6 @@ impl FriggMcpServer {
     }
 
     /// Trims a process-wide cache against its configured entry and byte budget.
-    ///
     /// The byte estimator is intentionally approximate; the goal is bounded residency for
     /// long-lived servers rather than exact heap accounting.
     pub(super) fn trim_runtime_cache_to_budget<K, V, F>(
@@ -115,6 +114,33 @@ impl FriggMcpServer {
         cached
     }
 
+    fn read_file_content_bytes_bounded(&self, canonical_path: &Path) -> Result<Vec<u8>, ErrorData> {
+        let max_file_bytes = self.config.max_file_bytes;
+        let metadata = fs::metadata(canonical_path).map_err(|err| {
+            Self::internal(
+                format!("failed to stat file {}: {err}", canonical_path.display()),
+                None,
+            )
+        })?;
+        let file_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        if file_bytes > max_file_bytes {
+            return Err(Self::invalid_params(
+                format!("file exceeds max_file_bytes={max_file_bytes}"),
+                Some(json!({
+                    "path": canonical_path.display().to_string(),
+                    "bytes": file_bytes,
+                    "max_file_bytes": max_file_bytes,
+                })),
+            ));
+        }
+        fs::read(canonical_path).map_err(|err| {
+            Self::internal(
+                format!("failed to read file {}: {err}", canonical_path.display()),
+                None,
+            )
+        })
+    }
+
     pub(super) fn file_content_snapshot_for_workspace(
         &self,
         workspace: &AttachedWorkspace,
@@ -125,12 +151,7 @@ impl FriggMcpServer {
             RepositoryResponseCacheFreshnessMode::ManifestOnly,
         )?;
         let Some(scopes) = freshness.scopes else {
-            let bytes = fs::read(canonical_path).map_err(|err| {
-                Self::internal(
-                    format!("failed to read file {}: {err}", canonical_path.display()),
-                    None,
-                )
-            })?;
+            let bytes = self.read_file_content_bytes_bounded(canonical_path)?;
             return Ok(Arc::new(FileContentSnapshot::from_bytes(bytes)));
         };
         let mut scoped_repository_ids = vec![workspace.repository_id.clone()];
@@ -144,12 +165,7 @@ impl FriggMcpServer {
             return Ok(cached);
         }
 
-        let bytes = fs::read(canonical_path).map_err(|err| {
-            Self::internal(
-                format!("failed to read file {}: {err}", canonical_path.display()),
-                None,
-            )
-        })?;
+        let bytes = self.read_file_content_bytes_bounded(canonical_path)?;
         let snapshot = Arc::new(FileContentSnapshot::from_bytes(bytes));
         self.cache_file_content_window(cache_key, Arc::clone(&snapshot));
         Ok(snapshot)

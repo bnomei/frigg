@@ -1,3 +1,8 @@
+//! Normalized query phrase context for intent rule evaluation.
+//!
+//! Lowercases and tokenizes hybrid queries so intent rules can match multi-word phrases and
+//! surface-specific term clusters deterministically.
+
 #[derive(Debug, Clone)]
 pub(super) struct QueryContext {
     query: String,

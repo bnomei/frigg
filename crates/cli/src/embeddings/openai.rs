@@ -1,3 +1,5 @@
+//! OpenAI embeddings HTTP provider with retry and normalized response mapping.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -48,6 +50,7 @@ struct OpenAiErrorPayload {
     error_type: Option<String>,
 }
 
+/// OpenAI embeddings client implementing the shared [`EmbeddingProvider`] contract.
 pub struct OpenAiEmbeddingProvider {
     http: Arc<dyn HttpExecutor>,
     sleeper: Arc<dyn BackoffSleeper>,
@@ -196,14 +199,49 @@ impl OpenAiEmbeddingProvider {
             )));
         }
 
-        let vectors = parsed
-            .data
+        let expected_len = parsed.data.len();
+        let mut slots: Vec<Option<Vec<f32>>> = (0..expected_len).map(|_| None).collect();
+        for item in parsed.data {
+            let slot = slots.get_mut(item.index).ok_or_else(|| {
+                EmbeddingError::Provider(ProviderFailure::non_retryable(
+                    self.kind(),
+                    format!(
+                        "OpenAI response index {} out of range for batch of {expected_len}",
+                        item.index
+                    ),
+                    Some("invalid_response".to_string()),
+                    Some(200),
+                    request.trace_id.clone(),
+                ))
+            })?;
+            if slot.is_some() {
+                return Err(EmbeddingError::Provider(ProviderFailure::non_retryable(
+                    self.kind(),
+                    format!("OpenAI response repeated index {}", item.index),
+                    Some("invalid_response".to_string()),
+                    Some(200),
+                    request.trace_id.clone(),
+                )));
+            }
+            *slot = Some(item.embedding);
+        }
+
+        let vectors = slots
             .into_iter()
-            .map(|item| EmbeddingVector {
-                index: item.index,
-                values: item.embedding,
+            .enumerate()
+            .map(|(index, slot)| {
+                let values = slot.ok_or_else(|| {
+                    EmbeddingError::Provider(ProviderFailure::non_retryable(
+                        self.kind(),
+                        format!("OpenAI response missing embedding for index {index}"),
+                        Some("invalid_response".to_string()),
+                        Some(200),
+                        request.trace_id.clone(),
+                    ))
+                })?;
+                Ok(EmbeddingVector { index, values })
             })
-            .collect();
+            .collect::<EmbeddingResult<Vec<_>>>()?;
 
         let usage = parsed
             .usage

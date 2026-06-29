@@ -1,3 +1,5 @@
+//! Workspace ignore matching shared by manifest walks and runtime path filtering.
+
 use std::path::Path;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};

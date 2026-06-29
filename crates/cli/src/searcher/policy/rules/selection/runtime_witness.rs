@@ -1,3 +1,5 @@
+//! Selection runtime-witness stage: baseline, support, locality, and language-navigation rules.
+
 use super::super::super::dsl::{ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

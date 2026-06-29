@@ -1,3 +1,6 @@
+//! Selection facts: candidate static features, rolling coverage state, and blended base score
+//! (path quality already applied) for diversification and companion rules.
+
 use super::super::super::HybridRankedEvidence;
 use super::super::super::intent::HybridRankingIntent;
 use super::super::super::laravel::LaravelUiSurfaceClass;
@@ -137,6 +140,7 @@ impl SelectionState {
     }
 }
 
+/// Facts for selection scoring: candidate features plus rolling coverage from prior picks.
 pub(crate) struct SelectionFacts {
     pub(crate) base_score: f32,
     pub(crate) class: HybridSourceClass,

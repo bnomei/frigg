@@ -1,3 +1,5 @@
+//! Integration regressions for BookStack PHP hybrid retrieval that keeps hidden Blade views and API docs visible.
+
 use super::*;
 
 #[test]

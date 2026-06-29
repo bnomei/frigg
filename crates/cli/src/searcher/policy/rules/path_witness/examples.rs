@@ -1,3 +1,5 @@
+//! Path-witness bonuses and penalties for example, bench, and test-support surfaces.
+
 use super::*;
 
 pub(super) fn examples_support_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {

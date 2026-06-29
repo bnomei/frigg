@@ -1,3 +1,5 @@
+//! Regression tests for path-witness overlay projection seeding, family bits, and test-subject heuristic versioning.
+
 use super::super::path_witness_search::{PathWitnessCandidate, path_witness_candidate_order};
 use super::*;
 use crate::searcher::RepositoryCandidateUniverse;

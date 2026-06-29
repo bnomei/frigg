@@ -1,3 +1,5 @@
+//! Repository reindex orchestration from plan execution through manifest and semantic writes.
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -38,6 +40,7 @@ pub fn reindex_repository(
     )
 }
 
+/// Runs repository reindex with caller-supplied semantic runtime configuration.
 pub fn reindex_repository_with_runtime_config(
     repository_id: &str,
     workspace_root: &Path,
@@ -57,6 +60,7 @@ pub fn reindex_repository_with_runtime_config(
     )
 }
 
+/// Runs repository reindex with explicit dirty-path hints for changed-only manifest builds.
 pub fn reindex_repository_with_runtime_config_and_dirty_paths(
     repository_id: &str,
     workspace_root: &Path,
@@ -318,13 +322,13 @@ pub(crate) fn execute_semantic_refresh_plan(
                 credentials,
                 executor,
             )
-            .and_then(|semantic_records| {
+            .and_then(|semantic_build| {
                 storage.replace_semantic_embeddings_for_repository(
                     repository_id,
                     snapshot_id,
                     provider,
                     model,
-                    &semantic_records,
+                    &semantic_build.records,
                 )
             })
         }
@@ -337,16 +341,22 @@ pub(crate) fn execute_semantic_refresh_plan(
             credentials,
             executor,
         )
-        .and_then(|semantic_records| {
+        .and_then(|semantic_build| {
+            let retained_changed_paths = semantic_refresh
+                .changed_paths
+                .iter()
+                .filter(|path| !semantic_build.unreadable_paths.contains(path))
+                .cloned()
+                .collect::<Vec<_>>();
             storage.advance_semantic_embeddings_for_repository(
                 repository_id,
                 previous_snapshot_id,
                 snapshot_id,
                 provider,
                 model,
-                &semantic_refresh.changed_paths,
+                &retained_changed_paths,
                 &semantic_refresh.deleted_paths,
-                &semantic_records,
+                &semantic_build.records,
             )
         }),
     }

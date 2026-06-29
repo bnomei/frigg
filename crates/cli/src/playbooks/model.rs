@@ -1,3 +1,5 @@
+//! Hybrid playbook model types: metadata contracts, witness groups, probe outcomes, and trace snapshots.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -8,6 +10,7 @@ pub(crate) fn default_hybrid_top_k() -> usize {
     8
 }
 
+/// Parsed playbook header metadata, including optional hybrid regression specification.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PlaybookMetadata {
     pub playbook_schema: String,
@@ -16,6 +19,7 @@ pub struct PlaybookMetadata {
     pub hybrid_regression: Option<HybridPlaybookRegression>,
 }
 
+/// Executable hybrid search regression contract embedded in a playbook header.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct HybridPlaybookRegression {
     pub query: String,
@@ -29,6 +33,7 @@ pub struct HybridPlaybookRegression {
     pub target_witness_groups: Vec<HybridWitnessGroup>,
 }
 
+/// Witness group that must or may match ranked retrieval paths for a playbook probe.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct HybridWitnessGroup {
     pub group_id: String,
@@ -41,6 +46,7 @@ pub struct HybridWitnessGroup {
     pub required_when: HybridWitnessRequirement,
 }
 
+/// Path matching mode for a witness group during playbook evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HybridWitnessMatchMode {
@@ -49,6 +55,7 @@ pub enum HybridWitnessMatchMode {
     ExactOrPrefix,
 }
 
+/// Gating rule that decides when a witness group is required for a passing probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HybridWitnessRequirement {
@@ -57,12 +64,14 @@ pub enum HybridWitnessRequirement {
     SemanticOk,
 }
 
+/// Parsed markdown playbook with scrubbable metadata header and retained body text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybookDocument {
     pub metadata: PlaybookMetadata,
     pub body: String,
 }
 
+/// Filesystem-backed hybrid playbook ready for regression execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedHybridPlaybookRegression {
     pub path: PathBuf,
@@ -70,6 +79,7 @@ pub struct LoadedHybridPlaybookRegression {
     pub spec: HybridPlaybookRegression,
 }
 
+/// Single channel hit captured in a playbook trace packet.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HybridPlaybookChannelHitSnapshot {
     pub rank: usize,
@@ -82,6 +92,7 @@ pub struct HybridPlaybookChannelHitSnapshot {
     pub provenance_ids: Vec<String>,
 }
 
+/// Per-channel retrieval trace for a hybrid playbook probe.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HybridPlaybookChannelTrace {
     pub channel: String,
@@ -93,6 +104,7 @@ pub struct HybridPlaybookChannelTrace {
     pub hits: Vec<HybridPlaybookChannelHitSnapshot>,
 }
 
+/// Ranked hybrid hit snapshot used in playbook trace packets.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HybridPlaybookRankedHitSnapshot {
     pub rank: usize,
@@ -112,6 +124,7 @@ pub struct HybridPlaybookRankedHitSnapshot {
     pub semantic_sources: Vec<String>,
 }
 
+/// Selection and witness rule trace for one ranked candidate.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HybridPlaybookCandidateTraceSnapshot {
     pub rank: usize,
@@ -121,6 +134,7 @@ pub struct HybridPlaybookCandidateTraceSnapshot {
     pub path_quality_rules: Vec<String>,
 }
 
+/// Serialized trace packet for one hybrid playbook regression run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HybridPlaybookTracePacket {
     pub playbook_id: String,
@@ -143,6 +157,7 @@ pub struct HybridPlaybookTracePacket {
     pub post_selection_repairs: Vec<BTreeMap<String, String>>,
 }
 
+/// Witness evaluation outcome for one playbook group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HybridPlaybookWitnessOutcome {
     pub group_id: String,
@@ -155,6 +170,7 @@ pub struct HybridPlaybookWitnessOutcome {
     pub passed: bool,
 }
 
+/// How a witness group matched, if at all, against ranked paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HybridWitnessMatchBy {
@@ -164,6 +180,7 @@ pub enum HybridWitnessMatchBy {
     Prefix,
 }
 
+/// Outcome of executing one hybrid playbook regression probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HybridPlaybookProbeOutcome {
     pub file_name: String,
@@ -180,6 +197,7 @@ pub struct HybridPlaybookProbeOutcome {
 }
 
 impl HybridPlaybookProbeOutcome {
+    /// Returns human-readable descriptions of required witness groups that failed.
     pub fn required_missing(&self) -> Vec<String> {
         self.required_witness_groups
             .iter()
@@ -188,6 +206,7 @@ impl HybridPlaybookProbeOutcome {
             .collect()
     }
 
+    /// Returns human-readable descriptions of target witness groups that failed.
     pub fn target_missing(&self) -> Vec<String> {
         self.target_witness_groups
             .iter()
@@ -196,6 +215,7 @@ impl HybridPlaybookProbeOutcome {
             .collect()
     }
 
+    /// Whether required witnesses and semantic status checks passed.
     pub fn passed_required(&self) -> bool {
         self.execution_error.is_none()
             && self.status_allowed
@@ -205,17 +225,20 @@ impl HybridPlaybookProbeOutcome {
                 .all(|group| group.passed)
     }
 
+    /// Whether target witness groups passed when semantic status allows evaluation.
     pub fn passed_targets(&self) -> bool {
         self.execution_error.is_none()
             && self.status_allowed
             && self.target_witness_groups.iter().all(|group| group.passed)
     }
 
+    /// Whether the probe passed required checks and, when requested, target checks.
     pub fn passed_all(&self, enforce_targets: bool) -> bool {
         self.passed_required() && (!enforce_targets || self.passed_targets())
     }
 }
 
+/// Aggregated results for a batch of hybrid playbook regressions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HybridPlaybookRunSummary {
     pub playbooks_root: String,

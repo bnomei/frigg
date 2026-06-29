@@ -1,3 +1,5 @@
+//! Runtime-config post-selection guardrails for root, local, and ordering surfaces.
+
 use super::*;
 
 pub(in crate::searcher::policy::post_selection) fn apply_runtime_config_surface_selection(

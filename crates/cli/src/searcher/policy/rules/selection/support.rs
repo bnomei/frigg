@@ -1,3 +1,5 @@
+//! Shared selection helpers for class novelty bonuses and repeat penalties.
+
 use crate::searcher::surfaces::HybridSourceClass;
 
 pub(crate) fn selection_class_novelty_bonus(class: HybridSourceClass) -> f32 {

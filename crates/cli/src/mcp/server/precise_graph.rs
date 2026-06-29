@@ -1,3 +1,5 @@
+//! Workspace precise-graph generation, SCIP artifact discovery, ingest, and cache reuse.
+
 use super::*;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::Deserialize;

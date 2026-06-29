@@ -1,3 +1,5 @@
+//! Clap-derived CLI surface: global runtime flags and utility or serve subcommands.
+
 use std::net::IpAddr;
 use std::path::PathBuf;
 

@@ -1,3 +1,5 @@
+//! CI and entrypoint build-workflow post-selection guardrails.
+
 use super::*;
 
 pub(in crate::searcher::policy::post_selection) fn apply_runtime_entrypoint_visibility(

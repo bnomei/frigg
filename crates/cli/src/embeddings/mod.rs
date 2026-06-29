@@ -206,6 +206,7 @@ pub fn verify_vector_store_readiness(
     })
 }
 
+/// Verifies sqlite-vec is the active vector backend before semantic indexing proceeds.
 pub fn verify_sqlite_vec_readiness(
     db_path: impl AsRef<Path>,
     expected_dimensions: Option<usize>,
@@ -440,6 +441,7 @@ pub use openai::OpenAiEmbeddingProvider;
 #[cfg(test)]
 mod tests;
 
+/// Provider contract for batch embedding calls used by semantic indexing and recall.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     fn kind(&self) -> EmbeddingProviderKind;

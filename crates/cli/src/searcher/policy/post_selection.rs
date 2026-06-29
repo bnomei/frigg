@@ -1,3 +1,6 @@
+//! Post-selection guardrail pipeline: predicate-gated transforms repair the final result set
+//! after top-k selection using witness hits and the candidate pool.
+
 use std::cmp::Ordering;
 use std::path::Path;
 
@@ -86,6 +89,7 @@ impl PostSelectionRule {
     }
 }
 
+// Guardrails run in declaration order; each rule may replace or insert into the result set.
 const RULES: &[PostSelectionRule] = &[
     PostSelectionRule::new(
         "post_selection.runtime_config",
@@ -233,6 +237,7 @@ const RULES: &[PostSelectionRule] = &[
     ),
 ];
 
+/// Apply predicate-gated post-selection guardrails in declaration order.
 pub(crate) fn apply(
     mut matches: Vec<HybridRankedEvidence>,
     ctx: &PostSelectionContext<'_>,

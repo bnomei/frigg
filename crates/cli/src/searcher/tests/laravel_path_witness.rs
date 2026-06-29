@@ -1,3 +1,5 @@
+//! Regression tests for Laravel hybrid ranking that surfaces Livewire components, Blade views, and UI path witnesses.
+
 use super::*;
 use crate::searcher::PATH_WITNESS_PROJECTION_HEURISTIC_VERSION;
 use crate::searcher::path_witness_projection::family_bits_for_projection;
@@ -952,7 +954,7 @@ fn hybrid_path_witness_recall_prefers_authoritative_anchor_sketch_excerpt() -> F
                 },
                 crate::storage::RetrievalProjectionHeadRecord {
                     family: "path_anchor_sketch".to_owned(),
-                    heuristic_version: 1,
+                    heuristic_version: 2,
                     input_modes: vec!["path".to_owned()],
                     row_count: 1,
                 },

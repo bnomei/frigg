@@ -1,3 +1,8 @@
+//! Laravel-specific path predicates for hybrid path-witness recall.
+//!
+//! Recognizes routes, providers, Livewire, Blade, jobs, and middleware surfaces so intent-driven
+//! witness rules can target PHP UI and runtime artifacts precisely.
+
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,3 +1,9 @@
+//! Candidate universe assembly for `TextSearcher`.
+//!
+//! Merges manifest-backed intake, filesystem walks, and intent-driven supplements (hidden CI
+//! workflows, root-scoped runtime config) into per-repository candidate sets used by every
+//! retrieval channel.
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 

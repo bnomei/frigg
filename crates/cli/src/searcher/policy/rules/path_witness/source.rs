@@ -1,3 +1,5 @@
+//! Path-witness scoring for source-class overlap and exact query-term matches.
+
 use super::*;
 
 pub(super) fn path_witness_specific_overlap_bonus(ctx: &PathWitnessFacts) -> Option<PolicyEffect> {

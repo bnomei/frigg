@@ -1,3 +1,5 @@
+//! Selection predicates over rolling coverage counts and diversification state.
+
 use super::{PredicateLeaf, SelectionFacts};
 
 fn seen_count_is_zero(ctx: &SelectionFacts) -> bool {

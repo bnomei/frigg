@@ -1,3 +1,6 @@
+//! Startup gates that block serve and semantic reindex until vector storage and embedding
+//! credentials satisfy the resolved runtime contract.
+
 use std::io;
 
 use frigg::settings::{

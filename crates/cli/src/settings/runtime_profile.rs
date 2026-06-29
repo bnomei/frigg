@@ -1,6 +1,9 @@
+//! Runtime profile resolution from transport and watch settings.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// MCP transport shape that drives persistence and watch defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeTransportKind {
     Stdio,
@@ -28,6 +31,7 @@ impl RuntimeProfile {
         }
     }
 
+    /// Whether durable storage and watch-driven reindex are expected for this profile.
     pub fn persistent_state_available(self) -> bool {
         matches!(
             self,
@@ -36,6 +40,7 @@ impl RuntimeProfile {
     }
 }
 
+/// Maps transport and watch state to the runtime profile used for storage lifecycle.
 pub fn runtime_profile_for_transport(
     transport: RuntimeTransportKind,
     watch_enabled: bool,

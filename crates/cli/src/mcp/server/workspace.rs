@@ -1,3 +1,5 @@
+//! Workspace lifecycle tools: attach, detach, prepare, reindex, and index/precise readiness waits.
+
 use super::*;
 
 impl FriggMcpSessionState {
@@ -135,9 +137,23 @@ impl FriggMcpServer {
                 .as_ref()
                 .cloned()
             {
-                watch_runtime
+                if let Err(err) = watch_runtime
                     .acquire_lease(workspace)
-                    .map_err(Self::map_frigg_error)?;
+                    .map_err(Self::map_frigg_error)
+                {
+                    self.session_state
+                        .inner
+                        .adopted_repository_ids
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&workspace.repository_id);
+                    self.runtime_state
+                        .workspace_registry
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .mark_session_released(&workspace.repository_id);
+                    return Err(err);
+                }
             }
         }
 
@@ -223,13 +239,25 @@ impl FriggMcpServer {
             .map(str::to_owned)
             .or_else(|| self.current_repository_id())
         {
-            if let Some(workspace) = registry.workspace_by_repository_id(&repository_id) {
-                return Ok(vec![workspace]);
+            let Some(workspace) = registry.workspace_by_repository_id(&repository_id) else {
+                return Err(Self::resource_not_found(
+                    "repository_id not found",
+                    Some(json!({ "repository_id": repository_id })),
+                ));
+            };
+            if !adopted_repository_ids
+                .iter()
+                .any(|id| id == &workspace.repository_id)
+            {
+                return Err(Self::resource_not_found(
+                    "repository_id is not adopted for this session",
+                    Some(json!({
+                        "repository_id": repository_id,
+                        "hint": "call workspace_attach for this repository_id first",
+                    })),
+                ));
             }
-            return Err(Self::resource_not_found(
-                "repository_id not found",
-                Some(json!({ "repository_id": repository_id })),
-            ));
+            return Ok(vec![workspace]);
         }
 
         let workspaces = adopted_repository_ids

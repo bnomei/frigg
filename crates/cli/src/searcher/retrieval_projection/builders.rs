@@ -1,3 +1,8 @@
+//! Path-heuristic builders for retrieval projection families.
+//!
+//! Derives test-subject links, entrypoint surfaces, path relations, subtree coverage, surface
+//! terms, and anchor sketches from stored path-witness projections and overlay records.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -299,6 +304,8 @@ pub(crate) fn build_path_anchor_sketch_projection_records(
         let Ok(contents) = fs::read_to_string(&file_path) else {
             continue;
         };
+        let contents =
+            super::super::content_scrub::scrub_search_content(&projection.path, &contents);
         let ranked = contents
             .lines()
             .enumerate()
@@ -479,4 +486,104 @@ pub(crate) fn trim_excerpt(line: &str) -> String {
     let mut trimmed = line.chars().take(MAX_CHARS).collect::<String>();
     trimmed.push_str("...");
     trimmed
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::storage::PathSurfaceTermProjection;
+
+    use super::*;
+
+    struct TempWorkspace {
+        root: PathBuf,
+    }
+
+    impl TempWorkspace {
+        fn new(name: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("frigg-anchor-sketch-{name}-{nonce}"));
+            fs::create_dir_all(&root).expect("create temp workspace");
+            Self { root }
+        }
+
+        fn write(&self, path: &str, contents: &str) {
+            let absolute = self.root.join(path);
+            if let Some(parent) = absolute.parent() {
+                fs::create_dir_all(parent).expect("create temp parent");
+            }
+            fs::write(absolute, contents).expect("write temp file");
+        }
+
+        fn path(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn surface_terms(path: &str, exact_terms: Vec<&str>) -> PathSurfaceTermProjection {
+        PathSurfaceTermProjection {
+            path: path.to_owned(),
+            term_weights: BTreeMap::new(),
+            exact_terms: exact_terms.into_iter().map(str::to_owned).collect(),
+        }
+    }
+
+    #[test]
+    fn path_anchor_sketch_scrubs_leading_markdown_html_comment() {
+        let workspace = TempWorkspace::new("markdown-scrub");
+        workspace.write(
+            "README.md",
+            "<!-- frigg-internal: hidden note -->\n# Project Runtime\n",
+        );
+        let path_witness = vec![StoredPathWitnessProjection::from_path("README.md")];
+        let path_surface_terms = vec![surface_terms("README.md", vec!["project", "runtime"])];
+
+        let anchors = build_path_anchor_sketch_projection_records(
+            workspace.path(),
+            &path_witness,
+            &path_surface_terms,
+        );
+
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].line, 2);
+        assert_eq!(anchors[0].excerpt, "# Project Runtime");
+        assert!(
+            !anchors[0].excerpt.contains("frigg-internal"),
+            "markdown leading comment should not be persisted as an anchor excerpt"
+        );
+    }
+
+    #[test]
+    fn path_anchor_sketch_keeps_non_markdown_leading_comment() {
+        let workspace = TempWorkspace::new("non-markdown-comment");
+        workspace.write(
+            "notes.txt",
+            "<!-- visible text comment -->\n# Project Runtime\n",
+        );
+        let path_witness = vec![StoredPathWitnessProjection::from_path("notes.txt")];
+        let path_surface_terms = vec![surface_terms("notes.txt", Vec::new())];
+
+        let anchors = build_path_anchor_sketch_projection_records(
+            workspace.path(),
+            &path_witness,
+            &path_surface_terms,
+        );
+
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].line, 1);
+        assert_eq!(anchors[0].excerpt, "<!-- visible text comment -->");
+    }
 }

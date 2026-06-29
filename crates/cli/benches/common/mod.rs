@@ -1,3 +1,5 @@
+//! Shared benchmark fixtures: workspace roots, manifest seeding, and MCP attach helpers for criterion suites.
+
 #![allow(dead_code, clippy::panic)]
 
 use std::fs;

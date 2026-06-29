@@ -1,3 +1,5 @@
+//! Runtime-witness locality rules: workspace subtree affinity and path-witness sourcing.
+
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;
 use super::super::super::super::predicates::selection as pred;

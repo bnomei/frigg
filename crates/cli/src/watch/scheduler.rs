@@ -1,3 +1,6 @@
+//! Debounced watch scheduler that coalesces filesystem events into manifest-fast and
+//! semantic-followup reindex work without letting concurrent refresh classes collide.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -141,7 +144,9 @@ impl RepositoryWatchState {
         if self.active_class == Some(WatchRefreshClass::ManifestFast) {
             self.manifest_fast.rerun_requested = true;
         }
-        if self.active_class != Some(WatchRefreshClass::SemanticFollowup) {
+        if self.active_class != Some(WatchRefreshClass::SemanticFollowup)
+            && self.semantic_followup.retry_deadline.is_none()
+        {
             self.semantic_followup = RefreshQueueState::default();
         }
     }
@@ -288,6 +293,7 @@ impl WatchSchedulerState {
         }
     }
 
+    // Scheduler prefers manifest-fast work before semantic-followup when both are ready.
     pub(super) fn next_ready_refresh(&self, now: Instant) -> Option<ScheduledRefresh> {
         if self.in_flight_manifest_fast.is_empty()
             && let Some(repository_id) =

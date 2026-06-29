@@ -1,3 +1,5 @@
+//! CLI command handlers for storage bootstrap, reindex, playbooks, and workload corpus export.
+
 mod playbooks;
 mod reindex;
 mod storage;

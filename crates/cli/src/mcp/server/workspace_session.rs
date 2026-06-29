@@ -1,3 +1,6 @@
+//! Per-session workspace adoption, default-repository selection, watch lease refcounting, and
+//! session-local `result_handle` storage for `read_match`.
+
 use super::*;
 
 impl FriggMcpServer {
@@ -332,7 +335,10 @@ impl FriggMcpServer {
     }
 
     async fn wait_for_repository_index_work(&self, repository_id: &str, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_add(timeout)
+            .unwrap_or_else(|| now + Duration::from_secs(60 * 60));
         loop {
             if self.active_repository_index_tasks(repository_id).is_empty() {
                 return true;
@@ -407,12 +413,15 @@ impl FriggMcpServer {
             WorkspaceIndexLifecyclePhase::RefreshQueued
         } else if matches!(action_taken, WorkspaceIndexAction::Unavailable) {
             WorkspaceIndexLifecyclePhase::Unavailable
+        } else if matches!(action_taken, WorkspaceIndexAction::SkippedNoWork) {
+            WorkspaceIndexLifecyclePhase::Stale
         } else {
             WorkspaceIndexLifecyclePhase::Skipped
         };
         let recommended_action = (!lexical_ready || !semantic_ready).then_some(match phase {
             WorkspaceIndexLifecyclePhase::Failed
             | WorkspaceIndexLifecyclePhase::Skipped
+            | WorkspaceIndexLifecyclePhase::Stale
             | WorkspaceIndexLifecyclePhase::Timeout
             | WorkspaceIndexLifecyclePhase::Unavailable => WorkspaceRecommendedAction::RerunReindex,
             WorkspaceIndexLifecyclePhase::Ready
@@ -904,7 +913,7 @@ impl FriggMcpServer {
     ) -> Result<(String, PathBuf, String), ErrorData> {
         let requested = PathBuf::from(&params.path);
         let roots = if requested.is_absolute() && params.repository_id.is_none() {
-            self.known_workspaces()
+            self.attached_workspaces()
                 .into_iter()
                 .map(|workspace| (workspace.repository_id, workspace.root))
                 .collect::<Vec<_>>()

@@ -1,3 +1,5 @@
+//! Witness evaluation for hybrid playbooks: path matching modes and semantic-status gating.
+
 use super::{
     HybridPlaybookWitnessOutcome, HybridWitnessGroup, HybridWitnessMatchBy, HybridWitnessMatchMode,
     HybridWitnessRequirement,

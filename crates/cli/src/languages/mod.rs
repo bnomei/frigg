@@ -1,3 +1,5 @@
+//! Language adapter facade: symbol extraction, PHP graph evidence, and capability routing.
+
 mod blade;
 mod go;
 mod java;

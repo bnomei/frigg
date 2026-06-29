@@ -1,3 +1,5 @@
+//! Shared SQLite fixtures and record builders for storage-layer unit tests.
+
 pub(super) use std::path::{Path, PathBuf};
 pub(super) use std::{env, fs};
 

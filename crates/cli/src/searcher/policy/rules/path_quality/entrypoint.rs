@@ -1,3 +1,5 @@
+//! Path-quality boosts for entrypoint runtime paths and build-workflow witnesses.
+
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;
 use crate::searcher::policy::kernel::PolicyProgram;

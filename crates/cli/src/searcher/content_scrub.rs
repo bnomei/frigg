@@ -1,3 +1,8 @@
+//! Content scrubbing for lexical and path-witness scans.
+//!
+//! Strips leading HTML comments from markdown candidates so internal annotations do not pollute
+//! lexical matches or path-witness anchor excerpts.
+
 use std::borrow::Cow;
 use std::path::Path;
 

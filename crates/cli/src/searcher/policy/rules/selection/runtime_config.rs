@@ -1,3 +1,5 @@
+//! Selection rules for runtime-config artifacts, repo-root configs, and TypeScript indexes.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

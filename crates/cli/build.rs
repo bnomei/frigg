@@ -1,3 +1,5 @@
+//! Build-time compilation of vendored native dependencies used by storage and language adapters.
+
 use std::path::{Path, PathBuf};
 
 fn main() {

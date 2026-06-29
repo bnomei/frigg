@@ -1,3 +1,5 @@
+//! Rust language adapter: symbol extraction, impl-block heuristics, and navigation hints.
+
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;

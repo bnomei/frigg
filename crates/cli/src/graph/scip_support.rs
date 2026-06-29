@@ -1,3 +1,5 @@
+//! SCIP payload decode, normalization, and document application into the symbol graph.
+
 use super::*;
 use protobuf::Message;
 
@@ -156,14 +158,24 @@ fn map_scip_document(
     artifact_label: &str,
     document: ScipDocumentJson,
 ) -> ScipIngestResult<ParsedScipDocument> {
-    let path = document.relative_path.trim().to_owned();
-    if path.is_empty() {
+    let raw_path = document.relative_path.trim().to_owned();
+    if raw_path.is_empty() {
         return Err(invalid_input(
             artifact_label,
             ScipInvalidInputCode::MissingDocumentPath,
             "document.relative_path must not be empty",
         ));
     }
+    let Some(path) = normalize_scip_document_relative_path(&raw_path) else {
+        return Err(invalid_input(
+            artifact_label,
+            ScipInvalidInputCode::InvalidDocumentPath,
+            format!(
+                "document.relative_path '{raw_path}' must be a repository-relative path \
+                 without absolute roots or parent-directory escapes"
+            ),
+        ));
+    };
 
     let mut occurrences = document
         .occurrences
@@ -215,6 +227,24 @@ fn map_scip_document(
         occurrences,
         relationships,
     })
+}
+
+fn normalize_scip_document_relative_path(path: &str) -> Option<String> {
+    let candidate = path.replace('\\', "/");
+    let mut normalized = std::path::PathBuf::new();
+    for component in std::path::Path::new(&candidate).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return None;
+    }
+    Some(normalized.to_string_lossy().replace('\\', "/"))
 }
 
 fn normalize_scip_symbol_kind(kind: Option<ScipSymbolKindJson>) -> String {

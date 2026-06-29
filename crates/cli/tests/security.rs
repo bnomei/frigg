@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Integration tests for session adoption boundaries and repository escape prevention.
+
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
@@ -8,10 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    ExploreOperation, ExploreParams, FindReferencesParams, ListRepositoriesParams,
-    PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
-    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
-    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM,
+    ExploreOperation, ExploreParams, FindReferencesParams, GoToDefinitionParams,
+    ListRepositoriesParams, PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES,
+    PUBLIC_TOOL_NAMES, PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse,
+    ReadPresentationMode, SearchPatternType, SearchSymbolParams, SearchTextParams,
+    WRITE_CONFIRM_PARAM, WorkspaceAttachIndexMode, WorkspaceAttachParams,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -30,24 +33,46 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
-fn build_server_for_repo(repo_root: &Path) -> FriggMcpServer {
-    build_server_for_roots(vec![repo_root.to_path_buf()])
+async fn build_server_for_repo(repo_root: &Path) -> FriggMcpServer {
+    build_server_for_roots(vec![repo_root.to_path_buf()]).await
 }
 
-fn build_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
+async fn build_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
     let config =
         FriggConfig::from_workspace_roots(roots).expect("workspace root must produce valid config");
-    FriggMcpServer::new(config)
+    let server = FriggMcpServer::new(config);
+    attach_session_repositories(&server).await;
+    server
 }
 
-fn build_extended_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
+async fn build_extended_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
     let config =
         FriggConfig::from_workspace_roots(roots).expect("workspace root must produce valid config");
-    FriggMcpServer::new_with_runtime_options(config, false, true)
+    let server = FriggMcpServer::new_with_runtime_options(config, false, true);
+    attach_session_repositories(&server).await;
+    server
 }
 
 fn cleanup_workspace(root: &Path) {
     let _ = fs::remove_dir_all(root);
+}
+
+async fn attach_session_repositories(server: &FriggMcpServer) {
+    for repository_id in public_repository_ids(server).await {
+        server
+            .workspace_attach(Parameters(WorkspaceAttachParams {
+                path: None,
+                repository_id: Some(repository_id),
+                set_default: Some(true),
+                resolve_mode: None,
+                wait_for_precise: Some(false),
+                index_mode: Some(WorkspaceAttachIndexMode::Skip),
+                wait_for_index: Some(false),
+                index_timeout_ms: None,
+            }))
+            .await
+            .expect("workspace_attach should adopt the startup repository");
+    }
 }
 
 async fn public_repository_ids(server: &FriggMcpServer) -> Vec<String> {
@@ -245,7 +270,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     )
     .expect("failed to seed fixture file");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -348,7 +373,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
     }
     find_references_result.expect("find_references should succeed");
 
-    let extended_server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let extended_server = build_extended_server_for_roots(vec![repo_root.clone()]).await;
     let extended_repository_id = public_repository_ids(&extended_server)
         .await
         .into_iter()
@@ -415,7 +440,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
     fs::write(outside_root.join("escape.rs"), "pub fn outside() {}\n")
         .expect("failed to seed outside file");
 
-    let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let server = build_extended_server_for_roots(vec![repo_root.clone()]).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -457,7 +482,7 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
     fs::create_dir_all(&src_root).expect("failed to create repo root");
     fs::write(src_root.join("lib.rs"), "pub fn needle() {}\n").expect("failed to seed repo file");
 
-    let server = build_extended_server_for_roots(vec![repo_root.clone()]);
+    let server = build_extended_server_for_roots(vec![repo_root.clone()]).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -508,7 +533,7 @@ async fn security_read_file_rejects_relative_path_traversal_outside_workspace() 
     fs::write(src_root.join("lib.rs"), "pub fn safe() {}\n").expect("failed to seed fixture file");
     fs::write(workspace.join("outside.txt"), "secret\n").expect("failed to seed outside file");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -554,7 +579,7 @@ async fn security_read_file_rejects_symlink_escape_outside_workspace() {
     std::os::unix::fs::symlink(&outside_path, src_root.join("linked-outside.txt"))
         .expect("failed to create fixture symlink");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -595,7 +620,7 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
     let outside_path = workspace.join("outside.txt");
     fs::write(&outside_path, "secret\n").expect("failed to seed outside file");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -629,6 +654,106 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
 }
 
 #[tokio::test]
+async fn security_go_to_definition_rejects_relative_path_traversal_outside_workspace() {
+    let workspace = temp_workspace_root("navigation-relative-traversal");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed fixture file");
+    fs::write(
+        workspace.join("outside.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed outside file");
+
+    let server = build_server_for_repo(&repo_root).await;
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
+
+    let result = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some(repository_id),
+            path: Some("../outside.rs".to_owned()),
+            line: Some(1),
+            column: Some(12),
+            include_follow_up_structural: None,
+            limit: None,
+            response_mode: None,
+        }))
+        .await;
+
+    match result {
+        Ok(response) => panic!(
+            "navigation must not read files outside workspace roots: resolved {} match(es)",
+            response.0.matches.len()
+        ),
+        Err(error) => {
+            assert_ne!(
+                error_code_tag(&error),
+                Some("confirmation_required"),
+                "traversal rejection must not masquerade as a confirmation prompt"
+            );
+        }
+    }
+
+    cleanup_workspace(&workspace);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn security_go_to_definition_rejects_absolute_path_outside_workspace() {
+    let workspace = temp_workspace_root("navigation-absolute-traversal");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
+    fs::write(
+        src_root.join("lib.rs"),
+        "pub fn outside_secret_token() {}\n",
+    )
+    .expect("failed to seed fixture file");
+    let outside_path = workspace.join("outside.rs");
+    fs::write(&outside_path, "pub fn outside_secret_token() {}\n")
+        .expect("failed to seed outside file");
+
+    let server = build_server_for_repo(&repo_root).await;
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
+
+    let result = server
+        .go_to_definition(Parameters(GoToDefinitionParams {
+            symbol: None,
+            repository_id: Some(repository_id),
+            path: Some(outside_path.display().to_string()),
+            line: Some(1),
+            column: Some(12),
+            include_follow_up_structural: None,
+            limit: None,
+            response_mode: None,
+        }))
+        .await;
+
+    if let Ok(response) = result {
+        panic!(
+            "navigation must not read absolute paths outside workspace roots: resolved {} match(es)",
+            response.0.matches.len()
+        );
+    }
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
 async fn security_read_file_resolves_absolute_path_under_later_workspace_root() {
     let workspace = temp_workspace_root("absolute-multi-root");
     let first_root = workspace.join("repo-a");
@@ -640,7 +765,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
     fs::write(second_root.join("src/lib.rs"), "pub fn second() {}\n")
         .expect("failed to seed second root fixture file");
 
-    let server = build_server_for_roots(vec![first_root.clone(), second_root.clone()]);
+    let server = build_server_for_roots(vec![first_root.clone(), second_root.clone()]).await;
     let repository_ids = public_repository_ids(&server).await;
     let response = server
         .read_file(Parameters(ReadFileParams {
@@ -682,7 +807,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
     let outside_missing_path = workspace.join("outside-missing.txt");
     fs::write(&outside_existing_path, "secret\n").expect("failed to seed outside file");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()
@@ -741,7 +866,7 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
     std::os::unix::fs::symlink(&outside_path, src_root.join("outside-link.txt"))
         .expect("failed to create symlink to outside file");
 
-    let server = build_server_for_repo(&repo_root);
+    let server = build_server_for_repo(&repo_root).await;
     let repository_id = public_repository_ids(&server)
         .await
         .into_iter()

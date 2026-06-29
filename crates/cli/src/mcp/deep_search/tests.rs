@@ -1,5 +1,7 @@
 #![allow(clippy::panic)]
 
+//! Regression tests that deep-search harness replay stays deterministic across playbook steps and trace artifacts.
+
 use super::runtime::{decode_params, diff_trace_artifacts, normalize_trace_response_for_tool};
 use super::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchPlaybookStep, DeepSearchTraceArtifact,

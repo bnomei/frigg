@@ -1,3 +1,8 @@
+//! Retrieval projection bundle assembly for a manifest snapshot.
+//!
+//! Orchestrates path-, AST-, and SCIP-backed builders into one `RetrievalProjectionBundle` with
+//! versioned heuristic metadata for each projection family.
+
 use std::path::Path;
 
 use crate::domain::FriggResult;

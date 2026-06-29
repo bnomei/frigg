@@ -1,3 +1,6 @@
+//! Declarative retrieval-policy DSL: predicate leaves compose `all`/`any`/`none` gates, and
+//! score rules bind predicates to kernel effects at a [`PolicyStage`].
+
 use super::kernel::PolicyProgram;
 use super::trace::{PolicyEffect, PolicyStage};
 
@@ -118,6 +121,7 @@ pub(crate) fn predicate_matches<Ctx: 'static>(ctx: &Ctx, predicate: Predicate<Ct
     matched_predicate_ids(ctx, &predicate).is_some()
 }
 
+/// Apply score rules in order; returns whether any rule matched and applied an effect.
 pub(crate) fn apply_score_rules<Ctx: 'static>(
     program: &mut PolicyProgram,
     ctx: &Ctx,

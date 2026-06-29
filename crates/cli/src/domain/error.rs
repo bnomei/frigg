@@ -1,7 +1,11 @@
+//! Shared error vocabulary for CLI, storage, indexing, and MCP boundaries.
+
 use thiserror::Error;
 
+/// Result alias used across Frigg crates.
 pub type FriggResult<T> = Result<T, FriggError>;
 
+/// Top-level failure modes surfaced to callers and MCP error envelopes.
 #[derive(Debug, Error)]
 pub enum FriggError {
     #[error("invalid input: {0}")]

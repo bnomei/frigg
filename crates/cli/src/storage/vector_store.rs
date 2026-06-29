@@ -1,3 +1,5 @@
+//! sqlite-vec registration, encoding, and vector table lifecycle.
+
 use super::*;
 
 pub(super) fn ensure_sqlite_vec_auto_extension_registered() -> FriggResult<()> {

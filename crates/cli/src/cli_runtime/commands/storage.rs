@@ -1,3 +1,5 @@
+//! CLI storage bootstrap and maintenance commands for init, verify, repair, and prune.
+
 use std::error::Error;
 use std::io;
 

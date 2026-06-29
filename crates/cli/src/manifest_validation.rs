@@ -1,3 +1,5 @@
+//! Manifest freshness validation and watch-time reuse of validated digest snapshots.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -91,6 +93,7 @@ pub(crate) enum ValidatedManifestCandidateCacheLookup {
 }
 
 #[derive(Debug, Default)]
+/// In-memory cache of manifest digests validated against the live workspace root.
 pub struct ValidatedManifestCandidateCache {
     entries: BTreeMap<ValidatedManifestCandidateCacheKey, ValidatedManifestCandidateCacheEntry>,
     stats: ValidatedManifestCandidateCacheStats,

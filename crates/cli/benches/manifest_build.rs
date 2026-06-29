@@ -1,3 +1,5 @@
+//! Criterion benchmarks for full-repository manifest walks and digest computation.
+
 #[path = "common/mod.rs"]
 mod support;
 

@@ -1,3 +1,8 @@
+//! Hybrid reranker: coverage grouping and intent-aware diversification.
+//!
+//! Builds coverage-grouped pools from ranked anchors and selects the final match list using
+//! policy-backed selection scores and surface-family spread constraints.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 

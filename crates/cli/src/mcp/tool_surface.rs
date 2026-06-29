@@ -1,9 +1,12 @@
+//! Core versus extended MCP tool-surface profiles and runtime parity checks against the manifest.
+
 use std::collections::BTreeSet;
 
 use crate::mcp::types::PUBLIC_TOOL_NAMES;
 
 pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 
+/// Registered MCP tool subset exposed by the running server process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolSurfaceProfile {
     /// Stable restricted public runtime surface.
@@ -23,6 +26,7 @@ impl ToolSurfaceProfile {
     }
 }
 
+/// Expected tool-name manifest for one `ToolSurfaceProfile`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSurfaceManifest {
     pub profile: ToolSurfaceProfile,
@@ -36,6 +40,7 @@ const EXTENDED_ONLY_TOOL_NAMES: [&str; 4] = [
     "deep_search_run",
 ];
 
+/// Resolves the active tool-surface profile from `FRIGG_MCP_TOOL_SURFACE_PROFILE`.
 pub fn active_runtime_tool_surface_profile() -> ToolSurfaceProfile {
     runtime_tool_surface_profile_from_env(std::env::var(TOOL_SURFACE_PROFILE_ENV).ok())
 }
@@ -80,6 +85,7 @@ pub fn tool_surface_profile_manifests() -> [ToolSurfaceManifest; 2] {
     ]
 }
 
+/// Drift between the runtime-registered tool router and a profile manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSurfaceParityDiff {
     pub profile: ToolSurfaceProfile,

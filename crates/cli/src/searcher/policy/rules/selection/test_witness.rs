@@ -1,3 +1,5 @@
+//! Selection rules for test-witness recall, harness paths, and example-support companions.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

@@ -1,3 +1,5 @@
+//! CLI `reindex` command: full or changed-only manifest rebuild across configured workspace roots.
+
 use std::error::Error;
 use std::io;
 

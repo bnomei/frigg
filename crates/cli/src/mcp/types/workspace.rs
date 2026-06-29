@@ -1,3 +1,5 @@
+//! Workspace lifecycle MCP wire types: attach, prepare, reindex, runtime tasks, and precise status.
+
 use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -189,6 +191,7 @@ pub enum WorkspaceIndexLifecyclePhase {
     Timeout,
     Failed,
     Skipped,
+    Stale,
     Unavailable,
 }
 
@@ -248,6 +251,7 @@ pub struct WorkspaceAttachParams {
     pub index_timeout_ms: Option<u64>,
 }
 
+/// Response from `workspace_attach` with storage, index, and precise lifecycle state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachResponse {
     pub repository: RepositorySummary,
@@ -335,6 +339,7 @@ pub struct WorkspaceReindexResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WorkspaceCurrentParams {}
 
+/// Response from `workspace_current` summarizing session adoption and runtime health.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceCurrentResponse {
     pub repository: Option<RepositorySummary>,
@@ -351,6 +356,7 @@ pub struct WorkspaceCurrentResponse {
     pub runtime: Option<RuntimeStatusSummary>,
 }
 
+/// Parameters for `read_file`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileParams {
     pub path: String,
@@ -369,6 +375,7 @@ pub struct ReadFileResponse {
     pub content: String,
 }
 
+/// Parameters for `read_match` using a prior search or navigation `result_handle`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadMatchParams {
     pub result_handle: String,

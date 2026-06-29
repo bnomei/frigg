@@ -1,3 +1,5 @@
+//! Criterion benchmarks for MCP file-content snapshot and window cache hit rates under repeated reads.
+
 #[path = "common/mod.rs"]
 mod support;
 

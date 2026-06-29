@@ -1,3 +1,5 @@
+//! Path-quality rules for example, bench, and mixed example-or-bench witness intent.
+
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;
 use crate::searcher::policy::kernel::PolicyProgram;

@@ -1,3 +1,8 @@
+//! Optional ripgrep accelerator for the lexical channel.
+//!
+//! Batches candidate paths into bounded `rg --json` invocations when the configured lexical
+//! backend allows it, falling back to the native scan engine for scrubbed markdown content.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
@@ -194,6 +199,7 @@ pub(super) fn search_with_ripgrep_in_universe(
     })
 }
 
+// Ripgrep argv size limits require batching; oversized batches are split before spawn.
 fn batch_candidate_paths(paths: &[String]) -> Vec<Vec<String>> {
     let mut batches = Vec::new();
     let mut current = Vec::new();

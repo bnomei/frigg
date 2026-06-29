@@ -1,3 +1,5 @@
+//! Semantic read APIs for heads, embeddings, vector search, and chunk payloads.
+
 use std::collections::BTreeMap;
 
 use crate::domain::{FriggError, FriggResult};
@@ -688,14 +690,18 @@ fn load_allowed_semantic_chunk_ids_for_snapshot_on_connection<'a>(
         .join(", ");
     let sql = format!(
         r#"
-        SELECT chunk_id
-        FROM semantic_chunk
-        WHERE repository_id = ?1
-          AND snapshot_id = ?2
-          AND provider = ?3
-          AND model = ?4
-          AND (?5 IS NULL OR language = ?5)
-          AND chunk_id IN ({placeholders})
+        SELECT chunk.chunk_id
+        FROM semantic_chunk AS chunk
+        INNER JOIN semantic_head AS head
+          ON head.repository_id = chunk.repository_id
+         AND head.provider = chunk.provider
+         AND head.model = chunk.model
+        WHERE chunk.repository_id = ?1
+          AND head.covered_snapshot_id = ?2
+          AND chunk.provider = ?3
+          AND chunk.model = ?4
+          AND (?5 IS NULL OR chunk.language = ?5)
+          AND chunk.chunk_id IN ({placeholders})
         "#
     );
     let mut statement = conn.prepare(&sql).map_err(|err| {

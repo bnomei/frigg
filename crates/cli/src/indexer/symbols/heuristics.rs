@@ -1,5 +1,8 @@
+//! Lexical token and graph-relation heuristic references that extend precise symbol graphs.
+
 use super::*;
 
+/// Accumulates heuristic references for one target symbol from graph hints and lexical scans.
 pub struct HeuristicReferenceResolver<'a> {
     repository_id: &'a str,
     target_symbol: &'a SymbolDefinition,
@@ -149,6 +152,7 @@ impl<'a> HeuristicReferenceResolver<'a> {
     }
 }
 
+/// Resolves heuristic references to a target symbol across the indexed symbol corpus.
 pub fn resolve_heuristic_references(
     repository_id: &str,
     symbol_id: &str,

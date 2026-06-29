@@ -1,3 +1,5 @@
+//! Repository discovery MCP wire types returned by `list_repositories` and workspace summaries.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +32,7 @@ pub struct RepositorySummary {
     pub health: Option<WorkspaceIndexHealthSummary>,
 }
 
+/// Response from `list_repositories`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListRepositoriesResponse {
     pub repositories: Vec<RepositorySummary>,

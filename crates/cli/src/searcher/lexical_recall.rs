@@ -1,3 +1,8 @@
+//! Broad lexical recall tokenization for hybrid search widening passes.
+//!
+//! Derives a bounded alternation regex from query terms so the lexical channel can seed graph and
+//! path-witness channels without requiring exact full-string matches.
+
 use std::collections::BTreeSet;
 
 use regex::escape;

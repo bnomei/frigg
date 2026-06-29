@@ -1,3 +1,5 @@
+//! Provenance storage path helpers shared by CLI bootstrap, reindex, and maintenance commands.
+
 use std::io;
 use std::path::{Path, PathBuf};
 

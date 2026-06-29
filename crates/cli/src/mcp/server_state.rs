@@ -1,3 +1,6 @@
+//! Shared execution-state types for the MCP server: symbol corpora, precise graph cache keys,
+//! navigation target resolution envelopes, and per-tool execution result bundles.
+
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -258,6 +261,16 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && task.repository_id == repository_id)
     }
 
+    pub fn has_active_task_for_any_repository(
+        &self,
+        kind: RuntimeTaskKind,
+        repository_ids: &[&str],
+    ) -> bool {
+        self.active
+            .values()
+            .any(|task| task.kind == kind && repository_ids.contains(&task.repository_id.as_str()))
+    }
+
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }
@@ -339,6 +352,36 @@ mod tests {
         assert_eq!(recent[0].status, RuntimeTaskStatus::Failed);
         assert_eq!(recent[1].task_id, first);
         assert_eq!(recent[1].status, RuntimeTaskStatus::Succeeded);
+    }
+
+    #[test]
+    fn has_active_task_for_any_repository_treats_stable_and_runtime_ids_as_aliases() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let task = registry.start_task(
+            RuntimeTaskKind::SemanticRefresh,
+            "repo-001",
+            "watch_semantic_followup",
+            None,
+        );
+
+        assert!(registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
+        assert!(!registry.has_active_task_for_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            "myrepo-abc123def456",
+        ));
+        assert!(!registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::WorkspaceReindex,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
+
+        registry.finish_task(&task, RuntimeTaskStatus::Succeeded, None);
+        assert!(!registry.has_active_task_for_any_repository(
+            RuntimeTaskKind::SemanticRefresh,
+            &["myrepo-abc123def456", "repo-001"],
+        ));
     }
 }
 

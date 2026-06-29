@@ -1,3 +1,5 @@
+//! Path-witness recall rules for Laravel UI, entrypoint, and form-action surfaces.
+
 use super::*;
 
 pub(super) fn laravel_livewire_view_focus_bonus(_ctx: &PathWitnessFacts) -> Option<PolicyEffect> {

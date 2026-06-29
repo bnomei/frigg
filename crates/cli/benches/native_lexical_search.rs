@@ -1,3 +1,5 @@
+//! Criterion benchmarks for native lexical search over a fixed symbol corpus.
+
 #[path = "common/mod.rs"]
 mod support;
 

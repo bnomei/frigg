@@ -1,3 +1,5 @@
+//! Regression tests for storage schema migrations, table initialization, and sqlite-vec capability detection.
+
 use super::support::*;
 
 #[test]

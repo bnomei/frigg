@@ -1,3 +1,5 @@
+//! Regression tests for Python ecosystem layouts (FastAPI, scripts, pyproject) in hybrid witness ranking.
+
 use super::*;
 
 #[test]

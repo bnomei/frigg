@@ -1,3 +1,5 @@
+//! Navigation response metadata, structural follow-up derivation, and compact selection notes.
+
 use super::*;
 use crate::languages::rust_implementation_candidates_from_facts;
 
@@ -22,6 +24,10 @@ impl FriggMcpServer {
         } else {
             root.join(&relative_path)
         };
+
+        if !Self::navigation_path_within_root(root, &absolute_path) {
+            return Vec::new();
+        }
 
         if !file_cache.contains_key(&absolute_path) {
             let source_file =

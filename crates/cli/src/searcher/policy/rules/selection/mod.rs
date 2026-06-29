@@ -1,3 +1,5 @@
+//! Selection rule pipeline: sequential score stages from base multipliers through tail repair.
+
 pub(crate) mod base;
 pub(crate) mod ci_scripts_ops;
 pub(crate) mod companion_tests;
@@ -19,6 +21,7 @@ use super::super::trace::PolicyEvaluation;
 
 type SelectionStageApply = fn(&mut PolicyProgram, &SelectionFacts);
 
+// Stages run in order; later stages see scores already adjusted by earlier multipliers.
 const PIPELINE: &[SelectionStageApply] = &[
     base::apply,
     contracts::apply,
@@ -35,6 +38,7 @@ const PIPELINE: &[SelectionStageApply] = &[
     tail::apply,
 ];
 
+/// Evaluate the full selection pipeline; optionally record a per-rule trace.
 pub(crate) fn evaluate(ctx: &SelectionFacts, trace: bool) -> PolicyEvaluation {
     let mut program = PolicyProgram::with_optional_trace(ctx.base_score, trace);
     for apply in PIPELINE {

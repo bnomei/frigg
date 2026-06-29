@@ -1,3 +1,6 @@
+//! In-file exploration helpers backing the `explore` tool: bounded line windows, literal/regex
+//! matching, and lossy UTF-8 normalization over shared runtime file-content snapshots.
+
 use std::borrow::Cow;
 use std::io;
 use std::path::Path;

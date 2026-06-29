@@ -1,3 +1,5 @@
+//! Selection predicates over normalized retrieval intent and witness-recall combinators.
+
 use super::{PredicateLeaf, SelectionFacts};
 
 fn wants_entrypoint_build_flow(ctx: &SelectionFacts) -> bool {

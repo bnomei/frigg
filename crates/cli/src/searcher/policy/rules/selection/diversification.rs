@@ -1,3 +1,5 @@
+//! Selection diversification rules keyed on coverage state and runtime-family overlap.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

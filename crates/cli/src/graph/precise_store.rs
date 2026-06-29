@@ -1,3 +1,5 @@
+//! Precise SCIP record upsert, replace, and overlay bookkeeping for symbol graph storage.
+
 use std::collections::BTreeSet;
 use std::time::Instant;
 

@@ -1,3 +1,5 @@
+//! PHP type and target evidence extraction for graph edge construction.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -146,9 +148,15 @@ fn collect_source_evidence(
     let mut next_namespace = current_namespace.map(ToOwned::to_owned);
     let mut next_class_canonical_name = current_class_canonical_name.map(ToOwned::to_owned);
     let mut next_owner_symbol_id = current_owner_symbol_id.map(ToOwned::to_owned);
+    let mut namespace_local_context: Option<PhpNameResolutionContext> = None;
 
     match node.kind() {
         "namespace_definition" => {
+            if node.child_by_field_name("body").is_some() {
+                namespace_local_context = Some(
+                    super::php_name_resolution_context_for_namespace_node(source, node),
+                );
+            }
             if let Some(namespace_name) = node
                 .child_by_field_name("name")
                 .and_then(|field| field.utf8_text(source.as_bytes()).ok())
@@ -473,13 +481,14 @@ fn collect_source_evidence(
         _ => {}
     }
 
+    let effective_context = namespace_local_context.as_ref().unwrap_or(context);
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_source_evidence(
             source,
             child,
             file_symbols,
-            context,
+            effective_context,
             next_namespace.as_deref(),
             next_class_canonical_name.as_deref(),
             next_owner_symbol_id.as_deref(),

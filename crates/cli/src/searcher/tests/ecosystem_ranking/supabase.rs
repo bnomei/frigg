@@ -1,3 +1,5 @@
+//! Regression tests for Supabase monorepo hybrid ranking across edge functions, migrations, and client SDK witnesses.
+
 use super::*;
 
 #[ignore = "workstream-c escalation target"]

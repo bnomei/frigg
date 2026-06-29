@@ -1,3 +1,5 @@
+//! Selection rules for Laravel blade, Livewire, layout, and view-component diversification.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;

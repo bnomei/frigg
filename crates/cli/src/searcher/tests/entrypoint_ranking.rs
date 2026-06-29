@@ -1,3 +1,5 @@
+//! Regression tests for entrypoint-oriented hybrid queries, lexical recall regex tokenization, and witness seeding.
+
 use super::*;
 
 #[test]

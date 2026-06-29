@@ -1,3 +1,6 @@
+//! Frigg binary entrypoint: builds the tokio runtime, initializes tracing, and hands off to CLI
+//! dispatch for serve, utility commands, and HTTP runtime startup.
+
 use frigg::settings::RuntimeTransportKind;
 use std::error::Error;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -75,8 +78,7 @@ fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'stati
 fn init_tracing(default_filter: &str) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    // MCP stdio transport requires stdout to carry protocol frames only.
-    // Force tracing output to stderr so logs never corrupt stdio framing.
+    // Side effect: MCP stdio transport requires stdout for protocol frames only.
     let _ = fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -162,6 +164,55 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 37_444)
         );
         assert_eq!(runtime.auth_token, None);
+    }
+
+    #[test]
+    fn serve_command_rejects_non_loopback_bind_without_override() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Serve);
+        cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
+        let error = resolve_http_runtime_config(&cli, true)
+            .expect_err("serve default port must not bind non-loopback without override");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing non-loopback HTTP bind"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn serve_command_rejects_non_loopback_bind_without_auth_token() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Serve);
+        cli.mcp_http_host = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        cli.allow_remote_http = true;
+
+        let error = resolve_http_runtime_config(&cli, true)
+            .expect_err("serve default port must require an auth token for remote binds");
+        assert!(
+            error
+                .to_string()
+                .contains("HTTP mode requires --mcp-http-auth-token"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn serve_command_honors_auth_token_on_default_port() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Serve);
+        cli.mcp_http_auth_token = Some("serve-token".to_owned());
+
+        let runtime = resolve_http_runtime_config(&cli, true)
+            .expect("serve runtime should resolve")
+            .expect("serve runtime should be enabled");
+        assert_eq!(
+            runtime.bind_addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 37_444)
+        );
+        assert_eq!(runtime.auth_token, Some("serve-token".to_owned()));
     }
 
     #[test]

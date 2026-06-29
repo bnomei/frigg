@@ -1,3 +1,5 @@
+//! Compact versus full response shaping, text-first read surfaces, and session `result_handle` allocation.
+
 use super::*;
 use crate::domain::model::TextMatch;
 use crate::mcp::types::DocumentSymbolItem;

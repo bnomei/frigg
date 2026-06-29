@@ -1,3 +1,5 @@
+//! Maps internal `FriggError` values to MCP `ErrorData` and filters the tool router by surface profile.
+
 use super::*;
 
 #[allow(clippy::enum_variant_names)]

@@ -1,3 +1,5 @@
+//! Repository-relative path classification for runtime, support, and project surfaces.
+
 use std::path::Path;
 
 use crate::domain::PathClass;

@@ -1,3 +1,5 @@
+//! Laravel post-selection guardrails: blade, Livewire, layout, and UI test-harness visibility.
+
 use super::*;
 
 fn is_laravel_blade_page_companion_path(path: &str) -> bool {

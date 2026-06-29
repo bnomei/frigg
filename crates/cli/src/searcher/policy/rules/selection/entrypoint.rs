@@ -1,3 +1,5 @@
+//! Selection rules for entrypoint runtime, build-flow, and Laravel bootstrap paths.
+
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;
 use super::super::super::kernel::PolicyProgram;
