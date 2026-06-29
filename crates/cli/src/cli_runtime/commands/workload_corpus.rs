@@ -109,7 +109,18 @@ fn workload_corpus_key_is_secret(key: &str) -> bool {
         .any(|fragment| lowered.contains(fragment))
 }
 
+fn workload_corpus_token_core(token: &str) -> &str {
+    let after_leading =
+        token.trim_start_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch));
+    after_leading.trim_end_matches(|ch: char| WORKLOAD_CORPUS_STRUCTURAL_PUNCT.contains(&ch))
+}
+
 fn workload_corpus_token_is_secret_like(token: &str) -> bool {
+    let token = workload_corpus_token_core(token);
+    if token.is_empty() {
+        return false;
+    }
+
     let lowered = token.to_ascii_lowercase();
     if WORKLOAD_CORPUS_SECRET_TOKEN_PREFIXES
         .iter()
@@ -140,6 +151,15 @@ fn redact_workload_corpus_token_core(word: &str) -> String {
     format!("{leading}{WORKLOAD_CORPUS_REDACTED}{trailing}")
 }
 
+fn workload_corpus_word_is_secret_introducer(word: &str) -> bool {
+    let normalized = word
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    WORKLOAD_CORPUS_SECRET_INTRODUCERS
+        .iter()
+        .any(|introducer| normalized == *introducer)
+}
+
 struct WorkloadCorpusWordRedaction {
     text: String,
     next_word_is_secret: bool,
@@ -149,12 +169,7 @@ fn redact_workload_corpus_word(
     word: &str,
     previous_word_introduces_secret: bool,
 ) -> WorkloadCorpusWordRedaction {
-    let normalized = word
-        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
-        .to_ascii_lowercase();
-    let is_introducer = WORKLOAD_CORPUS_SECRET_INTRODUCERS
-        .iter()
-        .any(|introducer| normalized == *introducer);
+    let is_introducer = workload_corpus_word_is_secret_introducer(word);
 
     if previous_word_introduces_secret {
         if is_introducer {
@@ -180,9 +195,10 @@ fn redact_workload_corpus_word(
                     next_word_is_secret: true,
                 };
             }
+            let value_introduces_secret = workload_corpus_word_is_secret_introducer(value);
             return WorkloadCorpusWordRedaction {
                 text: format!("{prefix}{}", redact_workload_corpus_token_core(value)),
-                next_word_is_secret: false,
+                next_word_is_secret: value_introduces_secret,
             };
         }
     }
@@ -439,6 +455,33 @@ mod tests {
                 .contains("abcDEF123456"),
             "bearer token must be redacted"
         );
+    }
+
+    #[test]
+    fn classifies_secret_like_tokens_after_trimming_structural_delimiters() {
+        let sanitized = redact_workload_corpus_text(
+            "look for \"sk-live-reviewToken\" and (ghp_reviewToken123)",
+        );
+        assert!(
+            !sanitized.contains("sk-live-reviewToken"),
+            "quoted token prefix must be redacted: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains("ghp_reviewToken123"),
+            "bracketed token prefix must be redacted: {sanitized}"
+        );
+        assert_eq!(sanitized, "look for \"[REDACTED]\" and ([REDACTED])");
+    }
+
+    #[test]
+    fn redacts_token_after_inline_authorization_scheme() {
+        let sanitized =
+            redact_workload_corpus_text("Authorization:Bearer shortOpaqueToken request");
+        assert!(
+            !sanitized.contains("shortOpaqueToken"),
+            "token after inline bearer scheme must be redacted: {sanitized}"
+        );
+        assert_eq!(sanitized, "Authorization:[REDACTED] [REDACTED] request");
     }
 
     #[test]
