@@ -3,6 +3,7 @@
 #[cfg(test)]
 use std::cell::RefCell;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::domain::{FriggError, FriggResult};
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -14,6 +15,8 @@ use super::{
     ManifestEntry, ManifestMetadataEntry, Migration, RepositoryManifestMetadataSnapshot,
     RepositoryManifestSnapshot, SNAPSHOT_KIND_MANIFEST,
 };
+
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(test)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -215,6 +218,9 @@ pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
     ensure_sqlite_vec_auto_extension_registered()?;
     let conn = Connection::open(path)
         .map_err(|err| FriggError::Internal(format!("failed to open sqlite db: {err}")))?;
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT).map_err(|err| {
+        FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
+    })?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|err| {
             FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}"))

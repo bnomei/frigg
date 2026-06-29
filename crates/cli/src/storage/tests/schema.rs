@@ -44,6 +44,25 @@ fn initialize_applies_base_schema_and_version() -> FriggResult<()> {
 }
 
 #[test]
+fn storage_connections_install_busy_timeout() -> FriggResult<()> {
+    let db_path = temp_db_path("connection-busy-timeout");
+    let storage = Storage::new(&db_path);
+
+    storage.initialize()?;
+
+    let conn = open_connection(&db_path)?;
+    let busy_timeout_ms: i64 = conn
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to read sqlite busy timeout: {err}"))
+        })?;
+    assert_eq!(busy_timeout_ms, 5_000);
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn initialize_is_idempotent() -> FriggResult<()> {
     let db_path = temp_db_path("init-idempotent");
     let storage = Storage::new(&db_path);
