@@ -316,8 +316,7 @@ async fn workspace_current_reports_stale_not_skipped_for_unindexed_repository() 
             index_timeout_ms: None,
         }))
         .await
-        .expect("workspace_attach with skip should succeed")
-        .0;
+        .expect("workspace_attach with skip should succeed");
 
     let current = server
         .workspace_current(Parameters(WorkspaceCurrentParams {}))

@@ -580,13 +580,15 @@ fn scip_ingest_rejects_document_paths_that_escape_repository_root() {
         let error = graph
             .ingest_scip_json("repo-001", label, payload.as_bytes())
             .expect_err("document path escaping the repository root should be rejected");
-        match error {
-            ScipIngestError::InvalidInput { diagnostic } => {
-                assert_eq!(diagnostic.artifact_label, label);
-                assert_eq!(diagnostic.code, ScipInvalidInputCode::InvalidDocumentPath);
-            }
-            other => panic!("expected typed invalid-document-path error, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                error,
+                ScipIngestError::InvalidInput { ref diagnostic }
+                    if diagnostic.artifact_label == label
+                        && diagnostic.code == ScipInvalidInputCode::InvalidDocumentPath
+            ),
+            "expected typed invalid-document-path error, got {error:?}"
+        );
     }
 
     assert_eq!(

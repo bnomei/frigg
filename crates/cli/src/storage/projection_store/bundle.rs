@@ -593,9 +593,7 @@ impl Storage {
         Ok(expected_versions
             .iter()
             .filter(|(family, expected_version)| {
-                present_versions
-                    .get(*family)
-                    .map_or(true, |present_version| present_version != expected_version)
+                present_versions.get(*family) != Some(expected_version)
             })
             .map(|(family, _)| (*family).to_owned())
             .collect())

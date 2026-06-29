@@ -305,6 +305,9 @@ pub(in crate::mcp::server) struct NavigationLocationTokenHint {
 /// Concrete streamable HTTP service type used when Frigg is exposed over MCP transport.
 pub type FriggMcpService = StreamableHttpService<FriggMcpServer, LocalSessionManager>;
 
+type PendingPreciseDirtyPathSets = (BTreeSet<String>, BTreeSet<String>);
+type PendingPreciseDirtyPathMap = Arc<RwLock<BTreeMap<String, PendingPreciseDirtyPathSets>>>;
+
 #[derive(Clone)]
 /// Orchestrates Frigg's public MCP tool surface over shared config, caches, session state,
 /// provenance, and optional watch-backed freshness.
@@ -332,8 +335,7 @@ struct FriggMcpRuntimeState {
     runtime_cache_telemetry: Arc<RwLock<BTreeMap<RuntimeCacheFamily, RuntimeCacheTelemetry>>>,
     precise_generation_status_cache:
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
-    precise_generation_pending_dirty_paths:
-        Arc<RwLock<BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>>>,
+    precise_generation_pending_dirty_paths: PendingPreciseDirtyPathMap,
 }
 
 #[derive(Clone)]
