@@ -62,6 +62,7 @@ use serde_json::{Value, json};
 use tokio::task;
 use tracing::{info, warn};
 
+use crate::agent_directive;
 use crate::mcp::advanced::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
 };
@@ -1470,7 +1471,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_file",
-        description = "Read a bounded slice of a repository file when you already know the canonical path. Use read_match to reopen a prior search or navigation hit by handle.",
+        description = "Use Frigg to read a bounded slice of a repository source file when you already know the canonical path. Keep shell reads for non-code files, git/filesystem inspection, or trivial one-offs; use read_match to reopen a prior search or navigation hit by handle.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1488,7 +1489,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_match",
-        description = "Open a bounded source window around a prior search or navigation hit using its session result_handle and match_id.",
+        description = "Use Frigg to open a bounded source window around a prior search or navigation hit using its session result_handle and match_id. Prefer this over shell reads for code evidence; keep shell for non-code, git/filesystem inspection, or trivial one-offs.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1524,7 +1525,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Use exact literal or regex search when you know the text and need repository scoping or path_regex narrowing. Use context_lines, max_matches_per_file, or collapse_by_file to keep first-pass review compact.",
+        description = "Use Frigg for exact literal or regex code search when you know the text and need repository scoping, path_regex narrowing, result handles, or bounded follow-up reads. Keep shell scans for non-code files, git/filesystem inspection, or trivial one-offs.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1540,7 +1541,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Use for broad repository discovery. If semantic is unavailable, treat broad natural-language ranking as weaker and pivot to exact tools sooner.",
+        description = "Use Frigg first for broad code discovery across attached repositories. If semantic is unavailable, treat broad natural-language ranking as weaker evidence and pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have an anchor.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1556,7 +1557,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Use when you know the symbol name and need repository-aware lookup. Add path_class or path_regex to reduce overload noise.",
+        description = "Use Frigg when you know the symbol name and need repository-aware code lookup, navigation anchors, result handles, or bounded source reads. Add path_class or path_regex to reduce overload noise.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1791,11 +1792,9 @@ impl ServerHandler for FriggMcpServer {
                         "Local-first deterministic code search + navigation MCP server",
                     ),
             )
-            .with_instructions(
-                format!(
-                    "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Prefer shell tools for cheap local reads and literal scans. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows when those tools are present in the active profile. {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
-                ),
-            )
+            .with_instructions(agent_directive::mcp_instructions(&format!(
+                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid for broad discovery, then pivot to search_symbol, search_text, navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and use exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows when those tools are present in the active profile. {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+            )))
     }
 
     async fn on_initialized(&self, _context: rmcp::service::NotificationContext<rmcp::RoleServer>) {

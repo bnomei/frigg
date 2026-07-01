@@ -3,6 +3,7 @@
 //! Regression tests for `workspace_current` and repository summary precise/index status fields.
 
 use super::*;
+use crate::agent_directive::FRIGG_FIRST_DIRECTIVE;
 use crate::mcp::types::{
     WorkspacePreciseCoverageMode, WorkspacePreciseIngestState, WorkspacePreciseState,
 };
@@ -49,9 +50,10 @@ fn server_info_enables_resources_and_prompts() {
     let instructions = info
         .instructions
         .expect("server info should publish MCP usage instructions");
+    assert!(instructions.starts_with(FRIGG_FIRST_DIRECTIVE.trim()));
     assert!(instructions.contains("call workspace_attach explicitly"));
     assert!(instructions.contains("Use workspace_current for repository health"));
-    assert!(instructions.contains("Prefer shell tools for cheap local reads"));
+    assert!(instructions.contains("Use shell tools for non-code files"));
     assert!(instructions.contains("restricted core tool surface"));
     assert!(instructions.contains("Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`"));
 }

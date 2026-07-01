@@ -144,7 +144,8 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "core_tools": core.tool_names,
         "extended_only_tools": extended_only_tool_names(),
         "guidance": [
-            "Use shell tools for trivial local literal scans and one-off file reads in the checked-out workspace.",
+            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.",
+            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs in the checked-out workspace.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
@@ -162,15 +163,17 @@ fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
     };
     format!(
         "# Shell vs Frigg\n\n\
-Use shell tools when the task is a trivial local operation in the checked-out workspace.\n\n\
-- exact literal scans such as `rg foo`\n\
-- quick one-off file reads such as `sed -n '1,120p' file`\n\
-- generic filesystem or git inspection\n\n\
-Use Frigg when the task needs repository-aware evidence.\n\n\
+Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.\n\n\
 - symbol, definition, reference, implementation, or call navigation\n\
+- exact literal or regex code searches with repository scoping and result handles\n\
+- bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
 - provenance-backed answers or replayable evidence\n\
 - attached multi-repo context instead of one current shell directory\n\n\
+Use shell tools only as the exception when the task is a trivial local operation in the checked-out workspace.\n\n\
+- non-code file reads or exact scans\n\
+- generic filesystem or git inspection\n\
+- trivial one-offs where repository-aware evidence and bounded source reads add no value\n\n\
 `read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\
@@ -215,20 +218,14 @@ pub(crate) fn read_policy_resource(
 }
 
 pub(crate) fn guidance_prompts() -> Vec<Prompt> {
-    vec![
-        Prompt::new(
-            ROUTING_GUIDE_PROMPT_NAME,
-            Some(
-                "Route a code question toward shell tools, core Frigg tools, or extended follow-up.",
-            ),
-            Some(vec![
-                PromptArgument::new("task")
-                    .with_description("Optional task or question to route.")
-                    .with_required(false),
-            ]),
-        )
-        .with_title("FRIGG Routing Guide"),
-    ]
+    vec![Prompt::new(
+        ROUTING_GUIDE_PROMPT_NAME,
+        Some("Route a code question toward Frigg tools, shell exceptions, or extended follow-up."),
+        Some(vec![PromptArgument::new("task")
+            .with_description("Optional task or question to route.")
+            .with_required(false)]),
+    )
+    .with_title("FRIGG Routing Guide")]
 }
 
 pub(crate) fn read_guidance_prompt(
@@ -258,13 +255,14 @@ pub(crate) fn read_guidance_prompt(
     }
     text.push_str(
         "Routing policy:\n\
-1. Prefer shell tools for trivial local scans, file reads, or git/filesystem inspection.\n\
-2. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
-3. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
-4. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
-5. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
-6. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
-7. Use `explore` only after discovery and only when the active profile includes it.\n\n",
+1. Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads.\n\
+2. Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs.\n\
+3. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
+4. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
+5. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
+6. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
+7. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
+8. Use `explore` only after discovery and only when the active profile includes it.\n\n",
     );
     text.push_str(profile_note);
 
