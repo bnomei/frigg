@@ -2,7 +2,7 @@
 
 use std::io::{self, Read, Write};
 
-use frigg::agent_directive::FRIGG_FIRST_DIRECTIVE;
+use frigg::agent_directive::HOOK_NUDGE;
 use serde_json::{Value, json};
 
 pub(crate) fn run_pretooluse_hook_command<R: Read, W: Write>(
@@ -24,7 +24,7 @@ fn render_pretooluse_hook_output(input: &str) -> Option<String> {
         json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": FRIGG_FIRST_DIRECTIVE.trim(),
+                "additionalContext": HOOK_NUDGE,
             }
         })
         .to_string()
@@ -53,15 +53,150 @@ fn should_nudge_pretooluse(value: &Value) -> bool {
 }
 
 fn contains_grep_like_command(command: &str) -> bool {
-    command
-        .split(|character: char| {
-            !(character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '/' | '.'))
-        })
-        .filter(|token| !token.is_empty())
-        .any(|token| {
-            let command_name = token.rsplit('/').next().unwrap_or(token);
-            matches!(command_name, "grep" | "egrep" | "fgrep" | "rg" | "ripgrep")
-        })
+    let mut tokens = ShellTokens::new(command);
+    let mut command_position = true;
+    let mut git_subcommand_position = false;
+
+    while let Some(token) = tokens.next() {
+        match token {
+            ShellToken::Separator => {
+                command_position = true;
+                git_subcommand_position = false;
+            }
+            ShellToken::Word(word) => {
+                let command_name = command_name(word);
+
+                if git_subcommand_position {
+                    if command_name == "grep" {
+                        return true;
+                    }
+                    if !word.starts_with('-') {
+                        git_subcommand_position = false;
+                    }
+                    command_position = false;
+                    continue;
+                }
+
+                if !command_position {
+                    continue;
+                }
+
+                if is_shell_assignment(word) {
+                    continue;
+                }
+                if is_grep_like_command_name(command_name) {
+                    return true;
+                }
+                if command_name == "git" {
+                    git_subcommand_position = true;
+                    command_position = false;
+                    continue;
+                }
+                command_position = is_command_wrapper(command_name);
+            }
+        }
+    }
+
+    false
+}
+
+fn command_name(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
+}
+
+fn is_grep_like_command_name(command_name: &str) -> bool {
+    matches!(command_name, "grep" | "egrep" | "fgrep" | "rg" | "ripgrep")
+}
+
+fn is_command_wrapper(command_name: &str) -> bool {
+    matches!(
+        command_name,
+        "command" | "exec" | "env" | "noglob" | "sudo" | "time"
+    )
+}
+
+fn is_shell_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+enum ShellToken<'a> {
+    Word(&'a str),
+    Separator,
+}
+
+struct ShellTokens<'a> {
+    command: &'a str,
+    index: usize,
+}
+
+impl<'a> ShellTokens<'a> {
+    fn new(command: &'a str) -> Self {
+        Self { command, index: 0 }
+    }
+}
+
+impl<'a> Iterator for ShellTokens<'a> {
+    type Item = ShellToken<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = self.command.as_bytes();
+        while self.index < bytes.len() && bytes[self.index].is_ascii_whitespace() {
+            if bytes[self.index] == b'\n' {
+                self.index += 1;
+                return Some(ShellToken::Separator);
+            }
+            self.index += 1;
+        }
+        if self.index >= bytes.len() {
+            return None;
+        }
+
+        let start = self.index;
+        let separator_width = match bytes[self.index] {
+            b';' | b'|' => Some(1),
+            b'&' if self.index + 1 < bytes.len() && bytes[self.index + 1] == b'&' => Some(2),
+            _ => None,
+        };
+        if let Some(width) = separator_width {
+            self.index += width;
+            return Some(ShellToken::Separator);
+        }
+
+        let mut quote = None;
+        while self.index < bytes.len() {
+            let byte = bytes[self.index];
+            if let Some(quote_byte) = quote {
+                self.index += 1;
+                if byte == quote_byte {
+                    quote = None;
+                }
+                continue;
+            }
+
+            match byte {
+                b'\'' | b'"' => {
+                    quote = Some(byte);
+                    self.index += 1;
+                }
+                b'\\' => {
+                    self.index = (self.index + 2).min(bytes.len());
+                }
+                b'\n' | b';' | b'|' => break,
+                b'&' if self.index + 1 < bytes.len() && bytes[self.index + 1] == b'&' => break,
+                byte if byte.is_ascii_whitespace() => break,
+                _ => self.index += 1,
+            }
+        }
+
+        Some(ShellToken::Word(&self.command[start..self.index]))
+    }
 }
 
 fn is_whole_file_code_read(tool_input: Option<&Value>) -> bool {
@@ -150,6 +285,7 @@ fn is_code_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use frigg::agent_directive::HOOK_NUDGE;
     use serde_json::{Value, json};
 
     use super::{render_pretooluse_hook_output, run_pretooluse_hook_command};
@@ -177,7 +313,7 @@ mod tests {
             hook_output
                 .get("additionalContext")
                 .and_then(Value::as_str)
-                .is_some_and(|context| context.contains("Frigg"))
+                .is_some_and(|context| context == HOOK_NUDGE)
         );
     }
 
@@ -232,6 +368,21 @@ mod tests {
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Bash",
                 "tool_input": { "command": "cargo test -p frigg hook" },
+            }),
+            json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "echo rg" },
+            }),
+            json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "printf 'grep\\n'" },
+            }),
+            json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": { "command": "cargo run -- rg needle" },
             }),
             json!({
                 "hook_event_name": "PreToolUse",
