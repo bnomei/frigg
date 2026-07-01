@@ -1,8 +1,10 @@
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use frigg::settings::FriggConfig;
+use frigg::storage::resolve_workspace_relative_write_path;
 
 use crate::cli_args::AdoptTarget;
 
@@ -88,7 +90,7 @@ pub(crate) fn run_adopt_command(
         return Ok(());
     }
 
-    let writes = apply_mcp_json_entries(&plan, uninstall, force)?;
+    let writes = apply_plan_entries(&plan, uninstall, force)?;
     if writes > 0 {
         println!("adopt apply writes={writes}");
     }
@@ -108,12 +110,14 @@ fn build_adopt_plan(
     let mut entries = Vec::new();
 
     for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "adopt summary status=failed repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
+        let root = config
+            .root_by_repository_id(&repo.repository_id.0)
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "adopt summary status=failed repository_id={} error=workspace root lookup failed",
+                    repo.repository_id.0
+                ))
+            })?;
 
         for target in select_targets(root, requested_targets, all, legacy_cursor) {
             let (action, reason) = classify_target_action(root, target, uninstall, force);
@@ -132,7 +136,7 @@ fn build_adopt_plan(
 }
 
 fn classify_target_action(
-    root: &std::path::Path,
+    root: &Path,
     target: AdoptTarget,
     uninstall: bool,
     force: bool,
@@ -205,16 +209,14 @@ fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction
     }
 }
 
-fn apply_mcp_json_entries(plan: &AdoptPlan, uninstall: bool, force: bool) -> io::Result<usize> {
+fn apply_plan_entries(
+    plan: &AdoptPlan,
+    uninstall: bool,
+    force: bool,
+) -> Result<usize, Box<dyn Error>> {
     let mut writes = 0;
 
     for entry in &plan.entries {
-        if !matches!(
-            entry.target,
-            AdoptTarget::McpProject | AdoptTarget::McpCursor
-        ) {
-            continue;
-        }
         if !matches!(
             entry.action,
             AdoptPlanAction::Create | AdoptPlanAction::Update | AdoptPlanAction::Remove
@@ -222,32 +224,108 @@ fn apply_mcp_json_entries(plan: &AdoptPlan, uninstall: bool, force: bool) -> io:
             continue;
         }
 
+        let write_path = resolve_entry_write_path(entry)?;
         let contents = match fs::read_to_string(&entry.path) {
             Ok(contents) => Some(contents),
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-            Err(err) => return Err(err),
+            Err(err) => return Err(Box::new(err)),
         };
 
-        let edit = if uninstall {
-            match contents.as_deref() {
-                Some(contents) => json_merge::remove_mcp_server(contents, force),
-                None => Ok(json_merge::McpJsonEdit::Unchanged),
-            }
+        let edit = if matches!(
+            entry.target,
+            AdoptTarget::McpProject | AdoptTarget::McpCursor
+        ) {
+            apply_mcp_json_edit(contents.as_deref(), uninstall, force)
         } else {
-            json_merge::upsert_mcp_server(contents.as_deref(), force)
-        }
-        .map_err(|err| io::Error::other(format!("{}: {err}", entry.path.display())))?;
+            apply_markdown_edit(contents.as_deref(), uninstall)
+        }?;
 
-        if let json_merge::McpJsonEdit::Changed(updated) = edit {
-            if let Some(parent) = entry.path.parent() {
-                fs::create_dir_all(parent)?;
+        match edit {
+            AdoptApplyEdit::Write(updated) => {
+                fs::write(&write_path, updated)?;
+                writes += 1;
             }
-            fs::write(&entry.path, updated)?;
-            writes += 1;
+            AdoptApplyEdit::Delete => {
+                match fs::remove_file(&write_path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(Box::new(err)),
+                }
+                writes += 1;
+            }
+            AdoptApplyEdit::Unchanged => {}
         }
     }
 
     Ok(writes)
+}
+
+#[cfg(test)]
+fn apply_mcp_json_entries(plan: &AdoptPlan, uninstall: bool, force: bool) -> io::Result<usize> {
+    apply_plan_entries(plan, uninstall, force).map_err(|err| io::Error::other(err.to_string()))
+}
+
+fn resolve_entry_write_path(entry: &AdoptPlanEntry) -> Result<PathBuf, Box<dyn Error>> {
+    resolve_workspace_relative_write_path(&entry.root, Path::new(entry.target.path()))
+        .map_err(|err| Box::new(err) as Box<dyn Error>)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AdoptApplyEdit {
+    Write(String),
+    Delete,
+    Unchanged,
+}
+
+fn apply_markdown_edit(
+    contents: Option<&str>,
+    uninstall: bool,
+) -> Result<AdoptApplyEdit, Box<dyn Error>> {
+    if uninstall {
+        let Some(contents) = contents else {
+            return Ok(AdoptApplyEdit::Unchanged);
+        };
+        return match managed_block::remove_managed_block(contents) {
+            Ok(managed_block::ManagedBlockEdit::Changed(updated)) => {
+                if updated.trim().is_empty() {
+                    Ok(AdoptApplyEdit::Delete)
+                } else {
+                    Ok(AdoptApplyEdit::Write(updated))
+                }
+            }
+            Ok(managed_block::ManagedBlockEdit::Unchanged) => Ok(AdoptApplyEdit::Unchanged),
+            Err(err) => Err(Box::new(err)),
+        };
+    }
+
+    let desired = managed_block::desired_markdown();
+    let edit = managed_block::upsert_managed_block(contents.unwrap_or_default(), &desired)?;
+    Ok(match edit {
+        managed_block::ManagedBlockEdit::Changed(updated) => AdoptApplyEdit::Write(updated),
+        managed_block::ManagedBlockEdit::Unchanged => AdoptApplyEdit::Unchanged,
+    })
+}
+
+fn apply_mcp_json_edit(
+    contents: Option<&str>,
+    uninstall: bool,
+    force: bool,
+) -> Result<AdoptApplyEdit, Box<dyn Error>> {
+    let edit = if uninstall {
+        match contents {
+            Some(contents) => json_merge::remove_mcp_server(contents, force),
+            None => Ok(json_merge::McpJsonEdit::Unchanged),
+        }
+    } else {
+        json_merge::upsert_mcp_server(contents, force)
+    }?;
+
+    Ok(match edit {
+        json_merge::McpJsonEdit::Changed(updated) => AdoptApplyEdit::Write(updated),
+        json_merge::McpJsonEdit::Unchanged | json_merge::McpJsonEdit::Skipped => {
+            AdoptApplyEdit::Unchanged
+        }
+    })
 }
 
 fn classify_mcp_target(
@@ -306,7 +384,7 @@ mod tests {
 
     use frigg::settings::FriggConfig;
 
-    use super::{apply_mcp_json_entries, build_adopt_plan};
+    use super::{apply_mcp_json_entries, apply_plan_entries, build_adopt_plan};
     use crate::cli_args::AdoptTarget;
 
     #[test]
@@ -416,6 +494,55 @@ mod tests {
     }
 
     #[test]
+    fn adopt_apply_creates_missing_markdown_with_managed_block() {
+        let root = temp_dir("adopt-apply-create-markdown");
+        fs::create_dir_all(&root).expect("create temp root");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_plan_entries(&plan, false, false).expect("apply markdown"),
+            1
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("AGENTS.md")).expect("read agents"),
+            super::managed_block::desired_markdown()
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_removes_owned_markdown_file_on_uninstall() {
+        let root = temp_dir("adopt-apply-remove-owned-markdown");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join("AGENTS.md"),
+            super::managed_block::desired_markdown(),
+        )
+        .expect("write agents");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, true, false)
+            .expect("build adopt plan");
+
+        assert_eq!(
+            apply_plan_entries(&plan, true, false).expect("apply uninstall"),
+            1
+        );
+        assert!(!root.join("AGENTS.md").exists());
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
     fn adopt_apply_preserves_sibling_mcp_servers() {
         let root = temp_dir("adopt-apply-preserve-mcp");
         fs::create_dir_all(&root).expect("create temp root");
@@ -484,6 +611,28 @@ mod tests {
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
         assert_eq!(value["unrelated"], true);
         fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopt_apply_rejects_symlink_parent_escape_before_write() {
+        let root = temp_dir("adopt-apply-symlink-root");
+        let outside = temp_dir("adopt-apply-symlink-outside");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::create_dir_all(&outside).expect("create outside root");
+        std::os::unix::fs::symlink(&outside, root.join(".cursor")).expect("create cursor symlink");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Cursor], false, false, false, false)
+            .expect("build adopt plan");
+
+        let err = apply_plan_entries(&plan, false, false)
+            .expect_err("symlinked parent escape should fail");
+
+        assert!(err.to_string().contains("escapes canonical workspace root"));
+        assert!(!outside.join("rules/frigg.mdc").exists());
+        fs::remove_dir_all(root).expect("remove temp root");
+        fs::remove_dir_all(outside).expect("remove outside root");
     }
 
     fn temp_dir(stem: &str) -> PathBuf {
