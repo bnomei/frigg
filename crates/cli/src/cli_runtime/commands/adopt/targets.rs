@@ -39,7 +39,7 @@ pub(crate) fn select_targets(
 pub(crate) fn detect_known_project_client_markers(root: &Path) -> Vec<AdoptTarget> {
     let mut targets = Vec::new();
     for target in NON_HOOK_V1_TARGETS {
-        if root.join(target.path()).exists() {
+        if target_marker_exists(root, target) {
             push_unique(&mut targets, target);
         }
     }
@@ -49,6 +49,15 @@ pub(crate) fn detect_known_project_client_markers(root: &Path) -> Vec<AdoptTarge
     }
 
     targets
+}
+
+fn target_marker_exists(root: &Path, target: AdoptTarget) -> bool {
+    match target {
+        AdoptTarget::Cursor => {
+            root.join(".cursor/rules").is_dir() || root.join(target.path()).exists()
+        }
+        _ => root.join(target.path()).exists(),
+    }
 }
 
 fn push_unique(targets: &mut Vec<AdoptTarget>, target: AdoptTarget) {
@@ -87,6 +96,17 @@ mod tests {
         let targets = detect_known_project_client_markers(&root);
 
         assert_eq!(targets, vec![AdoptTarget::GeminiMd, AdoptTarget::Cursor]);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_detects_cursor_project_marker_without_frigg_rule() {
+        let root = temp_dir("adopt-detect-cursor-project-marker");
+        fs::create_dir_all(root.join(".cursor/rules")).expect("create cursor rules dir");
+
+        let targets = detect_known_project_client_markers(&root);
+
+        assert_eq!(targets, vec![AdoptTarget::Cursor]);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

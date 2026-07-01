@@ -9,20 +9,36 @@ pub(crate) struct AdoptPlanEntry {
     pub(crate) target: AdoptTarget,
     pub(crate) path: PathBuf,
     pub(crate) action: AdoptPlanAction,
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdoptPlanAction {
-    PlanInstall,
-    PlanUninstall,
+    Create,
+    Update,
+    Unchanged,
+    Remove,
+    Skipped,
+    Error,
 }
 
 impl AdoptPlanAction {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::PlanInstall => "plan-install",
-            Self::PlanUninstall => "plan-uninstall",
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Unchanged => "unchanged",
+            Self::Remove => "remove",
+            Self::Skipped => "skipped",
+            Self::Error => "error",
         }
+    }
+
+    pub(crate) fn is_pending_change(self) -> bool {
+        matches!(
+            self,
+            Self::Create | Self::Update | Self::Remove | Self::Error
+        )
     }
 }
 
@@ -43,6 +59,20 @@ impl AdoptPlan {
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub(crate) fn pending_changes(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.action.is_pending_change())
+            .count()
+    }
+
+    pub(crate) fn action_count(&self, action: AdoptPlanAction) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.action == action)
+            .count()
+    }
 }
 
 #[cfg(test)]
@@ -57,11 +87,14 @@ mod tests {
             root: "/workspace".into(),
             target: AdoptTarget::AgentsMd,
             path: "/workspace/AGENTS.md".into(),
-            action: AdoptPlanAction::PlanInstall,
+            action: AdoptPlanAction::Create,
+            reason: None,
         }]);
 
         assert_eq!(plan.len(), 1);
         assert!(!plan.is_empty());
-        assert_eq!(plan.entries[0].action.as_str(), "plan-install");
+        assert_eq!(plan.entries[0].action.as_str(), "create");
+        assert_eq!(plan.pending_changes(), 1);
+        assert_eq!(plan.action_count(AdoptPlanAction::Create), 1);
     }
 }

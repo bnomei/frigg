@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fs;
 use std::io;
 
 use frigg::settings::FriggConfig;
@@ -24,20 +25,35 @@ pub(crate) fn run_adopt_command(
     dry_run: bool,
     force: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let plan = build_adopt_plan(config, &requested_targets, all, legacy_cursor, uninstall)?;
-    let _placeholder_contract = (
-        json_merge::DEFAULT_MCP_SERVER_URL,
-        json_merge::MCP_SERVER_KEY,
-        managed_block::MANAGED_BLOCK_START,
-        managed_block::MANAGED_BLOCK_END,
-    );
-    let status = if plan.is_empty() { "noop" } else { "planned" };
+    let plan = build_adopt_plan(
+        config,
+        &requested_targets,
+        all,
+        legacy_cursor,
+        uninstall,
+        force,
+    )?;
+    let pending_changes = plan.pending_changes();
+    let status = if plan.is_empty() {
+        "noop"
+    } else if check && pending_changes > 0 {
+        "pending"
+    } else {
+        "planned"
+    };
 
     println!(
-        "adopt summary status={} repositories={} targets={} dry_run={} check={} uninstall={} force={} writes=0",
+        "adopt summary status={} repositories={} targets={} create={} update={} unchanged={} remove={} skipped={} error={} pending={} dry_run={} check={} uninstall={} force={} writes=0",
         status,
         config.repositories().len(),
         plan.len(),
+        plan.action_count(AdoptPlanAction::Create),
+        plan.action_count(AdoptPlanAction::Update),
+        plan.action_count(AdoptPlanAction::Unchanged),
+        plan.action_count(AdoptPlanAction::Remove),
+        plan.action_count(AdoptPlanAction::Skipped),
+        plan.action_count(AdoptPlanAction::Error),
+        pending_changes,
         dry_run,
         check,
         uninstall,
@@ -46,13 +62,20 @@ pub(crate) fn run_adopt_command(
 
     for entry in &plan.entries {
         println!(
-            "adopt plan repository_id={} root={} target={:?} path={} action={} writes=0",
+            "adopt plan repository_id={} root={} target={:?} path={} action={} reason={} writes=0",
             entry.repository_id,
             entry.root.display(),
             entry.target,
             entry.path.display(),
-            entry.action.as_str()
+            entry.action.as_str(),
+            entry.reason.as_deref().unwrap_or("-")
         );
+    }
+
+    if check && pending_changes > 0 {
+        return Err(Box::new(io::Error::other(format!(
+            "adopt check failed: {pending_changes} pending change(s)"
+        ))));
     }
 
     Ok(())
@@ -64,6 +87,7 @@ fn build_adopt_plan(
     all: bool,
     legacy_cursor: bool,
     uninstall: bool,
+    force: bool,
 ) -> io::Result<AdoptPlan> {
     let repositories = config.repositories();
     let mut entries = Vec::new();
@@ -77,21 +101,129 @@ fn build_adopt_plan(
         })?;
 
         for target in select_targets(root, requested_targets, all, legacy_cursor) {
+            let (action, reason) = classify_target_action(root, target, uninstall, force);
             entries.push(AdoptPlanEntry {
                 repository_id: repo.repository_id.0.clone(),
                 root: root.to_path_buf(),
                 target,
                 path: root.join(target.path()),
-                action: if uninstall {
-                    AdoptPlanAction::PlanUninstall
-                } else {
-                    AdoptPlanAction::PlanInstall
-                },
+                action,
+                reason,
             });
         }
     }
 
     Ok(AdoptPlan::new(entries))
+}
+
+fn classify_target_action(
+    root: &std::path::Path,
+    target: AdoptTarget,
+    uninstall: bool,
+    force: bool,
+) -> (AdoptPlanAction, Option<String>) {
+    let path = root.join(target.path());
+    if !path.exists() {
+        return if uninstall {
+            (
+                AdoptPlanAction::Unchanged,
+                Some("target-missing".to_owned()),
+            )
+        } else {
+            (AdoptPlanAction::Create, Some("target-missing".to_owned()))
+        };
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) => return (AdoptPlanAction::Error, Some(format!("read-error:{err}"))),
+    };
+
+    if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
+        classify_mcp_target(&contents, uninstall, force)
+    } else {
+        classify_markdown_target(&contents, uninstall)
+    }
+}
+
+fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction, Option<String>) {
+    let desired = managed_block::desired_markdown();
+
+    if uninstall {
+        if managed_block::has_managed_block(contents) {
+            (
+                AdoptPlanAction::Remove,
+                Some("managed-block-present".to_owned()),
+            )
+        } else {
+            (
+                AdoptPlanAction::Unchanged,
+                Some("managed-block-absent".to_owned()),
+            )
+        }
+    } else if managed_block::managed_block_matches(contents, &desired) {
+        (
+            AdoptPlanAction::Unchanged,
+            Some("managed-block-current".to_owned()),
+        )
+    } else if managed_block::has_managed_block(contents) {
+        (
+            AdoptPlanAction::Update,
+            Some("managed-block-drifted".to_owned()),
+        )
+    } else {
+        (
+            AdoptPlanAction::Update,
+            Some("managed-block-absent".to_owned()),
+        )
+    }
+}
+
+fn classify_mcp_target(
+    contents: &str,
+    uninstall: bool,
+    force: bool,
+) -> (AdoptPlanAction, Option<String>) {
+    let state = match json_merge::classify_mcp_entry(contents) {
+        Ok(state) => state,
+        Err(err) => {
+            return (AdoptPlanAction::Error, Some(format!("invalid-json:{err}")));
+        }
+    };
+
+    match (uninstall, state, force) {
+        (true, json_merge::McpEntryState::Desired, _) => (
+            AdoptPlanAction::Remove,
+            Some("frigg-entry-present".to_owned()),
+        ),
+        (true, json_merge::McpEntryState::Diverged, false) => (
+            AdoptPlanAction::Skipped,
+            Some("frigg-entry-diverged".to_owned()),
+        ),
+        (true, json_merge::McpEntryState::Diverged, true) => (
+            AdoptPlanAction::Remove,
+            Some("force-diverged-frigg-entry".to_owned()),
+        ),
+        (true, json_merge::McpEntryState::Missing, _) => (
+            AdoptPlanAction::Unchanged,
+            Some("frigg-entry-absent".to_owned()),
+        ),
+        (false, json_merge::McpEntryState::Desired, _) => (
+            AdoptPlanAction::Unchanged,
+            Some("frigg-entry-current".to_owned()),
+        ),
+        (false, json_merge::McpEntryState::Missing, _) => (
+            AdoptPlanAction::Update,
+            Some("frigg-entry-absent".to_owned()),
+        ),
+        (false, json_merge::McpEntryState::Diverged, false) => (
+            AdoptPlanAction::Skipped,
+            Some("frigg-entry-diverged".to_owned()),
+        ),
+        (false, json_merge::McpEntryState::Diverged, true) => (
+            AdoptPlanAction::Update,
+            Some("force-diverged-frigg-entry".to_owned()),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -112,12 +244,72 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan.entries[0].repository_id, "repo-001");
         assert_eq!(plan.entries[0].path, root.join(".mcp.json"));
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_plan_reports_unchanged_markdown_when_block_is_current() {
+        let root = temp_dir("adopt-plan-current-markdown");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join("AGENTS.md"),
+            super::managed_block::desired_markdown(),
+        )
+        .expect("write agents");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_plan_skips_diverged_mcp_without_force() {
+        let root = temp_dir("adopt-plan-diverged-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"frigg":{"command":"frigg"}}}"#,
+        )
+        .expect("write mcp");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Skipped);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
