@@ -34,7 +34,10 @@ use db_runtime::{
 };
 #[cfg(test)]
 pub(crate) use db_runtime::{reset_semantic_read_trace, snapshot_semantic_read_trace};
-pub use provenance_path::{ensure_provenance_db_parent_dir, resolve_provenance_db_path};
+pub use provenance_path::{
+    ensure_provenance_db_parent_dir, resolve_provenance_db_path,
+    resolve_workspace_relative_write_path,
+};
 pub(crate) use schema::{MIGRATIONS, Migration, REQUIRED_TABLES};
 pub use types::*;
 #[cfg(test)]
