@@ -292,8 +292,8 @@ pub(crate) fn read_guidance_prompt(
 #[cfg(test)]
 mod tests {
     use super::{
-        ROUTING_GUIDE_PROMPT_NAME, SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI,
-        read_guidance_prompt, read_policy_resource,
+        ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
+        TOOL_SURFACE_RESOURCE_URI, read_guidance_prompt, read_policy_resource,
     };
     use crate::languages::{LanguageSupportCapability, SymbolLanguage};
     use crate::mcp::tool_surface::ToolSurfaceProfile;
@@ -518,5 +518,40 @@ mod tests {
         )
         .expect("routing prompt should exist");
         assert_eq!(prompt.messages.len(), 4);
+    }
+
+    #[test]
+    fn agent_directive_core_sentences_are_in_guidance_surfaces() {
+        let shell_guidance = resource_text(SHELL_GUIDANCE_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let tool_surface = resource_text(TOOL_SURFACE_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let prompt = read_guidance_prompt(
+            ROUTING_GUIDE_PROMPT_NAME,
+            Some(&serde_json::Map::from_iter([(
+                "task".to_owned(),
+                json!("find every caller of load_config"),
+            )])),
+            ToolSurfaceProfile::Extended,
+        )
+        .expect("routing prompt should exist");
+        let prompt_debug = format!("{prompt:?}");
+
+        assert!(shell_guidance.contains(
+            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads."
+        ));
+        assert!(tool_surface.contains(
+            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads."
+        ));
+        assert!(prompt_debug.contains(
+            "Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads."
+        ));
+        assert!(shell_guidance.contains(
+            "Use shell tools only as the exception when the task is a trivial local operation in the checked-out workspace."
+        ));
+        assert!(tool_surface.contains(
+            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs"
+        ));
+        assert!(prompt_debug.contains(
+            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs."
+        ));
     }
 }

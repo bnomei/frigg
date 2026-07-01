@@ -38,6 +38,36 @@ pub fn mcp_instructions(runtime_tail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    const CORE_SENTENCES: [&str; 3] = [
+        "Frigg is the default for code discovery, navigation, exact code search, and bounded source reads.",
+        "Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository.",
+        "Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.",
+    ];
+
+    fn assert_core_sentences(surface_name: &str, text: &str) {
+        for sentence in CORE_SENTENCES {
+            assert!(
+                text.contains(sentence),
+                "{surface_name} should contain canonical sentence: {sentence}"
+            );
+        }
+    }
+
+    fn workspace_file(relative_path: &str) -> Option<String> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative_path);
+        if !path.exists() {
+            return None;
+        }
+
+        Some(
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display())),
+        )
+    }
 
     #[test]
     fn render_managed_block_wraps_canonical_directive_with_markers() {
@@ -68,5 +98,52 @@ mod tests {
     #[test]
     fn mcp_instructions_omits_blank_tail_spacing() {
         assert_eq!(mcp_instructions(" \n\t "), FRIGG_FIRST_DIRECTIVE.trim());
+    }
+
+    #[test]
+    fn agent_directive_core_sentences_are_in_canonical_asset() {
+        assert_core_sentences("canonical directive", FRIGG_FIRST_DIRECTIVE);
+    }
+
+    #[test]
+    fn agent_directive_core_sentences_are_in_skill_and_openai_prompt() {
+        let skill = workspace_file("skills/frigg-mcp-search-navigation/SKILL.md");
+        let openai_prompt = workspace_file("skills/frigg-mcp-search-navigation/agents/openai.yaml");
+        let (Some(skill), Some(openai_prompt)) = (skill.as_deref(), openai_prompt.as_deref())
+        else {
+            assert!(
+                skill.is_none() && openai_prompt.is_none(),
+                "bundled skill and OpenAI prompt drift files should be present together"
+            );
+            return;
+        };
+
+        assert_core_sentences("bundled skill", skill);
+        assert_core_sentences("OpenAI prompt", openai_prompt);
+        assert!(
+            !skill.contains("Prefer local shell tools"),
+            "bundled skill should not return to shell-first code-search guidance"
+        );
+        assert!(
+            !openai_prompt.contains("Use shell tools for quick local inspection"),
+            "OpenAI prompt should not return to shell-first code-search guidance"
+        );
+    }
+
+    #[test]
+    fn agent_directive_core_sentences_are_in_readme_agent_workflow() {
+        let Some(readme) = workspace_file("README.md") else {
+            return;
+        };
+
+        assert_core_sentences("README", &readme);
+        assert!(
+            !readme.contains("Use shell tools for fast local inspection"),
+            "README should not return to shell-first code-search guidance"
+        );
+        assert!(
+            !readme.contains("Use Frigg when an agent needs more than a raw"),
+            "README intro should not position Frigg as only more than raw shell scans"
+        );
     }
 }

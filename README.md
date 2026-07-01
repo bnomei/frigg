@@ -6,9 +6,9 @@
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
-Frigg is a local-first MCP server for code understanding. It builds a synchronized SQLite repository model and gives AI agents source-backed search and navigation across Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim.
+Frigg is a local-first MCP server for code understanding. It is the default agent surface for code discovery, navigation, exact code search, and bounded source reads across Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim.
 
-Use Frigg when an agent needs more than a raw `rg`, `fd`, or `ast-grep` scan: broad discovery, exact source windows, document outlines, symbols, definitions, references, implementations, callers, structural queries, optional semantic recall, and optional SCIP-backed precision.
+It builds a synchronized SQLite repository model for broad discovery, exact source windows, document outlines, symbols, definitions, references, implementations, callers, structural queries, optional semantic recall, and optional SCIP-backed precision.
 
 Frigg is source read-only during normal indexing. It stores its own state under `.frigg/`, but it does not edit project source files as part of ordinary search and navigation.
 
@@ -172,13 +172,13 @@ For runtime diagnosis, see the [Frigg Operator Runbook](docs/operator-runbook.md
 
 ## Agent Workflow
 
-Use shell tools for fast local inspection:
+Frigg is the default for code discovery, navigation, exact code search, and bounded source reads.
 
-- `rg` for literal and regex scans
-- `fd` for file and path discovery
-- `ast-grep` for standalone structural matching
+Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository.
 
-Use Frigg when the question is repository-aware:
+Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.
+
+Use Frigg for repository-aware workflows:
 
 - broad natural-language discovery across many files
 - canonical repository-relative paths and bounded source reads
