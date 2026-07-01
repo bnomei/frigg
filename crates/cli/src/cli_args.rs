@@ -125,6 +125,30 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Serve Frigg over loopback HTTP for shared local MCP sessions.
     Serve,
+    /// Plan project-local Frigg client adoption for configured workspace roots.
+    Adopt {
+        /// Limit adoption to one or more client targets.
+        #[arg(long, value_enum)]
+        target: Vec<AdoptTarget>,
+        /// Plan every supported non-hook v1 target.
+        #[arg(long, default_value_t = false)]
+        all: bool,
+        /// Include the legacy Cursor rules file target.
+        #[arg(long = "legacy-cursor", default_value_t = false)]
+        legacy_cursor: bool,
+        /// Plan removal of Frigg-owned adoption content.
+        #[arg(long, default_value_t = false)]
+        uninstall: bool,
+        /// Report pending adoption changes and fail once apply support exists.
+        #[arg(long, default_value_t = false)]
+        check: bool,
+        /// Print the adoption plan without writing files.
+        #[arg(long = "dry-run", default_value_t = false)]
+        dry_run: bool,
+        /// Allow replacing diverged Frigg MCP JSON entries once apply support exists.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
     /// Initialize storage schema for each workspace root.
     Init,
     /// Verify storage schema and read/write sanity for each workspace root.
@@ -188,6 +212,33 @@ pub(crate) enum Command {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum AdoptTarget {
+    ClaudeMd,
+    AgentsMd,
+    GeminiMd,
+    Copilot,
+    Cursor,
+    LegacyCursor,
+    McpProject,
+    McpCursor,
+}
+
+impl AdoptTarget {
+    pub(crate) fn path(self) -> &'static str {
+        match self {
+            Self::ClaudeMd => "CLAUDE.md",
+            Self::AgentsMd => "AGENTS.md",
+            Self::GeminiMd => "GEMINI.md",
+            Self::Copilot => ".github/copilot-instructions.md",
+            Self::Cursor => ".cursor/rules/frigg.mdc",
+            Self::LegacyCursor => ".cursorrules",
+            Self::McpProject => ".mcp.json",
+            Self::McpCursor => ".cursor/mcp.json",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum WorkloadCorpusExportFormat {
     Json,
     Jsonl,
@@ -206,12 +257,51 @@ impl WorkloadCorpusExportFormat {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command};
+    use super::{AdoptTarget, Cli, Command};
 
     #[test]
     fn hash_command_parses_without_workspace_root() {
         let cli = Cli::try_parse_from(["frigg", "hash"]).expect("hash command should parse");
         assert!(cli.workspace_roots.is_empty());
         assert!(matches!(cli.command, Some(Command::Hash)));
+    }
+
+    #[test]
+    fn adopt_command_parses_non_hook_flags() {
+        let cli = Cli::try_parse_from([
+            "frigg",
+            "adopt",
+            "--target",
+            "agents-md",
+            "--target",
+            "mcp-project",
+            "--legacy-cursor",
+            "--dry-run",
+            "--check",
+            "--force",
+            "--uninstall",
+        ])
+        .expect("adopt command should parse");
+
+        match cli.command {
+            Some(Command::Adopt {
+                target,
+                all,
+                legacy_cursor,
+                uninstall,
+                check,
+                dry_run,
+                force,
+            }) => {
+                assert_eq!(target, vec![AdoptTarget::AgentsMd, AdoptTarget::McpProject]);
+                assert!(!all);
+                assert!(legacy_cursor);
+                assert!(uninstall);
+                assert!(check);
+                assert!(dry_run);
+                assert!(force);
+            }
+            other => panic!("expected adopt command, got {other:?}"),
+        }
     }
 }

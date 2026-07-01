@@ -12,7 +12,7 @@ use frigg::watch::maybe_start_watch_runtime;
 
 use crate::cli_runtime::{
     StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
-    resolve_startup_config, resolve_watch_runtime_config, run_hash_command,
+    resolve_startup_config, resolve_watch_runtime_config, run_adopt_command, run_hash_command,
     run_hybrid_playbook_command, run_reindex_command, run_semantic_runtime_startup_gate,
     run_storage_bootstrap_command, run_storage_maintenance_command,
     run_strict_startup_vector_readiness_gate, run_workload_corpus_export_command,
@@ -37,6 +37,27 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     if let Some(command) = cli.command.clone() {
         match command.clone() {
             Command::Serve => {}
+            Command::Adopt {
+                target,
+                all,
+                legacy_cursor,
+                uninstall,
+                check,
+                dry_run,
+                force,
+            } => {
+                let config = resolve_command_config(&cli, command.clone())?;
+                run_adopt_command(
+                    &config,
+                    target,
+                    all,
+                    legacy_cursor,
+                    uninstall,
+                    check,
+                    dry_run,
+                    force,
+                )?
+            }
             Command::Init => {
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?

@@ -41,7 +41,8 @@ pub(crate) fn resolve_command_config(
         Command::Serve => Err(Box::new(io::Error::other(
             "`frigg serve` uses startup serving config, not command config resolution",
         ))),
-        Command::Init
+        Command::Adopt { .. }
+        | Command::Init
         | Command::Verify
         | Command::RepairStorage
         | Command::PruneStorage { .. }

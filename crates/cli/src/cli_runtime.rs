@@ -13,7 +13,7 @@ mod startup_gates;
 mod storage_paths;
 
 pub(crate) use commands::{
-    StorageBootstrapCommand, StorageMaintenanceCommand, run_hash_command,
+    StorageBootstrapCommand, StorageMaintenanceCommand, run_adopt_command, run_hash_command,
     run_hybrid_playbook_command, run_reindex_command, run_storage_bootstrap_command,
     run_storage_maintenance_command, run_workload_corpus_export_command,
 };
