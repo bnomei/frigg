@@ -1,0 +1,56 @@
+name: Frigg Install Cache Dogfood
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FRIGG_VERSION: "0.5.0"
+  FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
+
+jobs:
+  install-cache:
+    name: Install and cache Frigg index
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Frigg
+        run: scripts/install.sh
+
+      - name: Compute Frigg cache hash
+        id: frigg_hash
+        run: frigg hash
+
+      - name: Restore Frigg index cache
+        id: frigg_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .frigg/
+          key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}
+          restore-keys: |
+            frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-
+
+      - name: Refresh and verify Frigg state
+        run: |
+          frigg init
+          frigg reindex --changed
+          frigg verify
+
+      - name: Save Frigg index cache
+        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.frigg_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .frigg/
+          key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-${{ github.sha }}

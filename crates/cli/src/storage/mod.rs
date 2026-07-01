@@ -79,6 +79,11 @@ const PROVENANCE_CREATED_AT_MAX_RETRY_MS: i64 = 32;
 static SQLITE_VEC_AUTO_EXTENSION_REGISTRATION: OnceLock<Result<(), String>> = OnceLock::new();
 static SQLITE_VEC_CONNECTION_READINESS: OnceLock<Result<String, String>> = OnceLock::new();
 
+/// Latest durable storage schema version expected by this build.
+pub fn latest_storage_schema_version() -> i64 {
+    latest_schema_version(MIGRATIONS)
+}
+
 #[allow(unsafe_code)]
 unsafe extern "C" {
     fn sqlite3_vec_init(

@@ -137,6 +137,8 @@ pub(crate) enum Command {
     },
     /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
     RepairStorage,
+    /// Emit Frigg's stable cache fingerprint for installer and CI cache keys.
+    Hash,
     /// Prune retained manifest snapshots and provenance events for each workspace root.
     PruneStorage {
         /// Number of latest manifest snapshots to retain per repository.
@@ -197,5 +199,19 @@ impl WorkloadCorpusExportFormat {
             Self::Json => "json",
             Self::Jsonl => "jsonl",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn hash_command_parses_without_workspace_root() {
+        let cli = Cli::try_parse_from(["frigg", "hash"]).expect("hash command should parse");
+        assert!(cli.workspace_roots.is_empty());
+        assert!(matches!(cli.command, Some(Command::Hash)));
     }
 }

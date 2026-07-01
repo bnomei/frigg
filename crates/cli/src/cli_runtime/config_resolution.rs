@@ -46,6 +46,7 @@ pub(crate) fn resolve_command_config(
         | Command::RepairStorage
         | Command::PruneStorage { .. }
         | Command::ExportWorkloadCorpus { .. } => resolve_base_config(cli, true, None),
+        Command::Hash => resolve_base_config(cli, false, None),
         Command::Reindex { .. } => {
             let mut config = resolve_base_config(cli, true, Some(RuntimeTransportKind::Stdio))?;
             config.semantic_runtime = resolve_semantic_runtime_config(cli);

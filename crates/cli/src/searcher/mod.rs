@@ -40,7 +40,9 @@ use crate::domain::{
 };
 use crate::languages::{LanguageCapability, SymbolLanguage, parse_supported_language};
 pub use crate::manifest_validation::ValidatedManifestCandidateCache;
+use crate::settings::DEFAULT_MAX_FILE_BYTES;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
+use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, latest_storage_schema_version};
 use aho_corasick::AhoCorasick;
 pub use attribution::{SearchStageAttribution, SearchStageSample};
 use graph_channel::{HybridGraphArtifact, HybridGraphArtifactCacheKey, search_graph_channel_hits};
@@ -297,6 +299,28 @@ const HYBRID_SEMANTIC_RETAIN_RELATIVE_FLOOR: f32 = 0.72;
 const REGEX_TRIGRAM_BITMAP_BITS: usize = 1 << 16;
 const REGEX_TRIGRAM_BITMAP_WORDS: usize = REGEX_TRIGRAM_BITMAP_BITS / 64;
 const REGEX_TRIGRAM_HASH_MULTIPLIER: u32 = 0x9E37_79B1;
+
+/// Frigg-owned stability fingerprint for persisted search/index cache compatibility.
+pub fn stable_cache_fingerprint_hex() -> String {
+    blake3::hash(stable_cache_fingerprint_material().as_bytes())
+        .to_hex()
+        .to_string()
+}
+
+fn stable_cache_fingerprint_material() -> String {
+    let mut material = vec![
+        format!("frigg.version={}", env!("CARGO_PKG_VERSION")),
+        format!("storage.schema={}", latest_storage_schema_version()),
+        format!("index.default_max_file_bytes={DEFAULT_MAX_FILE_BYTES}"),
+        format!("semantic.vector_dimensions={DEFAULT_VECTOR_DIMENSIONS}"),
+    ];
+    material.extend(
+        required_retrieval_projection_versions()
+            .into_iter()
+            .map(|(family, version)| format!("retrieval_projection.{family}={version}")),
+    );
+    material.join("\n")
+}
 
 impl TextSearcher {
     pub fn new(config: FriggConfig) -> Self {

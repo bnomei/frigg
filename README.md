@@ -26,16 +26,28 @@ Frigg is source read-only during normal indexing. It stores its own state under 
 
 ### 1. Install Frigg
 
-With Cargo:
+With the Unix installer on macOS or GNU/glibc Linux:
 
 ```bash
-cargo install frigg
+curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+  https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
+  | FRIGG_VERSION=0.5.0 sh
 ```
+
+`FRIGG_VERSION` accepts `0.5.0` or `v0.5.0`. When it is unset, the installer resolves the latest GitHub Release. The installer downloads the matching `frigg-v<VERSION>-<TARGET>.tar.gz` archive, verifies its `.sha256`, and installs only the `frigg` binary.
+
+For manual release-asset downloads, Unix archives use the same `frigg-v<VERSION>-<TARGET>.tar.gz` naming pattern.
 
 With Homebrew:
 
 ```bash
 brew install bnomei/frigg/frigg
+```
+
+With Cargo as a Rust/developer fallback:
+
+```bash
+cargo install frigg
 ```
 
 From a local checkout:
@@ -53,17 +65,15 @@ Run these commands inside the repository you want Frigg to index:
 ```bash
 frigg init
 frigg verify
-```
-
-Optional prewarm:
-
-```bash
 frigg reindex
+frigg serve
 ```
 
 When these commands run inside a repository root, Frigg uses the current directory as the workspace root. From another directory, pass `--workspace-root /absolute/path/to/repo`.
 
 ### 3. Start the shared MCP service
+
+If you did not start it during setup, run:
 
 ```bash
 frigg serve
@@ -141,6 +151,89 @@ Example prompts:
 - "Show me implementations of `ProviderInterface`."
 - "Who calls `handleWebhook`?"
 - "Which files are relevant to the checkout flow?"
+
+## GitHub Actions
+
+Use a pinned Frigg release in CI. The default path avoids caching Frigg state and refreshes repository state every run:
+
+```yaml
+name: Frigg
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  FRIGG_VERSION: 0.5.0
+
+jobs:
+  frigg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Frigg
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
+            | FRIGG_VERSION="${FRIGG_VERSION}" sh
+
+      - run: frigg init
+      - run: frigg reindex
+      - run: frigg verify
+```
+
+For larger repositories, optionally cache `.frigg/`. Treat `.frigg/` as build output and provenance, not as a secret store. Always restore first, then refresh and verify the restored state. Save the cache only from trusted events:
+
+```yaml
+name: Frigg
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  FRIGG_VERSION: 0.5.0
+
+jobs:
+  frigg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Frigg
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
+            | FRIGG_VERSION="${FRIGG_VERSION}" sh
+
+      - name: Compute Frigg cache hash
+        id: frigg-hash
+        run: frigg hash
+
+      - name: Restore Frigg state
+        uses: actions/cache/restore@v4
+        with:
+          path: .frigg/
+          key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg-hash.outputs.frigg-hash }}-${{ github.sha }}
+          restore-keys: |
+            frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg-hash.outputs.frigg-hash }}-
+
+      - run: frigg init
+      - run: frigg reindex --changed
+      - run: frigg verify
+
+      - name: Save Frigg state
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: .frigg/
+          key: frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg-hash.outputs.frigg-hash }}-${{ github.sha }}
+```
+
+As an advanced optimization, you can cache the installed `frigg` binary separately. Use an exact cache key built only from the Frigg version and runner platform, and do not use broad restore keys for cached executables.
 
 ## Why This Exists
 
