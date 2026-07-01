@@ -157,7 +157,9 @@ fn classify_target_action(
         Err(err) => return (AdoptPlanAction::Error, Some(format!("read-error:{err}"))),
     };
 
-    if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
+    if matches!(target, AdoptTarget::Hook) {
+        classify_claude_hook_target(&contents, uninstall)
+    } else if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
         classify_mcp_target(&contents, uninstall, force)
     } else {
         classify_markdown_target(&contents, uninstall)
@@ -231,7 +233,9 @@ fn apply_plan_entries(
             Err(err) => return Err(Box::new(err)),
         };
 
-        let edit = if matches!(
+        let edit = if matches!(entry.target, AdoptTarget::Hook) {
+            apply_claude_hook_edit(contents.as_deref(), uninstall)
+        } else if matches!(
             entry.target,
             AdoptTarget::McpProject | AdoptTarget::McpCursor
         ) {
@@ -328,6 +332,27 @@ fn apply_mcp_json_edit(
     })
 }
 
+fn apply_claude_hook_edit(
+    contents: Option<&str>,
+    uninstall: bool,
+) -> Result<AdoptApplyEdit, Box<dyn Error>> {
+    let edit = if uninstall {
+        match contents {
+            Some(contents) => json_merge::remove_claude_hook(contents),
+            None => Ok(json_merge::McpJsonEdit::Unchanged),
+        }
+    } else {
+        json_merge::upsert_claude_hook(contents)
+    }?;
+
+    Ok(match edit {
+        json_merge::McpJsonEdit::Changed(updated) => AdoptApplyEdit::Write(updated),
+        json_merge::McpJsonEdit::Unchanged | json_merge::McpJsonEdit::Skipped => {
+            AdoptApplyEdit::Unchanged
+        }
+    })
+}
+
 fn classify_mcp_target(
     contents: &str,
     uninstall: bool,
@@ -372,6 +397,35 @@ fn classify_mcp_target(
         (false, json_merge::McpEntryState::Diverged, true) => (
             AdoptPlanAction::Update,
             Some("force-diverged-frigg-entry".to_owned()),
+        ),
+    }
+}
+
+fn classify_claude_hook_target(
+    contents: &str,
+    uninstall: bool,
+) -> (AdoptPlanAction, Option<String>) {
+    let state = match json_merge::classify_claude_hook(contents) {
+        Ok(state) => state,
+        Err(err) => return (AdoptPlanAction::Error, Some(format!("invalid-json:{err}"))),
+    };
+
+    match (uninstall, state) {
+        (true, json_merge::ClaudeHookState::Desired) => (
+            AdoptPlanAction::Remove,
+            Some("frigg-hook-present".to_owned()),
+        ),
+        (true, json_merge::ClaudeHookState::Missing) => (
+            AdoptPlanAction::Unchanged,
+            Some("frigg-hook-absent".to_owned()),
+        ),
+        (false, json_merge::ClaudeHookState::Desired) => (
+            AdoptPlanAction::Unchanged,
+            Some("frigg-hook-current".to_owned()),
+        ),
+        (false, json_merge::ClaudeHookState::Missing) => (
+            AdoptPlanAction::Update,
+            Some("frigg-hook-absent".to_owned()),
         ),
     }
 }
@@ -610,6 +664,167 @@ mod tests {
         assert!(value["mcpServers"].get("frigg").is_none());
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
         assert_eq!(value["unrelated"], true);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_installs_claude_hook_idempotently() {
+        let root = temp_dir("adopt-apply-install-hook");
+        fs::create_dir_all(&root).expect("create temp root");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+            .expect("build adopt plan");
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
+        assert_eq!(
+            apply_plan_entries(&plan, false, false).expect("apply hook"),
+            1
+        );
+
+        let value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0],
+            super::json_merge::desired_claude_hook_command()
+        );
+
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+            .expect("build adopt plan again");
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
+        assert_eq!(
+            apply_plan_entries(&plan, false, false).expect("reapply hook"),
+            0
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_all_with_explicit_hook_installs_claude_hook() {
+        let root = temp_dir("adopt-apply-all-install-hook");
+        fs::create_dir_all(&root).expect("create temp root");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], true, false, false, false)
+            .expect("build adopt plan");
+        assert!(
+            plan.entries
+                .iter()
+                .any(|entry| entry.target == AdoptTarget::Hook)
+        );
+
+        apply_plan_entries(&plan, false, false).expect("apply all with hook");
+        let value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0],
+            super::json_merge::desired_claude_hook_command()
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_preserves_sibling_claude_settings_and_hooks() {
+        let root = temp_dir("adopt-apply-preserve-hook");
+        fs::create_dir_all(root.join(".claude")).expect("create claude dir");
+        fs::write(
+            root.join(".claude/settings.json"),
+            r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"other"}]}],"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"post"}]}]}}"#,
+        )
+        .expect("write settings");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+            .expect("build adopt plan");
+
+        assert_eq!(
+            apply_plan_entries(&plan, false, false).expect("apply hook"),
+            1
+        );
+        let value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(
+            value["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "post"
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "other"
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][0],
+            super::json_merge::desired_claude_hook_command()
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_removes_only_frigg_claude_hook_on_uninstall() {
+        let root = temp_dir("adopt-apply-remove-hook");
+        fs::create_dir_all(root.join(".claude")).expect("create claude dir");
+        fs::write(
+            root.join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"other"},{"type":"command","command":"frigg hook pretooluse","timeout":5}]},{"matcher":"Write","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5},{"type":"command","command":"write-hook"}]}]},"unrelated":true}"#,
+        )
+        .expect("write settings");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, true, false)
+            .expect("build adopt plan");
+
+        assert_eq!(
+            apply_plan_entries(&plan, true, false).expect("apply hook uninstall"),
+            1
+        );
+        let value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(value["unrelated"], true);
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "other"
+        );
+        assert_eq!(value["hooks"]["PreToolUse"][1]["matcher"], "Write");
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][0],
+            super::json_merge::desired_claude_hook_command()
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][1]["command"],
+            "write-hook"
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_plan_reports_malformed_claude_settings_without_clobbering() {
+        let root = temp_dir("adopt-plan-malformed-hook");
+        fs::create_dir_all(root.join(".claude")).expect("create claude dir");
+        let settings_path = root.join(".claude/settings.json");
+        fs::write(&settings_path, "{not json").expect("write malformed settings");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+            .expect("build adopt plan");
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
+
+        let err = super::apply_claude_hook_edit(Some("{not json"), false)
+            .expect_err("apply should reject malformed JSON");
+        assert!(err.to_string().contains("invalid JSON"));
+        assert_eq!(
+            fs::read_to_string(&settings_path).expect("read settings"),
+            "{not json"
+        );
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

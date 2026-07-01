@@ -3,12 +3,22 @@ use serde_json::{Map, Value, json};
 pub(crate) const DEFAULT_MCP_SERVER_URL: &str = "http://127.0.0.1:37444/mcp";
 pub(crate) const MCP_SERVER_KEY: &str = "frigg";
 const MCP_SERVERS_KEY: &str = "mcpServers";
+const CLAUDE_HOOKS_KEY: &str = "hooks";
+const CLAUDE_PRE_TOOL_USE_KEY: &str = "PreToolUse";
+const CLAUDE_HOOK_MATCHER: &str = "Grep|Bash|Read";
+const CLAUDE_HOOK_COMMAND: &str = "frigg hook pretooluse";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum McpEntryState {
     Missing,
     Desired,
     Diverged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClaudeHookState {
+    Missing,
+    Desired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,11 +135,155 @@ pub(crate) fn remove_mcp_server(contents: &str, force: bool) -> Result<McpJsonEd
     serialize_if_changed(Value::Object(root), contents)
 }
 
+pub(crate) fn desired_claude_hook_command() -> Value {
+    json!({
+        "type": "command",
+        "command": CLAUDE_HOOK_COMMAND,
+        "timeout": 5,
+    })
+}
+
+fn desired_claude_pre_tool_use_entry() -> Value {
+    json!({
+        "matcher": CLAUDE_HOOK_MATCHER,
+        "hooks": [desired_claude_hook_command()],
+    })
+}
+
+pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, McpJsonError> {
+    let root = parse_object_root(contents)?;
+    if contains_desired_claude_hook(&Value::Object(root)) {
+        Ok(ClaudeHookState::Desired)
+    } else {
+        Ok(ClaudeHookState::Missing)
+    }
+}
+
+pub(crate) fn upsert_claude_hook(contents: Option<&str>) -> Result<McpJsonEdit, McpJsonError> {
+    let Some(contents) = contents else {
+        return serialize_changed(json!({
+            CLAUDE_HOOKS_KEY: {
+                CLAUDE_PRE_TOOL_USE_KEY: [desired_claude_pre_tool_use_entry()],
+            },
+        }));
+    };
+
+    let mut root = parse_object_root(contents)?;
+    let pre_tool_use = ensure_pre_tool_use_array(&mut root)?;
+    if pre_tool_use_contains_desired_hook(pre_tool_use) {
+        return Ok(McpJsonEdit::Unchanged);
+    }
+
+    if let Some(entry) = pre_tool_use.iter_mut().find(|entry| {
+        entry
+            .get("matcher")
+            .and_then(Value::as_str)
+            .is_some_and(|matcher| matcher == CLAUDE_HOOK_MATCHER)
+            && entry.get("hooks").is_some_and(Value::is_array)
+    }) {
+        let hooks = entry
+            .get_mut("hooks")
+            .and_then(Value::as_array_mut)
+            .expect("entry hook array was checked above");
+        hooks.push(desired_claude_hook_command());
+    } else {
+        pre_tool_use.push(desired_claude_pre_tool_use_entry());
+    }
+
+    serialize_if_changed(Value::Object(root), contents)
+}
+
+pub(crate) fn remove_claude_hook(contents: &str) -> Result<McpJsonEdit, McpJsonError> {
+    let mut root = parse_object_root(contents)?;
+    let Some(hooks) = root.get_mut(CLAUDE_HOOKS_KEY) else {
+        return Ok(McpJsonEdit::Unchanged);
+    };
+    let hooks = hooks.as_object_mut().ok_or(McpJsonError::InvalidShape(
+        "hooks must be a JSON object when present",
+    ))?;
+    let Some(pre_tool_use) = hooks.get_mut(CLAUDE_PRE_TOOL_USE_KEY) else {
+        return Ok(McpJsonEdit::Unchanged);
+    };
+    let pre_tool_use = pre_tool_use
+        .as_array_mut()
+        .ok_or(McpJsonError::InvalidShape(
+            "hooks.PreToolUse must be a JSON array when present",
+        ))?;
+
+    if !pre_tool_use_contains_desired_hook(pre_tool_use) {
+        return Ok(McpJsonEdit::Unchanged);
+    }
+
+    for entry in pre_tool_use.iter_mut().filter(|entry| {
+        entry
+            .get("matcher")
+            .and_then(Value::as_str)
+            .is_some_and(|matcher| matcher == CLAUDE_HOOK_MATCHER)
+    }) {
+        let Some(hook_commands) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        hook_commands.retain(|hook| *hook != desired_claude_hook_command());
+    }
+
+    serialize_if_changed(Value::Object(root), contents)
+}
+
 fn parse_object_root(contents: &str) -> Result<Map<String, Value>, McpJsonError> {
     let value: Value = serde_json::from_str(contents).map_err(McpJsonError::Parse)?;
     value.as_object().cloned().ok_or(McpJsonError::InvalidShape(
         "MCP config root must be a JSON object",
     ))
+}
+
+fn contains_desired_claude_hook(root: &Value) -> bool {
+    root.get(CLAUDE_HOOKS_KEY)
+        .and_then(|hooks| hooks.get(CLAUDE_PRE_TOOL_USE_KEY))
+        .and_then(Value::as_array)
+        .is_some_and(|pre_tool_use| pre_tool_use_contains_desired_hook(pre_tool_use))
+}
+
+fn pre_tool_use_contains_desired_hook(pre_tool_use: &[Value]) -> bool {
+    pre_tool_use.iter().any(|entry| {
+        entry
+            .get("matcher")
+            .and_then(Value::as_str)
+            .is_some_and(|matcher| matcher == CLAUDE_HOOK_MATCHER)
+            && entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|hooks| {
+                    hooks
+                        .iter()
+                        .any(|hook| *hook == desired_claude_hook_command())
+                })
+    })
+}
+
+fn ensure_pre_tool_use_array(
+    root: &mut Map<String, Value>,
+) -> Result<&mut Vec<Value>, McpJsonError> {
+    if !root.contains_key(CLAUDE_HOOKS_KEY) {
+        root.insert(CLAUDE_HOOKS_KEY.to_owned(), Value::Object(Map::new()));
+    }
+
+    let hooks = root
+        .get_mut(CLAUDE_HOOKS_KEY)
+        .and_then(Value::as_object_mut)
+        .ok_or(McpJsonError::InvalidShape(
+            "hooks must be a JSON object when present",
+        ))?;
+
+    if !hooks.contains_key(CLAUDE_PRE_TOOL_USE_KEY) {
+        hooks.insert(CLAUDE_PRE_TOOL_USE_KEY.to_owned(), Value::Array(Vec::new()));
+    }
+
+    hooks
+        .get_mut(CLAUDE_PRE_TOOL_USE_KEY)
+        .and_then(Value::as_array_mut)
+        .ok_or(McpJsonError::InvalidShape(
+            "hooks.PreToolUse must be a JSON array when present",
+        ))
 }
 
 fn ensure_servers_object(
@@ -168,8 +322,9 @@ fn serialize_value(value: Value) -> Result<String, McpJsonError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_mcp_entry,
-        desired_mcp_config, desired_mcp_server, remove_mcp_server, upsert_mcp_server,
+        DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
+        classify_mcp_entry, desired_claude_hook_command, desired_mcp_config, desired_mcp_server,
+        remove_claude_hook, remove_mcp_server, upsert_claude_hook, upsert_mcp_server,
     };
 
     #[test]
@@ -308,5 +463,81 @@ mod tests {
             err.to_string(),
             "mcpServers must be a JSON object when present"
         );
+    }
+
+    #[test]
+    fn adopt_json_merge_adds_claude_hook_and_preserves_siblings() {
+        let edit = upsert_claude_hook(Some(
+            r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"other"}]}],"PostToolUse":[{"matcher":"Bash","hooks":[]}]}}"#,
+        ))
+        .expect("merge claude settings");
+
+        let McpJsonEdit::Changed(updated) = edit else {
+            panic!("expected changed edit");
+        };
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse updated");
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["hooks"]["PostToolUse"][0]["matcher"], "Bash");
+        assert_eq!(value["hooks"]["PreToolUse"][0]["matcher"], "Write");
+        assert_eq!(value["hooks"]["PreToolUse"][1]["matcher"], "Grep|Bash|Read");
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][0],
+            desired_claude_hook_command()
+        );
+    }
+
+    #[test]
+    fn adopt_json_merge_claude_hook_is_idempotent() {
+        let contents = r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5}]}]}}"#;
+
+        assert_eq!(
+            classify_claude_hook(contents).expect("classify claude hook"),
+            super::ClaudeHookState::Desired
+        );
+        assert_eq!(
+            upsert_claude_hook(Some(contents)).expect("upsert claude hook"),
+            McpJsonEdit::Unchanged
+        );
+    }
+
+    #[test]
+    fn adopt_json_merge_removes_only_frigg_claude_hook() {
+        let edit = remove_claude_hook(
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Grep|Bash|Read","hooks":[{"type":"command","command":"other"},{"type":"command","command":"frigg hook pretooluse","timeout":5}]},{"matcher":"Write","hooks":[{"type":"command","command":"frigg hook pretooluse","timeout":5},{"type":"command","command":"write-hook"}]}]},"unrelated":true}"#,
+        )
+        .expect("remove claude hook");
+
+        let McpJsonEdit::Changed(updated) = edit else {
+            panic!("expected changed edit");
+        };
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse updated");
+        assert_eq!(value["unrelated"], true);
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "other"
+        );
+        assert_eq!(value["hooks"]["PreToolUse"][1]["matcher"], "Write");
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][0],
+            desired_claude_hook_command()
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][1]["hooks"][1]["command"],
+            "write-hook"
+        );
+    }
+
+    #[test]
+    fn adopt_json_merge_rejects_malformed_claude_settings_without_output() {
+        let err = upsert_claude_hook(Some("{not json")).expect_err("reject malformed JSON");
+
+        assert!(err.to_string().contains("invalid JSON"));
     }
 }

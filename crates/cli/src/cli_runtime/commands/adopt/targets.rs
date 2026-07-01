@@ -29,6 +29,12 @@ pub(crate) fn select_targets(
         requested_targets.to_vec()
     };
 
+    if all {
+        for target in requested_targets {
+            push_unique(&mut targets, *target);
+        }
+    }
+
     if legacy_cursor {
         push_unique(&mut targets, AdoptTarget::LegacyCursor);
     }
@@ -121,6 +127,28 @@ mod tests {
             targets,
             vec![AdoptTarget::McpProject, AdoptTarget::LegacyCursor]
         );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_all_does_not_select_hook_target() {
+        let root = temp_dir("adopt-all-targets");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let targets = select_targets(&root, &[], true, false);
+
+        assert!(!targets.contains(&AdoptTarget::Hook));
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_all_preserves_explicit_hook_target() {
+        let root = temp_dir("adopt-all-hook-targets");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let targets = select_targets(&root, &[AdoptTarget::Hook], true, false);
+
+        assert!(targets.contains(&AdoptTarget::Hook));
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

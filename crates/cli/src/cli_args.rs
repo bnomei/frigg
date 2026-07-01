@@ -150,7 +150,13 @@ pub(crate) enum Command {
     /// Plan project-local Frigg client adoption for configured workspace roots.
     Adopt {
         /// Limit adoption to one or more client targets.
-        #[arg(long, value_enum)]
+        #[arg(
+            long,
+            value_enum,
+            alias = "hook",
+            num_args = 0..=1,
+            default_missing_value = "hook"
+        )]
         target: Vec<AdoptTarget>,
         /// Plan every supported non-hook v1 target.
         #[arg(long, default_value_t = false)]
@@ -243,6 +249,7 @@ pub(crate) enum AdoptTarget {
     LegacyCursor,
     McpProject,
     McpCursor,
+    Hook,
 }
 
 impl AdoptTarget {
@@ -256,6 +263,7 @@ impl AdoptTarget {
             Self::LegacyCursor => ".cursorrules",
             Self::McpProject => ".mcp.json",
             Self::McpCursor => ".cursor/mcp.json",
+            Self::Hook => ".claude/settings.json",
         }
     }
 }
@@ -302,6 +310,7 @@ mod tests {
             "--check",
             "--force",
             "--uninstall",
+            "--hook",
         ])
         .expect("adopt command should parse");
 
@@ -315,7 +324,14 @@ mod tests {
                 dry_run,
                 force,
             }) => {
-                assert_eq!(target, vec![AdoptTarget::AgentsMd, AdoptTarget::McpProject]);
+                assert_eq!(
+                    target,
+                    vec![
+                        AdoptTarget::AgentsMd,
+                        AdoptTarget::McpProject,
+                        AdoptTarget::Hook
+                    ]
+                );
                 assert!(!all);
                 assert!(legacy_cursor);
                 assert!(uninstall);
