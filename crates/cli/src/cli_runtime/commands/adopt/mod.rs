@@ -78,6 +78,21 @@ pub(crate) fn run_adopt_command(
         ))));
     }
 
+    if plan.action_count(AdoptPlanAction::Error) > 0 {
+        return Err(Box::new(io::Error::other(
+            "adopt failed: plan contains target error(s)",
+        )));
+    }
+
+    if dry_run {
+        return Ok(());
+    }
+
+    let writes = apply_mcp_json_entries(&plan, uninstall, force)?;
+    if writes > 0 {
+        println!("adopt apply writes={writes}");
+    }
+
     Ok(())
 }
 
@@ -190,6 +205,51 @@ fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction
     }
 }
 
+fn apply_mcp_json_entries(plan: &AdoptPlan, uninstall: bool, force: bool) -> io::Result<usize> {
+    let mut writes = 0;
+
+    for entry in &plan.entries {
+        if !matches!(
+            entry.target,
+            AdoptTarget::McpProject | AdoptTarget::McpCursor
+        ) {
+            continue;
+        }
+        if !matches!(
+            entry.action,
+            AdoptPlanAction::Create | AdoptPlanAction::Update | AdoptPlanAction::Remove
+        ) {
+            continue;
+        }
+
+        let contents = match fs::read_to_string(&entry.path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+
+        let edit = if uninstall {
+            match contents.as_deref() {
+                Some(contents) => json_merge::remove_mcp_server(contents, force),
+                None => Ok(json_merge::McpJsonEdit::Unchanged),
+            }
+        } else {
+            json_merge::upsert_mcp_server(contents.as_deref(), force)
+        }
+        .map_err(|err| io::Error::other(format!("{}: {err}", entry.path.display())))?;
+
+        if let json_merge::McpJsonEdit::Changed(updated) = edit {
+            if let Some(parent) = entry.path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&entry.path, updated)?;
+            writes += 1;
+        }
+    }
+
+    Ok(writes)
+}
+
 fn classify_mcp_target(
     contents: &str,
     uninstall: bool,
@@ -246,7 +306,7 @@ mod tests {
 
     use frigg::settings::FriggConfig;
 
-    use super::build_adopt_plan;
+    use super::{apply_mcp_json_entries, build_adopt_plan};
     use crate::cli_args::AdoptTarget;
 
     #[test]
@@ -322,6 +382,107 @@ mod tests {
         .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Skipped);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_creates_missing_mcp_config() {
+        let root = temp_dir("adopt-apply-create-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
+            1
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
+                .expect("parse mcp");
+        assert_eq!(
+            value["mcpServers"]["frigg"],
+            super::json_merge::desired_mcp_server()
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_preserves_sibling_mcp_servers() {
+        let root = temp_dir("adopt-apply-preserve-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"other":{"command":"other"}},"unrelated":true}"#,
+        )
+        .expect("write mcp");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
+            1
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
+                .expect("parse mcp");
+        assert_eq!(value["mcpServers"]["other"]["command"], "other");
+        assert_eq!(value["unrelated"], true);
+        assert_eq!(
+            value["mcpServers"]["frigg"],
+            super::json_merge::desired_mcp_server()
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_removes_only_frigg_mcp_server_on_uninstall() {
+        let root = temp_dir("adopt-apply-remove-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:37444/mcp"},"other":{"command":"other"}},"unrelated":true}"#,
+        )
+        .expect("write mcp");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            true,
+            false,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_mcp_json_entries(&plan, true, false).expect("apply mcp"),
+            1
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
+                .expect("parse mcp");
+        assert!(value["mcpServers"].get("frigg").is_none());
+        assert_eq!(value["mcpServers"]["other"]["command"], "other");
+        assert_eq!(value["unrelated"], true);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
