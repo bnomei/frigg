@@ -149,32 +149,44 @@ fn classify_markdown_target(contents: &str, uninstall: bool) -> (AdoptPlanAction
     let desired = managed_block::desired_markdown();
 
     if uninstall {
-        if managed_block::has_managed_block(contents) {
-            (
+        return match managed_block::remove_managed_block(contents) {
+            Ok(managed_block::ManagedBlockEdit::Changed(_)) => (
                 AdoptPlanAction::Remove,
                 Some("managed-block-present".to_owned()),
-            )
-        } else {
-            (
+            ),
+            Ok(managed_block::ManagedBlockEdit::Unchanged) => (
                 AdoptPlanAction::Unchanged,
                 Some("managed-block-absent".to_owned()),
-            )
-        }
-    } else if managed_block::managed_block_matches(contents, &desired) {
-        (
+            ),
+            Err(err) => (
+                AdoptPlanAction::Error,
+                Some(format!("invalid-managed-block:{err}")),
+            ),
+        };
+    }
+
+    match managed_block::upsert_managed_block(contents, &desired) {
+        Ok(managed_block::ManagedBlockEdit::Unchanged) => (
             AdoptPlanAction::Unchanged,
             Some("managed-block-current".to_owned()),
-        )
-    } else if managed_block::has_managed_block(contents) {
-        (
-            AdoptPlanAction::Update,
-            Some("managed-block-drifted".to_owned()),
-        )
-    } else {
-        (
-            AdoptPlanAction::Update,
-            Some("managed-block-absent".to_owned()),
-        )
+        ),
+        Ok(managed_block::ManagedBlockEdit::Changed(_)) => {
+            if managed_block::has_managed_block(contents) {
+                (
+                    AdoptPlanAction::Update,
+                    Some("managed-block-drifted".to_owned()),
+                )
+            } else {
+                (
+                    AdoptPlanAction::Update,
+                    Some("managed-block-absent".to_owned()),
+                )
+            }
+        }
+        Err(err) => (
+            AdoptPlanAction::Error,
+            Some(format!("invalid-managed-block:{err}")),
+        ),
     }
 }
 
