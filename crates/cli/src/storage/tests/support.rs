@@ -12,8 +12,8 @@ pub(super) use super::super::{
     VECTOR_TABLE_NAME, encode_f32_vector, ensure_provenance_db_parent_dir,
     ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
-    reset_semantic_read_trace, resolve_provenance_db_path, set_schema_version,
-    snapshot_semantic_read_trace, table_exists,
+    reset_semantic_read_trace, resolve_provenance_db_path, resolve_workspace_relative_write_path,
+    set_schema_version, snapshot_semantic_read_trace, table_exists,
     verify_vector_store_on_connection_with_detected_capability,
 };
 pub(super) use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
