@@ -121,6 +121,28 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
+#[derive(Debug, Parser)]
+#[command(name = "frigg", version, about = "Frigg MCP server")]
+pub(crate) struct HiddenHookCli {
+    #[command(subcommand)]
+    pub(crate) command: HiddenHookCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum HiddenHookCommand {
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        event: HookEvent,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub(crate) enum HookEvent {
+    #[command(name = "pretooluse")]
+    Pretooluse,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
     /// Serve Frigg over loopback HTTP for shared local MCP sessions.
@@ -257,7 +279,7 @@ impl WorkloadCorpusExportFormat {
 mod tests {
     use clap::Parser;
 
-    use super::{AdoptTarget, Cli, Command};
+    use super::{AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent};
 
     #[test]
     fn hash_command_parses_without_workspace_root() {
@@ -302,6 +324,16 @@ mod tests {
                 assert!(force);
             }
             other => panic!("expected adopt command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hidden_hook_pretooluse_command_parses() {
+        let cli = HiddenHookCli::try_parse_from(["frigg", "hook", "pretooluse"])
+            .expect("hidden hook command should parse");
+
+        match cli.command {
+            HiddenHookCommand::Hook { event } => assert_eq!(event, HookEvent::Pretooluse),
         }
     }
 }

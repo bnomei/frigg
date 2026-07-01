@@ -10,6 +10,10 @@ use frigg::searcher::ValidatedManifestCandidateCache;
 use frigg::settings::{RuntimeTransportKind, runtime_profile_for_transport};
 use frigg::watch::maybe_start_watch_runtime;
 
+#[path = "cli_runtime/commands/hook.rs"]
+mod hook_command;
+
+use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
     StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
     resolve_startup_config, resolve_watch_runtime_config, run_adopt_command, run_hash_command,
@@ -22,6 +26,16 @@ use crate::{Cli, Command, default_tracing_filter, init_tracing, startup_trace};
 
 pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dyn Error>> {
     startup_trace(startup_trace_enabled, "async_main: entered");
+    if let Some(event) = parse_hidden_hook_event() {
+        startup_trace(startup_trace_enabled, "async_main: hidden hook parsed");
+        match event {
+            HookEvent::Pretooluse => {
+                hook_command::run_pretooluse_hook_command(std::io::stdin(), std::io::stdout())?
+            }
+        }
+        startup_trace(startup_trace_enabled, "async_main: hidden hook complete");
+        return Ok(());
+    }
     let cli = Cli::parse();
     startup_trace(startup_trace_enabled, "async_main: cli parsed");
     let serve_requested = matches!(cli.command, Some(Command::Serve));
@@ -168,4 +182,13 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     }
 
     Ok(())
+}
+
+fn parse_hidden_hook_event() -> Option<HookEvent> {
+    match HiddenHookCli::try_parse_from(std::env::args_os())
+        .ok()?
+        .command
+    {
+        HiddenHookCommand::Hook { event } => Some(event),
+    }
 }

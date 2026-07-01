@@ -2,6 +2,8 @@
 
 mod adopt;
 mod hash;
+#[allow(dead_code)]
+mod hook;
 mod playbooks;
 mod reindex;
 mod storage;
