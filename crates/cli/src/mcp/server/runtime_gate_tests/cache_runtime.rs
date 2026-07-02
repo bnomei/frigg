@@ -1388,6 +1388,7 @@ async fn read_match_records_read_match_provenance_not_read_file() {
             max_matches_per_file: None,
             collapse_by_file: None,
             response_mode: None,
+            include_context_efficiency: None,
         })
         .await
         .expect("search_text should succeed")

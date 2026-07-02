@@ -22,6 +22,10 @@ impl FriggMcpServer {
                 let mut read_diagnostics_count = 0usize;
                 let mut response_source_refs = json!({});
                 let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
+                    let need_context_efficiency =
+                        crate::context_efficiency::need_context_efficiency(
+                            params_for_blocking.include_context_efficiency,
+                        );
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
@@ -76,16 +80,22 @@ impl FriggMcpServer {
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                        SearchTextResponseCacheKey {
-                            scoped_repository_ids: scoped_repository_ids.clone(),
-                            freshness_scopes: freshness_scopes.clone(),
-                            query: query.clone(),
-                            pattern_type: Self::search_pattern_type_cache_key(&pattern_type),
-                            path_regex: params_for_blocking.path_regex.clone(),
-                            limit,
-                        }
-                    });
+                    let cache_key = (!need_context_efficiency)
+                        .then(|| {
+                            cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                                SearchTextResponseCacheKey {
+                                    scoped_repository_ids: scoped_repository_ids.clone(),
+                                    freshness_scopes: freshness_scopes.clone(),
+                                    query: query.clone(),
+                                    pattern_type: Self::search_pattern_type_cache_key(
+                                        &pattern_type,
+                                    ),
+                                    path_regex: params_for_blocking.path_regex.clone(),
+                                    limit,
+                                }
+                            })
+                        })
+                        .flatten();
                     if cache_key.is_none() {
                         server.record_runtime_cache_event(
                             RuntimeCacheFamily::SearchTextResponse,
@@ -179,7 +189,7 @@ impl FriggMcpServer {
                         "lexical_backend": response
                             .metadata
                             .as_ref()
-                            .map(|metadata| metadata.lexical_backend.clone()),
+                            .and_then(|metadata| metadata.lexical_backend.clone()),
                         "lexical_backend_note": response
                             .metadata
                             .as_ref()
@@ -199,10 +209,39 @@ impl FriggMcpServer {
                         );
                     }
 
-                    Ok(Json(server.present_search_text_response(
-                        response,
-                        &params_for_blocking,
-                    )?))
+                    let mut presented =
+                        server.present_search_text_response(response, &params_for_blocking)?;
+                    if need_context_efficiency {
+                        let context_efficiency = Self::search_text_context_efficiency_metadata(
+                            &scoped_workspaces,
+                            &presented.matches,
+                            presented.total_matches,
+                        )?;
+                        if params_for_blocking.include_context_efficiency == Some(true) {
+                            presented
+                                .metadata
+                                .get_or_insert_with(|| SearchTextMetadata {
+                                    lexical_backend: None,
+                                    lexical_backend_note: None,
+                                    context_efficiency: None,
+                                })
+                                .context_efficiency = Some(context_efficiency);
+                        }
+                    }
+                    if let Some(metadata) = &presented.metadata {
+                        let mut metadata_value = serde_json::to_value(metadata)
+                            .expect("search_text metadata should serialize");
+                        metadata_value
+                            .as_object_mut()
+                            .expect("search_text metadata should be an object")
+                            .remove("context_efficiency");
+                        response_source_refs
+                            .as_object_mut()
+                            .expect("search_text source refs should be an object")
+                            .insert("metadata".to_owned(), metadata_value);
+                    }
+
+                    Ok(Json(presented))
                 })();
 
                 let total_matches = result

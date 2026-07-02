@@ -141,6 +141,8 @@ pub struct SearchTextParams {
     pub collapse_by_file: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
+    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    pub include_context_efficiency: Option<bool>,
 }
 
 /// Response from `search_text` with optional `result_handle` for `read_match`.
@@ -164,9 +166,12 @@ pub enum SearchLexicalBackendMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextMetadata {
-    pub lexical_backend: SearchLexicalBackendMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical_backend: Option<SearchLexicalBackendMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lexical_backend_note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

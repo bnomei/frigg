@@ -127,7 +127,7 @@ fn search_text_metadata_maps_ripgrep_backend() {
     .expect("metadata should exist");
     assert_eq!(
         metadata.lexical_backend,
-        SearchLexicalBackendMetadata::Ripgrep
+        Some(SearchLexicalBackendMetadata::Ripgrep)
     );
     assert_eq!(
         metadata.lexical_backend_note.as_deref(),
@@ -138,6 +138,98 @@ fn search_text_metadata_maps_ripgrep_backend() {
 #[test]
 fn search_text_metadata_returns_none_without_backend() {
     assert!(FriggMcpServer::search_text_metadata(None, None).is_none());
+}
+
+#[test]
+fn search_text_params_accept_context_efficiency_opt_in() {
+    let params: SearchTextParams = serde_json::from_value(json!({
+        "query": "runtime capture",
+        "include_context_efficiency": true
+    }))
+    .expect("search_text params should accept include_context_efficiency");
+
+    assert_eq!(params.include_context_efficiency, Some(true));
+}
+
+#[test]
+fn search_text_metadata_omits_context_efficiency_by_default() {
+    let metadata = SearchTextMetadata {
+        lexical_backend: Some(SearchLexicalBackendMetadata::Native),
+        lexical_backend_note: None,
+        context_efficiency: None,
+    };
+
+    let value = serde_json::to_value(metadata).expect("metadata should serialize");
+    assert!(value.get("context_efficiency").is_none());
+}
+
+#[test]
+fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_stages() {
+    let root = std::env::temp_dir().join(format!(
+        "frigg-text-context-efficiency-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".frigg")).expect("temp frigg directory should be writable");
+    let db_path = root.join(".frigg/storage.sqlite3");
+    let storage = Storage::new(&db_path);
+    storage.initialize().expect("storage should initialize");
+    storage
+        .upsert_manifest(
+            "repo-001",
+            "snapshot-001",
+            &[
+                manifest_entry("src/lib.rs", 100, Some(10)),
+                manifest_entry("README.md", 40, Some(20)),
+            ],
+        )
+        .expect("manifest should be writable");
+
+    let workspace = AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: "fixture".to_owned(),
+        root: root.clone(),
+        db_path,
+    };
+    let matches = vec![
+        TextMatch {
+            match_id: None,
+            repository_id: "repo-001".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            line: 1,
+            column: 1,
+            excerpt: "alpha".to_owned(),
+            witness_score_hint_millis: None,
+            witness_provenance_ids: None,
+        },
+        TextMatch {
+            match_id: None,
+            repository_id: "repo-001".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            line: 2,
+            column: 1,
+            excerpt: "beta".to_owned(),
+            witness_score_hint_millis: None,
+            witness_provenance_ids: None,
+        },
+    ];
+
+    let metadata =
+        FriggMcpServer::search_text_context_efficiency_metadata(&[workspace], &matches, 4)
+            .expect("context-efficiency metadata should build");
+
+    assert_eq!(metadata.indexed_readable_files, 2);
+    assert_eq!(metadata.indexed_readable_bytes, 140);
+    assert_eq!(metadata.candidate_input_count, None);
+    assert_eq!(metadata.candidate_output_count, None);
+    assert_eq!(metadata.returned_match_count, Some(4));
+    assert_eq!(metadata.returned_unique_paths, Some(1));
+    assert_eq!(metadata.returned_unique_file_bytes, Some(100));
+    assert_eq!(metadata.returned_source_bytes_estimate, Some(9));
+    assert_eq!(metadata.stage_attribution, None);
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
