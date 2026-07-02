@@ -13,6 +13,9 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) quiet: bool,
 
+    #[arg(long, global = true)]
+    pub(crate) verbose: bool,
+
     #[arg(long = "workspace-root", value_name = "PATH", global = true)]
     pub(crate) workspace_roots: Vec<PathBuf>,
 

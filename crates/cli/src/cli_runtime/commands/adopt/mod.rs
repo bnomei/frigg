@@ -7,6 +7,7 @@ use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
 
 use crate::cli_args::AdoptTarget;
+use crate::cli_runtime::CliOutput;
 
 mod json_merge;
 mod managed_block;
@@ -17,7 +18,7 @@ use plan::{AdoptPlan, AdoptPlanAction, AdoptPlanEntry};
 use targets::select_targets;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_adopt_command(
+pub(crate) fn run_adopt_command_with_output(
     config: &FriggConfig,
     requested_targets: Vec<AdoptTarget>,
     all: bool,
@@ -26,6 +27,7 @@ pub(crate) fn run_adopt_command(
     check: bool,
     dry_run: bool,
     force: bool,
+    output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let plan = build_adopt_plan(
         config,
@@ -44,10 +46,74 @@ pub(crate) fn run_adopt_command(
         "planned"
     };
 
-    println!(
-        "adopt summary status={} repositories={} targets={} create={} update={} unchanged={} remove={} skipped={} error={} pending={} dry_run={} check={} uninstall={} force={} writes=0",
+    if dry_run || check {
+        output.result(adopt_summary_line(
+            status,
+            config.repositories().len(),
+            &plan,
+            pending_changes,
+            dry_run,
+            check,
+            uninstall,
+            force,
+            0,
+        ))?;
+        for entry in &plan.entries {
+            output.result(adopt_plan_line(entry))?;
+        }
+    }
+
+    if check && pending_changes > 0 {
+        return Err(Box::new(io::Error::other(format!(
+            "adopt check failed: {pending_changes} pending change(s)"
+        ))));
+    }
+
+    if plan.action_count(AdoptPlanAction::Error) > 0 {
+        let message = "adopt failed: plan contains target error(s)";
+        output.error(message)?;
+        return Err(Box::new(io::Error::other(message)));
+    }
+
+    if dry_run || check {
+        return Ok(());
+    }
+
+    for entry in &plan.entries {
+        output.progress(adopt_plan_line(entry))?;
+    }
+
+    let writes = apply_plan_entries(&plan, uninstall, force)?;
+    output.summary(adopt_summary_line(
         status,
         config.repositories().len(),
+        &plan,
+        pending_changes,
+        dry_run,
+        check,
+        uninstall,
+        force,
+        writes,
+    ))?;
+
+    Ok(())
+}
+
+fn adopt_summary_line(
+    status: &str,
+    repositories: usize,
+    plan: &AdoptPlan,
+    pending_changes: usize,
+    dry_run: bool,
+    check: bool,
+    uninstall: bool,
+    force: bool,
+    writes: usize,
+) -> String {
+    format!(
+        "adopt summary status={} repositories={} targets={} create={} update={} unchanged={} remove={} skipped={} error={} pending={} dry_run={} check={} uninstall={} force={} writes={}",
+        status,
+        repositories,
         plan.len(),
         plan.action_count(AdoptPlanAction::Create),
         plan.action_count(AdoptPlanAction::Update),
@@ -59,43 +125,21 @@ pub(crate) fn run_adopt_command(
         dry_run,
         check,
         uninstall,
-        force
-    );
+        force,
+        writes
+    )
+}
 
-    for entry in &plan.entries {
-        println!(
-            "adopt plan repository_id={} root={} target={:?} path={} action={} reason={} writes=0",
-            entry.repository_id,
-            entry.root.display(),
-            entry.target,
-            entry.path.display(),
-            entry.action.as_str(),
-            entry.reason.as_deref().unwrap_or("-")
-        );
-    }
-
-    if check && pending_changes > 0 {
-        return Err(Box::new(io::Error::other(format!(
-            "adopt check failed: {pending_changes} pending change(s)"
-        ))));
-    }
-
-    if plan.action_count(AdoptPlanAction::Error) > 0 {
-        return Err(Box::new(io::Error::other(
-            "adopt failed: plan contains target error(s)",
-        )));
-    }
-
-    if dry_run {
-        return Ok(());
-    }
-
-    let writes = apply_plan_entries(&plan, uninstall, force)?;
-    if writes > 0 {
-        println!("adopt apply writes={writes}");
-    }
-
-    Ok(())
+fn adopt_plan_line(entry: &AdoptPlanEntry) -> String {
+    format!(
+        "adopt plan repository_id={} root={} target={:?} path={} action={} reason={} writes=0",
+        entry.repository_id,
+        entry.root.display(),
+        entry.target,
+        entry.path.display(),
+        entry.action.as_str(),
+        entry.reason.as_deref().unwrap_or("-")
+    )
 }
 
 fn build_adopt_plan(

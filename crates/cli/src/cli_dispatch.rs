@@ -15,12 +15,14 @@ mod hook_command;
 
 use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
-    StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
-    resolve_startup_config, resolve_watch_runtime_config, run_adopt_command,
-    run_context_summary_command, run_hash_command, run_hybrid_playbook_command,
-    run_prepare_semantic_model_command, run_reindex_command, run_semantic_runtime_startup_gate,
-    run_storage_bootstrap_command, run_storage_maintenance_command,
-    run_strict_startup_vector_readiness_gate, run_workload_corpus_export_command,
+    CliOutput, StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
+    resolve_startup_config, resolve_watch_runtime_config, run_adopt_command_with_output,
+    run_context_summary_command, run_hash_command, run_hybrid_playbook_command_with_output,
+    run_prepare_semantic_model_command_with_output, run_reindex_command_with_output,
+    run_semantic_runtime_startup_gate_with_output, run_storage_bootstrap_command_with_output,
+    run_storage_maintenance_command_with_output,
+    run_strict_startup_vector_readiness_gate_with_output,
+    run_workload_corpus_export_command_with_output,
 };
 use crate::http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
 use crate::{Cli, Command, default_tracing_filter, init_tracing, startup_trace};
@@ -38,6 +40,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         return Ok(());
     }
     let cli = Cli::parse();
+    let cli_output = CliOutput::from_flags(cli.quiet, cli.verbose)?;
     startup_trace(startup_trace_enabled, "async_main: cli parsed");
     let serve_requested = matches!(cli.command, Some(Command::Serve));
     let http_runtime = resolve_http_runtime_config(&cli, serve_requested)?;
@@ -62,7 +65,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 force,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_adopt_command(
+                run_adopt_command_with_output(
                     &config,
                     target,
                     all,
@@ -71,33 +74,48 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     check,
                     dry_run,
                     force,
+                    &cli_output,
                 )?
             }
             Command::Init => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)?
+                run_storage_bootstrap_command_with_output(
+                    &config,
+                    StorageBootstrapCommand::Init,
+                    &cli_output,
+                )?
             }
             Command::Verify => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)?
+                run_storage_bootstrap_command_with_output(
+                    &config,
+                    StorageBootstrapCommand::Verify,
+                    &cli_output,
+                )?
             }
             Command::Reindex {
                 changed,
                 prepare_semantic_model,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_semantic_runtime_startup_gate(&config)?;
-                run_reindex_command(&config, changed, prepare_semantic_model)?
+                run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
+                run_reindex_command_with_output(
+                    &config,
+                    changed,
+                    prepare_semantic_model,
+                    &cli_output,
+                )?
             }
             Command::PrepareSemanticModel => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_prepare_semantic_model_command(&config)?
+                run_prepare_semantic_model_command_with_output(&config, &cli_output)?
             }
             Command::RepairStorage => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_maintenance_command(
+                run_storage_maintenance_command_with_output(
                     &config,
                     StorageMaintenanceCommand::RepairSemanticVectorStore,
+                    &cli_output,
                 )?
             }
             Command::Hash => run_hash_command()?,
@@ -106,12 +124,13 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 keep_provenance_events,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_storage_maintenance_command(
+                run_storage_maintenance_command_with_output(
                     &config,
                     StorageMaintenanceCommand::Prune {
                         keep_manifest_snapshots,
                         keep_provenance_events,
                     },
+                    &cli_output,
                 )?
             }
             Command::PlaybookHybridRun {
@@ -121,13 +140,14 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 trace_root,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_semantic_runtime_startup_gate(&config)?;
-                run_hybrid_playbook_command(
+                run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
+                run_hybrid_playbook_command_with_output(
                     &config,
                     &playbooks_root,
                     enforce_targets,
                     output.as_deref(),
                     trace_root.as_deref(),
+                    &cli_output,
                 )?
             }
             Command::ExportWorkloadCorpus {
@@ -136,7 +156,13 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 limit,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_workload_corpus_export_command(&config, &output, format, limit)?
+                run_workload_corpus_export_command_with_output(
+                    &config,
+                    &output,
+                    format,
+                    limit,
+                    &cli_output,
+                )?
             }
             Command::Context { since, until } => {
                 let config = resolve_command_config(&cli, command.clone())?;
@@ -154,9 +180,9 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
 
     let config = resolve_startup_config(&cli, transport_kind)?;
     startup_trace(startup_trace_enabled, "async_main: startup config resolved");
-    run_strict_startup_vector_readiness_gate(&config)?;
+    run_strict_startup_vector_readiness_gate_with_output(&config, &cli_output)?;
     startup_trace(startup_trace_enabled, "async_main: vector readiness passed");
-    run_semantic_runtime_startup_gate(&config)?;
+    run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
     startup_trace(startup_trace_enabled, "async_main: semantic gate passed");
     let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
     startup_trace(startup_trace_enabled, "async_main: watch config resolved");

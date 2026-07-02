@@ -116,7 +116,8 @@ fn adopt_cli_applies_markdown_cursor_legacy_cursor_and_mcp_targets_idempotently(
         ],
     );
     assert_success(&first);
-    assert!(stdout(&first).contains("adopt apply writes=5"));
+    assert!(stdout(&first).contains("writes=5"));
+    assert!(!stdout(&first).contains("adopt plan"));
 
     for path in ["AGENTS.md", ".cursor/rules/frigg.mdc", ".cursorrules"] {
         let contents = fs::read_to_string(root.join(path)).expect("read adopted markdown");
@@ -152,6 +153,7 @@ fn adopt_cli_applies_markdown_cursor_legacy_cursor_and_mcp_targets_idempotently(
     );
     assert_success(&second);
     assert!(stdout(&second).contains("unchanged=5"));
+    assert!(stdout(&second).contains("writes=0"));
     assert!(!stdout(&second).contains("adopt apply writes="));
     cleanup_workspace(&root);
 }
@@ -222,7 +224,8 @@ fn adopt_cli_force_replaces_diverged_frigg_mcp_entry() {
 
     let skipped = run_frigg(&root, &["adopt", "--target", "mcp-project"]);
     assert_success(&skipped);
-    assert!(stdout(&skipped).contains("action=skipped"));
+    assert!(stdout(&skipped).contains("skipped=1"));
+    assert!(!stdout(&skipped).contains("adopt plan"));
     let value: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
             .expect("parse mcp");

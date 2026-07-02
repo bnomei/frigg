@@ -9,6 +9,7 @@ use frigg::settings::{
 use frigg::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend};
 use tracing::info;
 
+use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
 
 #[derive(Debug)]
@@ -32,16 +33,29 @@ impl std::fmt::Display for SemanticStartupGateError {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> io::Result<()> {
+    run_strict_startup_vector_readiness_gate_with_output(config, &CliOutput::normal())
+}
+
+pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
+    config: &FriggConfig,
+    output: &CliOutput,
+) -> io::Result<()> {
     let repositories = config.repositories();
 
     for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "startup summary status=failed repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
+        let root = match config.root_by_repository_id(&repo.repository_id.0) {
+            Some(root) => root,
+            None => {
+                let message = format!(
+                    "startup summary status=failed repository_id={} error=workspace root lookup failed",
+                    repo.repository_id.0
+                );
+                output.error(&message)?;
+                return Err(io::Error::other(message));
+            }
+        };
         let db_path = resolve_storage_db_path(root, "startup")?;
         if !db_path.is_file() {
             let err_message = format!(
@@ -52,14 +66,14 @@ pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
                 root.display(),
                 root.display()
             );
-            println!(
+            output.error(format!(
                 "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
                 repositories.len(),
                 repo.repository_id.0,
                 root.display(),
                 db_path.display(),
                 err_message
-            );
+            ))?;
             return Err(io::Error::other(err_message));
         }
         let storage = Storage::new(&db_path);
@@ -77,14 +91,14 @@ pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
         let status = match status {
             Ok(status) => status,
             Err(err) => {
-                println!(
+                output.error(format!(
                     "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
                     repositories.len(),
                     repo.repository_id.0,
                     root.display(),
                     db_path.display(),
                     err
-                );
+                ))?;
                 return Err(err);
             }
         };
@@ -94,14 +108,14 @@ pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
                 "vector subsystem not ready: sqlite-vec backend unavailable (active backend: {})",
                 status.backend.as_str()
             );
-            println!(
+            output.error(format!(
                 "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
                 repositories.len(),
                 repo.repository_id.0,
                 root.display(),
                 db_path.display(),
                 err_message
-            );
+            ))?;
             return Err(io::Error::other(format!(
                 "startup strict vector readiness failed repository_id={} root={} db={}: {err_message}",
                 repo.repository_id.0,
@@ -122,14 +136,30 @@ pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
     Ok(())
 }
 
-pub(crate) fn run_semantic_runtime_startup_gate(config: &FriggConfig) -> io::Result<()> {
+pub(crate) fn run_semantic_runtime_startup_gate_with_output(
+    config: &FriggConfig,
+    output: &CliOutput,
+) -> io::Result<()> {
     let credentials = SemanticRuntimeCredentials::from_process_env();
-    run_semantic_runtime_startup_gate_with_credentials(config, &credentials)
+    run_semantic_runtime_startup_gate_with_credentials_and_output(config, &credentials, output)
 }
 
+#[cfg(test)]
 pub(crate) fn run_semantic_runtime_startup_gate_with_credentials(
     config: &FriggConfig,
     credentials: &SemanticRuntimeCredentials,
+) -> io::Result<()> {
+    run_semantic_runtime_startup_gate_with_credentials_and_output(
+        config,
+        credentials,
+        &CliOutput::normal(),
+    )
+}
+
+fn run_semantic_runtime_startup_gate_with_credentials_and_output(
+    config: &FriggConfig,
+    credentials: &SemanticRuntimeCredentials,
+    output: &CliOutput,
 ) -> io::Result<()> {
     if !config.semantic_runtime.enabled {
         return Ok(());
@@ -143,13 +173,13 @@ pub(crate) fn run_semantic_runtime_startup_gate_with_credentials(
             .map(SemanticRuntimeProvider::as_str)
             .unwrap_or("-");
         let model = config.semantic_runtime.normalized_model().unwrap_or("-");
-        println!(
+        output.error(format!(
             "startup summary status=failed semantic_enabled=true semantic_provider={} semantic_model={} semantic_code={} error={}",
             provider,
             model,
             startup_error.code(),
             startup_error
-        );
+        ))?;
         return Err(io::Error::other(format!(
             "startup semantic runtime readiness failed code={}: {}",
             startup_error.code(),

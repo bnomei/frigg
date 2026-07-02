@@ -9,8 +9,11 @@ use frigg::embeddings::local_model::{
 };
 use frigg::settings::{FriggConfig, SemanticRuntimeProvider};
 
-pub(crate) fn run_prepare_semantic_model_command(
+use crate::cli_runtime::CliOutput;
+
+pub(crate) fn run_prepare_semantic_model_command_with_output(
     config: &FriggConfig,
+    output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let provider = config.semantic_runtime.provider.ok_or_else(|| {
         io::Error::other(
@@ -36,7 +39,7 @@ pub(crate) fn run_prepare_semantic_model_command(
         .expect("semantic model exists after validation");
     match check_local_model_artifact(model) {
         Ok(LocalModelArtifactStatus::Ready(artifact)) => {
-            print_prepared_summary("already_ready", &artifact);
+            print_prepared_summary("already_ready", &artifact, output)?;
             return Ok(());
         }
         Ok(LocalModelArtifactStatus::Missing(_)) => {}
@@ -46,20 +49,24 @@ pub(crate) fn run_prepare_semantic_model_command(
 
     let artifact = prepare_local_semantic_model(&config.semantic_runtime)
         .map_err(|err| io::Error::other(err.to_string()))?;
-    print_prepared_summary("prepared", &artifact);
+    print_prepared_summary("prepared", &artifact, output)?;
     Ok(())
 }
 
-fn print_prepared_summary(status: &str, artifact: &LocalModelArtifact) {
-    println!(
+fn print_prepared_summary(
+    status: &str,
+    artifact: &LocalModelArtifact,
+    output: &CliOutput,
+) -> io::Result<()> {
+    output.summary(format!(
         "prepare-semantic-model summary status={status} semantic_provider=local semantic_model={} cache_root={} cache_key={} repository={}",
         artifact.semantic_model,
         artifact.cache_root.display(),
         artifact.cache_key,
         artifact.repository
-    );
-    println!(
+    ))?;
+    output.advisory(format!(
         "prepare-semantic-model next_step=\"run `frigg reindex` after changing semantic provider or model so semantic rows match provider=local model={}\"",
         artifact.semantic_model
-    );
+    ))
 }

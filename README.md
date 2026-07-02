@@ -472,6 +472,7 @@ Precedence is `CLI flag > env var > default`.
 
 | Flag / Env | Default | Meaning |
 | --- | --- | --- |
+| `--quiet` / `--verbose` | normal output | Controls CLI command output. Normal mode prints stable summaries/results, `--quiet` prints errors only except required machine/protocol stdout, and `--verbose` adds progress and diagnostics on stderr. |
 | `--workspace-root` | utility commands default to current directory; serving mode can start empty | Limits what Frigg can read and index. Repeatable. In serving mode, roots become the global known-repository catalog. |
 | `--max-file-bytes` / `FRIGG_MAX_FILE_BYTES` | `2097152` | Maximum file size Frigg will read. |
 | `--full-scip-ingest` / `FRIGG_FULL_SCIP_INGEST` | `true` | Disables precise navigation SCIP ingest budgets. This is the default. |

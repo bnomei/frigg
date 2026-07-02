@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, to_string_pretty};
 
 use crate::WorkloadCorpusExportFormat;
+use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
 
 const WORKLOAD_CORPUS_MAX_STRING_CHARS: usize = 256;
@@ -288,11 +289,28 @@ fn workload_corpus_summary_field(payload: &Value, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+#[cfg(test)]
 pub(crate) fn run_workload_corpus_export_command(
     config: &FriggConfig,
     output_path: &Path,
     format: WorkloadCorpusExportFormat,
     limit: usize,
+) -> Result<(), Box<dyn Error>> {
+    run_workload_corpus_export_command_with_output(
+        config,
+        output_path,
+        format,
+        limit,
+        &CliOutput::normal(),
+    )
+}
+
+pub(crate) fn run_workload_corpus_export_command_with_output(
+    config: &FriggConfig,
+    output_path: &Path,
+    format: WorkloadCorpusExportFormat,
+    limit: usize,
+    output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     if limit == 0 {
         return Err(Box::new(io::Error::other(
@@ -304,12 +322,17 @@ pub(crate) fn run_workload_corpus_export_command(
     let mut rows = Vec::new();
 
     for repo in &repositories {
-        let root = config.root_by_repository_id(&repo.repository_id.0).ok_or_else(|| {
-            io::Error::other(format!(
-                "export-workload-corpus summary status=failed repository_id={} error=workspace root lookup failed",
-                repo.repository_id.0
-            ))
-        })?;
+        let root = match config.root_by_repository_id(&repo.repository_id.0) {
+            Some(root) => root,
+            None => {
+                let message = format!(
+                    "export-workload-corpus summary status=failed repository_id={} error=workspace root lookup failed",
+                    repo.repository_id.0
+                );
+                output.error(&message)?;
+                return Err(Box::new(io::Error::other(message)));
+            }
+        };
         let db_path = resolve_storage_db_path(root, "export-workload-corpus")?;
         let storage = Storage::new(&db_path);
         let repo_rows = storage
@@ -357,13 +380,13 @@ pub(crate) fn run_workload_corpus_export_command(
             });
         }
 
-        println!(
+        output.progress(format!(
             "export-workload-corpus ok repository_id={} root={} db={} rows={}",
             repo.repository_id.0,
             root.display(),
             db_path.display(),
             exported_count
-        );
+        ))?;
     }
 
     rows.sort_by(|left, right| {
@@ -396,14 +419,14 @@ pub(crate) fn run_workload_corpus_export_command(
         }
     }
 
-    println!(
+    output.summary(format!(
         "export-workload-corpus summary status=ok repositories={} rows={} format={} output={} limit={}",
         repositories.len(),
         rows.len(),
         format.as_str(),
         output_path.display(),
         limit
-    );
+    ))?;
     Ok(())
 }
 

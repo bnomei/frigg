@@ -70,8 +70,10 @@ fn startup_trace(enabled: bool, message: &str) {
 fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'static str {
     if cli.quiet || (cli.command.is_none() && transport == RuntimeTransportKind::Stdio) {
         "error"
-    } else {
+    } else if cli.verbose {
         "info"
+    } else {
+        "warn"
     }
 }
 
@@ -99,6 +101,7 @@ mod tests {
     fn base_cli() -> Cli {
         Cli {
             quiet: false,
+            verbose: false,
             workspace_roots: vec![PathBuf::from(".")],
             max_file_bytes: None,
             full_scip_ingest: true,
@@ -600,12 +603,12 @@ mod tests {
         cli.mcp_http_port = Some(4013);
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::LoopbackHttp),
-            "info"
+            "warn"
         );
     }
 
     #[test]
-    fn utility_commands_keep_info_log_filter() {
+    fn utility_commands_default_to_warning_log_filter() {
         let mut cli = base_cli();
         cli.command = Some(Command::Reindex {
             changed: false,
@@ -613,7 +616,31 @@ mod tests {
         });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
+            "warn"
+        );
+    }
+
+    #[test]
+    fn verbose_flag_enables_info_log_filter_for_utility_commands() {
+        let mut cli = base_cli();
+        cli.verbose = true;
+        cli.command = Some(Command::Reindex {
+            changed: false,
+            prepare_semantic_model: false,
+        });
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "info"
+        );
+    }
+
+    #[test]
+    fn verbose_flag_does_not_raise_stdio_server_log_filter() {
+        let mut cli = base_cli();
+        cli.verbose = true;
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
+            "error"
         );
     }
 

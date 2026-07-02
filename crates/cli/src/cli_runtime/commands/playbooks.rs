@@ -9,19 +9,22 @@ use frigg::searcher::TextSearcher;
 use frigg::settings::FriggConfig;
 use serde_json::to_string_pretty;
 
-pub(crate) fn run_hybrid_playbook_command(
+use crate::cli_runtime::CliOutput;
+
+pub(crate) fn run_hybrid_playbook_command_with_output(
     config: &FriggConfig,
     playbooks_root: &Path,
     enforce_targets: bool,
     output_path: Option<&Path>,
     trace_root: Option<&Path>,
+    output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let searcher = TextSearcher::new(config.clone());
     let summary =
         run_hybrid_playbook_regressions(&searcher, playbooks_root, enforce_targets, trace_root)?;
 
     for outcome in &summary.outcomes {
-        println!(
+        output.diagnostic(format!(
             "playbook result playbook_id={} file={} semantic_status={} status_allowed={} duration_ms={} execution_error={} trace_path={} required_missing={:?} target_missing={:?} hits={:?}",
             outcome.playbook_id,
             outcome.file_name,
@@ -33,7 +36,7 @@ pub(crate) fn run_hybrid_playbook_command(
             outcome.required_missing(),
             outcome.target_missing(),
             outcome.matched_paths
-        );
+        ))?;
     }
 
     if let Some(output_path) = output_path {
@@ -51,7 +54,7 @@ pub(crate) fn run_hybrid_playbook_command(
         summary.required_failures > 0 || (summary.enforce_targets && summary.target_failures > 0);
     let status = if regressions_failed { "failed" } else { "ok" };
 
-    println!(
+    let summary_line = format!(
         "playbook summary status={status} playbooks={} required_failures={} target_failures={} enforce_targets={} output={} trace_root={}",
         summary.playbook_count,
         summary.required_failures,
@@ -66,10 +69,12 @@ pub(crate) fn run_hybrid_playbook_command(
     );
 
     if regressions_failed {
+        output.error(summary_line)?;
         return Err(Box::new(io::Error::other(format!(
             "hybrid playbook regressions failed: required_failures={} target_failures={} enforce_targets={}",
             summary.required_failures, summary.target_failures, summary.enforce_targets
         ))));
     }
+    output.summary(summary_line)?;
     Ok(())
 }
