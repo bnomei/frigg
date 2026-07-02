@@ -47,17 +47,10 @@ pub(crate) fn resolve_command_config(
         | Command::Init
         | Command::Verify
         | Command::RepairStorage
-        | Command::PruneStorage { .. }
-        | Command::ExportWorkloadCorpus { .. } => resolve_base_config(cli, true, None),
+        | Command::PruneStorage { .. } => resolve_base_config(cli, true, None),
         Command::Hash => resolve_base_config(cli, false, None),
         Command::Reindex { .. } | Command::PrepareSemanticModel => {
             let mut config = resolve_base_config(cli, true, Some(RuntimeTransportKind::Stdio))?;
-            config.semantic_runtime = resolve_semantic_runtime_config(cli);
-            config.validate()?;
-            Ok(config)
-        }
-        Command::PlaybookHybridRun { .. } => {
-            let mut config = resolve_base_config(cli, true, None)?;
             config.semantic_runtime = resolve_semantic_runtime_config(cli);
             config.validate()?;
             Ok(config)

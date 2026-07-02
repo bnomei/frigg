@@ -2,8 +2,7 @@
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::storage::{
-    PathWitnessProjection, Storage, db_runtime::i64_to_u64, db_runtime::open_connection,
-    db_runtime::u64_to_i64,
+    PathWitnessProjection, Storage, db_runtime::i64_to_u64, db_runtime::u64_to_i64,
 };
 
 use super::common::normalize_repository_snapshot_ids;
@@ -18,7 +17,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
                 "failed to start path witness projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
@@ -108,7 +107,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"

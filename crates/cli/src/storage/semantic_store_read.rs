@@ -18,7 +18,7 @@ use crate::storage::{
     SNAPSHOT_KIND_MANIFEST, SQLITE_VEC_MAX_KNN_LIMIT, SemanticChunkEmbeddingProjection,
     SemanticChunkEmbeddingRecord, SemanticChunkPayload, SemanticChunkPreview,
     SemanticChunkVectorMatch, SemanticHeadRecord, Storage, VECTOR_TABLE_NAME, i64_to_u64,
-    open_connection, usize_to_i64,
+    usize_to_i64,
 };
 
 pub(crate) struct SemanticReadContext {
@@ -40,7 +40,7 @@ impl Storage {
         #[cfg(test)]
         record_semantic_read_context_open();
         Ok(SemanticReadContext {
-            conn: open_connection(&self.db_path)?,
+            conn: self.open_current_schema_connection()?,
         })
     }
 
@@ -69,7 +69,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         load_semantic_head_for_repository_model_on_connection(&conn, repository_id, provider, model)
     }
 
@@ -91,7 +91,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut statement = conn
             .prepare(
                 r#"
@@ -219,7 +219,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut statement = conn
             .prepare(
                 r#"
@@ -392,7 +392,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let count: i64 = conn
             .query_row(
                 r#"

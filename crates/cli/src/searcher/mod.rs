@@ -82,10 +82,7 @@ use path_witness_projection::StoredPathWitnessProjection;
 pub(crate) use path_witness_projection::{
     PATH_WITNESS_PROJECTION_HEURISTIC_VERSION, build_path_witness_projection_records_from_paths,
 };
-pub(crate) use policy::{
-    apply_post_selection_guardrails_with_trace, path_quality_rule_trace, path_witness_rule_trace,
-    selection_rule_trace,
-};
+pub(crate) use policy::apply_post_selection_guardrails_with_trace;
 pub(crate) use projection_service::ProjectionStoreService;
 use query_terms::{
     hybrid_excerpt_has_build_flow_anchor, hybrid_excerpt_has_test_double_anchor,
@@ -673,21 +670,6 @@ impl TextSearcher {
         )
     }
 
-    pub(crate) fn search_hybrid_with_filters_with_trace(
-        &self,
-        query: SearchHybridQuery,
-        filters: SearchFilters,
-    ) -> FriggResult<SearchHybridExecutionOutput> {
-        let credentials = SemanticRuntimeCredentials::from_process_env();
-        let semantic_executor = RuntimeSemanticQueryEmbeddingExecutor::new(credentials.clone());
-        self.search_hybrid_with_filters_using_executor_with_trace(
-            query,
-            filters,
-            &credentials,
-            &semantic_executor,
-        )
-    }
-
     fn search_hybrid_with_filters_using_executor(
         &self,
         query: SearchHybridQuery,
@@ -705,6 +687,7 @@ impl TextSearcher {
         )
     }
 
+    #[cfg(test)]
     fn search_hybrid_with_filters_using_executor_with_trace(
         &self,
         query: SearchHybridQuery,

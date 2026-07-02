@@ -220,11 +220,13 @@ impl Default for HybridExecutionNote {
 pub struct SearchHybridExecutionOutput {
     pub matches: Vec<HybridRankedEvidence>,
     pub ranked_anchors: Vec<HybridRankedEvidence>,
+    #[allow(dead_code)]
     pub(crate) coverage_grouped_pool: Vec<HybridRankedEvidence>,
     pub diagnostics: SearchExecutionDiagnostics,
     pub channel_results: Vec<ChannelResult>,
     pub note: HybridExecutionNote,
     pub stage_attribution: Option<SearchStageAttribution>,
+    #[allow(dead_code)]
     pub(crate) post_selection_trace: Option<PostSelectionTrace>,
 }
 

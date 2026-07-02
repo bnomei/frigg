@@ -5,7 +5,6 @@
 pub mod advanced;
 mod explorer;
 mod guidance;
-mod provenance_cache;
 mod server;
 mod server_cache;
 mod server_state;

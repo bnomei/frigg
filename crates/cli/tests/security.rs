@@ -48,7 +48,7 @@ async fn build_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
 async fn build_extended_server_for_roots(roots: Vec<PathBuf>) -> FriggMcpServer {
     let config =
         FriggConfig::from_workspace_roots(roots).expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, true);
+    let server = FriggMcpServer::new_with_runtime_options(config, true);
     attach_session_repositories(&server).await;
     server
 }
@@ -912,22 +912,22 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn security_provenance_rejects_symlink_escape_before_write() {
-    let workspace = temp_workspace_root("provenance-symlink-escape");
+async fn security_storage_rejects_symlink_escape_before_write() {
+    let workspace = temp_workspace_root("storage-symlink-escape");
     let repo_root = workspace.join("repo");
     let escaped_store = workspace.join("escaped-store");
     fs::create_dir_all(&repo_root).expect("failed to create fixture repo root");
     fs::create_dir_all(&escaped_store).expect("failed to create escaped storage fixture");
     std::os::unix::fs::symlink(&escaped_store, repo_root.join(".frigg"))
-        .expect("failed to create symlinked provenance storage fixture");
+        .expect("failed to create symlinked storage fixture");
 
     let config = FriggConfig::from_workspace_roots(vec![repo_root.clone()])
         .expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_provenance_best_effort(config, true);
+    let server = FriggMcpServer::new(config);
     let response = server
         .list_repositories(Parameters(ListRepositoriesParams::default()))
         .await
-        .expect("list_repositories should succeed even when provenance path is unsafe")
+        .expect("list_repositories should succeed even when storage path is unsafe")
         .0;
 
     assert!(
@@ -936,7 +936,7 @@ async fn security_provenance_rejects_symlink_escape_before_write() {
     );
     assert!(
         !escaped_store.join("storage.sqlite3").exists(),
-        "provenance write should not escape through symlinked .frigg directory"
+        "storage writes should not escape through symlinked .frigg directory"
     );
 
     cleanup_workspace(&workspace);

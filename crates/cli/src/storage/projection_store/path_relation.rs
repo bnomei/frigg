@@ -1,9 +1,7 @@
 //! Path relation projection load for graph-backed retrieval witnesses.
 
 use crate::domain::{FriggError, FriggResult};
-use crate::storage::{
-    PathRelationProjection, Storage, db_runtime::i64_to_u64, db_runtime::open_connection,
-};
+use crate::storage::{PathRelationProjection, Storage, db_runtime::i64_to_u64};
 
 use super::common::normalize_repository_snapshot_ids;
 
@@ -16,7 +14,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT src_path, dst_path, relation_kind, evidence_source, src_symbol_id, dst_symbol_id,

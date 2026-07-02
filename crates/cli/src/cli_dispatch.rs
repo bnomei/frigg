@@ -17,14 +17,11 @@ use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
     CliOutput, StorageBootstrapCommand, StorageMaintenanceCommand, resolve_command_config,
     resolve_startup_config, resolve_watch_runtime_config, run_adopt_command_with_output,
-    run_context_summary_command, run_hash_command, run_hybrid_playbook_command_with_output,
-    run_prepare_semantic_model_command_with_output, run_reindex_command_with_output,
-    run_semantic_runtime_startup_gate_with_output,
+    run_context_summary_command, run_hash_command, run_prepare_semantic_model_command_with_output,
+    run_reindex_command_with_output, run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output,
-    run_storage_bootstrap_command_with_output,
-    run_storage_maintenance_command_with_output,
+    run_storage_bootstrap_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
-    run_workload_corpus_export_command_with_output,
 };
 use crate::http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
 use crate::{Cli, Command, default_tracing_filter, init_tracing, startup_trace};
@@ -126,46 +123,13 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             Command::Hash => run_hash_command()?,
             Command::PruneStorage {
                 keep_manifest_snapshots,
-                keep_provenance_events,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_maintenance_command_with_output(
                     &config,
                     StorageMaintenanceCommand::Prune {
                         keep_manifest_snapshots,
-                        keep_provenance_events,
                     },
-                    &cli_output,
-                )?
-            }
-            Command::PlaybookHybridRun {
-                playbooks_root,
-                enforce_targets,
-                output,
-                trace_root,
-            } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
-                run_hybrid_playbook_command_with_output(
-                    &config,
-                    &playbooks_root,
-                    enforce_targets,
-                    output.as_deref(),
-                    trace_root.as_deref(),
-                    &cli_output,
-                )?
-            }
-            Command::ExportWorkloadCorpus {
-                output,
-                format,
-                limit,
-            } => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_workload_corpus_export_command_with_output(
-                    &config,
-                    &output,
-                    format,
-                    limit,
                     &cli_output,
                 )?
             }

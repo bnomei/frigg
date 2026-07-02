@@ -26,7 +26,20 @@ impl FriggMcpServer {
                 index_state: WorkspaceStorageIndexState::Uninitialized,
                 error: None,
             },
-            Ok(_) => match storage.verify() {
+            Ok(version) if version != crate::storage::latest_storage_schema_version() => {
+                WorkspaceStorageSummary {
+                    db_path: workspace.db_path.display().to_string(),
+                    exists: true,
+                    initialized: true,
+                    index_state: WorkspaceStorageIndexState::Error,
+                    error: Some(format!(
+                        "storage schema is incompatible (found {version}, expected {}); delete '{}' and rerun `frigg init` or `frigg reindex` to regenerate storage",
+                        crate::storage::latest_storage_schema_version(),
+                        workspace.db_path.display()
+                    )),
+                }
+            }
+            Ok(_) => match storage.verify_relational_schema() {
                 Ok(_) => {
                     match storage
                         .load_latest_manifest_for_repository(&workspace.runtime_repository_id)

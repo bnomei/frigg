@@ -1,6 +1,6 @@
 //! Process-wide workspace catalog keyed by canonical repository root.
 //!
-//! Tracks stable `repository_id` values, provenance storage paths, and per-session adoption
+//! Tracks stable `repository_id` values, SQLite storage paths, and per-session adoption
 //! refcounts so watch leases and cache invalidation can outlive individual MCP sessions.
 
 use std::collections::BTreeMap;

@@ -5,7 +5,6 @@
 //!
 //! Semantic map:
 //! - `watch` — lease-gated filesystem supervisor and debounced reindex scheduler.
-//! - `playbooks` — hybrid search regression probes and trace packets.
 //! - `test_support` — lightweight config helpers for integration tests.
 
 /// Canonical agent directive text and rendering helpers reused across MCP, hooks, and docs checks.
@@ -31,9 +30,6 @@ mod manifest_validation;
 /// schemas.
 pub mod mcp;
 pub(crate) mod path_class;
-/// Playbook parsing and regression helpers used to turn retrieval expectations into executable
-/// probes.
-pub mod playbooks;
 /// Retrieval orchestration that blends lexical, graph, and semantic evidence into stable ranked
 /// results.
 pub mod searcher;

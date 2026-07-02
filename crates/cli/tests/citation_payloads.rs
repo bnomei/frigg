@@ -28,7 +28,7 @@ fn runtime_server() -> FriggMcpServer {
         .expect("current working directory should exist for runtime citation tests");
     let config = FriggConfig::from_workspace_roots(vec![workspace_root])
         .expect("runtime citation tests must build a valid FriggConfig");
-    FriggMcpServer::new_with_runtime_options(config, false, true)
+    FriggMcpServer::new_with_runtime_options(config, true)
 }
 
 fn claim_text_for_tool_call(payload: &DeepSearchCitationPayload, tool_call_id: &str) -> String {

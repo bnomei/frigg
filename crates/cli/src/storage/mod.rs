@@ -1,37 +1,33 @@
-//! Durable storage for manifests, semantic state, retrieval projections, and provenance. Storage
-//! is the handoff point that lets indexing, search, and MCP runtime share consistent repository
-//! state across process boundaries and refresh cycles.
+//! Durable storage for manifests, semantic state, and retrieval projections. Storage is the
+//! handoff point that lets indexing, search, and MCP runtime share consistent repository state
+//! across process boundaries and refresh cycles.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
-use rusqlite::{Connection, ErrorCode};
-use serde_json::Value;
+use rusqlite::Connection;
 
 mod db_runtime;
 mod lifecycle;
 mod manifest_store;
 mod projection_store;
 mod provenance_path;
-mod provenance_store;
 mod schema;
 mod semantic_store;
 mod types;
 mod vector_store;
-#[cfg(test)]
-use db_runtime::set_schema_version;
 use db_runtime::{
-    apply_migration, count_provenance_events, count_snapshots_for_repository_and_kind, i64_to_u64,
-    latest_schema_version, load_latest_manifest_metadata_snapshot_for_repository,
+    count_snapshots_for_repository_and_kind, database_has_user_tables, i64_to_u64,
+    load_latest_manifest_metadata_snapshot_for_repository,
     load_latest_manifest_snapshot_for_repository, load_latest_manifest_snapshot_id_for_repository,
     load_manifest_entries_for_snapshot, load_manifest_metadata_entries_for_snapshot,
     load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
-    open_connection, option_u64_to_option_i64, prune_provenance_events_on_connection,
-    read_schema_version, run_repository_roundtrip_probe, table_exists, u64_to_i64, usize_to_i64,
+    open_connection, open_existing_connection, option_u64_to_option_i64, read_schema_version,
+    run_repository_roundtrip_probe, set_schema_version, table_exists, u64_to_i64, usize_to_i64,
 };
 #[cfg(test)]
 pub(crate) use db_runtime::{reset_semantic_read_trace, snapshot_semantic_read_trace};
@@ -39,11 +35,11 @@ pub use provenance_path::{
     ensure_provenance_db_parent_dir, resolve_provenance_db_path,
     resolve_workspace_relative_write_path,
 };
-pub(crate) use schema::{MIGRATIONS, Migration, REQUIRED_TABLES};
+pub(crate) use schema::{CURRENT_SCHEMA_SQL, CURRENT_SCHEMA_VERSION, REQUIRED_TABLES};
 pub use types::*;
 #[cfg(test)]
 pub(crate) use vector_store::{
-    encode_f32_vector, ensure_sqlite_vec_pinned_version,
+    ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability,
     verify_vector_store_on_connection_with_detected_capability,
 };
@@ -59,10 +55,9 @@ const INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC: &str = "semantic_vector_parti
 
 #[derive(Debug, Clone)]
 /// Owns Frigg's durable SQLite state so indexing and serving can share the same repository
-/// snapshots, projections, semantic artifacts, and provenance history.
+/// snapshots, projections, and semantic artifacts.
 pub struct Storage {
     db_path: PathBuf,
-    provenance_write_connection: Arc<OnceLock<Mutex<Connection>>>,
 }
 
 /// Default embedding width expected by semantic vector storage.
@@ -71,21 +66,18 @@ pub const DEFAULT_VECTOR_DIMENSIONS: usize = 1_536;
 pub const VECTOR_TABLE_NAME: &str = "embedding_vectors";
 /// Manifest snapshot epochs retained per repository after pruning.
 pub const DEFAULT_RETAINED_MANIFEST_SNAPSHOTS: usize = 8;
-/// Provenance events retained after append-time pruning.
-pub const DEFAULT_RETAINED_PROVENANCE_EVENTS: usize = 10_000;
 const SQLITE_VEC_MAX_KNN_LIMIT: usize = 4_096;
 const SQLITE_VEC_REQUIRED_VERSION: &str = "0.1.7-alpha.10";
 /// Hidden workspace directory containing durable Frigg storage artifacts.
 pub const PROVENANCE_STORAGE_DIR: &str = ".frigg";
 /// SQLite database filename under [`PROVENANCE_STORAGE_DIR`].
 pub const PROVENANCE_STORAGE_DB_FILE: &str = "storage.sqlite3";
-const PROVENANCE_CREATED_AT_MAX_RETRY_MS: i64 = 32;
 static SQLITE_VEC_AUTO_EXTENSION_REGISTRATION: OnceLock<Result<(), String>> = OnceLock::new();
 static SQLITE_VEC_CONNECTION_READINESS: OnceLock<Result<String, String>> = OnceLock::new();
 
 /// Latest durable storage schema version expected by this build.
 pub fn latest_storage_schema_version() -> i64 {
-    latest_schema_version(MIGRATIONS)
+    CURRENT_SCHEMA_VERSION
 }
 
 #[allow(unsafe_code)]

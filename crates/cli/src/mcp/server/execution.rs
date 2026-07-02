@@ -159,28 +159,69 @@ mod tests {
     use super::*;
 
     use crate::settings::FriggConfig;
-    use std::path::PathBuf;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    fn fixture_server() -> (FriggMcpServer, AttachedWorkspace) {
-        let workspace_root = std::env::current_dir()
-            .expect("current working directory should exist for MCP execution tests");
+    struct TempWorkspace {
+        root: PathBuf,
+    }
+
+    impl TempWorkspace {
+        fn new(name: &str) -> Self {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "frigg-mcp-execution-{name}-{}-{stamp}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("temporary workspace should be creatable");
+            Self { root }
+        }
+
+        fn path(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    impl Drop for TempWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn fixture_server() -> (FriggMcpServer, AttachedWorkspace, TempWorkspace) {
+        let workspace_root = TempWorkspace::new("fixture");
+        fs::create_dir_all(workspace_root.path().join(".git"))
+            .expect("temporary git root marker should be creatable");
+        fs::create_dir_all(workspace_root.path().join("src"))
+            .expect("temporary source directory should be creatable");
+        fs::write(
+            workspace_root.path().join("src/lib.rs"),
+            "pub fn fixture() -> &'static str { \"fixture\" }\n",
+        )
+        .expect("temporary source file should be writable");
         let config = FriggConfig::from_optional_workspace_roots(Vec::<PathBuf>::new())
             .expect("fixture config should build");
-        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let server = FriggMcpServer::new_with_runtime_options(config, false);
         let _ = server
-            .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::GitRoot)
+            .attach_workspace_internal(workspace_root.path(), true, WorkspaceResolveMode::GitRoot)
             .expect("fixture workspace should attach");
         let workspace = server
             .attached_workspaces()
             .into_iter()
             .next()
             .expect("fixture server should attach one workspace");
-        (server, workspace)
+        (server, workspace, workspace_root)
     }
 
     #[test]
     fn tool_execution_context_scopes_to_explicit_repository() {
-        let (server, workspace) = fixture_server();
+        let (server, workspace, _workspace_root) = fixture_server();
 
         let context = server
             .scoped_read_only_tool_execution_context(
@@ -201,7 +242,7 @@ mod tests {
 
     #[test]
     fn tool_execution_context_uses_session_default_repository() {
-        let (server, workspace) = fixture_server();
+        let (server, workspace, _workspace_root) = fixture_server();
         server.set_current_repository_id(Some(workspace.repository_id.clone()));
 
         let context = server
@@ -219,7 +260,7 @@ mod tests {
 
     #[test]
     fn tool_execution_finalization_preserves_typed_workload_metadata() {
-        let (server, workspace) = fixture_server();
+        let (server, workspace, _workspace_root) = fixture_server();
         let context = server
             .scoped_read_only_tool_execution_context(
                 "search_text",

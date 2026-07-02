@@ -33,14 +33,6 @@ pub struct RepositoryManifestMetadataSnapshot {
     pub entries: Vec<ManifestMetadataEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvenanceEventRow {
-    pub trace_id: String,
-    pub tool_name: String,
-    pub payload_json: String,
-    pub created_at: String,
-}
-
 /// Semantic chunk with embedding payload persisted for a repository model partition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticChunkEmbeddingRecord {

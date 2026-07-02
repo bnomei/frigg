@@ -15,7 +15,7 @@ Frigg is source read-only during normal indexing. It stores its own state under 
 ## What You Get
 
 - one local MCP service that can serve multiple adopted repositories
-- local SQLite state for manifests, search projections, semantic rows, navigation data, and provenance
+- local SQLite state for manifests, search projections, semantic rows, and navigation data
 - Tree-sitter-backed symbol, document outline, and structural search for all supported languages
 - hybrid discovery that blends lexical matches, path and surface witnesses, graph evidence, optional semantic recall, and code-aware reranking
 - bounded `read_file` and `read_match` output so agents inspect smaller source slices instead of repeatedly reading whole files
@@ -184,7 +184,7 @@ jobs:
       - run: frigg verify
 ```
 
-For larger repositories, optionally cache `.frigg/`. Treat `.frigg/` as build output and provenance, not as a secret store. Always restore first, then refresh and verify the restored state. Save the cache only from trusted events:
+For larger repositories, optionally cache `.frigg/`. Treat `.frigg/` as regenerable build output, not as a secret store. Always restore first, then refresh and verify the restored state. Save the cache only from trusted events:
 
 ```yaml
 name: Frigg
@@ -249,7 +249,7 @@ The Frigg-specific layer is `search_hybrid`: a local reranking flow that gathers
 
 For each indexed repository, Frigg creates and maintains:
 
-- `.frigg/storage.sqlite3`: local SQLite state for manifests, snapshot-scoped retrieval projections, search state, navigation data, semantic data, and provenance
+- `.frigg/storage.sqlite3`: local SQLite state for manifests, snapshot-scoped retrieval projections, search state, navigation data, and semantic data
 
 Frigg can also read:
 
@@ -259,7 +259,7 @@ Frigg can also read:
 
 By default, `workspace_attach` uses `index_mode=ensure`: it adopts the repository, refreshes stale or missing lexical and semantic state when possible, waits up to 30 seconds, and reports `index_lifecycle`. Use `index_mode=skip` only when stale or missing indexed state is acceptable.
 
-Attach is not side-effect free. It can create or update `.frigg/storage.sqlite3`, record session/provenance state, report repository health, and schedule precise-generator discovery or generation when a generator applies. Optional precise generation may write `.frigg/scip/` artifacts, execute repo-local generator tools, or apply generator-specific compatibility patches.
+Attach is not side-effect free. It can create or update `.frigg/storage.sqlite3`, update session state, report repository health, and schedule precise-generator discovery or generation when a generator applies. Optional precise generation may write `.frigg/scip/` artifacts, execute repo-local generator tools, or apply generator-specific compatibility patches.
 
 For runtime diagnosis, see the [Frigg Operator Runbook](docs/operator-runbook.md).
 
@@ -431,7 +431,7 @@ Frigg can report context efficiency for bounded source-returning tools. The feat
 
 The response field is opt-in per tool call. Pass `include_context_efficiency=true` to include `context_efficiency` metadata in supported MCP responses. When the flag is omitted or false, Frigg keeps those response fields out of the tool payload.
 
-Context-efficiency metadata is computed from the current response and existing index state. It is not stored in SQLite provenance rows. The indexed readable surface comes from latest manifest metadata, and returned full-file totals use manifest sizes for the unique returned paths. This is separate from `returned_source_bytes_estimate`, which counts the returned source windows, excerpts, or read contents assembled for the response. `narrowing_ratio_estimate` is an estimate derived from those returned source bytes against the indexed readable bytes.
+Context-efficiency metadata is computed from the current response and existing index state. It is not stored in SQLite. The indexed readable surface comes from latest manifest metadata, and returned full-file totals use manifest sizes for the unique returned paths. This is separate from `returned_source_bytes_estimate`, which counts the returned source windows, excerpts, or read contents assembled for the response. `narrowing_ratio_estimate` is an estimate derived from those returned source bytes against the indexed readable bytes.
 
 Set `FRIGG_CONTEXT_EFFICIENCY_LOG=true` to append compact JSONL rows under the active repository's `.frigg/context.jsonl`. This logging control is independent from `include_context_efficiency=true`: logging can be enabled while response metadata remains omitted, and response metadata can be requested without enabling JSONL logging.
 

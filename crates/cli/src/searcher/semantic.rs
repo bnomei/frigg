@@ -1,6 +1,6 @@
 //! Semantic retrieval channel backed by manifest snapshot embeddings.
 //!
-//! Embeds the query, runs vector top-k against provenance storage, retains chunk candidates with
+//! Embeds the query, runs vector top-k against SQLite storage, retains chunk candidates with
 //! relative score floors, and reports channel health when embeddings or snapshots are missing.
 
 use std::collections::{BTreeMap, BTreeSet};

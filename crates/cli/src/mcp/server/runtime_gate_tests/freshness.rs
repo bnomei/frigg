@@ -140,7 +140,7 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
     config.semantic_runtime = semantic_runtime_enabled_openai();
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry
@@ -212,7 +212,6 @@ fn repository_response_cache_freshness_returns_ready_manifest_scope() {
     let server = FriggMcpServer::new_with_runtime_options(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
-        false,
         false,
     );
     let workspace = server
@@ -292,7 +291,6 @@ fn repository_response_cache_freshness_marks_dirty_root_uncacheable() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
         false,
-        false,
     );
     let workspace = server
         .known_workspaces()
@@ -356,7 +354,6 @@ fn repository_response_cache_freshness_marks_missing_snapshot_uncacheable() {
     let server = FriggMcpServer::new_with_runtime_options(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
-        false,
         false,
     );
     let workspace = server
@@ -442,7 +439,6 @@ fn repository_response_cache_freshness_marks_stale_snapshot_uncacheable() {
     let server = FriggMcpServer::new_with_runtime_options(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
-        false,
         false,
     );
     let workspace = server
@@ -530,7 +526,7 @@ fn repository_response_cache_freshness_includes_semantic_scope_metadata() {
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
     config.semantic_runtime = semantic_runtime_enabled_openai();
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .known_workspaces()
         .into_iter()

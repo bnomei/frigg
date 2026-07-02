@@ -1,4 +1,4 @@
-//! SQLite connection helpers, manifest loaders, and schema bookkeeping.
+//! SQLite connection helpers, manifest loaders, and schema compatibility checks.
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -6,13 +6,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::domain::{FriggError, FriggResult};
-use rusqlite::{Connection, OptionalExtension, Transaction};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction};
 
 use super::vector_store::{
     ensure_sqlite_vec_auto_extension_registered, ensure_sqlite_vec_registration_readiness,
 };
 use super::{
-    ManifestEntry, ManifestMetadataEntry, Migration, RepositoryManifestMetadataSnapshot,
+    ManifestEntry, ManifestMetadataEntry, RepositoryManifestMetadataSnapshot,
     RepositoryManifestSnapshot, SNAPSHOT_KIND_MANIFEST,
 };
 
@@ -137,53 +137,6 @@ pub(super) fn count_snapshots_for_repository_and_kind(
     })
 }
 
-pub(super) fn count_provenance_events(conn: &Connection) -> FriggResult<usize> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM provenance_event", [], |row| {
-            row.get(0)
-        })
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to count provenance events for retention: {err}"
-            ))
-        })?;
-    usize::try_from(count).map_err(|err| {
-        FriggError::Internal(format!(
-            "provenance event count overflow for retention: {err}"
-        ))
-    })
-}
-
-pub(super) fn prune_provenance_events_on_connection(
-    conn: &Connection,
-    keep_latest: usize,
-) -> FriggResult<()> {
-    let total = count_provenance_events(conn)?;
-    if total <= keep_latest {
-        return Ok(());
-    }
-
-    conn.execute(
-        r#"
-        DELETE FROM provenance_event
-        WHERE rowid NOT IN (
-          SELECT rowid
-          FROM provenance_event
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT ?1
-        )
-        "#,
-        [usize_to_i64(keep_latest, "keep_latest")?],
-    )
-    .map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to prune provenance events on the live connection: {err}"
-        ))
-    })?;
-
-    Ok(())
-}
-
 pub(super) fn load_semantic_head_snapshot_ids_for_repository(
     conn: &Connection,
     repository_id: &str,
@@ -213,11 +166,43 @@ pub(super) fn load_semantic_head_snapshot_ids_for_repository(
 }
 
 pub(super) fn open_connection(path: &Path) -> FriggResult<Connection> {
+    open_connection_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )
+}
+
+pub(super) fn open_existing_connection(path: &Path) -> FriggResult<Connection> {
+    match path.metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return Err(FriggError::InvalidInput(format!(
+                "storage db path '{}' exists but is not a file; move or delete it, then run `frigg init` or `frigg reindex`",
+                path.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(FriggError::NotFound(format!(
+                "storage db file is missing at '{}'; run `frigg init` or `frigg reindex` to create it",
+                path.display()
+            )));
+        }
+        Err(err) => return Err(FriggError::Io(err)),
+    }
+
+    open_connection_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+}
+
+fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> FriggResult<Connection> {
     #[cfg(test)]
     record_semantic_open_connection();
     ensure_sqlite_vec_auto_extension_registered()?;
-    let conn = Connection::open(path)
-        .map_err(|err| FriggError::Internal(format!("failed to open sqlite db: {err}")))?;
+    let conn = Connection::open_with_flags(path, flags).map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to open sqlite db '{}': {err}",
+            path.display()
+        ))
+    })?;
     conn.busy_timeout(SQLITE_BUSY_TIMEOUT).map_err(|err| {
         FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
     })?;
@@ -589,33 +574,6 @@ pub(super) fn read_schema_version(conn: &Connection) -> FriggResult<i64> {
     .map_or(Ok(0), Ok)
 }
 
-pub(super) fn apply_migration(conn: &mut Connection, migration: &Migration) -> FriggResult<()> {
-    let tx = conn.transaction().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to start migration transaction v{}: {err}",
-            migration.version
-        ))
-    })?;
-
-    tx.execute_batch(migration.sql).map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to apply schema migration v{}: {err}",
-            migration.version
-        ))
-    })?;
-
-    set_schema_version(&tx, migration.version)?;
-
-    tx.commit().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to commit migration transaction v{}: {err}",
-            migration.version
-        ))
-    })?;
-
-    Ok(())
-}
-
 pub(super) fn set_schema_version(tx: &Transaction<'_>, version: i64) -> FriggResult<()> {
     tx.execute(
         r#"
@@ -646,8 +604,21 @@ pub(super) fn table_exists(conn: &Connection, table_name: &str) -> FriggResult<b
     })
 }
 
-pub(super) fn latest_schema_version(migrations: &[Migration]) -> i64 {
-    migrations.last().map_or(0, |migration| migration.version)
+pub(super) fn database_has_user_tables(conn: &Connection) -> FriggResult<bool> {
+    conn.query_row(
+        r#"
+        SELECT EXISTS(
+          SELECT 1
+          FROM sqlite_master
+          WHERE type = 'table'
+            AND name NOT LIKE 'sqlite_%'
+        )
+        "#,
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(|err| FriggError::Internal(format!("failed to inspect sqlite schema: {err}")))
 }
 
 pub(super) fn run_repository_roundtrip_probe(conn: &mut Connection) -> FriggResult<()> {
@@ -735,70 +706,11 @@ mod tests {
               mtime_ns INTEGER
             );
 
-            CREATE TABLE IF NOT EXISTS provenance_event (
-              trace_id TEXT NOT NULL,
-              tool_name TEXT NOT NULL,
-              payload_json TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              PRIMARY KEY (trace_id, tool_name, created_at)
-            );
             "#,
         )
         .map_err(|err| {
             FriggError::Internal(format!("failed to create db-runtime test tables: {err}"))
         })
-    }
-
-    #[test]
-    fn count_provenance_events_counts_rows() -> FriggResult<()> {
-        let db_path = temp_db_path("count-events");
-        let conn = Connection::open(&db_path).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to open db for provenance count test: {err}"
-            ))
-        })?;
-        ensure_core_storage_tables(&conn)?;
-
-        assert_eq!(count_provenance_events(&conn)?, 0);
-
-        conn.execute(
-            "INSERT INTO provenance_event (trace_id, tool_name, payload_json, created_at) VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z')",
-            ("trace-1", "read_file", "{}"),
-        )
-        .map_err(|err| FriggError::Internal(format!("failed to seed provenance row: {err}")))?;
-
-        assert_eq!(count_provenance_events(&conn)?, 1);
-        let _ = std::fs::remove_file(&db_path);
-        Ok(())
-    }
-
-    #[test]
-    fn prune_provenance_events_on_connection_keeps_requested_retention() -> FriggResult<()> {
-        let db_path = temp_db_path("prune-events");
-        let conn = Connection::open(&db_path).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to open db for provenance prune test: {err}"
-            ))
-        })?;
-        ensure_core_storage_tables(&conn)?;
-
-        for idx in 1..=3 {
-            conn.execute(
-                "INSERT INTO provenance_event (trace_id, tool_name, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
-                (format!("trace-{idx}"), "read_file", "{}", format!("2026-01-0{idx}T00:00:00Z")),
-            )
-            .map_err(|err| FriggError::Internal(format!("failed to seed provenance row {idx}: {err}")))?;
-        }
-
-        prune_provenance_events_on_connection(&conn, 2)?;
-        let before = count_provenance_events(&conn)?;
-        assert_eq!(before, 2);
-
-        prune_provenance_events_on_connection(&conn, 10)?;
-        assert_eq!(count_provenance_events(&conn)?, 2);
-
-        let _ = std::fs::remove_file(&db_path);
-        Ok(())
     }
 
     #[test]

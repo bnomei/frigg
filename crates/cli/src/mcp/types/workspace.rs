@@ -440,15 +440,6 @@ pub struct RuntimeTaskSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RecentProvenanceSummary {
-    pub trace_id: String,
-    pub tool_name: String,
-    pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeStatusSummary {
     pub profile: RuntimeProfile,
     pub persistent_state_available: bool,
@@ -459,8 +450,6 @@ pub struct RuntimeStatusSummary {
     pub active_tasks: Vec<RuntimeTaskSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_tasks: Vec<RuntimeTaskSummary>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub recent_provenance: Vec<RecentProvenanceSummary>,
 }
 
 #[cfg(test)]

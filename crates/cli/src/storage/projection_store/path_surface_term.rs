@@ -1,7 +1,7 @@
 //! Path surface term projection load for lexical witness scoring.
 
 use crate::domain::{FriggError, FriggResult};
-use crate::storage::{PathSurfaceTermProjection, Storage, db_runtime::open_connection};
+use crate::storage::{PathSurfaceTermProjection, Storage};
 
 use super::common::normalize_repository_snapshot_ids;
 
@@ -14,7 +14,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT path, term_weights_json, exact_terms_json

@@ -1,5 +1,5 @@
 //! MCP server orchestration: tool routing, session-scoped workspace adoption, runtime caches,
-//! provenance recording, and the public tool handlers agents invoke over streamable HTTP or stdio.
+//! and the public tool handlers agents invoke over streamable HTTP or stdio.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -76,7 +76,6 @@ use crate::mcp::guidance::{
     TOOL_SURFACE_RESOURCE_URI, guidance_prompts, policy_resources, read_guidance_prompt,
     read_policy_resource,
 };
-use crate::mcp::provenance_cache::{ProvenancePersistenceStage, ProvenanceStorageCacheKey};
 use crate::mcp::server_cache::{
     CachedFindDeclarationsResponse, CachedGoToDefinitionResponse, CachedHeuristicReferences,
     CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness, CachedRepositorySummary,
@@ -117,26 +116,25 @@ use crate::mcp::types::{
     InspectSyntaxTreeResponse, ListRepositoriesParams, ListRepositoriesResponse,
     NavigationAvailability, NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
     NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
-    ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode,
-    RecentProvenanceSummary, RepositorySummary, ResponseMode, RuntimeStatusSummary,
-    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelWeightsParams,
-    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem,
-    WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction,
-    WorkspaceAttachIndexMode, WorkspaceAttachParams, WorkspaceAttachResponse,
-    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceDetachParams,
-    WorkspaceDetachResponse, WorkspaceIndexAction, WorkspaceIndexComponentState,
-    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase,
-    WorkspaceIndexLifecycleSummary, WorkspacePreciseArtifactFailureSummary,
-    WorkspacePreciseCoverageMode, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
-    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
-    WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
-    WorkspacePreciseLifecycleSummary, WorkspacePreciseSummary, WorkspacePrepareParams,
-    WorkspacePrepareResponse, WorkspaceRecommendedAction, WorkspaceReindexParams,
-    WorkspaceReindexResponse, WorkspaceResolveMode, WorkspaceStorageIndexState,
-    WorkspaceStorageSummary,
+    ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RepositorySummary,
+    ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary,
+    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
+    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
+    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
+    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
+    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
+    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexAction,
+    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
+    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary,
+    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
+    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
+    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
+    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseSummary,
+    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
+    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
+    WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -319,7 +317,6 @@ pub struct FriggMcpServer {
     runtime_state: FriggMcpRuntimeState,
     session_state: FriggMcpSessionState,
     cache_state: FriggMcpCacheState,
-    provenance_state: FriggMcpProvenanceState,
 }
 
 #[derive(Clone)]
@@ -359,7 +356,6 @@ struct FriggMcpCacheState {
     symbol_corpus_cache: Arc<RwLock<BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>>>,
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
-    provenance_storage_cache: Arc<RwLock<BTreeMap<ProvenanceStorageCacheKey, Arc<Storage>>>>,
     repository_response_freshness_cache: Arc<
         RwLock<BTreeMap<RepositoryResponseFreshnessCacheKey, CachedRepositoryResponseFreshness>>,
     >,
@@ -382,12 +378,6 @@ struct FriggMcpCacheState {
     compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
 }
 
-#[derive(Clone)]
-struct FriggMcpProvenanceState {
-    best_effort: bool,
-    enabled: bool,
-}
-
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReadOnlyToolExecutionContext {
@@ -406,7 +396,6 @@ pub(super) struct ScopedReadOnlyToolExecutionContext {
 
 impl FriggMcpServer {
     const PROVENANCE_MAX_TEXT_CHARS: usize = 512;
-    const PROVENANCE_BEST_EFFORT_ENV: &str = "FRIGG_MCP_PROVENANCE_BEST_EFFORT";
     const FIND_REFERENCES_MAX_SCIP_ARTIFACTS: usize = 2_048;
     const FIND_REFERENCES_MAX_SOURCE_FILES: usize = 20_000;
     const FIND_REFERENCES_SCIP_ARTIFACT_BYTES_MULTIPLIER: usize = 8;
@@ -420,17 +409,17 @@ impl FriggMcpServer {
     const PRECISE_DISCOVERY_SAMPLE_LIMIT: usize = 16;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
-    const RUNTIME_RECENT_PROVENANCE_LIMIT: usize = 8;
     const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
     const REPOSITORY_RESPONSE_FRESHNESS_CACHE_TTL: Duration = Duration::from_secs(2);
     const REPOSITORY_RESPONSE_FRESHNESS_CACHE_MAX_ENTRIES: usize = 64;
     const PRECISE_GENERATOR_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
     const PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES: usize = 128;
-    const PROVENANCE_STORAGE_CACHE_MAX_ENTRIES: usize = 32;
     const SESSION_RESULT_HANDLE_TTL: Duration = Duration::from_secs(300);
     const SESSION_RESULT_HANDLE_MAX_ENTRIES: usize = 64;
     pub fn new(config: FriggConfig) -> Self {
-        Self::new_with_provenance_best_effort(config, Self::provenance_best_effort_from_env())
+        let enable_extended_tools =
+            active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
+        Self::new_with_runtime_options(config, enable_extended_tools)
     }
 
     pub fn new_with_runtime(
@@ -440,12 +429,10 @@ impl FriggMcpServer {
         runtime_task_registry: Arc<RwLock<RuntimeTaskRegistry>>,
         validated_manifest_candidate_cache: Arc<RwLock<ValidatedManifestCandidateCache>>,
     ) -> Self {
-        let provenance_best_effort = Self::provenance_best_effort_from_env();
         let enable_extended_tools =
             active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
         Self::new_with_runtime_context(
             config,
-            provenance_best_effort,
             enable_extended_tools,
             runtime_profile,
             runtime_watch_active,
@@ -458,7 +445,6 @@ impl FriggMcpServer {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_runtime_context(
         config: FriggConfig,
-        provenance_best_effort: bool,
         enable_extended_tools: bool,
         runtime_profile: RuntimeProfile,
         runtime_watch_active: bool,
@@ -505,7 +491,6 @@ impl FriggMcpServer {
                 symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                provenance_storage_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_response_freshness_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generator_probe_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -518,21 +503,12 @@ impl FriggMcpServer {
                 heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
             },
-            provenance_state: FriggMcpProvenanceState {
-                best_effort: provenance_best_effort,
-                enabled: true,
-            },
         }
     }
 
-    pub fn new_with_runtime_options(
-        config: FriggConfig,
-        provenance_best_effort: bool,
-        enable_extended_tools: bool,
-    ) -> Self {
+    pub fn new_with_runtime_options(config: FriggConfig, enable_extended_tools: bool) -> Self {
         Self::new_with_runtime_context(
             config,
-            provenance_best_effort,
             enable_extended_tools,
             RuntimeProfile::StdioEphemeral,
             false,
@@ -540,15 +516,6 @@ impl FriggMcpServer {
             Arc::new(RwLock::new(RuntimeTaskRegistry::new())),
             Arc::new(RwLock::new(ValidatedManifestCandidateCache::default())),
         )
-    }
-
-    pub fn new_with_provenance_best_effort(
-        config: FriggConfig,
-        provenance_best_effort: bool,
-    ) -> Self {
-        let enable_extended_tools =
-            active_runtime_tool_surface_profile() == ToolSurfaceProfile::Extended;
-        Self::new_with_runtime_options(config, provenance_best_effort, enable_extended_tools)
     }
 
     #[doc(hidden)]
@@ -1447,10 +1414,6 @@ impl FriggMcpServer {
                 .runtime
                 .as_ref()
                 .map(|runtime| runtime.recent_tasks.len()),
-            "recent_provenance_count": response
-                .runtime
-                .as_ref()
-                .map(|runtime| runtime.recent_provenance.len()),
         });
         let normalized_workload =
             execution_context.normalized_workload(&repository_ids, WorkloadPrecisionMode::Exact);

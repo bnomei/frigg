@@ -10,7 +10,7 @@ use crate::mcp::types::{
 
 #[test]
 fn extended_only_tools_are_hidden_by_default_runtime_options() {
-    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, false);
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
     let names = to_set(server.runtime_registered_tool_names());
 
     for tool_name in extended_only_tool_names() {
@@ -27,7 +27,7 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
 
 #[test]
 fn extended_only_tools_are_registered_when_runtime_option_enabled() {
-    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, true);
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), true);
     let names = to_set(server.runtime_registered_tool_names());
 
     for tool_name in extended_only_tool_names() {
@@ -40,7 +40,7 @@ fn extended_only_tools_are_registered_when_runtime_option_enabled() {
 
 #[test]
 fn server_info_enables_resources_and_prompts() {
-    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false, false);
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
     let info = <FriggMcpServer as rmcp::ServerHandler>::get_info(&server);
 
     assert!(info.capabilities.tools.is_some());
@@ -68,7 +68,7 @@ fn server_starts_detached_when_started_without_startup_roots() {
 
     let config = FriggConfig::from_optional_workspace_roots(Vec::new())
         .expect("empty serving config should be valid");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     assert!(server.attached_workspaces().is_empty());
     assert!(server.current_repository_id().is_none());
 
@@ -86,7 +86,7 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
     config.semantic_runtime.enabled = true;
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry
@@ -136,7 +136,6 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
     let server = FriggMcpServer::new_with_runtime_options(
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
-        false,
         false,
     );
     let workspace = server
@@ -193,7 +192,7 @@ fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
 
 #[test]
 fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
-    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), true, false);
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
 
     let manifest_task_id = server
         .runtime_state
@@ -267,7 +266,7 @@ fn repository_summary_reports_precise_ingest_failures_separately_from_scip_disco
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
     config.max_file_bytes = 1;
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry
@@ -331,7 +330,7 @@ fn repository_summary_full_scip_ingest_mode_accepts_artifacts_above_default_budg
         .expect("workspace root must produce valid config");
     config.max_file_bytes = 1;
     config.full_scip_ingest = true;
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry

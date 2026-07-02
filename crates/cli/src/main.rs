@@ -11,7 +11,7 @@ mod cli_runtime;
 mod http_runtime;
 #[cfg(test)]
 use axum::http::{StatusCode, header};
-pub(crate) use cli_args::{Cli, Command, WorkloadCorpusExportFormat};
+pub(crate) use cli_args::{Cli, Command};
 use cli_dispatch::async_main;
 #[cfg(test)]
 use cli_runtime::{
@@ -21,7 +21,6 @@ use cli_runtime::{
     resolve_watch_runtime_config, run_reindex_command,
     run_semantic_runtime_startup_gate_with_credentials, run_storage_bootstrap_command,
     run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
-    run_workload_corpus_export_command,
 };
 #[cfg(test)]
 use frigg::settings::{
@@ -31,17 +30,13 @@ use frigg::settings::{
 #[cfg(test)]
 use frigg::storage::SemanticChunkEmbeddingRecord;
 #[cfg(test)]
-use frigg::storage::{
-    DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS, Storage,
-};
+use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
 #[cfg(test)]
 use http_runtime::{
     HttpRuntimeConfig, allowed_authorities_for_bind, authority_allowed, constant_time_equals,
     host_header_allowed, origin_header_allowed, parse_host_authority, parse_origin_authority,
     resolve_http_runtime_config, typed_access_denied_response,
 };
-#[cfg(test)]
-use serde_json::json;
 #[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(test)]
@@ -922,29 +917,9 @@ mod tests {
             &cli,
             Command::PruneStorage {
                 keep_manifest_snapshots: DEFAULT_RETAINED_MANIFEST_SNAPSHOTS,
-                keep_provenance_events: DEFAULT_RETAINED_PROVENANCE_EVENTS,
             },
         )
         .expect("prune-storage command should resolve base config");
-        assert!(!config.semantic_runtime.enabled);
-        assert!(config.semantic_runtime.provider.is_none());
-    }
-
-    #[test]
-    fn export_workload_corpus_command_resolution_keeps_semantic_runtime_unset() {
-        let mut cli = base_cli();
-        cli.semantic_runtime_enabled = Some(true);
-        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
-
-        let config = resolve_command_config(
-            &cli,
-            Command::ExportWorkloadCorpus {
-                output: PathBuf::from("var/workload-corpus.jsonl"),
-                format: WorkloadCorpusExportFormat::Jsonl,
-                limit: DEFAULT_RETAINED_PROVENANCE_EVENTS,
-            },
-        )
-        .expect("export-workload-corpus command should resolve base config");
         assert!(!config.semantic_runtime.enabled);
         assert!(config.semantic_runtime.provider.is_none());
     }
@@ -1213,7 +1188,7 @@ mod tests {
         let workspace_root = temp_workspace_root("startup-fallback");
         fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
         let db_dir = workspace_root.join(PROVENANCE_STORAGE_DIR);
-        fs::create_dir_all(&db_dir).expect("provenance directory should be creatable");
+        fs::create_dir_all(&db_dir).expect("storage directory should be creatable");
         let db_path = db_dir.join(PROVENANCE_STORAGE_DB_FILE);
 
         let conn = Connection::open(&db_path)
@@ -1260,7 +1235,7 @@ mod tests {
         );
         assert!(
             db_path.ends_with(Path::new(PROVENANCE_STORAGE_DIR).join(PROVENANCE_STORAGE_DB_FILE)),
-            "storage db path should use the provenance storage suffix"
+            "storage db path should use the Frigg storage suffix"
         );
         assert!(
             db_path
@@ -1268,6 +1243,53 @@ mod tests {
                 .expect("db path should have a parent directory")
                 .is_dir(),
             "storage db parent directory should be created"
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn storage_maintenance_rejects_incompatible_schema_before_writes() {
+        let workspace_root = temp_workspace_root("storage-maintenance-incompatible-schema");
+        create_simple_workspace(&workspace_root);
+        let db_path = ensure_storage_db_path_for_write(&workspace_root, "storage-maintenance")
+            .expect("storage db path should be creatable for incompatible-schema fixture");
+        let conn = Connection::open(&db_path).expect("incompatible fixture sqlite db should open");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              version INTEGER NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version (id, version, updated_at)
+            VALUES (1, 10, CURRENT_TIMESTAMP);
+            "#,
+        )
+        .expect("incompatible schema version should seed");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        let prune_error = run_storage_maintenance_command(
+            &config,
+            StorageMaintenanceCommand::Prune {
+                keep_manifest_snapshots: 1,
+            },
+        )
+        .expect_err("prune-storage should reject incompatible storage before pruning");
+        assert!(
+            prune_error.to_string().contains("schema is incompatible"),
+            "unexpected prune incompatible-schema error: {prune_error}"
+        );
+
+        let repair_error = run_storage_maintenance_command(
+            &config,
+            StorageMaintenanceCommand::RepairSemanticVectorStore,
+        )
+        .expect_err("repair-storage should reject incompatible storage before repair");
+        assert!(
+            repair_error.to_string().contains("schema is incompatible"),
+            "unexpected repair incompatible-schema error: {repair_error}"
         );
 
         cleanup_workspace(&workspace_root);
@@ -1343,6 +1365,41 @@ mod tests {
             message.contains(&format!("db={}", db_path.display())),
             "unexpected verify bootstrap error: {message}"
         );
+        assert!(
+            !db_path.exists(),
+            "verify should not create a missing storage db while reporting the error"
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn storage_maintenance_reports_missing_db_without_creating_file() {
+        let workspace_root = temp_workspace_root("storage-maintenance-missing-db");
+        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        let db_path = resolve_storage_db_path(&workspace_root, "repair-storage")
+            .expect("storage db path should resolve for an existing workspace root");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        let error = run_storage_maintenance_command(
+            &config,
+            StorageMaintenanceCommand::RepairSemanticVectorStore,
+        )
+        .expect_err("repair-storage should fail when the storage db file is missing");
+        let message = error.to_string();
+        assert!(
+            message.contains("repair-storage failed for repository_id=repo-001"),
+            "unexpected repair-storage error: {message}"
+        );
+        assert!(
+            message.contains("storage db file is missing"),
+            "unexpected repair-storage error: {message}"
+        );
+        assert!(
+            !db_path.exists(),
+            "repair-storage should not create a missing storage db while reporting the error"
+        );
 
         cleanup_workspace(&workspace_root);
     }
@@ -1383,7 +1440,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_storage_command_prunes_manifest_and_provenance_history() {
+    fn prune_storage_command_prunes_manifest_history() {
         let workspace_root = temp_workspace_root("prune-storage-success");
         create_simple_workspace(&workspace_root);
 
@@ -1408,21 +1465,10 @@ mod tests {
                 )
                 .expect("manifest snapshots should seed before prune");
         }
-        for idx in 0..4 {
-            storage
-                .append_provenance_event(
-                    &format!("trace-{idx}"),
-                    "read_file",
-                    &json!({ "idx": idx }),
-                )
-                .expect("provenance events should seed before prune");
-        }
-
         run_storage_maintenance_command(
             &config,
             StorageMaintenanceCommand::Prune {
                 keep_manifest_snapshots: 1,
-                keep_provenance_events: 2,
             },
         )
         .expect("prune-storage command should succeed");
@@ -1439,13 +1485,6 @@ mod tests {
                 .load_manifest_for_snapshot("snapshot-001")
                 .expect("oldest manifest snapshot lookup should succeed")
                 .is_empty()
-        );
-        assert_eq!(
-            storage
-                .load_recent_provenance_events(10)
-                .expect("recent provenance should remain readable")
-                .len(),
-            2
         );
 
         cleanup_workspace(&workspace_root);
@@ -1520,117 +1559,6 @@ mod tests {
             )
             .expect("repaired semantic health should be readable");
         assert!(repaired.vector_consistent);
-
-        cleanup_workspace(&workspace_root);
-    }
-
-    #[test]
-    fn export_workload_corpus_command_writes_deterministic_bounded_jsonl() {
-        let workspace_root = temp_workspace_root("export-workload-corpus-success");
-        create_simple_workspace(&workspace_root);
-
-        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
-            .expect("config should load from temp workspace root");
-        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
-            .expect("init bootstrap should succeed before workload corpus export");
-        let db_path = resolve_storage_db_path(&workspace_root, "export-workload-corpus")
-            .expect("storage db path should resolve after init");
-        let storage = Storage::new(&db_path);
-        let long_text = "x".repeat(400);
-        let large_values: Vec<_> = (0..12).collect();
-        storage
-            .append_provenance_event(
-                "trace-001",
-                "read_file",
-                &json!({
-                    "tool_name": "read_file",
-                    "params": {
-                        "path": "src/main.rs",
-                        "query": long_text,
-                        "values": large_values,
-                    },
-                    "source_refs": [
-                        {"path": "src/main.rs", "line": 1},
-                        {"path": "README.md", "line": 1},
-                    ],
-                    "outcome": {"status": "ok"},
-                    "target_repository_id": "repo-001",
-                    "normalized_workload": {
-                        "tool_class": "literal_lookup",
-                        "precision_mode": "exact",
-                        "repository_scope": {
-                            "scope": "single",
-                            "repository_count": 1
-                        }
-                    }
-                }),
-            )
-            .expect("first provenance event should seed before export");
-        storage
-            .append_provenance_event(
-                "trace-002",
-                "search_hybrid",
-                &json!({
-                    "tool_name": "search_hybrid",
-                    "params": {"query": "main function"},
-                    "source_refs": [],
-                    "outcome": {
-                        "status": "error",
-                        "error_code": "unavailable"
-                    },
-                    "target_repository_id": "repo-001",
-                    "normalized_workload": {
-                        "tool_class": "hybrid_discovery",
-                        "precision_mode": "heuristic"
-                    }
-                }),
-            )
-            .expect("second provenance event should seed before export");
-
-        let output_path = workspace_root
-            .join("artifacts")
-            .join("workload-corpus.jsonl");
-        run_workload_corpus_export_command(
-            &config,
-            &output_path,
-            WorkloadCorpusExportFormat::Jsonl,
-            10,
-        )
-        .expect("workload corpus export should succeed");
-
-        let exported = fs::read_to_string(&output_path)
-            .expect("workload corpus output should be readable after export");
-        let rows = exported
-            .lines()
-            .map(|line| {
-                serde_json::from_str::<serde_json::Value>(line)
-                    .expect("each row should be valid json")
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["trace_id"], "trace-001");
-        assert_eq!(rows[1]["trace_id"], "trace-002");
-        assert_eq!(rows[0]["repository_id"], "repo-001");
-        assert_eq!(rows[0]["tool_name"], "read_file");
-        assert_eq!(rows[0]["source_ref_count"], 2);
-        assert_eq!(
-            rows[0]["normalized_workload"]["tool_class"],
-            "literal_lookup"
-        );
-
-        let bounded_query = rows[0]["parameter_summary"]["query"]
-            .as_str()
-            .expect("bounded query should remain a string");
-        assert!(bounded_query.len() < 400);
-        assert!(bounded_query.ends_with("..."));
-        assert_eq!(
-            rows[0]["parameter_summary"]["values"]
-                .as_array()
-                .expect("bounded values should remain an array")
-                .len(),
-            8
-        );
 
         cleanup_workspace(&workspace_root);
     }

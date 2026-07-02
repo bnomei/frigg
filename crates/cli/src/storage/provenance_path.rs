@@ -1,4 +1,4 @@
-//! Workspace-scoped provenance database path resolution and boundary checks.
+//! Workspace-scoped SQLite storage path resolution and boundary checks.
 
 use super::*;
 use std::path::Component;
@@ -37,7 +37,7 @@ pub fn resolve_provenance_db_path(workspace_root: &Path) -> FriggResult<PathBuf>
     Ok(db_path)
 }
 
-/// Creates the provenance storage parent directory when missing and verifies root boundary.
+/// Creates the storage parent directory when missing and verifies root boundary.
 pub fn ensure_provenance_db_parent_dir(workspace_root: &Path) -> FriggResult<PathBuf> {
     let relative_db_path = Path::new(PROVENANCE_STORAGE_DIR).join(PROVENANCE_STORAGE_DB_FILE);
     resolve_workspace_relative_write_path(workspace_root, &relative_db_path)
@@ -48,7 +48,7 @@ fn resolve_provenance_db_path_with_root(workspace_root: &Path) -> FriggResult<(P
     let db_path = root_canonical
         .join(PROVENANCE_STORAGE_DIR)
         .join(PROVENANCE_STORAGE_DB_FILE);
-    ensure_canonical_root_boundary(&db_path, &root_canonical, "provenance storage path")?;
+    ensure_canonical_root_boundary(&db_path, &root_canonical, "storage path")?;
     Ok((root_canonical, db_path))
 }
 

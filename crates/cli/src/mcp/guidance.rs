@@ -49,7 +49,7 @@ fn support_matrix_json() -> String {
             "safe file reads",
             "text, symbol, and hybrid search",
             "read-only navigation",
-            "provenance-backed auditing"
+            "evidence-backed auditing"
         ],
         "optional_accelerators": [
             "semantic retrieval",
@@ -168,7 +168,7 @@ Use Frigg as the default for code discovery, navigation, exact code search, and 
 - exact literal or regex code searches with repository scoping and result handles\n\
 - bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
-- provenance-backed answers or replayable evidence\n\
+- evidence-backed answers or replayable source references\n\
 - attached multi-repo context instead of one current shell directory\n\n\
 Use shell tools only as the exception when the task is a trivial local operation in the checked-out workspace.\n\n\
 - non-code file reads or exact scans\n\

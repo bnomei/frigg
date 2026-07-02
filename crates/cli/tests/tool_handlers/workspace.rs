@@ -204,13 +204,6 @@ async fn workspace_attach_reuses_git_root_and_sets_session_default() {
     assert!(!runtime.persistent_state_available);
     assert!(!runtime.watch_active);
     assert_eq!(runtime.status_tool, "workspace_current");
-    assert!(
-        runtime
-            .recent_provenance
-            .iter()
-            .any(|event| event.tool_name == "workspace_attach"),
-        "workspace_current should surface recent provenance from prior attach"
-    );
 }
 
 #[test]
@@ -660,47 +653,4 @@ async fn workspace_read_file_without_attached_repositories_returns_remediation()
             .and_then(|value| value.as_str()),
         Some("workspace_attach")
     );
-}
-
-#[tokio::test]
-async fn core_list_repositories_fails_with_typed_error_when_provenance_persistence_fails_by_default()
- {
-    let workspace_root = temp_workspace_root("list-repositories-provenance-strict");
-    fs::create_dir_all(&workspace_root).expect("failed to create temporary workspace root");
-    fs::write(workspace_root.join(".frigg"), "blocked")
-        .expect("failed to seed blocking provenance path fixture");
-    let server = server_for_workspace_root(&workspace_root).await;
-
-    let error = match server
-        .list_repositories(Parameters(ListRepositoriesParams::default()))
-        .await
-    {
-        Ok(_) => panic!("strict mode should fail when provenance persistence fails"),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
-    assert_eq!(
-        error_code_tag(&error),
-        Some("provenance_persistence_failed")
-    );
-    assert_eq!(retryable_tag(&error), Some(false));
-    assert_eq!(
-        error
-            .data
-            .as_ref()
-            .and_then(|value| value.get("provenance_stage"))
-            .and_then(|value| value.as_str()),
-        Some("resolve_storage_path")
-    );
-    assert_eq!(
-        error
-            .data
-            .as_ref()
-            .and_then(|value| value.get("tool_name"))
-            .and_then(|value| value.as_str()),
-        Some("list_repositories")
-    );
-
-    cleanup_workspace_root(&workspace_root);
 }

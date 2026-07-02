@@ -4,33 +4,23 @@ pub(super) use std::path::{Path, PathBuf};
 pub(super) use std::{env, fs};
 
 pub(super) use super::super::{
-    DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, MIGRATIONS, ManifestEntry,
-    PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR, PathAnchorSketchProjection,
-    PathRelationProjection, PathSurfaceTermProjection, PathWitnessProjection,
-    RetrievalProjectionBundle, RetrievalProjectionHeadRecord, SQLITE_VEC_REQUIRED_VERSION,
-    SemanticChunkEmbeddingRecord, Storage, SubtreeCoverageProjection, TestSubjectProjection,
-    VECTOR_TABLE_NAME, encode_f32_vector, ensure_provenance_db_parent_dir,
+    CURRENT_SCHEMA_VERSION, DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, ManifestEntry,
+    PathAnchorSketchProjection, PathRelationProjection, PathSurfaceTermProjection,
+    PathWitnessProjection, REQUIRED_TABLES, RetrievalProjectionBundle,
+    RetrievalProjectionHeadRecord, SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord,
+    Storage, SubtreeCoverageProjection, TestSubjectProjection, VECTOR_TABLE_NAME,
     ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
-    reset_semantic_read_trace, resolve_provenance_db_path, resolve_workspace_relative_write_path,
-    set_schema_version, snapshot_semantic_read_trace, table_exists,
+    reset_semantic_read_trace, snapshot_semantic_read_trace, table_exists,
     verify_vector_store_on_connection_with_detected_capability,
 };
 pub(super) use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 pub(super) use rusqlite::Connection;
-pub(super) use serde_json::json;
 pub(super) use uuid::Uuid;
 
 pub(super) fn temp_db_path(test_name: &str) -> PathBuf {
     env::temp_dir().join(format!(
         "frigg-storage-{test_name}-{}.sqlite3",
-        Uuid::now_v7()
-    ))
-}
-
-pub(super) fn temp_workspace_root(test_name: &str) -> PathBuf {
-    env::temp_dir().join(format!(
-        "frigg-storage-workspace-{test_name}-{}",
         Uuid::now_v7()
     ))
 }
@@ -41,49 +31,6 @@ pub(super) fn open_test_connection(path: &Path) -> FriggResult<Connection> {
             "failed to open sqlite db for test assertions: {err}"
         ))
     })
-}
-
-pub(super) fn initialize_v3_storage_schema(path: &Path) -> FriggResult<()> {
-    let mut conn = open_test_connection(path)?;
-    conn.execute_batch(
-        r#"
-            CREATE TABLE schema_version (
-              id INTEGER PRIMARY KEY CHECK (id = 1),
-              version INTEGER NOT NULL,
-              updated_at TEXT NOT NULL
-            );
-            "#,
-    )
-    .map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to create schema_version table for v3 migration test: {err}"
-        ))
-    })?;
-
-    let tx = conn.transaction().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to start v3 migration seed transaction for tests: {err}"
-        ))
-    })?;
-    for migration in MIGRATIONS
-        .iter()
-        .take_while(|migration| migration.version <= 3)
-    {
-        tx.execute_batch(migration.sql).map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to seed migration v{} for v3 migration test: {err}",
-                migration.version
-            ))
-        })?;
-    }
-    set_schema_version(&tx, 3)?;
-    tx.commit().map_err(|err| {
-        FriggError::Internal(format!(
-            "failed to commit v3 schema seed transaction for tests: {err}"
-        ))
-    })?;
-
-    Ok(())
 }
 
 pub(super) fn count_rows(conn: &Connection, table_name: &str) -> FriggResult<i64> {
@@ -132,16 +79,6 @@ pub(super) fn explain_query_plan(conn: &Connection, query: &str) -> FriggResult<
 
 pub(super) fn cleanup_db(path: &Path) {
     let _ = fs::remove_file(path);
-}
-
-pub(super) fn cleanup_workspace(path: &Path) {
-    let _ = fs::remove_dir_all(path);
-}
-
-#[cfg(unix)]
-pub(super) fn create_dir_symlink(target: &Path, link: &Path) -> FriggResult<()> {
-    std::os::unix::fs::symlink(target, link).map_err(FriggError::Io)?;
-    Ok(())
 }
 
 pub(super) fn create_sqlite_vec_like_table(

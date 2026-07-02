@@ -971,6 +971,9 @@ impl FriggMcpServer {
             .into_iter()
             .find(|workspace| workspace.repository_id == repository_id)
             .map(|workspace| {
+                if !workspace.db_path.exists() {
+                    return Ok(None);
+                }
                 Storage::new(&workspace.db_path)
                     .load_latest_context_efficiency_manifest_summary_for_repository(repository_id)
                     .map_err(Self::map_frigg_error)

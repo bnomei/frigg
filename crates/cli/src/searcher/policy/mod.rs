@@ -12,6 +12,7 @@ mod rules;
 mod trace;
 
 use super::intent::HybridRankingIntent;
+#[cfg(test)]
 use super::path_witness_projection::StoredPathWitnessProjection;
 use facts::PathQualityFacts;
 pub(super) use facts::{
@@ -82,6 +83,7 @@ pub(crate) fn apply_post_selection_guardrails_with_trace(
     (final_matches, trace)
 }
 
+#[cfg(test)]
 fn format_rule_trace(evaluation: crate::searcher::policy::trace::PolicyEvaluation) -> Vec<String> {
     evaluation
         .trace
@@ -100,11 +102,13 @@ fn format_rule_trace(evaluation: crate::searcher::policy::trace::PolicyEvaluatio
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(crate) fn path_quality_rule_trace(path: &str, intent: &HybridRankingIntent) -> Vec<String> {
     let facts = PathQualityFacts::from_path(path, intent);
     format_rule_trace(rules::path_quality::evaluate(&facts, true))
 }
 
+#[cfg(test)]
 pub(crate) fn path_witness_rule_trace(
     path: &str,
     intent: &HybridRankingIntent,
@@ -118,6 +122,7 @@ pub(crate) fn path_witness_rule_trace(
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(crate) fn selection_rule_trace(
     entry: super::HybridRankedEvidence,
     selected_so_far: &[super::HybridRankedEvidence],

@@ -18,7 +18,7 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
 
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry
@@ -66,7 +66,7 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
 
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry
@@ -116,7 +116,7 @@ fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
 
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
     let workspace = server
         .runtime_state
         .workspace_registry

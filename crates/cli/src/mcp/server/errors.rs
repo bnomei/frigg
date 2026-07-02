@@ -314,57 +314,6 @@ impl FriggMcpServer {
         Self::timeout(message, Some(Value::Object(detail)))
     }
 
-    pub(super) fn provenance_persistence_error(
-        stage: ProvenancePersistenceStage,
-        tool_name: &str,
-        repository_id: Option<&str>,
-        db_path: Option<&Path>,
-        err: impl std::fmt::Display,
-    ) -> ErrorData {
-        let mut detail = serde_json::Map::new();
-        detail.insert(
-            "provenance_stage".to_owned(),
-            Value::String(stage.as_str().to_owned()),
-        );
-        detail.insert("tool_name".to_owned(), Value::String(tool_name.to_owned()));
-        if let Some(repository_id) = repository_id {
-            detail.insert(
-                "repository_id".to_owned(),
-                Value::String(repository_id.to_owned()),
-            );
-        }
-        if let Some(db_path) = db_path {
-            detail.insert(
-                "db_path".to_owned(),
-                Value::String(db_path.display().to_string()),
-            );
-        }
-
-        let raw_message = err.to_string();
-        detail.insert(
-            "provenance_error".to_owned(),
-            Value::String(Self::bounded_text(&raw_message)),
-        );
-
-        Self::internal_with_code(
-            format!("failed to persist provenance for tool {tool_name}"),
-            "provenance_persistence_failed",
-            stage.retryable(),
-            Some(Value::Object(detail)),
-        )
-    }
-
-    pub(super) fn parse_env_flag(raw: &str) -> bool {
-        let normalized = raw.trim().to_ascii_lowercase();
-        matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-    }
-
-    pub(super) fn provenance_best_effort_from_env() -> bool {
-        std::env::var(Self::PROVENANCE_BEST_EFFORT_ENV)
-            .map(|raw| Self::parse_env_flag(&raw))
-            .unwrap_or(false)
-    }
-
     pub(super) fn map_frigg_error(err: FriggError) -> ErrorData {
         Self::build_frigg_error_data(Self::translate_frigg_error(err))
     }

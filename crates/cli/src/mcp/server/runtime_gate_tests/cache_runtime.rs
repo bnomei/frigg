@@ -195,7 +195,6 @@ fn runtime_text_searchers_share_projection_store_service_across_requests() {
         FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("workspace root must produce valid config"),
         false,
-        false,
     );
     assert_eq!(
         server
@@ -1336,8 +1335,8 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
 }
 
 #[tokio::test]
-async fn read_match_records_read_match_provenance_not_read_file() {
-    let workspace_root = temp_workspace_root("read-match-provenance");
+async fn read_match_reads_from_cached_result_handle() {
+    let workspace_root = temp_workspace_root("read-match-result-handle");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -1352,13 +1351,13 @@ async fn read_match_records_read_match_provenance_not_read_file() {
         .repositories()
         .into_iter()
         .next()
-        .expect("read_match provenance test should define one repository");
+        .expect("read_match result-handle test should define one repository");
     let declared_root = PathBuf::from(&declared_repository.root_path);
     let db_path = crate::storage::ensure_provenance_db_parent_dir(&declared_root)
-        .expect("provenance storage path should resolve");
+        .expect("storage path should resolve");
     Storage::new(&db_path)
         .initialize()
-        .expect("provenance storage should initialize");
+        .expect("storage should initialize");
     crate::indexer::reindex_repository_with_runtime_config(
         &declared_repository.repository_id.0,
         &declared_root,
@@ -1415,37 +1414,6 @@ async fn read_match_records_read_match_provenance_not_read_file() {
         })
         .await
         .expect("read_match should succeed");
-
-    let storage = Storage::new(&db_path);
-    let read_match_events = storage
-        .load_provenance_events_for_tool("read_match", 8)
-        .expect("read_match provenance query should succeed");
-    assert_eq!(
-        read_match_events.len(),
-        1,
-        "read_match should persist exactly one durable provenance event"
-    );
-    let payload: Value = serde_json::from_str(&read_match_events[0].payload_json)
-        .expect("read_match provenance payload should be valid json");
-    assert_eq!(payload["tool_name"], serde_json::json!("read_match"));
-    assert_eq!(
-        payload["params"]["result_handle"],
-        serde_json::json!(result_handle),
-        "read_match provenance must preserve the result_handle input contract"
-    );
-    assert_eq!(
-        payload["params"]["match_id"],
-        serde_json::json!(match_id),
-        "read_match provenance must preserve the match_id input contract"
-    );
-
-    let read_file_events = storage
-        .load_provenance_events_for_tool("read_file", 8)
-        .expect("read_file provenance query should succeed");
-    assert!(
-        read_file_events.is_empty(),
-        "read_match must not masquerade as a read_file provenance event"
-    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }

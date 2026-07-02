@@ -15,7 +15,6 @@ impl FriggMcpServer {
                 self.runtime_state.watch_runtime.clone(),
             ),
             cache_state: self.cache_state.clone(),
-            provenance_state: self.provenance_state.clone(),
         }
     }
 
@@ -1024,7 +1023,7 @@ mod tests {
         };
         let config = FriggConfig::from_optional_workspace_roots(Vec::new())
             .expect("empty serving config should be valid");
-        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let server = FriggMcpServer::new_with_runtime_options(config, false);
 
         let (scoped_config, runtime_repository_ids, repository_id_map) =
             server.scoped_search_config(std::slice::from_ref(&workspace));

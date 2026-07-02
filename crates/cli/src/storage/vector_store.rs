@@ -224,16 +224,6 @@ fn create_sqlite_vec_table(conn: &Connection, expected_dimensions: usize) -> Fri
     Ok(())
 }
 
-fn drop_sqlite_vec_table(conn: &Connection) -> FriggResult<()> {
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
-        .map_err(|err| {
-            FriggError::Internal(format!(
-                "vector subsystem not ready: failed to drop vector table '{VECTOR_TABLE_NAME}': {err}"
-            ))
-        })?;
-    Ok(())
-}
-
 fn sqlite_vec_table_has_expected_projection_schema(
     conn: &Connection,
     expected_dimensions: usize,
@@ -266,14 +256,14 @@ fn verify_sqlite_vec_table_schema(
 ) -> FriggResult<()> {
     if !table_exists(conn, VECTOR_TABLE_NAME)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: missing vector table '{VECTOR_TABLE_NAME}'"
+            "vector subsystem not ready: missing vector table '{VECTOR_TABLE_NAME}'; run `frigg init` to provision it, or run `frigg reindex` to rebuild storage"
         )));
     }
 
     let schema_sql = read_vector_table_schema_sql(conn)?;
     if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/provider/model partition keys and language/chunk_id metadata)"
+            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/provider/model partition keys and language/chunk_id metadata); automatic vector table repair is disabled during init/reindex, run `frigg repair-storage` or delete the storage DB and run `frigg reindex`"
         )));
     }
 
@@ -354,10 +344,6 @@ pub(crate) fn initialize_vector_store_on_connection_with_detected_capability(
             Ok(sqlite_vec_status(extension_version, expected_dimensions))
         }
         ExistingVectorStoreBackend::SqliteVec => {
-            if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
-                drop_sqlite_vec_table(conn)?;
-                create_sqlite_vec_table(conn, expected_dimensions)?;
-            }
             verify_sqlite_vec_table_schema(conn, expected_dimensions)?;
             Ok(sqlite_vec_status(extension_version, expected_dimensions))
         }

@@ -26,7 +26,7 @@ This runbook describes the runtime states operators are most likely to see while
 | `stale` | The index is not ready and no refresh is running or queued, and the caller did not request a skip. Typically seen from `workspace_current` when files changed without watch active. | Run `workspace_reindex`, or attach with `index_mode=ensure`, to refresh the repository. |
 | `unavailable` | Frigg could not evaluate index lifecycle for this repository. | Verify the repository is attached and storage is accessible, then retry attach or reindex. |
 
-`index_mode=skip` is scoped to lexical and semantic index refresh. It still adopts the repository into the MCP session, records provenance when strict provenance storage is available, returns current health, and may run precise-generator discovery or best-effort precise artifact generation. Use `wait_for_precise=false` when the caller wants to return without waiting for precise generation; that flag does not disable indexing or generation scheduling.
+`index_mode=skip` is scoped to lexical and semantic index refresh. It still adopts the repository into the MCP session, returns current health, and may run precise-generator discovery or best-effort precise artifact generation. Use `wait_for_precise=false` when the caller wants to return without waiting for precise generation; that flag does not disable indexing or generation scheduling.
 
 Use `workspace_prepare` or `workspace_reindex` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on Frigg's local `.frigg/storage.sqlite3` state.
 

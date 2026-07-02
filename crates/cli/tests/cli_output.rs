@@ -129,6 +129,26 @@ fn reindex_verbose_emits_progress_on_stderr() {
 }
 
 #[test]
+fn verify_missing_storage_writes_actionable_stderr_without_creating_db() {
+    let root = temp_workspace_root("verify-missing-storage");
+    create_simple_workspace(&root);
+
+    let output = run_frigg(&root, &["verify"]);
+
+    assert_failure(&output);
+    assert_eq!(stdout(&output), "");
+    let stderr = stderr(&output);
+    assert!(stderr.contains("verify summary status=failed"));
+    assert!(stderr.contains("storage db file is missing"));
+    assert!(stderr.contains("verify failure next: run `frigg init` or `frigg reindex`"));
+    assert!(
+        !root.join(".frigg/storage.sqlite3").exists(),
+        "verify should not create an empty storage DB"
+    );
+    cleanup_workspace(&root);
+}
+
+#[test]
 fn quiet_verbose_conflict_fails_before_machine_output() {
     let mut command = frigg_command();
     let output = command

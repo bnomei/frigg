@@ -16,7 +16,7 @@ pub struct ManifestStore {
 }
 
 impl ManifestStore {
-    /// Opens a manifest store backed by the provenance database at `db_path`.
+    /// Opens a manifest store backed by the SQLite storage database at `db_path`.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             storage: Storage::new(db_path),

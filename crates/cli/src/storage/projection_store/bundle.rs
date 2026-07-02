@@ -3,7 +3,7 @@
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{
     RetrievalProjectionBundle, RetrievalProjectionHeadRecord, Storage,
-    db_runtime::{i64_to_u64, open_connection, u64_to_i64, usize_to_i64},
+    db_runtime::{i64_to_u64, u64_to_i64, usize_to_i64},
 };
 use rusqlite::OptionalExtension;
 
@@ -30,7 +30,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
                 "failed to start retrieval projection replace transaction for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
@@ -474,7 +474,7 @@ impl Storage {
                 family,
             )?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         conn.query_row(
             r#"
             SELECT family, heuristic_version, input_modes_json, row_count
@@ -515,7 +515,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -560,7 +560,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"

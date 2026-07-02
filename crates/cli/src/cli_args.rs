@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use frigg::settings::{LexicalBackendMode, SemanticRuntimeProvider, WatchMode};
-use frigg::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, DEFAULT_RETAINED_PROVENANCE_EVENTS};
+use frigg::storage::DEFAULT_RETAINED_MANIFEST_SNAPSHOTS;
 
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
@@ -61,7 +61,6 @@ pub(crate) struct Cli {
     )]
     pub(crate) semantic_runtime_enabled: Option<bool>,
 
-    /// Semantic provider. Defaults to local when semantic runtime is enabled.
     #[arg(
         long,
         value_name = "PROVIDER",
@@ -200,7 +199,7 @@ pub(crate) enum Command {
     RepairStorage,
     /// Emit Frigg's stable cache fingerprint for installer and CI cache keys.
     Hash,
-    /// Prune retained manifest snapshots and provenance events for each workspace root.
+    /// Prune retained manifest snapshots for each workspace root.
     PruneStorage {
         /// Number of latest manifest snapshots to retain per repository.
         #[arg(
@@ -208,43 +207,6 @@ pub(crate) enum Command {
             default_value_t = DEFAULT_RETAINED_MANIFEST_SNAPSHOTS
         )]
         keep_manifest_snapshots: usize,
-        /// Number of latest provenance events to retain per repository.
-        #[arg(
-            long = "keep-provenance-events",
-            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
-        )]
-        keep_provenance_events: usize,
-    },
-    /// Execute markdown hybrid playbooks against the selected workspace root(s).
-    PlaybookHybridRun {
-        /// Directory containing executable markdown playbooks.
-        #[arg(long = "playbooks-root", value_name = "PATH")]
-        playbooks_root: PathBuf,
-        /// Enforce target witness groups in addition to required witness groups.
-        #[arg(long, default_value_t = false)]
-        enforce_targets: bool,
-        /// Optional path for pretty JSON summary output.
-        #[arg(long, value_name = "PATH")]
-        output: Option<PathBuf>,
-        /// Optional directory for per-playbook trace packets.
-        #[arg(long = "trace-root", value_name = "PATH")]
-        trace_root: Option<PathBuf>,
-    },
-    /// Export a deterministic sanitized workload corpus from stored provenance rows.
-    ExportWorkloadCorpus {
-        /// Output file path for JSON or JSONL export.
-        #[arg(long, value_name = "PATH")]
-        output: PathBuf,
-        /// Export encoding.
-        #[arg(long, value_enum, default_value_t = WorkloadCorpusExportFormat::Jsonl)]
-        format: WorkloadCorpusExportFormat,
-        /// Number of recent provenance rows to export per repository.
-        #[arg(
-            long,
-            value_name = "COUNT",
-            default_value_t = DEFAULT_RETAINED_PROVENANCE_EVENTS
-        )]
-        limit: usize,
     },
     /// Summarize local context-efficiency JSONL logs for configured workspace roots.
     Context {
@@ -282,21 +244,6 @@ impl AdoptTarget {
             Self::McpProject => ".mcp.json",
             Self::McpCursor => ".cursor/mcp.json",
             Self::Hook => ".claude/settings.json",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum WorkloadCorpusExportFormat {
-    Json,
-    Jsonl,
-}
-
-impl WorkloadCorpusExportFormat {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Jsonl => "jsonl",
         }
     }
 }

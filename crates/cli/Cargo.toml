@@ -115,10 +115,6 @@ name = "php_hybrid_regressions"
 path = "tests/php_hybrid_regressions.rs"
 
 [[test]]
-name = "provenance"
-path = "tests/provenance.rs"
-
-[[test]]
 name = "security"
 path = "tests/security.rs"
 

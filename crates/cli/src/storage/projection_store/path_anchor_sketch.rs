@@ -1,9 +1,7 @@
 //! Path anchor sketch projection load for exact-anchor biased retrieval.
 
 use crate::domain::{FriggError, FriggResult};
-use crate::storage::{
-    PathAnchorSketchProjection, Storage, db_runtime::i64_to_u64, db_runtime::open_connection,
-};
+use crate::storage::{PathAnchorSketchProjection, Storage, db_runtime::i64_to_u64};
 
 use super::common::normalize_repository_snapshot_ids;
 
@@ -16,7 +14,7 @@ impl Storage {
         let (repository_id, snapshot_id) =
             normalize_repository_snapshot_ids(repository_id, snapshot_id)?;
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let mut stmt = conn.prepare(
             r#"
             SELECT path, anchor_rank, line, anchor_kind, excerpt, terms_json, score_hint

@@ -1315,7 +1315,7 @@ mod tests {
         let config =
             FriggConfig::from_workspace_roots(vec![first_root.clone(), second_root.clone()])
                 .expect("workspace roots should produce a config");
-        let server = FriggMcpServer::new_with_runtime_options(config, false, false);
+        let server = FriggMcpServer::new_with_runtime_options(config, false);
         let workspaces = server.known_workspaces();
         for workspace in &workspaces {
             server

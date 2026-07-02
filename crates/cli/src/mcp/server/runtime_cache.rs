@@ -329,69 +329,6 @@ impl FriggMcpServer {
         .map_err(|err| err.message.to_string())
     }
 
-    pub(super) fn runtime_status_workspace(&self) -> Option<AttachedWorkspace> {
-        self.current_workspace().or_else(|| {
-            self.attached_workspaces()
-                .into_iter()
-                .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
-                .or_else(|| {
-                    self.known_workspaces()
-                        .into_iter()
-                        .min_by(|left, right| left.repository_id.cmp(&right.repository_id))
-                })
-        })
-    }
-
-    pub(super) fn runtime_recent_provenance_repository_id(payload_json: &str) -> Option<String> {
-        let payload = serde_json::from_str::<Value>(payload_json).ok()?;
-        payload
-            .get("target_repository_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| {
-                payload
-                    .get("source_refs")
-                    .and_then(|source_refs| source_refs.get("repository_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .or_else(|| {
-                payload
-                    .get("source_refs")
-                    .and_then(|source_refs| source_refs.get("repository_ids"))
-                    .and_then(Value::as_array)
-                    .and_then(|ids| ids.first())
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-    }
-
-    pub(super) fn runtime_recent_provenance_summaries(&self) -> Vec<RecentProvenanceSummary> {
-        let Some(workspace) = self.runtime_status_workspace() else {
-            return Vec::new();
-        };
-        let storage = Storage::new(&workspace.db_path);
-        match storage.load_recent_provenance_events(Self::RUNTIME_RECENT_PROVENANCE_LIMIT) {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|row| RecentProvenanceSummary {
-                    trace_id: row.trace_id,
-                    tool_name: row.tool_name,
-                    created_at: row.created_at,
-                    repository_id: Self::runtime_recent_provenance_repository_id(&row.payload_json),
-                })
-                .collect(),
-            Err(err) => {
-                warn!(
-                    repository_id = workspace.repository_id,
-                    error = %err,
-                    "failed to load recent runtime provenance summaries"
-                );
-                Vec::new()
-            }
-        }
-    }
-
     pub(super) fn runtime_status_summary(&self) -> RuntimeStatusSummary {
         let (active_tasks, recent_tasks) = {
             let registry = self
@@ -413,7 +350,6 @@ impl FriggMcpServer {
             status_tool: "workspace_current".to_owned(),
             active_tasks,
             recent_tasks,
-            recent_provenance: self.runtime_recent_provenance_summaries(),
         }
     }
 }

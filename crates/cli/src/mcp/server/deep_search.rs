@@ -14,7 +14,7 @@ impl FriggMcpServer {
             .iter()
             .map(|step| step.tool_name.clone())
             .collect::<Vec<_>>();
-        let harness = DeepSearchHarness::new(self.with_provenance_enabled(false));
+        let harness = DeepSearchHarness::new(self.clone());
         let internal_result = harness.run_playbook(&playbook).await;
         let budget_metadata = internal_result
             .as_ref()
@@ -59,7 +59,7 @@ impl FriggMcpServer {
             Self::bounded_text(&params.expected_trace_artifact.trace_schema);
         let expected_step_count = params.expected_trace_artifact.step_count;
         let (playbook, expected_trace_artifact) = params.into_internal();
-        let harness = DeepSearchHarness::new(self.with_provenance_enabled(false));
+        let harness = DeepSearchHarness::new(self.clone());
         let internal_result = harness
             .replay_and_diff(&playbook, &expected_trace_artifact)
             .await;

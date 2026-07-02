@@ -322,7 +322,7 @@ async fn server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
 async fn extended_runtime_server_for_workspace_root(workspace_root: &Path) -> FriggMcpServer {
     let config = FriggConfig::from_workspace_roots(vec![workspace_root.to_path_buf()])
         .expect("workspace root must produce valid config");
-    let server = FriggMcpServer::new_with_runtime_options(config, false, true);
+    let server = FriggMcpServer::new_with_runtime_options(config, true);
     attach_session_repositories(&server).await;
     server
 }

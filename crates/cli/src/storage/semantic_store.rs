@@ -10,7 +10,6 @@ use super::{
     DEFAULT_VECTOR_DIMENSIONS, SNAPSHOT_KIND_MANIFEST, SemanticChunkEmbeddingRecord,
     SemanticStorageHealth, Storage, VECTOR_TABLE_NAME,
     load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
-    open_connection,
 };
 
 #[path = "semantic_store_read.rs"]
@@ -71,7 +70,7 @@ impl Storage {
             validate_semantic_target(record, provider, model)?;
         }
 
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let _ = initialize_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
@@ -156,7 +155,7 @@ impl Storage {
             validate_semantic_target(record, provider, model)?;
         }
 
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let _ = initialize_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
@@ -256,7 +255,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let head = load_semantic_head_for_repository_model_on_connection(
             &conn,
             repository_id,
@@ -292,7 +291,7 @@ impl Storage {
     }
 
     pub fn repair_semantic_vector_store(&self) -> FriggResult<()> {
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
                 "failed to start semantic vector repair transaction: {err}"
@@ -332,7 +331,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let protected_snapshot_ids =
             load_semantic_head_snapshot_ids_for_repository(&conn, repository_id)?;
         let snapshot_ids = load_snapshot_ids_for_repository_and_kind(

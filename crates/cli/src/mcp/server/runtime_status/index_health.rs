@@ -243,7 +243,8 @@ impl FriggMcpServer {
         }
 
         let storage = Storage::new(&workspace.db_path);
-        if matches!(storage.schema_version(), Ok(0)) {
+        let schema_version = storage.schema_version().map_err(|err| err.to_string())?;
+        if schema_version == 0 {
             return Ok(crate::manifest_validation::RepositoryFreshnessStatus {
                 snapshot_id: None,
                 manifest_entry_count: None,
@@ -257,6 +258,9 @@ impl FriggMcpServer {
                 semantic_target: None,
             });
         }
+        storage
+            .require_current_schema()
+            .map_err(|err| err.to_string())?;
 
         repository_freshness_status(
             &storage,
@@ -1124,7 +1128,14 @@ impl FriggMcpServer {
                     "uninitialized_db".to_owned()
                 }),
             ),
-            WorkspaceStorageIndexState::Ready | WorkspaceStorageIndexState::Error => return None,
+            WorkspaceStorageIndexState::Ready => return None,
+            WorkspaceStorageIndexState::Error => (
+                WorkspaceIndexComponentState::Error,
+                storage
+                    .error
+                    .clone()
+                    .or_else(|| Some("storage_error".to_owned())),
+            ),
         };
         Some(WorkspaceIndexComponentSummary {
             state,

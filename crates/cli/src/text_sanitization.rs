@@ -27,7 +27,8 @@ pub(crate) fn scrub_leading_html_comment<'a>(raw: &'a str) -> Cow<'a, str> {
     Cow::Owned(scrubbed)
 }
 
-pub(crate) fn leading_metadata_comment_bounds(raw: &str, marker: &str) -> Option<(usize, usize)> {
+#[cfg(test)]
+fn leading_metadata_comment_bounds(raw: &str, marker: &str) -> Option<(usize, usize)> {
     let raw = raw.trim_start_matches('\u{feff}');
     let start = raw.find(marker)?;
     let after_marker = &raw[start + marker.len()..];
@@ -35,7 +36,8 @@ pub(crate) fn leading_metadata_comment_bounds(raw: &str, marker: &str) -> Option
     Some((start, start + marker.len() + close_index + 3))
 }
 
-pub(crate) fn scrub_leading_metadata_comment<'a>(raw: &'a str, marker: &str) -> Cow<'a, str> {
+#[cfg(test)]
+fn scrub_leading_metadata_comment<'a>(raw: &'a str, marker: &str) -> Cow<'a, str> {
     let Some((start, end)) = leading_metadata_comment_bounds(raw, marker) else {
         return Cow::Borrowed(raw);
     };

@@ -45,6 +45,16 @@ fn vector_store_verify_fails_on_dimension_mismatch() -> FriggResult<()> {
         "dimension mismatch error should mention the expected vector width: {err_message}"
     );
 
+    let init_err = storage
+        .initialize_vector_store(DEFAULT_VECTOR_DIMENSIONS + 1)
+        .expect_err("initialize_vector_store should not silently rebuild mismatched vector tables");
+    let init_err_message = init_err.to_string();
+    assert!(
+        init_err_message.contains("automatic vector table repair is disabled"),
+        "unexpected vector-store initialize mismatch error: {init_err_message}"
+    );
+    storage.verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)?;
+
     cleanup_db(&db_path);
     Ok(())
 }
@@ -209,6 +219,34 @@ fn vector_store_detected_capability_rejects_mismatched_sqlite_vec_version() -> F
         err_message.contains(SQLITE_VEC_REQUIRED_VERSION),
         "mismatch error should include pinned version: {err_message}"
     );
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn repair_storage_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
+    let db_path = temp_db_path("vector-schema-repair");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    {
+        let conn = open_test_connection(&db_path)?;
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to drop vector table for repair fixture: {err}"
+                ))
+            })?;
+        create_sqlite_vec_like_table(&conn, DEFAULT_VECTOR_DIMENSIONS + 1)?;
+    }
+
+    let repair_summary = storage.repair_storage_invariants()?;
+    assert_eq!(
+        repair_summary.repaired_categories,
+        vec!["semantic_vector_partition_in_sync".to_owned()]
+    );
+    storage.verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)?;
 
     cleanup_db(&db_path);
     Ok(())

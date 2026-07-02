@@ -28,7 +28,7 @@ impl Storage {
             ));
         }
 
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         conn.execute(
             r#"
             INSERT INTO repository (repository_id, root_path, display_name, created_at)
@@ -58,7 +58,7 @@ impl Storage {
         snapshot_id: &str,
         entries: &[ManifestEntry],
     ) -> FriggResult<()> {
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
                 "failed to start manifest upsert transaction for snapshot '{snapshot_id}': {err}"
@@ -147,7 +147,7 @@ impl Storage {
     }
 
     pub fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>> {
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         load_manifest_entries_for_snapshot(&conn, snapshot_id)
     }
 
@@ -155,7 +155,7 @@ impl Storage {
         &self,
         repository_id: &str,
     ) -> FriggResult<Option<RepositoryManifestSnapshot>> {
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         load_latest_manifest_snapshot_for_repository(&conn, repository_id)
     }
 
@@ -163,7 +163,7 @@ impl Storage {
         &self,
         repository_id: &str,
     ) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         load_latest_manifest_metadata_snapshot_for_repository(&conn, repository_id)
     }
 
@@ -172,7 +172,7 @@ impl Storage {
         &self,
         repository_id: &str,
     ) -> FriggResult<Option<ManifestMetadataSummary>> {
-        let conn = open_connection(&self.db_path)?;
+        let conn = self.open_current_schema_connection()?;
         let Some(snapshot_id) =
             load_latest_manifest_snapshot_id_for_repository(&conn, repository_id)?
         else {
@@ -206,7 +206,7 @@ impl Storage {
             ));
         }
 
-        let mut conn = open_connection(&self.db_path)?;
+        let mut conn = self.open_current_schema_connection()?;
         let tx = conn.transaction().map_err(|err| {
             FriggError::Internal(format!(
                 "failed to start snapshot delete transaction for '{snapshot_id}': {err}"
