@@ -63,6 +63,7 @@ pub struct DeepSearchPlaybookContract {
     pub steps: Vec<DeepSearchPlaybookStepContract>,
 }
 
+/// One tool invocation step in a deep-search playbook contract.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchPlaybookStepContract {
     pub step_id: String,
@@ -80,6 +81,7 @@ pub struct DeepSearchTraceArtifactContract {
     pub steps: Vec<DeepSearchTraceStepContract>,
 }
 
+/// One executed step recorded in a deep-search trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchTraceStepContract {
     pub step_index: usize,
@@ -89,6 +91,7 @@ pub struct DeepSearchTraceStepContract {
     pub outcome: DeepSearchTraceOutcomeContract,
 }
 
+/// Success or error outcome for one traced deep-search tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DeepSearchTraceOutcomeContract {
@@ -102,6 +105,7 @@ pub enum DeepSearchTraceOutcomeContract {
     },
 }
 
+/// Claim-linked citation payload composed from a deep-search trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchCitationPayloadContract {
     pub answer_schema: String,
@@ -111,6 +115,7 @@ pub struct DeepSearchCitationPayloadContract {
     pub citations: Vec<DeepSearchCitationContract>,
 }
 
+/// One answer claim backed by one or more file-span citations.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchClaimContract {
     pub claim_id: String,
@@ -118,6 +123,7 @@ pub struct DeepSearchClaimContract {
     pub citation_ids: Vec<String>,
 }
 
+/// One repository file-span citation tied to a traced tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchCitationContract {
     pub citation_id: String,
@@ -128,6 +134,7 @@ pub struct DeepSearchCitationContract {
     pub span: DeepSearchFileSpanContract,
 }
 
+/// 1-based file span used by deep-search citation contracts.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeepSearchFileSpanContract {
     pub start_line: usize,

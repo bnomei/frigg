@@ -22,6 +22,7 @@ impl FriggMcpServer {
                 let mut read_diagnostics_count = 0usize;
                 let mut response_source_refs = json!({});
                 let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
+                    let query_started_at = std::time::Instant::now();
                     let context_efficiency_log_enabled =
                         crate::context_efficiency::context_efficiency_log_enabled();
                     let need_context_efficiency =
@@ -225,7 +226,12 @@ impl FriggMcpServer {
                                     presented.total_matches,
                                 )
                             },
-                        )?;
+                        )?
+                        .map(|mut metadata| {
+                            metadata.query_duration_ms =
+                                Some(Self::context_efficiency_elapsed_ms(query_started_at));
+                            metadata
+                        });
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
                             Self::append_context_efficiency_log_for_workspaces(
                                 "search_text",

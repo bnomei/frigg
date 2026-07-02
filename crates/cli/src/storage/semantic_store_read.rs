@@ -21,6 +21,7 @@ use crate::storage::{
     usize_to_i64,
 };
 
+/// Reusable SQLite read context for semantic head, vector, and payload queries.
 pub(crate) struct SemanticReadContext {
     conn: Connection,
 }

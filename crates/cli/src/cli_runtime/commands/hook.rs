@@ -5,6 +5,7 @@ use std::io::{self, Read, Write};
 use frigg::agent_directive::HOOK_NUDGE;
 use serde_json::{Value, json};
 
+/// Handles the hidden Claude Code PreToolUse hook and may append Frigg navigation nudges to stdout.
 pub(crate) fn run_pretooluse_hook_command<R: Read, W: Write>(
     mut stdin: R,
     mut stdout: W,

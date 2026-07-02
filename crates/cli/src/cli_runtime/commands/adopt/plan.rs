@@ -1,7 +1,10 @@
+//! Adopt planning types: per-repository target classification and roll-up counts for pending changes.
+
 use std::path::PathBuf;
 
 use crate::cli_args::AdoptTarget;
 
+/// One adopt target under a repository root with the planned action and optional classification reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdoptPlanEntry {
     pub(crate) repository_id: String,
@@ -12,6 +15,7 @@ pub(crate) struct AdoptPlanEntry {
     pub(crate) reason: Option<String>,
 }
 
+/// Planned adopt outcome for one target file before any write is attempted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdoptPlanAction {
     Create,
@@ -42,6 +46,7 @@ impl AdoptPlanAction {
     }
 }
 
+/// Full adopt plan across repositories and targets, used for check, dry-run, and apply flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdoptPlan {
     pub(crate) entries: Vec<AdoptPlanEntry>,

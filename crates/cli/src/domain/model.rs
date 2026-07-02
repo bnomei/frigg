@@ -46,6 +46,7 @@ pub struct TextMatch {
     pub witness_provenance_ids: Option<Vec<String>>,
 }
 
+/// Planner strategy for a generated structural follow-up search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeneratedStructuralFollowUpStrategy {
@@ -54,6 +55,7 @@ pub enum GeneratedStructuralFollowUpStrategy {
     AncestorNamedNodeRepoScoped,
 }
 
+/// Confidence tier attached to a generated structural follow-up suggestion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeneratedStructuralFollowUpConfidence {
@@ -61,6 +63,7 @@ pub enum GeneratedStructuralFollowUpConfidence {
     Medium,
 }
 
+/// Parameters for a follow-up structural search emitted by navigation tools.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GeneratedStructuralSearchParams {
     pub query: String,
@@ -72,6 +75,7 @@ pub struct GeneratedStructuralSearchParams {
     pub limit: Option<usize>,
 }
 
+/// Structural focus metadata explaining why a follow-up search was suggested.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GeneratedStructuralFollowUpBasis {
     pub focus_kind: String,
@@ -81,6 +85,7 @@ pub struct GeneratedStructuralFollowUpBasis {
     pub ancestor_kind: Option<String>,
 }
 
+/// Suggested structural search follow-up bundled with a reference match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GeneratedStructuralFollowUp {
     pub strategy: GeneratedStructuralFollowUpStrategy,
@@ -89,6 +94,7 @@ pub struct GeneratedStructuralFollowUp {
     pub params: GeneratedStructuralSearchParams,
 }
 
+/// Symbol lookup hit with repository coordinates and optional container context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SymbolMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,6 +112,7 @@ pub struct SymbolMatch {
     pub signature: Option<String>,
 }
 
+/// Reference role for a symbol occurrence returned by navigation tools.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceMatchKind {
@@ -114,6 +121,7 @@ pub enum ReferenceMatchKind {
     Reference,
 }
 
+/// Symbol reference hit with precision metadata and optional structural follow-ups.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReferenceMatch {
     #[serde(skip_serializing_if = "Option::is_none")]

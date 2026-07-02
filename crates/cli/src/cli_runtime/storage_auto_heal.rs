@@ -3,6 +3,7 @@
 use frigg::domain::{FriggError, FriggResult};
 use frigg::storage::Storage;
 
+/// Initializes storage and auto-repairs regenerable invariants when verification fails.
 pub(crate) fn initialize_storage_with_auto_repair(storage: &Storage) -> FriggResult<Vec<String>> {
     match storage.initialize() {
         Ok(()) => verify_storage_with_auto_repair(storage),
@@ -10,6 +11,7 @@ pub(crate) fn initialize_storage_with_auto_repair(storage: &Storage) -> FriggRes
     }
 }
 
+/// Verifies storage invariants and attempts one repair pass before surfacing the original error.
 pub(crate) fn verify_storage_with_auto_repair(storage: &Storage) -> FriggResult<Vec<String>> {
     match storage.verify() {
         Ok(()) => Ok(Vec::new()),

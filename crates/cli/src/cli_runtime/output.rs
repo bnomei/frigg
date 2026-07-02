@@ -8,6 +8,7 @@ use frigg::indexer::IndexPlan;
 
 const MAX_VERBOSE_PATH_LINES: usize = 50;
 
+/// Quiet, normal, or verbose CLI output policy selected from global flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputMode {
     Quiet,
@@ -29,11 +30,13 @@ impl OutputMode {
     }
 }
 
+/// Output sink that routes structured result lines to stdout and diagnostics to stderr by mode.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CliOutput {
     mode: OutputMode,
 }
 
+/// Severity label embedded in structured CLI event lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputLevel {
     Ok,
@@ -61,6 +64,7 @@ pub(crate) struct OutputField {
     value: String,
 }
 
+/// Builds one `key=value` field for structured CLI event formatting.
 pub(crate) fn field(key: &'static str, value: impl Display) -> OutputField {
     OutputField {
         key,
@@ -196,6 +200,7 @@ pub(crate) fn format_output_event_line(
     line
 }
 
+/// Emits verbose index planning and path-delta progress events for one repository plan.
 pub(crate) fn emit_index_plan_events(
     output: CliOutput,
     repository_id: &str,
@@ -476,6 +481,7 @@ impl Display for ReportedCliError {
 
 impl Error for ReportedCliError {}
 
+/// Wraps an error whose message was already emitted through structured CLI output.
 pub(crate) fn reported_error(message: impl Into<String>) -> Box<dyn Error> {
     Box::new(ReportedCliError::new(message))
 }

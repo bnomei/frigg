@@ -20,6 +20,11 @@ mod schema;
 mod semantic_store;
 mod types;
 mod vector_store;
+#[cfg(test)]
+pub(crate) use db_runtime::{
+    DEFAULT_SQLITE_BUSY_TIMEOUT_MS, reset_semantic_read_trace, snapshot_semantic_read_trace,
+    sqlite_busy_timeout_ms_from_raw,
+};
 use db_runtime::{
     count_snapshots_for_repository_and_kind, database_has_user_tables, i64_to_u64,
     load_latest_manifest_metadata_snapshot_for_repository,
@@ -29,8 +34,6 @@ use db_runtime::{
     open_connection, open_existing_connection, option_u64_to_option_i64, read_schema_version,
     run_repository_roundtrip_probe, set_schema_version, table_exists, u64_to_i64, usize_to_i64,
 };
-#[cfg(test)]
-pub(crate) use db_runtime::{reset_semantic_read_trace, snapshot_semantic_read_trace};
 pub use provenance_path::{
     ensure_provenance_db_parent_dir, resolve_provenance_db_path,
     resolve_workspace_relative_write_path,
@@ -53,9 +56,9 @@ const INVARIANT_SEMANTIC_HEAD_REQUIRES_MANIFEST_SNAPSHOT: &str =
     "semantic_head_requires_manifest_snapshot";
 const INVARIANT_SEMANTIC_VECTOR_PARTITION_IN_SYNC: &str = "semantic_vector_partition_in_sync";
 
-#[derive(Debug, Clone)]
 /// Owns Frigg's durable SQLite state so indexing and serving can share the same repository
 /// snapshots, projections, and semantic artifacts.
+#[derive(Debug, Clone)]
 pub struct Storage {
     db_path: PathBuf,
 }

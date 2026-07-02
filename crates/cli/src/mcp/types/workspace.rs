@@ -9,6 +9,7 @@ use super::repository::{
 };
 use super::{ContextEfficiencyMetadata, ReadPresentationMode};
 
+/// Availability of one configured SCIP generator for precise-artifact generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseGeneratorState {
@@ -19,6 +20,7 @@ pub enum WorkspacePreciseGeneratorState {
     Error,
 }
 
+/// Outcome of one precise-artifact generation attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseGenerationStatus {
@@ -31,6 +33,7 @@ pub enum WorkspacePreciseGenerationStatus {
     Timeout,
 }
 
+/// Failure category for a precise generator or ingest step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseFailureClass {
@@ -42,6 +45,7 @@ pub enum WorkspacePreciseFailureClass {
     ToolFailed,
 }
 
+/// Suggested next step when precise generation or ingest is degraded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceRecommendedAction {
@@ -52,6 +56,7 @@ pub enum WorkspaceRecommendedAction {
     UseHeuristicMode,
 }
 
+/// Aggregate precise readiness reported by workspace lifecycle tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseState {
@@ -61,6 +66,7 @@ pub enum WorkspacePreciseState {
     Unavailable,
 }
 
+/// Whether attach or index triggered precise-artifact generation work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseGenerationAction {
@@ -70,6 +76,7 @@ pub enum WorkspacePreciseGenerationAction {
     NotApplicable,
 }
 
+/// Lifecycle phase for background or awaited precise-artifact generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseLifecyclePhase {
@@ -82,6 +89,7 @@ pub enum WorkspacePreciseLifecyclePhase {
     Timeout,
 }
 
+/// Result metadata for one precise-artifact generation run.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseGenerationSummary {
     pub status: WorkspacePreciseGenerationStatus,
@@ -104,6 +112,40 @@ pub struct WorkspacePreciseGenerationSummary {
     pub detail: Option<String>,
 }
 
+/// One SCIP generator selected for a planned precise-artifact refresh.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGenerationPlanItem {
+    pub generator_id: String,
+    pub language: String,
+    pub tool: String,
+    pub expected_output_path: String,
+}
+
+/// Planned precise-artifact generators for a repository path delta or cold-start refresh.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGenerationPlanSummary {
+    pub action: WorkspacePreciseGenerationAction,
+    pub generators: Vec<WorkspacePreciseGenerationPlanItem>,
+}
+
+/// Per-generator execution result from a synchronous precise-artifact run.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGenerationRunItem {
+    pub generator_id: String,
+    pub language: String,
+    pub tool: String,
+    pub expected_output_path: String,
+    pub summary: WorkspacePreciseGenerationSummary,
+}
+
+/// Aggregate outcome from running all selected precise generators for one repository.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspacePreciseGenerationRunSummary {
+    pub action: WorkspacePreciseGenerationAction,
+    pub generators: Vec<WorkspacePreciseGenerationRunItem>,
+}
+
+/// Repository-local side effects a precise generator may perform outside `.frigg/`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseRepoLocalTouchRisk {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -120,6 +162,7 @@ impl WorkspacePreciseRepoLocalTouchRisk {
     }
 }
 
+/// Per-generator precise status including last generation and repo-local touch risk.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseGeneratorSummary {
     pub state: WorkspacePreciseGeneratorState,
@@ -142,6 +185,7 @@ pub struct WorkspacePreciseGeneratorSummary {
     pub reason: Option<String>,
 }
 
+/// Compact precise readiness summary returned by workspace attach and current-status tools.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseSummary {
     pub state: WorkspacePreciseState,
@@ -157,6 +201,7 @@ pub struct WorkspacePreciseSummary {
     pub generation_action: Option<WorkspacePreciseGenerationAction>,
 }
 
+/// Detailed precise lifecycle state including active tasks and last generation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseLifecycleSummary {
     pub phase: WorkspacePreciseLifecyclePhase,
@@ -176,6 +221,7 @@ pub struct WorkspacePreciseLifecycleSummary {
     pub recommended_action: Option<WorkspaceRecommendedAction>,
 }
 
+/// How `workspace_attach` should treat stale or missing lexical and semantic index state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceAttachIndexMode {
@@ -184,6 +230,7 @@ pub enum WorkspaceAttachIndexMode {
     Skip,
 }
 
+/// Lifecycle phase for attach-time or background index refresh work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceIndexLifecyclePhase {
@@ -197,6 +244,7 @@ pub enum WorkspaceIndexLifecyclePhase {
     Unavailable,
 }
 
+/// Action taken for index refresh during workspace attach or index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceIndexAction {
@@ -209,6 +257,7 @@ pub enum WorkspaceIndexAction {
     Unavailable,
 }
 
+/// Index lifecycle state returned while attach or index waits on lexical and semantic readiness.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexLifecycleSummary {
     pub phase: WorkspaceIndexLifecyclePhase,
@@ -226,6 +275,7 @@ pub struct WorkspaceIndexLifecycleSummary {
     pub recommended_action: Option<WorkspaceRecommendedAction>,
 }
 
+/// Whether attach created a fresh session adoption or reused an existing workspace entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceAttachAction {
@@ -267,12 +317,14 @@ pub struct WorkspaceAttachResponse {
     pub index_lifecycle: WorkspaceIndexLifecycleSummary,
 }
 
+/// Parameters for `workspace_detach`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceDetachParams {
     /// Repository identifier to detach. Omit to detach the current session-default repository.
     pub repository_id: Option<String>,
 }
 
+/// Response from `workspace_detach`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceDetachResponse {
     pub repository_id: String,
@@ -280,6 +332,7 @@ pub struct WorkspaceDetachResponse {
     pub detached: bool,
 }
 
+/// Parameters for `workspace_prepare`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePrepareParams {
     /// File or directory path to prepare. Relative paths resolve against the Frigg server process cwd.
@@ -294,6 +347,7 @@ pub struct WorkspacePrepareParams {
     pub confirm: Option<bool>,
 }
 
+/// Response from `workspace_prepare`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePrepareResponse {
     pub repository: RepositorySummary,
@@ -305,6 +359,7 @@ pub struct WorkspacePrepareResponse {
     pub storage: WorkspaceStorageSummary,
 }
 
+/// Parameters for `workspace_index`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexParams {
     /// File or directory path to index. Relative paths resolve against the Frigg server process cwd.
@@ -321,6 +376,7 @@ pub struct WorkspaceIndexParams {
     pub wait_for_precise: Option<bool>,
 }
 
+/// Response from `workspace_index` including snapshot deltas and precise lifecycle state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexResponse {
     pub repository: RepositorySummary,
@@ -348,6 +404,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Empty parameter object for `workspace_current`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WorkspaceCurrentParams {}
 
@@ -376,13 +433,14 @@ pub struct ReadFileParams {
     pub max_bytes: Option<usize>,
     pub line_start: Option<usize>,
     pub line_end: Option<usize>,
-    /// Omit or set `text` for pure MCP text output; set `json` when callers need structured
-    /// metadata or a machine-readable `content` field.
+    /// Omit or set `text` to return only the selected file content; set `json` when callers need
+    /// path, byte, context-efficiency, or a machine-readable `content` field.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    /// Include bounded context-efficiency metadata in the response. Requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
 }
 
+/// Response from `read_file` with selected bytes and optional context-efficiency metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileResponse {
     pub repository_id: String,
@@ -400,13 +458,14 @@ pub struct ReadMatchParams {
     pub match_id: String,
     pub before: Option<usize>,
     pub after: Option<usize>,
-    /// Omit or set `text` for pure MCP text output; set `json` when callers need structured
-    /// metadata or a machine-readable `content` field.
+    /// Omit or set `text` to return only the selected file content; set `json` when callers need
+    /// path, byte, context-efficiency, or a machine-readable `content` field.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    /// Include bounded context-efficiency metadata in the response. Requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
 }
 
+/// Response from `read_match` expanding a prior search or navigation hit with local context.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadMatchResponse {
     pub repository_id: String,
@@ -422,6 +481,7 @@ pub struct ReadMatchResponse {
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
+/// Background runtime work kind tracked by the MCP server process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskKind {
@@ -433,6 +493,7 @@ pub enum RuntimeTaskKind {
     WorkspaceIndex,
 }
 
+/// Completion state for one tracked runtime task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskStatus {
@@ -441,6 +502,7 @@ pub enum RuntimeTaskStatus {
     Failed,
 }
 
+/// One active or recently finished runtime task surfaced in workspace status responses.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeTaskSummary {
     pub task_id: String,
@@ -455,6 +517,7 @@ pub struct RuntimeTaskSummary {
     pub detail: Option<String>,
 }
 
+/// Process-level runtime summary returned by `workspace_current`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RuntimeStatusSummary {
     pub profile: RuntimeProfile,

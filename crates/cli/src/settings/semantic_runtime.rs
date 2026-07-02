@@ -5,11 +5,17 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Default OpenAI embedding model when semantic runtime omits an explicit model.
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+/// Default Google embedding model when semantic runtime omits an explicit model.
 pub const DEFAULT_GOOGLE_EMBEDDING_MODEL: &str = "gemini-embedding-001";
+/// Default local embedding model when semantic runtime omits an explicit model.
 pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
+/// Environment variable holding the OpenAI API key for semantic runtime startup.
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+/// Environment variable holding the Gemini API key for semantic runtime startup.
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
+/// MCP error code returned for invalid semantic runtime configuration.
 pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
 
 /// Embedding provider selected for semantic indexing and recall.
@@ -102,6 +108,7 @@ impl SemanticRuntimeCredentials {
     }
 }
 
+/// Configuration validation failures for enabled semantic runtime settings.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SemanticRuntimeConfigError {
     #[error("semantic_runtime.provider is required when semantic_runtime.enabled=true")]
@@ -116,6 +123,7 @@ impl SemanticRuntimeConfigError {
     }
 }
 
+/// Credential validation failures encountered during semantic runtime startup.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SemanticRuntimeCredentialError {
     #[error("semantic runtime provider={provider} requires {env_var} to be set")]
@@ -136,6 +144,7 @@ impl SemanticRuntimeCredentialError {
     }
 }
 
+/// Combined configuration and credential failures for semantic runtime startup.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SemanticRuntimeStartupError {
     #[error("{0}")]

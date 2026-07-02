@@ -26,8 +26,8 @@ pub struct FindReferencesParams {
     pub response_mode: Option<ResponseMode>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 /// Precision mode reported by navigation tools for the resolved target and match set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationMode {
     Precise,
@@ -36,6 +36,7 @@ pub enum NavigationMode {
     UnavailableNoPrecise,
 }
 
+/// Whether navigation target resolution produced one symbol or requires disambiguation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationTargetSelectionStatus {
@@ -43,6 +44,7 @@ pub enum NavigationTargetSelectionStatus {
     DisambiguationRequired,
 }
 
+/// Target-resolution summary shared by navigation tool responses.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationTargetSelectionSummary {
     pub status: NavigationTargetSelectionStatus,
@@ -73,6 +75,7 @@ pub struct FindReferencesResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `go_to_definition`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GoToDefinitionParams {
     pub symbol: Option<String>,
@@ -87,6 +90,7 @@ pub struct GoToDefinitionParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// One resolved navigation location with optional structural follow-up suggestions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +128,7 @@ pub struct GoToDefinitionResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `find_declarations`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsParams {
     pub symbol: Option<String>,
@@ -138,6 +143,7 @@ pub struct FindDeclarationsParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Response from `find_declarations`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindDeclarationsResponse {
     pub matches: Vec<NavigationLocation>,
@@ -153,6 +159,7 @@ pub struct FindDeclarationsResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `find_implementations`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsParams {
     pub symbol: Option<String>,
@@ -167,6 +174,7 @@ pub struct FindImplementationsParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// One implementation or override location for a resolved symbol target.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImplementationMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,6 +198,7 @@ pub struct ImplementationMatch {
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
+/// Response from `find_implementations`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FindImplementationsResponse {
     pub matches: Vec<ImplementationMatch>,
@@ -205,6 +214,7 @@ pub struct FindImplementationsResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `incoming_calls`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsParams {
     pub symbol: Option<String>,
@@ -219,6 +229,7 @@ pub struct IncomingCallsParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Parameters for `outgoing_calls`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsParams {
     pub symbol: Option<String>,
@@ -233,6 +244,7 @@ pub struct OutgoingCallsParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// One incoming or outgoing call edge in the call hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CallHierarchyMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,6 +278,7 @@ pub struct CallHierarchyMatch {
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
+/// Response from `incoming_calls`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncomingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
@@ -282,6 +295,7 @@ pub struct IncomingCallsResponse {
     pub note: Option<String>,
 }
 
+/// Response from `outgoing_calls`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutgoingCallsResponse {
     pub matches: Vec<CallHierarchyMatch>,
@@ -298,6 +312,7 @@ pub struct OutgoingCallsResponse {
     pub note: Option<String>,
 }
 
+/// Availability note when call-hierarchy results depend on precise coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NavigationAvailability {
     pub status: String,
@@ -305,6 +320,7 @@ pub struct NavigationAvailability {
     pub precise_required_for_complete_results: bool,
 }
 
+/// Parameters for `document_symbols`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsParams {
     pub path: String,
@@ -317,6 +333,7 @@ pub struct DocumentSymbolsParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// One document symbol row with optional nested children.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolItem {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -339,6 +356,7 @@ pub struct DocumentSymbolItem {
     pub children: Vec<DocumentSymbolItem>,
 }
 
+/// Response from `document_symbols`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DocumentSymbolsResponse {
     pub symbols: Vec<DocumentSymbolItem>,
@@ -351,6 +369,7 @@ pub struct DocumentSymbolsResponse {
     pub note: Option<String>,
 }
 
+/// Parameters for `inspect_syntax_tree`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectSyntaxTreeParams {
     pub path: String,
@@ -363,6 +382,7 @@ pub struct InspectSyntaxTreeParams {
     pub include_follow_up_structural: Option<bool>,
 }
 
+/// One syntax-tree node with source span and excerpt.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SyntaxTreeNodeItem {
     pub kind: String,
@@ -375,6 +395,7 @@ pub struct SyntaxTreeNodeItem {
     pub excerpt: String,
 }
 
+/// Response from `inspect_syntax_tree` around a focused AST node.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InspectSyntaxTreeResponse {
     pub repository_id: String,
@@ -392,6 +413,7 @@ pub struct InspectSyntaxTreeResponse {
     pub note: Option<String>,
 }
 
+/// Whether `search_structural` returns grouped match rows or raw capture rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuralResultMode {
@@ -399,6 +421,7 @@ pub enum StructuralResultMode {
     Captures,
 }
 
+/// Capture-selection policy used to derive a structural match anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuralAnchorSelection {
@@ -425,6 +448,7 @@ pub struct SearchStructuralParams {
     pub include_follow_up_structural: Option<bool>,
 }
 
+/// One named capture from a structural query match.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StructuralCaptureItem {
     pub name: String,
@@ -435,6 +459,7 @@ pub struct StructuralCaptureItem {
     pub excerpt: String,
 }
 
+/// One structural query match with anchor capture and follow-up suggestions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StructuralMatch {
     pub repository_id: String,
@@ -452,6 +477,7 @@ pub struct StructuralMatch {
     pub follow_up_structural: Vec<GeneratedStructuralFollowUp>,
 }
 
+/// Response from `search_structural`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchStructuralResponse {
     pub matches: Vec<StructuralMatch>,

@@ -9,6 +9,7 @@ use frigg::searcher::stable_cache_fingerprint_hex;
 
 const HASH_OUTPUT_KEY: &str = "frigg-hash";
 
+/// Prints the stable Frigg cache fingerprint for CI workflows and optional `GITHUB_OUTPUT` export.
 pub(crate) fn run_hash_command() -> io::Result<()> {
     let github_output = env::var_os("GITHUB_OUTPUT");
     run_hash_command_with_output(github_output.as_deref().map(Path::new), io::stdout())

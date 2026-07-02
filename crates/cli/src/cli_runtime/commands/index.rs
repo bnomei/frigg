@@ -1,4 +1,7 @@
 //! CLI `index` command: full or changed-only manifest rebuild across configured workspace roots.
+//!
+//! After each repository index completes, changed and deleted paths may trigger synchronous
+//! SCIP precise-artifact generation when configured generators need refresh.
 
 use std::error::Error;
 
@@ -6,12 +9,14 @@ use frigg::domain::FriggError;
 use frigg::indexer::{
     IndexMode, ManifestDiagnosticKind, index_repository_with_runtime_config_and_plan_callback,
 };
+use frigg::mcp::FriggMcpServer;
 use frigg::settings::{FriggConfig, SemanticRuntimeCredentials};
 use frigg::storage::Storage;
 
 use super::super::storage_auto_heal::{
     initialize_storage_with_auto_repair, verify_storage_with_auto_repair,
 };
+use super::{CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation};
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
 use crate::cli_runtime::{
     CliOutput, OutputLevel, emit_index_plan_events, field, format_output_event_line,
@@ -23,6 +28,7 @@ pub(crate) fn run_index_command(config: &FriggConfig, changed: bool) -> Result<(
     run_index_command_with_output(config, changed, &CliOutput::normal())
 }
 
+/// Runs full or changed-only indexing for every configured repository and reports structured progress.
 pub(crate) fn run_index_command_with_output(
     config: &FriggConfig,
     changed: bool,
@@ -42,6 +48,8 @@ pub(crate) fn run_index_command_with_output(
     let mut total_walk_diagnostics = 0usize;
     let mut total_read_diagnostics = 0usize;
     let mut total_duration_ms = 0u128;
+    let precise_server = FriggMcpServer::new(config.clone());
+    let mut total_precise = CliPreciseGenerationCounters::default();
 
     for repo in &repositories {
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
@@ -232,45 +240,54 @@ pub(crate) fn run_index_command_with_output(
             )?;
         }
 
+        let precise_counters = run_cli_precise_generation(
+            &precise_server,
+            *output,
+            "index",
+            &repo.repository_id.0,
+            root,
+            &summary.changed_paths,
+            &summary.deleted_paths,
+        );
+        total_precise.add(precise_counters);
+
+        let mut repo_fields = vec![
+            field("status", "ok"),
+            field("repo", &repo.repository_id.0),
+            field("mode", mode_name),
+            field("snapshot", &summary.snapshot_id),
+            field("scanned", summary.files_scanned),
+            field("changed", summary.files_changed),
+            field("deleted", summary.files_deleted),
+            field("diagnostics", diagnostics_total),
+            field("diagnostics_walk", diagnostics_walk),
+            field("diagnostics_read", diagnostics_read),
+            field("duration_ms", summary.duration_ms),
+            field("db", db_path.display()),
+        ];
+        repo_fields.extend(precise_counter_fields(precise_counters));
         output.progress_event(
             OutputLevel::Ok,
             "index",
             "repo",
-            &[
-                field("status", "ok"),
-                field("repo", &repo.repository_id.0),
-                field("mode", mode_name),
-                field("snapshot", &summary.snapshot_id),
-                field("scanned", summary.files_scanned),
-                field("changed", summary.files_changed),
-                field("deleted", summary.files_deleted),
-                field("diagnostics", diagnostics_total),
-                field("diagnostics_walk", diagnostics_walk),
-                field("diagnostics_read", diagnostics_read),
-                field("duration_ms", summary.duration_ms),
-                field("db", db_path.display()),
-            ],
+            &repo_fields,
             Some(&root.display().to_string()),
         )?;
     }
 
-    output.summary_event(
-        OutputLevel::Ok,
-        "index",
-        "complete",
-        &[
-            field("status", "ok"),
-            field("mode", mode_name),
-            field("repos", repositories.len()),
-            field("scanned", total_files_scanned),
-            field("changed", total_files_changed),
-            field("deleted", total_files_deleted),
-            field("diagnostics", total_diagnostics),
-            field("diagnostics_walk", total_walk_diagnostics),
-            field("diagnostics_read", total_read_diagnostics),
-            field("duration_ms", total_duration_ms),
-        ],
-        None,
-    )?;
+    let mut summary_fields = vec![
+        field("status", "ok"),
+        field("mode", mode_name),
+        field("repos", repositories.len()),
+        field("scanned", total_files_scanned),
+        field("changed", total_files_changed),
+        field("deleted", total_files_deleted),
+        field("diagnostics", total_diagnostics),
+        field("diagnostics_walk", total_walk_diagnostics),
+        field("diagnostics_read", total_read_diagnostics),
+        field("duration_ms", total_duration_ms),
+    ];
+    summary_fields.extend(precise_counter_fields(total_precise));
+    output.summary_event(OutputLevel::Ok, "index", "complete", &summary_fields, None)?;
     Ok(())
 }

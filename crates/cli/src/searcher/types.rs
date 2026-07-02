@@ -20,42 +20,59 @@ use super::policy::PostSelectionTrace;
 /// Input for direct lexical search when callers want raw text recall without the hybrid ranking
 /// stack.
 pub struct SearchTextQuery {
+    /// Literal or regex pattern text, depending on the search entry point invoked.
     pub query: String,
+    /// Optional repository-relative path filter applied before scanning candidates.
     pub path_regex: Option<regex::Regex>,
+    /// Maximum number of matches to retain after deterministic ordering.
     pub limit: usize,
 }
 
 #[derive(Debug, Clone, Default)]
 /// Shared repository-level filters used to scope both lexical and hybrid retrieval paths.
 pub struct SearchFilters {
+    /// Restrict retrieval to one configured repository id when set.
     pub repository_id: Option<String>,
+    /// Restrict retrieval to files classified as one supported source language when set.
     pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Category of non-fatal issue encountered while walking or reading repository candidates.
 pub enum SearchDiagnosticKind {
+    /// Candidate discovery failed for a subtree or repository root.
     Walk,
+    /// A candidate file could not be read during scanning.
     Read,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One diagnostic emitted while building or scanning the candidate universe.
 pub struct SearchDiagnostic {
+    /// Repository that produced the diagnostic.
     pub repository_id: String,
+    /// Candidate path when the issue is file-specific.
     pub path: Option<String>,
+    /// Whether the issue occurred during discovery or file read.
     pub kind: SearchDiagnosticKind,
+    /// Human-readable explanation suitable for surfacing to callers.
     pub message: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Aggregated diagnostics from candidate intake and lexical scanning.
 pub struct SearchExecutionDiagnostics {
+    /// Ordered diagnostic entries collected across repositories.
     pub entries: Vec<SearchDiagnostic>,
 }
 
 impl SearchExecutionDiagnostics {
+    /// Total number of diagnostic entries recorded for the run.
     pub fn total_count(&self) -> usize {
         self.entries.len()
     }
 
+    /// Count of diagnostics matching one [`SearchDiagnosticKind`].
     pub fn count_by_kind(&self, kind: SearchDiagnosticKind) -> usize {
         self.entries
             .iter()
@@ -68,21 +85,31 @@ impl SearchExecutionDiagnostics {
 /// Output of a lexical-only search pass, including diagnostics that explain degraded or partial
 /// coverage.
 pub struct SearchExecutionOutput {
+    /// Number of matches before caller-side truncation.
     pub total_matches: usize,
+    /// Bounded, deterministically ordered lexical matches.
     pub matches: Vec<TextMatch>,
+    /// Walk and read issues encountered while scanning candidates.
     pub diagnostics: SearchExecutionDiagnostics,
+    /// Backend that produced lexical hits when an accelerator was selected.
     pub lexical_backend: Option<SearchLexicalBackend>,
+    /// Optional explanation when the backend fell back or mixed native and ripgrep paths.
     pub lexical_backend_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Lexical scan backend used for a search execution.
 pub enum SearchLexicalBackend {
+    /// Frigg's streaming native scanner over the candidate universe.
     Native,
+    /// External `rg` accelerator over non-scrubbed candidates.
     Ripgrep,
+    /// Ripgrep for most candidates with native fallback for scrubbed markdown content.
     Mixed,
 }
 
 impl SearchLexicalBackend {
+    /// Stable snake_case label for diagnostics and MCP payloads.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Native => "native",
@@ -130,14 +157,19 @@ pub(crate) struct ManifestCandidateFilesBuild {
     pub(crate) freshness_validation_elapsed_us: u64,
 }
 
+/// Repository document identity shared by hybrid channel hits and ranked evidence.
 pub type HybridDocumentRef = EvidenceDocumentRef;
+/// Single retrieval hit from one hybrid channel before ranker blending.
 pub type HybridChannelHit = EvidenceHit;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// Relative influence assigned to each hybrid retrieval channel before result diversification.
 pub struct HybridChannelWeights {
+    /// Weight applied to lexical and path-witness family scores.
     pub lexical: f32,
+    /// Weight applied to graph-precise expansion hits.
     pub graph: f32,
+    /// Weight applied to semantic vector retrieval hits.
     pub semantic: f32,
 }
 
@@ -173,27 +205,42 @@ impl HybridChannelWeights {
 /// Input for Frigg's multi-signal retrieval path that can combine lexical, graph, and semantic
 /// evidence behind one call.
 pub struct SearchHybridQuery {
+    /// Natural-language or keyword query text driving all retrieval channels.
     pub query: String,
+    /// Maximum diversified matches to return after post-selection guardrails.
     pub limit: usize,
+    /// Relative channel weights validated before ranker fusion.
     pub weights: HybridChannelWeights,
+    /// Explicit semantic on/off override; defaults to runtime configuration when unset.
     pub semantic: Option<bool>,
 }
 
+/// Semantic channel health status surfaced on hybrid execution notes.
 pub type HybridSemanticStatus = ChannelHealthStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Execution-side explanation of how the hybrid search actually ran, including whether semantic
 /// recall participated or the query fell back to a narrower mode.
 pub struct HybridExecutionNote {
+    /// Whether the caller or runtime asked for semantic retrieval.
     pub semantic_requested: bool,
+    /// Whether semantic retrieval produced at least one fused match.
     pub semantic_enabled: bool,
+    /// Semantic channel health after embedding and vector lookup.
     pub semantic_status: HybridSemanticStatus,
+    /// Disabled or degraded reason when semantic recall did not run cleanly.
     pub semantic_reason: Option<String>,
+    /// Semantic candidates considered before relative score retention.
     pub semantic_candidate_count: usize,
+    /// Semantic hits retained for ranker fusion.
     pub semantic_hit_count: usize,
+    /// Semantic hits that survived into the final diversified match list.
     pub semantic_match_count: usize,
+    /// True when semantic recall did not contribute usable pre-fusion hits.
     pub lexical_only_mode: bool,
+    /// Lexical backend used while seeding hybrid channels.
     pub lexical_backend: Option<SearchLexicalBackend>,
+    /// Optional note when lexical seeding mixed or fell back across backends.
     pub lexical_backend_note: Option<String>,
 }
 
@@ -218,13 +265,19 @@ impl Default for HybridExecutionNote {
 /// Top-level result of a hybrid retrieval run, pairing final matches with diagnostics, channel
 /// health, and execution attribution.
 pub struct SearchHybridExecutionOutput {
+    /// Final diversified matches delivered to callers.
     pub matches: Vec<HybridRankedEvidence>,
+    /// Pre-diversification ranked anchors retained for inspection and tooling.
     pub ranked_anchors: Vec<HybridRankedEvidence>,
     #[allow(dead_code)]
     pub(crate) coverage_grouped_pool: Vec<HybridRankedEvidence>,
+    /// Walk and read issues encountered while scanning candidates.
     pub diagnostics: SearchExecutionDiagnostics,
+    /// Per-channel hit counts, health, and diagnostics after fan-out.
     pub channel_results: Vec<ChannelResult>,
+    /// Summary of semantic participation and lexical backend behavior.
     pub note: HybridExecutionNote,
+    /// Optional stage timing and cardinality samples for hybrid profiling.
     pub stage_attribution: Option<SearchStageAttribution>,
     #[allow(dead_code)]
     pub(crate) post_selection_trace: Option<PostSelectionTrace>,
@@ -234,17 +287,29 @@ pub struct SearchHybridExecutionOutput {
 /// A ranked anchor after Frigg has merged evidence from multiple retrieval channels around one
 /// repository location.
 pub struct HybridRankedEvidence {
+    /// Repository and path identity for the matched document.
     pub document: HybridDocumentRef,
+    /// Line- or symbol-scoped anchor within the document.
     pub anchor: EvidenceAnchor,
+    /// Excerpt chosen from the highest-priority contributing channel.
     pub excerpt: String,
+    /// Weighted blend of channel scores after policy multipliers.
     pub blended_score: f32,
+    /// Lexical manifest channel contribution.
     pub lexical_score: f32,
+    /// Path-surface witness channel contribution.
     pub witness_score: f32,
+    /// Graph-precise expansion contribution.
     pub graph_score: f32,
+    /// Semantic vector retrieval contribution.
     pub semantic_score: f32,
+    /// Source labels explaining lexical score components.
     pub lexical_sources: Vec<String>,
+    /// Source labels explaining path-witness score components.
     pub witness_sources: Vec<String>,
+    /// Source labels explaining graph score components.
     pub graph_sources: Vec<String>,
+    /// Source labels explaining semantic score components.
     pub semantic_sources: Vec<String>,
 }
 

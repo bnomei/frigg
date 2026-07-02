@@ -12,13 +12,16 @@ use thiserror::Error;
 
 use crate::settings::SemanticRuntimeConfig;
 
+/// Environment variable override for the local semantic model cache root.
 pub const FRIGG_SEMANTIC_MODEL_CACHE_ENV: &str = "FRIGG_SEMANTIC_MODEL_CACHE";
+/// Default local embedding model alias supported by the v1 local provider.
 pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
 const HF_HOME_ENV: &str = "HF_HOME";
 const HF_ENDPOINT_ENV: &str = "HF_ENDPOINT";
 const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
 const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
 
+/// Mapping between a semantic runtime model name and its fastembed artifact metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalModelAlias {
     pub semantic_model: &'static str,
@@ -27,6 +30,7 @@ pub struct LocalModelAlias {
     pub dimensions: usize,
 }
 
+/// Default local model alias used when semantic runtime omits an explicit model.
 pub const DEFAULT_LOCAL_MODEL_ALIAS: LocalModelAlias = LocalModelAlias {
     semantic_model: DEFAULT_LOCAL_EMBEDDING_MODEL,
     fastembed_model: EmbeddingModel::AllMiniLML6V2,
@@ -34,6 +38,7 @@ pub const DEFAULT_LOCAL_MODEL_ALIAS: LocalModelAlias = LocalModelAlias {
     dimensions: 384,
 };
 
+/// Host platform used when resolving the default local model cache root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CachePlatform {
     MacOs,
@@ -41,6 +46,7 @@ pub enum CachePlatform {
     Windows,
 }
 
+/// Environment snapshot used to resolve the local semantic model cache root.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CacheResolutionEnv {
     pub frigg_semantic_model_cache: Option<PathBuf>,
@@ -60,6 +66,7 @@ impl CacheResolutionEnv {
     }
 }
 
+/// Resolved on-disk artifact layout for a supported local embedding model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalModelArtifact {
     pub semantic_model: String,
@@ -71,12 +78,14 @@ pub struct LocalModelArtifact {
     pub required_files: Vec<String>,
 }
 
+/// Whether a resolved local model artifact is ready for provider construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalModelArtifactStatus {
     Ready(LocalModelArtifact),
     Missing(LocalModelArtifact),
 }
 
+/// Failure modes for local model resolution, verification, and preparation.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum LocalModelError {
     #[error("local semantic model '{model}' is not supported; supported v1 model: {supported}")]
@@ -108,6 +117,7 @@ pub enum LocalModelError {
     },
 }
 
+/// Result alias for local model artifact resolution and preparation.
 pub type LocalModelResult<T> = Result<T, LocalModelError>;
 
 pub fn resolve_local_model_artifact(semantic_model: &str) -> LocalModelResult<LocalModelArtifact> {

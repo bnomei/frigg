@@ -1,6 +1,6 @@
 # Frigg Workflows
 
-Use the lightest tool that preserves the right semantics. Shell tools are still good for quick local inspection, but Frigg is now also a reasonable exact-search surface when you want repository scoping, canonical paths, or direct MCP follow-up.
+Use the lightest tool that preserves the right semantics. Shell tools are still good for non-code files, git/filesystem inspection, and trivial local checks, but Frigg is the default for code search when you want repository scoping, canonical paths, or direct MCP follow-up.
 
 ## Bug Trace
 
@@ -19,7 +19,7 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 2. `find_references` for call sites
 3. `find_implementations` when the change hits an interface or trait boundary
 4. Use `read_match` for bounded follow-up on the most relevant hits, or `read_file` when you already know the canonical path
-5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; shell `rg` or `git grep` is still fine for nearby throwaway pattern checks
+5. Use `search_text` with `path_regex` when canonical paths, scoped MCP results, or direct follow-up matter; keep shell `rg` or `git grep` for nearby throwaway checks that do not need repository-aware evidence
 
 ## Technical Review
 
@@ -55,8 +55,8 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 
 ## Security Or Pattern Sweep
 
-1. Start with either a narrow shell literal or `search_text`, depending on whether you want repository-backed results and follow-up
+1. Start with `search_text` for direct literal or regex code patterns when repository-backed results and follow-up matter
 2. Upgrade to regex only when the literal underfills
 3. Use `search_text` with `path_regex` when you need repository scoping or canonical-path results
-4. Use a shell slice or `read_file` to validate true positives
+4. Use `read_match` or `read_file` to validate true positives; shell slices are still fine for throwaway local checks
 5. `find_references` or call hierarchy to measure blast radius

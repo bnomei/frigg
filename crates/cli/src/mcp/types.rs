@@ -142,6 +142,7 @@ pub fn metadata_object_field_schema(generator: &mut SchemaGenerator) -> Schema {
     MetadataObject::json_schema(generator)
 }
 
+/// Response detail profile for search and navigation tools that support compact versus full payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseMode {
@@ -152,8 +153,8 @@ pub enum ResponseMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadPresentationMode {
-    /// Return only MCP text `content[]`. Do not attach `structuredContent` in this mode:
-    /// some MCP clients prefer structured output over text and would hide the source body.
+    /// Return only the selected source bytes as MCP text `content[]`. Do not prepend headers or
+    /// attach `structuredContent`; request JSON mode for path, line, byte, or efficiency metadata.
     Text,
     /// Return a structured JSON object with explicit `content`, path, byte, and metadata fields.
     Json,

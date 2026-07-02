@@ -165,10 +165,12 @@ pub struct IndexDiagnostics {
 }
 
 impl IndexDiagnostics {
+    /// Returns the total number of manifest-build diagnostics attached to a plan.
     pub fn total_count(&self) -> usize {
         self.entries.len()
     }
 
+    /// Counts manifest-build diagnostics of one kind, such as walk or read failures.
     pub fn count_by_kind(&self, kind: ManifestDiagnosticKind) -> usize {
         self.entries
             .iter()

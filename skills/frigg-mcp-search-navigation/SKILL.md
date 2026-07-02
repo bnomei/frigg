@@ -14,20 +14,21 @@ Start with Frigg MCP tools when you need to find code, inspect symbols, follow r
 - Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.
 - Use Frigg when repository-aware semantics matter: canonical repository-relative paths, cross-file navigation, symbol lookup, structural search, hybrid doc/runtime discovery, bounded repository-backed reads, or multi-repository search.
 - Do not avoid `search_text` just because the query is exact. On macOS and Linux, Frigg may use `rg` internally as a lexical accelerator while still preserving repository scope, canonical paths, and downstream navigation flow.
+- Use `search_hybrid` for broad discovery-style questions, not as the cleanest direct-string lookup. When you already have exact text or a regex, use `search_text`; when you already have an identifier, use `search_symbol`.
 - Treat `workspace_attach` as the explicit setup boundary. Sessions can start detached even when the client is launched inside a repo.
 
 ## Default Loop
 
 1. Call `list_repositories`.
 2. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly. Use `workspace_current` when you need health, precise, or runtime task status.
-3. Start with `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor.
-4. Pivot to `search_symbol` when you know an API, type, or function name, or to `search_text` when exact strings, canonical paths, `path_regex` scoping, or MCP-backed follow-up matter.
+3. Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor.
+4. Use `search_symbol` when you know an API, type, or function name, or `search_text` when exact strings, canonical paths, `path_regex` scoping, or MCP-backed follow-up matter.
 5. Frigg read-only tools default to compact responses. Ask for `response_mode=full` only when you need diagnostics, freshness detail, or selection notes.
 6. Use navigation tools for impact and code flow: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
 7. Prefer `read_match` when a prior Frigg result already returned `result_handle` plus `match_id`; use `read_file` when you already know the canonical path. Both default to text-first source output, so ask for `presentation_mode=json` only when you truly need the structured compatibility payload. Use `explore` when the extended tool profile is enabled and you need probe/zoom/refine follow-up inside one artifact.
 8. Use `document_symbols(top_level_only=true)` or `inspect_syntax_tree` before `search_structural` when syntax shape matters more than ranking.
 
-Treat `search_hybrid` as discovery-first. If top-level `warning` is present, top-level `semantic_status != ok`, or `response_mode=full` shows `metadata.lexical_only_mode = true`, treat the ranking as weaker evidence and pivot to more concrete tools before making claims. In lexical-only mode, broad natural-language ranking is noticeably less trustworthy than explicit `search_symbol` or `search_text` queries.
+Treat `search_hybrid` as discovery-first. It is allowed to be less precise than exact tools because it is ranking candidate pivots for broad questions, not replacing direct string or symbol lookup. If top-level `warning` is present, top-level `semantic_status != ok`, or `response_mode=full` shows `metadata.lexical_only_mode = true`, treat the ranking as weaker evidence and pivot to more concrete tools before making claims. In lexical-only mode, broad natural-language ranking is noticeably less trustworthy than explicit `search_symbol` or `search_text` queries.
 
 Compact responses still keep the main contract fields, but they intentionally omit bulky `metadata` and `note` payloads. `read_file`, `read_match`, and `explore(operation=zoom)` are also text-first by default now, with compact `structured_content` metadata and an explicit `presentation_mode=json` escape hatch when structured payload fields are required. When a tool returns `result_handle` and per-row `match_id` values, prefer `read_match` over manually repeating `path`, `line`, and `column`.
 
@@ -42,8 +43,8 @@ For technical reviews or blog-style investigations, use this trust order:
 
 ## Decision Table
 
-- Simple local file read, file listing, or one-off literal scan with no need for repository-aware semantics: shell tools
-- Broad architecture, onboarding, or "where does this live?" questions: `search_hybrid`, but pivot quickly if lexical-only mode is active
+- Non-code file read, file listing, git/filesystem inspection, or a trivial one-off with no need for repository-aware semantics: shell tools
+- Broad architecture, onboarding, or "where does this live?" questions without a stable anchor: `search_hybrid`, but pivot quickly if lexical-only mode is active
 - Known API, type, trait, class, or function name: `search_symbol`
 - Exact string or regex probe that needs canonical paths, repository scoping, or direct MCP follow-up: `search_text`
 - Repository-backed file slice or source proof tied to Frigg results: `read_file`

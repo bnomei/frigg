@@ -26,6 +26,7 @@ use crate::mcp::types::{
     SearchTextResponse, WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
 };
 
+/// Named runtime cache family governed by budget, freshness, and reuse policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum RuntimeCacheFamily {
     ValidatedManifestCandidate,
@@ -88,12 +89,14 @@ impl RuntimeCacheFamily {
     }
 }
 
+/// Whether a cache family may survive across MCP requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheResidency {
     ProcessWide,
     RequestLocal,
 }
 
+/// Reuse semantics for one runtime cache family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheReuseClass {
     SnapshotScopedReusable,
@@ -103,6 +106,7 @@ pub(crate) enum RuntimeCacheReuseClass {
     DeferredUntilReadOnly,
 }
 
+/// Freshness inputs required before a cached value may be reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheFreshnessContract {
     RepositorySnapshot,
@@ -112,6 +116,7 @@ pub(crate) enum RuntimeCacheFreshnessContract {
     RequestLocal,
 }
 
+/// Entry and byte limits applied to one cache family or the global runtime cache envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeCacheBudget {
     pub(crate) max_entries: Option<usize>,
@@ -136,6 +141,7 @@ impl RuntimeCacheBudget {
     }
 }
 
+/// Policy bundle describing how one runtime cache family may be stored and invalidated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeCacheFamilyPolicy {
     pub(crate) residency: RuntimeCacheResidency,
@@ -153,12 +159,14 @@ impl RuntimeCacheFamilyPolicy {
     }
 }
 
+/// Default runtime cache registry with per-family budgets and freshness contracts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeCacheRegistry {
     pub(crate) global_budget: RuntimeCacheBudget,
     families: BTreeMap<RuntimeCacheFamily, RuntimeCacheFamilyPolicy>,
 }
 
+/// Hit, miss, bypass, and eviction counters for runtime cache instrumentation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeCacheTelemetry {
     pub(crate) hits: usize,
@@ -182,6 +190,7 @@ impl RuntimeCacheTelemetry {
     }
 }
 
+/// Telemetry event recorded against one runtime cache family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheEvent {
     Hit,
@@ -321,6 +330,7 @@ const fn runtime_cache_family_policy(family: RuntimeCacheFamily) -> RuntimeCache
     }
 }
 
+/// Freshness basis mode used when deciding whether a response may be cached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepositoryResponseCacheFreshnessMode {
     ManifestOnly,
@@ -336,6 +346,7 @@ impl RepositoryResponseCacheFreshnessMode {
     }
 }
 
+/// Repository snapshot and semantic inputs that scope one response-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RepositoryFreshnessCacheScope {
     pub(crate) repository_id: String,
@@ -345,24 +356,28 @@ pub(crate) struct RepositoryFreshnessCacheScope {
     pub(crate) semantic_model: Option<String>,
 }
 
+/// Serialized freshness basis attached to cacheable search and navigation responses.
 #[derive(Debug, Clone)]
 pub(crate) struct RepositoryResponseCacheFreshness {
     pub(crate) scopes: Option<Vec<RepositoryFreshnessCacheScope>>,
     pub(crate) basis: Value,
 }
 
+/// Planned semantic refresh keyed to the latest repository snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspaceSemanticRefreshPlan {
     pub(crate) latest_snapshot_id: String,
     pub(crate) reason: &'static str,
 }
 
+/// Process-wide cached `RepositorySummary` for discovery and status tools.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedRepositorySummary {
     pub(crate) summary: RepositorySummary,
     pub(crate) generated_at: Instant,
 }
 
+/// Cached precise-generation summary for one workspace generator probe.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedWorkspacePreciseGeneration {
     pub(crate) summary: WorkspacePreciseGenerationSummary,
@@ -370,24 +385,28 @@ pub(crate) struct CachedWorkspacePreciseGeneration {
     pub(crate) generated_at: Instant,
 }
 
+/// Cache key for repository response-freshness metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RepositoryResponseFreshnessCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
     pub(crate) mode: &'static str,
 }
 
+/// Cached response-freshness payload with generation timestamp.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedRepositoryResponseFreshness {
     pub(crate) freshness: RepositoryResponseCacheFreshness,
     pub(crate) generated_at: Instant,
 }
 
+/// Cache key for one precise-generator availability probe.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PreciseGeneratorProbeCacheKey {
     pub(crate) repository_id: String,
     pub(crate) generator_id: String,
 }
 
+/// Cached precise-generator probe result for workspace status reporting.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedPreciseGeneratorProbe {
     pub(crate) state: WorkspacePreciseGeneratorState,
@@ -397,6 +416,7 @@ pub(crate) struct CachedPreciseGeneratorProbe {
     pub(crate) generated_at: Instant,
 }
 
+/// Cache key for a `search_text` response micro-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchTextResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -407,12 +427,14 @@ pub(crate) struct SearchTextResponseCacheKey {
     pub(crate) limit: usize,
 }
 
+/// Cached `search_text` response plus provenance refs for invalidation.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedSearchTextResponse {
     pub(crate) response: SearchTextResponse,
     pub(crate) source_refs: Value,
 }
 
+/// Cache key for a `search_hybrid` response micro-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchHybridResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -426,12 +448,14 @@ pub(crate) struct SearchHybridResponseCacheKey {
     pub(crate) semantic_weight_bits: u32,
 }
 
+/// Cached `search_hybrid` response plus provenance refs for invalidation.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedSearchHybridResponse {
     pub(crate) response: SearchHybridResponse,
     pub(crate) source_refs: Value,
 }
 
+/// Cache key for a `search_symbol` response micro-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SearchSymbolResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -442,6 +466,7 @@ pub(crate) struct SearchSymbolResponseCacheKey {
     pub(crate) limit: usize,
 }
 
+/// Cached `search_symbol` response plus diagnostic context for reuse checks.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedSearchSymbolResponse {
     pub(crate) response: SearchSymbolResponse,
@@ -453,6 +478,7 @@ pub(crate) struct CachedSearchSymbolResponse {
     pub(crate) effective_limit: usize,
 }
 
+/// Cache key for a `go_to_definition` response micro-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct GoToDefinitionResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -466,6 +492,7 @@ pub(crate) struct GoToDefinitionResponseCacheKey {
     pub(crate) limit: usize,
 }
 
+/// Cached `go_to_definition` response plus resolution metadata for reuse checks.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedGoToDefinitionResponse {
     pub(crate) response: GoToDefinitionResponse,
@@ -480,6 +507,7 @@ pub(crate) struct CachedGoToDefinitionResponse {
     pub(crate) match_count: usize,
 }
 
+/// Cache key for a `find_declarations` response micro-cache entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FindDeclarationsResponseCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -493,6 +521,7 @@ pub(crate) struct FindDeclarationsResponseCacheKey {
     pub(crate) limit: usize,
 }
 
+/// Cached `find_declarations` response plus resolution metadata for reuse checks.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedFindDeclarationsResponse {
     pub(crate) response: FindDeclarationsResponse,
@@ -507,6 +536,7 @@ pub(crate) struct CachedFindDeclarationsResponse {
     pub(crate) match_count: usize,
 }
 
+/// Cache key for heuristic reference evidence built without precise coverage.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HeuristicReferenceCacheKey {
     pub(crate) repository_id: String,
@@ -515,6 +545,7 @@ pub(crate) struct HeuristicReferenceCacheKey {
     pub(crate) scip_signature: String,
 }
 
+/// Cached heuristic reference set plus source-load diagnostics.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedHeuristicReferences {
     pub(crate) references: Arc<Vec<HeuristicReference>>,
@@ -524,6 +555,7 @@ pub(crate) struct CachedHeuristicReferences {
     pub(crate) source_bytes_loaded: u64,
 }
 
+/// Repository path anchor stored for one `result_handle` match id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResultHandleMatchAnchor {
     pub(crate) repository_id: String,
@@ -532,12 +564,14 @@ pub(crate) struct ResultHandleMatchAnchor {
     pub(crate) column: Option<usize>,
 }
 
+/// Session-scoped `result_handle` entry mapping match ids to source anchors.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionResultHandleEntry {
     pub(crate) generated_at: Instant,
     pub(crate) matches: BTreeMap<String, ResultHandleMatchAnchor>,
 }
 
+/// Session-local cache backing `read_match` lookups from prior search or navigation handles.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SessionResultHandleCache {
     pub(crate) entries: BTreeMap<String, SessionResultHandleEntry>,
@@ -545,6 +579,7 @@ pub(crate) struct SessionResultHandleCache {
     pub(crate) next_id: u64,
 }
 
+/// Cache key for one shared file-content snapshot scoped by repository freshness.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FileContentWindowCacheKey {
     pub(crate) scoped_repository_ids: Vec<String>,
@@ -566,6 +601,7 @@ pub(crate) struct FileContentSnapshot {
     estimated_bytes: usize,
 }
 
+/// Cached file-content window entry stored in the runtime cache.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedFileContentWindow {
     pub(crate) snapshot: Arc<FileContentSnapshot>,

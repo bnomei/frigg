@@ -11,8 +11,11 @@ use crate::domain::{
 
 use super::{LexicalRuntimeConfig, SemanticRuntimeConfig, WatchConfig};
 
+/// Default workspace root when callers omit explicit roots.
 pub const DEFAULT_WORKSPACE_ROOT: &str = ".";
+/// Default maximum search result count for lexical and hybrid tools.
 pub const DEFAULT_MAX_SEARCH_RESULTS: usize = 200;
+/// Default maximum readable file byte budget for bounded source reads.
 pub const DEFAULT_MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Top-level configuration shared by indexing, retrieval, watch, and MCP serving.

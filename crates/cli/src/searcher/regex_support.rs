@@ -141,6 +141,7 @@ pub enum RegexSearchError {
 }
 
 impl RegexSearchError {
+    /// Stable machine-readable error code for MCP and CLI surfaces.
     pub fn code(&self) -> &'static str {
         match self {
             Self::EmptyPattern => "regex_empty_pattern",

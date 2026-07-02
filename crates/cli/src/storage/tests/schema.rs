@@ -36,9 +36,34 @@ fn storage_connections_install_busy_timeout() -> FriggResult<()> {
         .map_err(|err| {
             FriggError::Internal(format!("failed to read sqlite busy timeout: {err}"))
         })?;
-    assert_eq!(busy_timeout_ms, 5_000);
+    assert_eq!(busy_timeout_ms as u64, DEFAULT_SQLITE_BUSY_TIMEOUT_MS);
 
     cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn sqlite_busy_timeout_override_parses_positive_milliseconds() -> FriggResult<()> {
+    assert_eq!(
+        sqlite_busy_timeout_ms_from_raw(None)?,
+        DEFAULT_SQLITE_BUSY_TIMEOUT_MS
+    );
+    assert_eq!(sqlite_busy_timeout_ms_from_raw(Some(" 45000 "))?, 45_000);
+
+    let zero = sqlite_busy_timeout_ms_from_raw(Some("0"))
+        .expect_err("zero busy timeout should be rejected");
+    assert!(
+        zero.to_string().contains("must be greater than 0"),
+        "unexpected zero-timeout error: {zero}"
+    );
+
+    let invalid = sqlite_busy_timeout_ms_from_raw(Some("later"))
+        .expect_err("non-numeric busy timeout should be rejected");
+    assert!(
+        invalid.to_string().contains("positive integer"),
+        "unexpected invalid-timeout error: {invalid}"
+    );
+
     Ok(())
 }
 

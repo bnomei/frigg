@@ -101,7 +101,6 @@ async fn core_read_file_supports_line_range_slicing() {
 #[tokio::test]
 async fn core_read_file_defaults_to_text_first_output() {
     let server = server_for_fixture().await;
-    let repository_id = public_repository_id(&server).await;
     let result = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
@@ -120,14 +119,15 @@ async fn core_read_file_defaults_to_text_first_output() {
         "text-mode read_file must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&result);
-    assert!(text.contains(&format!("repository_id: {repository_id}")));
-    assert!(text.contains("path: src/lib.rs"));
-    assert!(text.contains("line_window: 2-2"));
-    assert!(text.ends_with("    \"hello from fixture\""));
+    assert_eq!(text, "    \"hello from fixture\"");
+    assert!(
+        !text.contains("path:") && !text.contains("line_window:"),
+        "text-mode read_file should return only file content"
+    );
 }
 
 #[tokio::test]
-async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
+async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
     let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;
 
@@ -147,8 +147,12 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
         default_read.structured_content.is_none(),
         "text-mode read_file should not include structured metadata"
     );
+    assert_eq!(
+        tool_result_text(&default_read),
+        "    \"hello from fixture\""
+    );
 
-    let requested_read = server
+    let text_context_error = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
@@ -159,15 +163,12 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
             include_context_efficiency: Some(true),
         }))
         .await
-        .expect("context-efficiency read_file should succeed");
+        .expect_err("context-efficiency read_file in text mode should fail");
+    assert_eq!(text_context_error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&text_context_error), Some("invalid_params"));
     assert_eq!(
-        tool_result_text(&requested_read),
-        tool_result_text(&default_read),
-        "context-efficiency metadata must not change the text body"
-    );
-    assert!(
-        requested_read.structured_content.is_none(),
-        "text-mode read_file should stay pure text even when metadata is requested"
+        text_context_error.message,
+        "include_context_efficiency requires presentation_mode=json"
     );
 
     let requested_json: ReadFileResponse = structured_tool_result(
@@ -205,16 +206,43 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
         .await
         .expect("search_text should succeed")
         .0;
+    let result_handle = search
+        .result_handle
+        .expect("search_text should return result handle");
+    let match_id = search.matches[0]
+        .match_id
+        .clone()
+        .expect("search_text match should carry match id");
+
+    let read_match_text_context_error = server
+        .read_match(Parameters(ReadMatchParams {
+            result_handle: result_handle.clone(),
+            match_id: match_id.clone(),
+            before: None,
+            after: None,
+            presentation_mode: None,
+            include_context_efficiency: Some(true),
+        }))
+        .await
+        .expect_err("context-efficiency read_match in text mode should fail");
+    assert_eq!(
+        read_match_text_context_error.code,
+        ErrorCode::INVALID_PARAMS
+    );
+    assert_eq!(
+        error_code_tag(&read_match_text_context_error),
+        Some("invalid_params")
+    );
+    assert_eq!(
+        read_match_text_context_error.message,
+        "include_context_efficiency requires presentation_mode=json"
+    );
+
     let read_match: ReadMatchResponse = structured_tool_result(
         server
             .read_match(Parameters(ReadMatchParams {
-                result_handle: search
-                    .result_handle
-                    .expect("search_text should return result handle"),
-                match_id: search.matches[0]
-                    .match_id
-                    .clone()
-                    .expect("search_text match should carry match id"),
+                result_handle,
+                match_id,
                 before: None,
                 after: None,
                 presentation_mode: Some(ReadPresentationMode::Json),
@@ -230,6 +258,40 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
     assert_eq!(
         read_match_context.returned_source_bytes_estimate,
         Some(read_match.bytes.try_into().unwrap())
+    );
+
+    let explore_zoom_text_context_error = server
+        .explore(Parameters(ExploreParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(repository_id.clone()),
+            operation: ExploreOperation::Zoom,
+            query: None,
+            pattern_type: None,
+            anchor: Some(ExploreAnchor {
+                start_line: 2,
+                start_column: 5,
+                end_line: 2,
+                end_column: 25,
+            }),
+            context_lines: Some(1),
+            max_matches: None,
+            resume_from: None,
+            presentation_mode: None,
+            include_context_efficiency: Some(true),
+        }))
+        .await
+        .expect_err("context-efficiency explore zoom in text mode should fail");
+    assert_eq!(
+        explore_zoom_text_context_error.code,
+        ErrorCode::INVALID_PARAMS
+    );
+    assert_eq!(
+        error_code_tag(&explore_zoom_text_context_error),
+        Some("invalid_params")
+    );
+    assert_eq!(
+        explore_zoom_text_context_error.message,
+        "include_context_efficiency requires presentation_mode=json"
     );
 
     let explore_false: ExploreResponse = structured_tool_result(
@@ -556,10 +618,14 @@ async fn core_read_match_defaults_to_text_first_output() {
         "text-mode read_match must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&opened);
-    assert!(text.contains("path: src/lib.rs"));
-    assert!(text.contains("line_window: 1-3"));
-    assert!(text.contains("pub fn greeting()"));
-    assert!(text.contains("\"hello from fixture\""));
+    assert_eq!(
+        text,
+        "pub fn greeting() -> &'static str {\n    \"hello from fixture\"\n}"
+    );
+    assert!(
+        !text.contains("path:") && !text.contains("line_window:"),
+        "text-mode read_match should return only file content"
+    );
 }
 
 #[tokio::test]
@@ -1698,10 +1764,14 @@ async fn extended_explore_zoom_defaults_to_text_first_output() {
         "text-mode explore zoom must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&response);
-    assert!(text.contains("path: src/lib.rs"));
-    assert!(text.contains("line_window: 1-3"));
-    assert!(text.contains("let alpha = 1;"));
-    assert!(text.contains("let beta = alpha;"));
+    assert_eq!(
+        text,
+        "pub fn demo() {\n    let alpha = 1;\n    let beta = alpha;"
+    );
+    assert!(
+        !text.contains("path:") && !text.contains("line_window:"),
+        "text-mode explore zoom should return only file content"
+    );
 
     cleanup_workspace_root(&workspace_root);
 }

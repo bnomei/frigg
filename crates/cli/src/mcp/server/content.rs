@@ -69,6 +69,7 @@ impl FriggMcpServer {
                 let mut effective_line_start: Option<usize> = None;
                 let mut effective_line_end: Option<usize> = None;
                 let result = (|| -> Result<ReadFileResponse, ErrorData> {
+                    let query_started_at = std::time::Instant::now();
                     let context_efficiency_log_enabled =
                         crate::context_efficiency::context_efficiency_log_enabled();
                     let need_context_efficiency =
@@ -180,6 +181,9 @@ impl FriggMcpServer {
                                             &response.path,
                                             response.bytes,
                                             None,
+                                            Some(Self::context_efficiency_elapsed_ms(
+                                                query_started_at,
+                                            )),
                                         )
                                     },
                                 )?;
@@ -249,6 +253,7 @@ impl FriggMcpServer {
                                     &response.path,
                                     response.bytes,
                                     None,
+                                    Some(Self::context_efficiency_elapsed_ms(query_started_at)),
                                 )
                             },
                         )?;
@@ -384,6 +389,7 @@ impl FriggMcpServer {
                 let mut truncated = false;
 
                 let result = (|| -> Result<ExploreResponse, ErrorData> {
+                    let query_started_at = std::time::Instant::now();
                     let context_efficiency_log_enabled =
                         crate::context_efficiency::context_efficiency_log_enabled();
                     let need_context_efficiency =
@@ -751,6 +757,7 @@ impl FriggMcpServer {
                                     &display_path,
                                     returned_source_bytes_estimate,
                                     Some(scan.total_matches),
+                                    Some(Self::context_efficiency_elapsed_ms(query_started_at)),
                                 )
                             },
                         )?;
@@ -889,15 +896,8 @@ impl FriggMcpServer {
         match Self::read_presentation_mode(params.presentation_mode) {
             ReadPresentationMode::Json => Self::structured_tool_result(&response),
             ReadPresentationMode::Text => {
-                let (line_start, line_end) =
-                    Self::read_file_effective_line_window(params, &response.content);
-                Ok(Self::text_read_surface_result(
-                    &response.repository_id,
-                    &response.path,
-                    line_start,
-                    line_end,
-                    response.content,
-                ))
+                Self::reject_text_context_efficiency(params.include_context_efficiency)?;
+                Ok(Self::text_read_surface_result(response.content))
             }
         }
     }
@@ -910,15 +910,8 @@ impl FriggMcpServer {
         match Self::read_presentation_mode(params.presentation_mode) {
             ReadPresentationMode::Json => Self::structured_tool_result(&response),
             ReadPresentationMode::Text => {
-                let (line_start, line_end) =
-                    Self::effective_line_window(response.line_start, &response.content);
-                Ok(Self::text_read_surface_result(
-                    &response.repository_id,
-                    &response.path,
-                    line_start,
-                    line_end,
-                    response.content,
-                ))
+                Self::reject_text_context_efficiency(params.include_context_efficiency)?;
+                Ok(Self::text_read_surface_result(response.content))
             }
         }
     }
@@ -931,6 +924,7 @@ impl FriggMcpServer {
         match Self::explore_presentation_mode(params)? {
             ReadPresentationMode::Json => Self::structured_tool_result(&response),
             ReadPresentationMode::Text => {
+                Self::reject_text_context_efficiency(params.include_context_efficiency)?;
                 let Some(window) = response.window else {
                     return Err(Self::internal(
                         "explore zoom response missing window",
@@ -940,13 +934,7 @@ impl FriggMcpServer {
                         })),
                     ));
                 };
-                Ok(Self::text_read_surface_result(
-                    &response.repository_id,
-                    &response.path,
-                    window.start_line,
-                    window.end_line,
-                    window.content,
-                ))
+                Ok(Self::text_read_surface_result(window.content))
             }
         }
     }
@@ -957,6 +945,7 @@ impl FriggMcpServer {
         path: &str,
         returned_source_bytes_estimate: usize,
         returned_match_count: Option<usize>,
+        query_duration_ms: Option<u64>,
     ) -> Result<ContextEfficiencyMetadata, ErrorData> {
         let summary = self
             .attached_workspaces_for_repository(Some(repository_id))?
@@ -985,25 +974,32 @@ impl FriggMcpServer {
         let indexed_max_mtime_ns = summary.as_ref().and_then(|summary| summary.max_mtime_ns);
         let returned_unique_file_bytes = summary
             .as_ref()
-            .map(|summary| summary.returned_unique_file_bytes([path]));
+            .and_then(|summary| summary.returned_unique_file_bytes_if_known([path]));
         let returned_source_bytes_estimate =
             u64::try_from(returned_source_bytes_estimate).unwrap_or(u64::MAX);
-        let denominator = returned_source_bytes_estimate.max(1) as f64;
 
-        Ok(ContextEfficiencyMetadata {
-            indexed_readable_files,
-            indexed_readable_bytes,
-            indexed_min_mtime_ns,
-            indexed_max_mtime_ns,
-            candidate_input_count: None,
-            candidate_output_count: None,
-            returned_match_count,
-            returned_unique_paths: Some(1),
-            returned_unique_file_bytes,
-            returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
-            narrowing_ratio_estimate: Some(indexed_readable_bytes as f64 / denominator),
-            stage_attribution: None,
-        })
+        Ok(Self::finalize_context_efficiency_metadata(
+            ContextEfficiencyMetadata {
+                indexed_readable_files,
+                indexed_readable_bytes,
+                indexed_min_mtime_ns,
+                indexed_max_mtime_ns,
+                candidate_input_count: None,
+                candidate_output_count: None,
+                returned_match_count,
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes,
+                returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
+                matched_file_context_saved_bytes_estimate: None,
+                matched_file_context_saved_percent_estimate: None,
+                corpus_context_saved_bytes_estimate: None,
+                corpus_context_saved_percent_estimate: None,
+                corpus_narrowing_ratio_estimate: None,
+                query_duration_ms,
+                narrowing_ratio_estimate: None,
+                stage_attribution: None,
+            },
+        ))
     }
 
     fn structured_tool_result<T: Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
@@ -1017,46 +1013,26 @@ impl FriggMcpServer {
             })
     }
 
-    fn read_file_effective_line_window(params: &ReadFileParams, content: &str) -> (usize, usize) {
-        Self::effective_line_window(params.line_start.unwrap_or(1), content)
+    fn reject_text_context_efficiency(
+        include_context_efficiency: Option<bool>,
+    ) -> Result<(), ErrorData> {
+        if include_context_efficiency == Some(true) {
+            return Err(Self::invalid_params(
+                "include_context_efficiency requires presentation_mode=json",
+                Some(json!({
+                    "include_context_efficiency": true,
+                    "presentation_mode": ReadPresentationMode::Text,
+                    "supported_presentation_mode": ReadPresentationMode::Json,
+                })),
+            ));
+        }
+        Ok(())
     }
 
-    fn effective_line_window(line_start: usize, content: &str) -> (usize, usize) {
-        let line_count = content.lines().count().max(1);
-        let line_end = line_start.saturating_add(line_count.saturating_sub(1));
-        (line_start, line_end)
-    }
-
-    fn text_read_surface_result(
-        repository_id: &str,
-        path: &str,
-        line_start: usize,
-        line_end: usize,
-        content: String,
-    ) -> CallToolResult {
-        // Keep text-mode read surfaces pure MCP text. Codex and some other clients prefer
-        // `structuredContent` over `content` when both are present, which can hide the source body
-        // from the model. Callers that need machine-readable path, byte, or context-efficiency
-        // metadata should request `presentation_mode=json` instead.
-        CallToolResult::success(vec![Content::text(Self::format_text_read_surface(
-            repository_id,
-            path,
-            line_start,
-            line_end,
-            &content,
-        ))])
-    }
-
-    fn format_text_read_surface(
-        repository_id: &str,
-        path: &str,
-        line_start: usize,
-        line_end: usize,
-        content: &str,
-    ) -> String {
-        format!(
-            "repository_id: {repository_id}\npath: {path}\nline_window: {line_start}-{line_end}\n\n{content}"
-        )
+    fn text_read_surface_result(content: String) -> CallToolResult {
+        // Text mode is intentionally just the selected source bytes. Do not prepend path/line
+        // headers or attach `structuredContent`: callers that need metadata must use JSON mode.
+        CallToolResult::success(vec![Content::text(content)])
     }
 
     pub(super) fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {

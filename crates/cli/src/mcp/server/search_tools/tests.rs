@@ -227,6 +227,14 @@ fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_st
     assert_eq!(metadata.returned_unique_paths, Some(1));
     assert_eq!(metadata.returned_unique_file_bytes, Some(100));
     assert_eq!(metadata.returned_source_bytes_estimate, Some(9));
+    assert_eq!(metadata.matched_file_context_saved_bytes_estimate, Some(91));
+    assert_eq!(
+        metadata.matched_file_context_saved_percent_estimate,
+        Some(91.0)
+    );
+    assert_eq!(metadata.corpus_context_saved_bytes_estimate, Some(131));
+    assert_eq!(metadata.corpus_context_saved_percent_estimate, Some(93.57));
+    assert_eq!(metadata.corpus_narrowing_ratio_estimate, Some(16));
     assert_eq!(metadata.stage_attribution, None);
 
     let _ = std::fs::remove_dir_all(root);
@@ -273,7 +281,13 @@ fn context_efficiency_log_for_workspaces_respects_log_state() {
         returned_unique_paths: Some(1),
         returned_unique_file_bytes: Some(100),
         returned_source_bytes_estimate: Some(7),
-        narrowing_ratio_estimate: Some(100.0 / 7.0),
+        matched_file_context_saved_bytes_estimate: Some(93),
+        matched_file_context_saved_percent_estimate: Some(93.0),
+        corpus_context_saved_bytes_estimate: Some(93),
+        corpus_context_saved_percent_estimate: Some(93.0),
+        corpus_narrowing_ratio_estimate: Some(14),
+        query_duration_ms: Some(11),
+        narrowing_ratio_estimate: Some(14),
         stage_attribution: None,
     };
 
@@ -472,7 +486,14 @@ fn search_hybrid_context_efficiency_metadata_uses_manifest_and_excerpts() {
     assert_eq!(metadata.returned_unique_paths, Some(1));
     assert_eq!(metadata.returned_unique_file_bytes, Some(100));
     assert_eq!(metadata.returned_source_bytes_estimate, Some(14));
-    assert_eq!(metadata.narrowing_ratio_estimate, Some(10.0));
+    assert_eq!(metadata.matched_file_context_saved_bytes_estimate, Some(86));
+    assert_eq!(
+        metadata.matched_file_context_saved_percent_estimate,
+        Some(86.0)
+    );
+    assert_eq!(metadata.corpus_context_saved_bytes_estimate, Some(126));
+    assert_eq!(metadata.corpus_narrowing_ratio_estimate, Some(10));
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(10));
 
     let _ = std::fs::remove_dir_all(root);
 }

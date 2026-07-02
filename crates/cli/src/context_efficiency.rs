@@ -1,4 +1,7 @@
 //! Shared context-efficiency helpers for optional response metadata and local summaries.
+//!
+//! Computes corpus, matched-file, and returned-source byte estimates for MCP responses and
+//! optional JSONL operator logs controlled by `FRIGG_CONTEXT_EFFICIENCY_LOG`.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -13,10 +16,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::RepositoryManifestMetadataSnapshot;
 
+/// Environment variable that enables optional JSONL context-efficiency logging.
 pub(crate) const CONTEXT_EFFICIENCY_LOG_ENV: &str = "FRIGG_CONTEXT_EFFICIENCY_LOG";
 const MANIFEST_METADATA_CACHE_LIMIT: usize = 64;
 const JSONL_SUMMARY_CACHE_LIMIT: usize = 32;
 
+/// Cache key for manifest metadata summaries derived from storage identity and snapshot id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ManifestMetadataCacheKey {
     storage_identity: String,
@@ -50,6 +55,7 @@ impl ManifestMetadataCacheKey {
     }
 }
 
+/// Indexed corpus byte totals and per-path sizes for context-efficiency estimates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManifestMetadataSummary {
     pub(crate) repository_id: String,
@@ -100,6 +106,19 @@ impl ManifestMetadataSummary {
             .filter_map(|path| self.path_size_bytes.get(path))
             .copied()
             .fold(0_u64, u64::saturating_add)
+    }
+
+    /// Sums indexed byte sizes for returned unique paths when every path is in the manifest snapshot.
+    pub(crate) fn returned_unique_file_bytes_if_known<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a str>,
+    ) -> Option<u64> {
+        let unique_paths = paths.into_iter().collect::<BTreeSet<_>>();
+        let mut total = 0_u64;
+        for path in unique_paths {
+            total = total.saturating_add(*self.path_size_bytes.get(path)?);
+        }
+        Some(total)
     }
 }
 
@@ -181,6 +200,7 @@ pub(crate) fn need_context_efficiency_with_log_state(
     include_context_efficiency == Some(true) || context_efficiency_log_enabled
 }
 
+/// Compact context-efficiency metrics attached to MCP responses and JSONL rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogMetrics {
     pub(crate) indexed_readable_files: usize,
@@ -202,9 +222,58 @@ pub(crate) struct ContextEfficiencyLogMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) returned_source_bytes_estimate: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) narrowing_ratio_estimate: Option<f64>,
+    pub(crate) matched_file_context_saved_bytes_estimate: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) matched_file_context_saved_percent_estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) corpus_context_saved_bytes_estimate: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) corpus_context_saved_percent_estimate: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_u64_from_number"
+    )]
+    pub(crate) corpus_narrowing_ratio_estimate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) query_duration_ms: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_u64_from_number"
+    )]
+    pub(crate) narrowing_ratio_estimate: Option<u64>,
 }
 
+fn deserialize_optional_u64_from_number<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match value {
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_u64() {
+                return Ok(Some(value));
+            }
+            let value = number.as_f64().ok_or_else(|| {
+                serde::de::Error::custom("expected finite non-negative numeric ratio")
+            })?;
+            if !value.is_finite() || value < 0.0 {
+                return Err(serde::de::Error::custom(
+                    "expected finite non-negative numeric ratio",
+                ));
+            }
+            Ok(Some(value.round() as u64))
+        }
+        other => Err(serde::de::Error::custom(format!(
+            "expected numeric ratio, got {other}"
+        ))),
+    }
+}
+
+/// Single JSONL row written to `.frigg/context.jsonl` when logging is enabled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogRow {
     pub(crate) timestamp: String,
@@ -216,6 +285,7 @@ pub(crate) struct ContextEfficiencyLogRow {
     pub(crate) metrics: ContextEfficiencyLogMetrics,
 }
 
+/// Inclusive time window used when aggregating context-efficiency JSONL logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextSummaryWindow {
     pub date_since: DateTime<Utc>,
@@ -267,6 +337,7 @@ impl ContextSummaryWindow {
     }
 }
 
+/// Failure modes when resolving summary windows or reading context logs.
 #[derive(Debug)]
 pub enum ContextSummaryError {
     InvalidDate(String),
@@ -298,17 +369,22 @@ impl From<serde_json::Error> for ContextSummaryError {
     }
 }
 
+/// Rolled-up context-efficiency counters across one or more workspace roots.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ContextLogAggregate {
     pub events: usize,
     pub indexed_readable_files_max: usize,
     pub indexed_readable_bytes_max: u64,
+    pub query_duration_ms_total: u64,
+    pub query_duration_ms_max: u64,
     pub candidate_input_count: u64,
     pub candidate_output_count: u64,
     pub returned_match_count: u64,
     pub returned_unique_paths: u64,
     pub returned_unique_file_bytes: u64,
     pub returned_source_bytes_estimate: u64,
+    pub matched_file_context_saved_bytes_estimate: i64,
+    pub corpus_context_saved_bytes_estimate: i64,
 }
 
 impl ContextLogAggregate {
@@ -320,6 +396,12 @@ impl ContextLogAggregate {
         self.indexed_readable_bytes_max = self
             .indexed_readable_bytes_max
             .max(row.metrics.indexed_readable_bytes);
+        self.query_duration_ms_total = self
+            .query_duration_ms_total
+            .saturating_add(row.metrics.query_duration_ms.unwrap_or_default());
+        self.query_duration_ms_max = self
+            .query_duration_ms_max
+            .max(row.metrics.query_duration_ms.unwrap_or_default());
         self.candidate_input_count = self
             .candidate_input_count
             .saturating_add(row.metrics.candidate_input_count.unwrap_or_default() as u64);
@@ -340,6 +422,19 @@ impl ContextLogAggregate {
                 .returned_source_bytes_estimate
                 .unwrap_or_default(),
         );
+        self.matched_file_context_saved_bytes_estimate = self
+            .matched_file_context_saved_bytes_estimate
+            .saturating_add(
+                row.metrics
+                    .matched_file_context_saved_bytes_estimate
+                    .unwrap_or_default(),
+            );
+        self.corpus_context_saved_bytes_estimate =
+            self.corpus_context_saved_bytes_estimate.saturating_add(
+                row.metrics
+                    .corpus_context_saved_bytes_estimate
+                    .unwrap_or_default(),
+            );
     }
 
     fn merge(&mut self, other: &Self) {
@@ -350,6 +445,10 @@ impl ContextLogAggregate {
         self.indexed_readable_bytes_max = self
             .indexed_readable_bytes_max
             .max(other.indexed_readable_bytes_max);
+        self.query_duration_ms_total = self
+            .query_duration_ms_total
+            .saturating_add(other.query_duration_ms_total);
+        self.query_duration_ms_max = self.query_duration_ms_max.max(other.query_duration_ms_max);
         self.candidate_input_count = self
             .candidate_input_count
             .saturating_add(other.candidate_input_count);
@@ -368,9 +467,16 @@ impl ContextLogAggregate {
         self.returned_source_bytes_estimate = self
             .returned_source_bytes_estimate
             .saturating_add(other.returned_source_bytes_estimate);
+        self.matched_file_context_saved_bytes_estimate = self
+            .matched_file_context_saved_bytes_estimate
+            .saturating_add(other.matched_file_context_saved_bytes_estimate);
+        self.corpus_context_saved_bytes_estimate = self
+            .corpus_context_saved_bytes_estimate
+            .saturating_add(other.corpus_context_saved_bytes_estimate);
     }
 }
 
+/// Per-workspace-root summary of context-efficiency JSONL activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextLogRootSummary {
     pub root: String,
@@ -382,6 +488,7 @@ pub struct ContextLogRootSummary {
     pub aggregate: ContextLogAggregate,
 }
 
+/// Multi-root context-efficiency summary for operator-facing reporting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextLogSummary {
     pub date_since: String,
@@ -787,7 +894,13 @@ mod tests {
                 returned_unique_paths: Some(1),
                 returned_unique_file_bytes: Some(20),
                 returned_source_bytes_estimate: Some(5),
-                narrowing_ratio_estimate: Some(18.0),
+                matched_file_context_saved_bytes_estimate: Some(15),
+                matched_file_context_saved_percent_estimate: Some(75.0),
+                corpus_context_saved_bytes_estimate: Some(85),
+                corpus_context_saved_percent_estimate: Some(94.44),
+                corpus_narrowing_ratio_estimate: Some(18),
+                query_duration_ms: Some(4),
+                narrowing_ratio_estimate: Some(18),
             },
         );
 
@@ -820,7 +933,13 @@ mod tests {
                 returned_unique_paths: Some(1),
                 returned_unique_file_bytes: Some(100),
                 returned_source_bytes_estimate: Some(9),
-                narrowing_ratio_estimate: Some(15.555555555555555),
+                matched_file_context_saved_bytes_estimate: Some(91),
+                matched_file_context_saved_percent_estimate: Some(91.0),
+                corpus_context_saved_bytes_estimate: Some(131),
+                corpus_context_saved_percent_estimate: Some(93.57),
+                corpus_narrowing_ratio_estimate: Some(16),
+                query_duration_ms: Some(6),
+                narrowing_ratio_estimate: Some(16),
             },
         );
 
@@ -835,6 +954,12 @@ mod tests {
         assert_eq!(value["tool"], "read_file");
         assert_eq!(value["repository_id"], "repo-1");
         assert_eq!(value["snapshot_id"], "snapshot-1");
+        assert_eq!(value["query_duration_ms"], 6);
+        assert_eq!(value["matched_file_context_saved_bytes_estimate"], 91);
+        assert_eq!(value["matched_file_context_saved_percent_estimate"], 91.0);
+        assert_eq!(value["corpus_context_saved_bytes_estimate"], 131);
+        assert_eq!(value["corpus_context_saved_percent_estimate"], 93.57);
+        assert_eq!(value["corpus_narrowing_ratio_estimate"], 16);
         assert!(value.get("query").is_none());
         assert!(value.get("content").is_none());
         assert!(value.get("excerpt").is_none());
@@ -942,7 +1067,13 @@ mod tests {
                     returned_unique_paths: Some(4),
                     returned_unique_file_bytes: Some(400),
                     returned_source_bytes_estimate: Some(40),
-                    narrowing_ratio_estimate: Some(25.0),
+                    matched_file_context_saved_bytes_estimate: Some(360),
+                    matched_file_context_saved_percent_estimate: Some(90.0),
+                    corpus_context_saved_bytes_estimate: Some(960),
+                    corpus_context_saved_percent_estimate: Some(96.0),
+                    corpus_narrowing_ratio_estimate: Some(25),
+                    query_duration_ms: Some(5),
+                    narrowing_ratio_estimate: Some(25),
                 },
             },
             ContextEfficiencyLogRow {
@@ -961,7 +1092,13 @@ mod tests {
                     returned_unique_paths: Some(2),
                     returned_unique_file_bytes: Some(200),
                     returned_source_bytes_estimate: Some(20),
-                    narrowing_ratio_estimate: Some(60.0),
+                    matched_file_context_saved_bytes_estimate: Some(180),
+                    matched_file_context_saved_percent_estimate: Some(90.0),
+                    corpus_context_saved_bytes_estimate: Some(1180),
+                    corpus_context_saved_percent_estimate: Some(98.33),
+                    corpus_narrowing_ratio_estimate: Some(60),
+                    query_duration_ms: Some(7),
+                    narrowing_ratio_estimate: Some(60),
                 },
             },
             ContextEfficiencyLogRow {
@@ -980,7 +1117,13 @@ mod tests {
                     returned_unique_paths: Some(1),
                     returned_unique_file_bytes: Some(80),
                     returned_source_bytes_estimate: Some(12),
-                    narrowing_ratio_estimate: Some(100.0),
+                    matched_file_context_saved_bytes_estimate: Some(68),
+                    matched_file_context_saved_percent_estimate: Some(85.0),
+                    corpus_context_saved_bytes_estimate: Some(1188),
+                    corpus_context_saved_percent_estimate: Some(99.0),
+                    corpus_narrowing_ratio_estimate: Some(100),
+                    query_duration_ms: Some(3),
+                    narrowing_ratio_estimate: Some(100),
                 },
             },
         ];
@@ -1002,8 +1145,15 @@ mod tests {
         assert_eq!(summary.totals.events, 2);
         assert_eq!(summary.totals.indexed_readable_files_max, 120);
         assert_eq!(summary.totals.indexed_readable_bytes_max, 1200);
+        assert_eq!(summary.totals.query_duration_ms_total, 10);
+        assert_eq!(summary.totals.query_duration_ms_max, 7);
         assert_eq!(summary.totals.candidate_input_count, 50);
         assert_eq!(summary.totals.returned_unique_file_bytes, 280);
+        assert_eq!(
+            summary.totals.matched_file_context_saved_bytes_estimate,
+            248
+        );
+        assert_eq!(summary.totals.corpus_context_saved_bytes_estimate, 2368);
         assert_eq!(summary.roots[0].repositories, vec!["repo-1".to_owned()]);
         assert_eq!(summary.roots[0].tools["search_text"], 1);
         assert_eq!(summary.roots[0].tools["read_file"], 1);
@@ -1045,7 +1195,13 @@ mod tests {
                 returned_unique_paths: Some(1),
                 returned_unique_file_bytes: Some(10),
                 returned_source_bytes_estimate: Some(5),
-                narrowing_ratio_estimate: Some(2.0),
+                matched_file_context_saved_bytes_estimate: Some(5),
+                matched_file_context_saved_percent_estimate: Some(50.0),
+                corpus_context_saved_bytes_estimate: Some(5),
+                corpus_context_saved_percent_estimate: Some(50.0),
+                corpus_narrowing_ratio_estimate: Some(2),
+                query_duration_ms: Some(1),
+                narrowing_ratio_estimate: Some(2),
             },
         };
         std::fs::write(

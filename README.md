@@ -140,9 +140,10 @@ The normal first-use loop is:
 
 1. Call `workspace_attach` for the repository.
 2. Check `workspace_current` when you need freshness, precise-generator, or runtime status.
-3. Start broad questions with `search_hybrid`.
-4. Open source with `read_match` when a search result returned `result_handle` and `match_id`.
-5. Pivot to `search_symbol`, `document_symbols`, `go_to_definition`, `find_references`, `find_implementations`, `incoming_calls`, `outgoing_calls`, or `search_structural` when you need exact navigation.
+3. Use `search_hybrid` for broad discovery questions when you do not yet have a stable string, symbol, or path anchor.
+4. Use `search_text` for direct literal or regex text matches, and `search_symbol` for known identifiers.
+5. Open source with `read_match` when a search result returned `result_handle` and `match_id`.
+6. Pivot to `document_symbols`, `go_to_definition`, `find_references`, `find_implementations`, `incoming_calls`, `outgoing_calls`, or `search_structural` when you need exact navigation.
 
 Example prompts:
 
@@ -240,7 +241,7 @@ Frigg follows the same local-index principle, but aims it at source-backed navig
 
 This pattern also shows up in production coding tools. [Turbopuffer](https://turbopuffer.com), [Cursor](https://cursor.com), and [Sourcegraph](https://sourcegraph.com) all point at the same broad lesson: agents do better when grep, indexes, semantic search, symbols, and precise code intelligence work together. Frigg brings a compact version of that shape to a local MCP server: smaller than Sourcegraph, less IDE-coupled than Cursor, and designed for terminal-based assistants that need source-backed code evidence.
 
-The Frigg-specific layer is `search_hybrid`: a local reranking flow that gathers broad candidates, blends lexical, path, graph, witness, and optional semantic evidence, then applies code-aware selection rules for runtime files, entrypoints, configs, tests, build surfaces, navigation companions, and framework-specific witnesses.
+The Frigg-specific layer is `search_hybrid`: a local reranking flow that gathers broad candidates, blends lexical, path, graph, witness, and optional semantic evidence, then applies code-aware selection rules for runtime files, entrypoints, configs, tests, build surfaces, navigation companions, and framework-specific witnesses. It is a discovery surface for questions and subsystems, not the cleanest direct-string lookup; use `search_text` for literal or regex text and `search_symbol` for known identifiers.
 
 ## How Frigg Uses Your Workspace
 
@@ -270,7 +271,9 @@ Use shell tools for non-code files, git and filesystem inspection, and trivial o
 
 Use Frigg for repository-aware workflows:
 
-- broad natural-language discovery across many files
+- broad natural-language discovery across many files with `search_hybrid`
+- direct literal or regex code search with `search_text`
+- known identifier lookup with `search_symbol`
 - canonical repository-relative paths and bounded source reads
 - definitions, declarations, references, implementations, callers, and callees
 - document outlines and Tree-sitter structural queries
@@ -465,6 +468,7 @@ Precedence is `CLI flag > env var > default`.
 | `--watch-mode` / `FRIGG_WATCH_MODE` | stdio `off`, HTTP `auto` | Controls the built-in watch worker: `auto`, `on`, or `off`. |
 | `--watch-debounce-ms` / `FRIGG_WATCH_DEBOUNCE_MS` | `2000` | Debounce delay before a watch-triggered refresh starts. |
 | `--watch-retry-ms` / `FRIGG_WATCH_RETRY_MS` | `5000` | Retry delay after a failed watch refresh. |
+| `FRIGG_SQLITE_BUSY_TIMEOUT_MS` | `30000` | SQLite wait timeout for transient writer contention on `.frigg/storage.sqlite3`. Increase for test-heavy or multi-process development. |
 | `--mcp-http-port` | `37444` for `frigg serve`, unset otherwise | Enables HTTP transport on the given port. |
 | `--mcp-http-host` | `127.0.0.1` when HTTP is enabled | Host bind address for HTTP transport. |
 | `--allow-remote-http` | `false` | Required for non-loopback HTTP serving. |

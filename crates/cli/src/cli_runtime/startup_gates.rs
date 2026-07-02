@@ -50,6 +50,7 @@ pub(crate) fn run_strict_startup_vector_readiness_gate(config: &FriggConfig) -> 
     run_strict_startup_vector_readiness_gate_with_output(config, &CliOutput::normal())
 }
 
+/// Blocks serve and strict index paths until sqlite-vec storage is initialized and schema-compatible.
 pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
     config: &FriggConfig,
     output: &CliOutput,
@@ -216,6 +217,7 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
     Ok(())
 }
 
+/// Validates semantic-runtime credentials and prepares local model artifacts before serve or index.
 pub(crate) fn run_semantic_runtime_startup_gate_with_output(
     config: &FriggConfig,
     output: &CliOutput,
@@ -230,6 +232,7 @@ pub(crate) fn run_semantic_runtime_startup_gate_with_output(
     )
 }
 
+/// Like [`run_semantic_runtime_startup_gate_with_output`], but routes local-model prep messages to stderr.
 pub(crate) fn run_semantic_runtime_startup_gate_with_stderr_prepare_output(
     config: &FriggConfig,
     output: &CliOutput,

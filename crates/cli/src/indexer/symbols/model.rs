@@ -80,6 +80,7 @@ pub struct SymbolDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Per-file symbol extraction failure carried alongside successful symbols in batch output.
 pub struct SymbolExtractionDiagnostic {
     pub path: PathBuf,
     pub language: Option<SymbolLanguage>,
@@ -95,6 +96,7 @@ pub struct SymbolExtractionOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Selects whether structural search returns flat captures or grouped match rows.
 pub enum StructuralQueryResultMode {
     Matches,
     Captures,
@@ -102,6 +104,7 @@ pub enum StructuralQueryResultMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Policy for choosing the anchor capture that defines a structural query match excerpt.
 pub enum StructuralQueryAnchorSelection {
     PrimaryCapture,
     MatchCapture,
@@ -111,6 +114,7 @@ pub enum StructuralQueryAnchorSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One named tree-sitter capture within a structural query match.
 pub struct StructuralQueryCapture {
     pub name: String,
     pub span: SourceSpan,
@@ -130,6 +134,7 @@ pub struct StructuralQueryMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One syntax-tree node with kind metadata and a bounded source excerpt.
 pub struct SyntaxTreeInspectionNode {
     pub kind: String,
     pub named: bool,
@@ -150,6 +155,7 @@ pub struct SyntaxTreeInspection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Confidence tier for heuristic symbol references surfaced outside precise graph resolution.
 pub enum HeuristicReferenceConfidence {
     Low,
     Medium,
@@ -168,6 +174,7 @@ impl From<HeuristicConfidence> for HeuristicReferenceConfidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Evidence backing one heuristic reference, either graph-derived or lexical.
 pub enum HeuristicReferenceEvidence {
     GraphRelation {
         source_symbol_id: String,

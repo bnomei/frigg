@@ -5,6 +5,7 @@
 
 use tree_sitter_language::LanguageFn;
 
+/// Vendored tree-sitter grammar bindings for Blade templates.
 pub(crate) mod tree_sitter_blade {
     use super::LanguageFn;
 
@@ -24,6 +25,7 @@ pub(crate) mod tree_sitter_blade {
         include_str!("../vendor-grammars/tree-sitter-blade/queries/injections.scm");
 }
 
+/// Vendored tree-sitter grammar bindings for Nim sources.
 pub(crate) mod tree_sitter_nim {
     use super::LanguageFn;
 
@@ -36,6 +38,7 @@ pub(crate) mod tree_sitter_nim {
         include_str!("../vendor-grammars/tree-sitter-nim/src/node-types.json");
 }
 
+/// Vendored tree-sitter grammar bindings for Kotlin and KTS sources.
 pub(crate) mod tree_sitter_kotlin {
     use super::LanguageFn;
 
@@ -52,6 +55,7 @@ pub(crate) mod tree_sitter_kotlin {
         include_str!("../vendor-grammars/tree-sitter-kotlin/queries/highlights.scm");
 }
 
+/// Vendored tree-sitter grammar bindings for Roc sources.
 pub(crate) mod tree_sitter_roc {
     use super::LanguageFn;
 

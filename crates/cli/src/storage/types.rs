@@ -19,6 +19,7 @@ pub struct RepositoryManifestSnapshot {
     pub entries: Vec<ManifestEntry>,
 }
 
+/// Manifest metadata row without content hash, used for freshness and context summaries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestMetadataEntry {
     pub path: String,
@@ -26,6 +27,7 @@ pub struct ManifestMetadataEntry {
     pub mtime_ns: Option<u64>,
 }
 
+/// Manifest metadata snapshot keyed by repository and snapshot id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryManifestMetadataSnapshot {
     pub repository_id: String,
@@ -52,6 +54,7 @@ pub struct SemanticChunkEmbeddingRecord {
     pub embedding: Vec<f32>,
 }
 
+/// Semantic chunk projection containing path coordinates and embedding vector only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticChunkEmbeddingProjection {
     pub chunk_id: String,
@@ -64,6 +67,7 @@ pub struct SemanticChunkEmbeddingProjection {
     pub embedding: Vec<f32>,
 }
 
+/// Vector search match for a semantic chunk within a repository snapshot partition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticChunkVectorMatch {
     pub chunk_id: String,
@@ -72,6 +76,7 @@ pub struct SemanticChunkVectorMatch {
     pub distance: f32,
 }
 
+/// Semantic chunk text payload loaded after vector or id-based recall.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticChunkPayload {
     pub chunk_id: String,
@@ -82,6 +87,7 @@ pub struct SemanticChunkPayload {
     pub content_text: String,
 }
 
+/// Truncated semantic chunk preview used by bounded response surfaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkPreview {
     pub chunk_id: String,
@@ -106,6 +112,7 @@ pub struct PathWitnessProjection {
     pub heuristic_version: i64,
 }
 
+/// Test-to-subject linkage projection used by witness-focused retrieval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestSubjectProjection {
     pub test_path: String,
@@ -115,6 +122,7 @@ pub struct TestSubjectProjection {
     pub flags_json: String,
 }
 
+/// Entrypoint surface projection for onboarding and build-flow retrieval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntrypointSurfaceProjection {
     pub path: String,
@@ -125,6 +133,7 @@ pub struct EntrypointSurfaceProjection {
     pub flags_json: String,
 }
 
+/// Header row describing one retrieval projection family in a snapshot bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetrievalProjectionHeadRecord {
     pub family: String,
@@ -133,6 +142,7 @@ pub struct RetrievalProjectionHeadRecord {
     pub row_count: usize,
 }
 
+/// Path-to-path relation projection derived from graph or heuristic evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathRelationProjection {
     pub src_path: String,
@@ -147,6 +157,7 @@ pub struct PathRelationProjection {
     pub score_hint: usize,
 }
 
+/// Subtree coverage summary used to rank repository-area candidates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubtreeCoverageProjection {
     pub subtree_root: String,
@@ -156,6 +167,7 @@ pub struct SubtreeCoverageProjection {
     pub exemplar_score_hint: usize,
 }
 
+/// Weighted path-surface term projection for lexical witness recall.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathSurfaceTermProjection {
     pub path: String,
@@ -163,6 +175,7 @@ pub struct PathSurfaceTermProjection {
     pub exact_terms: Vec<String>,
 }
 
+/// Path anchor sketch projection used for exact-anchor-biased retrieval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathAnchorSketchProjection {
     pub path: String,
@@ -212,6 +225,7 @@ pub struct SemanticStorageHealth {
     pub vector_consistent: bool,
 }
 
+/// Summary of storage invariant categories repaired during verification.
 #[derive(Debug, Default, Clone)]
 pub struct StorageInvariantRepairSummary {
     pub repaired_categories: Vec<String>,

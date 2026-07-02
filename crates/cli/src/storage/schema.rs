@@ -4,8 +4,10 @@
 //! initialized with this schema; existing databases with another schema version are rejected so the
 //! user can delete and rebuild them instead of running migrations.
 
+/// Latest durable storage schema version written to empty SQLite databases.
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 11;
 
+/// Full SQLite DDL for the current durable storage schema.
 pub(crate) const CURRENT_SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS schema_version (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -236,6 +238,7 @@ pub(crate) const CURRENT_SCHEMA_SQL: &str = r#"
     ON path_anchor_sketch_projection (repository_id, snapshot_id, path, anchor_rank);
 "#;
 
+/// Tables that must exist before storage accepts an existing database file.
 pub(crate) const REQUIRED_TABLES: &[&str] = &[
     "schema_version",
     "repository",

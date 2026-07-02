@@ -78,6 +78,7 @@ struct ValidatedManifestCandidateCacheKey {
     root: PathBuf,
 }
 
+/// Cache hit/miss counters for validated manifest digest reuse.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ValidatedManifestCandidateCacheStats {
     pub hits: usize,
@@ -85,6 +86,7 @@ pub(crate) struct ValidatedManifestCandidateCacheStats {
     pub dirty_bypasses: usize,
 }
 
+/// Outcome of a validated manifest digest cache lookup for a workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValidatedManifestCandidateCacheLookup {
     Hit(Arc<Vec<FileMetadataDigest>>),
@@ -92,8 +94,8 @@ pub(crate) enum ValidatedManifestCandidateCacheLookup {
     Dirty,
 }
 
-#[derive(Debug, Default)]
 /// In-memory cache of manifest digests validated against the live workspace root.
+#[derive(Debug, Default)]
 pub struct ValidatedManifestCandidateCache {
     entries: BTreeMap<ValidatedManifestCandidateCacheKey, ValidatedManifestCandidateCacheEntry>,
     stats: ValidatedManifestCandidateCacheStats,
@@ -190,12 +192,14 @@ impl ValidatedManifestCandidateCache {
     }
 }
 
+/// Manifest snapshot with digests confirmed against the live workspace filesystem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ValidatedManifestSnapshot {
     pub snapshot_id: String,
     pub digests: Vec<FileMetadataDigest>,
 }
 
+/// Shared validated manifest snapshot used to avoid cloning digest vectors on cache hits.
 #[derive(Debug, Clone)]
 pub(crate) struct SharedValidatedManifestSnapshot {
     pub snapshot_id: String,
@@ -267,6 +271,7 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     })
 }
 
+/// Manifest snapshot freshness relative to the live workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepositoryManifestFreshness {
     MissingSnapshot,
@@ -274,6 +279,7 @@ pub(crate) enum RepositoryManifestFreshness {
     Ready,
 }
 
+/// Semantic corpus freshness for the active provider-model partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepositorySemanticFreshness {
     Disabled,
@@ -284,12 +290,14 @@ pub(crate) enum RepositorySemanticFreshness {
     Ready,
 }
 
+/// Active semantic embedding provider and model for freshness checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositorySemanticTarget {
     pub provider: String,
     pub model: String,
 }
 
+/// Combined manifest and semantic freshness snapshot used by watch and MCP refresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositoryFreshnessStatus {
     pub snapshot_id: Option<String>,

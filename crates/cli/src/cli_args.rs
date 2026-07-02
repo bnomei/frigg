@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use frigg::settings::{LexicalBackendMode, SemanticRuntimeProvider, WatchMode};
 use frigg::storage::DEFAULT_RETAINED_MANIFEST_SNAPSHOTS;
 
+/// Root Clap parser for global runtime flags and utility or serve subcommands.
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
 pub(crate) struct Cli {
@@ -202,6 +203,7 @@ pub(crate) enum HookEvent {
     Pretooluse,
 }
 
+/// Utility and serve subcommands exposed by the `frigg` binary.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
     /// Serve MCP over loopback HTTP.
@@ -282,6 +284,7 @@ pub(crate) enum Command {
     },
 }
 
+/// Project files and configs that `frigg adopt` can install or remove managed Frigg entries in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum AdoptTarget {
     ClaudeMd,

@@ -182,6 +182,7 @@ impl WorkloadPrecisionMode {
     }
 }
 
+/// Reason a workload degraded from precise to heuristic or fallback precision.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -225,6 +226,7 @@ impl WorkloadFallbackReason {
     }
 }
 
+/// Repository cardinality for a normalized workload invocation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -245,6 +247,7 @@ impl WorkloadRepositoryScopeKind {
     }
 }
 
+/// Bounded repository scope metadata attached to workload provenance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadRepositoryScope {
     pub scope: WorkloadRepositoryScopeKind,
@@ -291,6 +294,7 @@ impl WorkloadRepositoryScope {
     }
 }
 
+/// Timing and cardinality sample for one deep-search attribution stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadStageSample {
     pub elapsed_us: u64,

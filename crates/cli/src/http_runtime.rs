@@ -40,6 +40,7 @@ impl HttpRuntimeConfig {
     }
 }
 
+/// Resolves optional HTTP transport settings from CLI flags and serve intent.
 pub(super) fn resolve_http_runtime_config(
     cli: &Cli,
     serve_requested: bool,

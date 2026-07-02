@@ -10,6 +10,7 @@ use crate::domain::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Literal or safe-regex matching mode for text and explore queries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchPatternType {
@@ -17,6 +18,7 @@ pub enum SearchPatternType {
     Regex,
 }
 
+/// In-file explorer mode: scan, zoom to an anchor window, or refine within an anchor scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExploreOperation {
@@ -25,6 +27,7 @@ pub enum ExploreOperation {
     Refine,
 }
 
+/// 1-based source anchor bounding an explore zoom or refine window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreAnchor {
     pub start_line: usize,
@@ -33,18 +36,21 @@ pub struct ExploreAnchor {
     pub end_column: usize,
 }
 
+/// 1-based continuation cursor for paginated explore probe or refine scans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreCursor {
     pub line: usize,
     pub column: usize,
 }
 
+/// Inclusive 1-based line window inside one repository file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreLineWindow {
     pub start_line: usize,
     pub end_line: usize,
 }
 
+/// Bounded source excerpt returned by explore zoom or match windows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreWindow {
     pub start_line: usize,
@@ -53,6 +59,7 @@ pub struct ExploreWindow {
     pub content: String,
 }
 
+/// One explore match row with excerpt, anchor, and local context window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreMatch {
     pub match_id: String,
@@ -65,6 +72,7 @@ pub struct ExploreMatch {
     pub anchor: ExploreAnchor,
 }
 
+/// Explorer execution metadata including effective limits and optional context-efficiency stats.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreMetadata {
     pub lossy_utf8: bool,
@@ -74,7 +82,6 @@ pub struct ExploreMetadata {
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
-/// Parameters for the extended `explore` tool.
 /// Parameters for the extended `explore` tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreParams {
@@ -96,12 +103,13 @@ pub struct ExploreParams {
     pub max_matches: Option<usize>,
     /// Explicit continuation cursor for `probe` or `refine`.
     pub resume_from: Option<ExploreCursor>,
-    /// Read-surface presentation mode. Defaults to `text` for `zoom` and `json` for `probe`/`refine`.
+    /// Read-surface presentation mode. Zoom defaults to raw text content; probe/refine default to JSON.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    /// Include bounded context-efficiency metadata in the response. Requires JSON presentation.
     pub include_context_efficiency: Option<bool>,
 }
 
+/// Response from the extended `explore` tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreResponse {
     pub repository_id: String,
@@ -160,6 +168,7 @@ pub struct SearchTextResponse {
     pub metadata: Option<SearchTextMetadata>,
 }
 
+/// Lexical search backend mix reported in text and hybrid metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchLexicalBackendMetadata {
@@ -168,6 +177,7 @@ pub enum SearchLexicalBackendMetadata {
     Mixed,
 }
 
+/// Optional metadata returned by `search_text`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,6 +188,10 @@ pub struct SearchTextMetadata {
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
+/// Bounded context-efficiency metadata returned by read and search tools when requested.
+///
+/// Estimates compare indexed corpus size against returned match and source bytes so callers
+/// can judge how much repository context a tool response avoided loading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextEfficiencyMetadata {
     pub indexed_readable_files: usize,
@@ -199,17 +213,31 @@ pub struct ContextEfficiencyMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub returned_source_bytes_estimate: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub narrowing_ratio_estimate: Option<f64>,
+    pub matched_file_context_saved_bytes_estimate: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_file_context_saved_percent_estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_context_saved_bytes_estimate: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_context_saved_percent_estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_narrowing_ratio_estimate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowing_ratio_estimate: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_attribution: Option<ContextEfficiencyStageAttribution>,
 }
 
+/// Candidate narrowing counts attributed to one context-efficiency measurement stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextEfficiencyStageAttribution {
     pub candidate_input_count: usize,
     pub candidate_output_count: usize,
 }
 
+/// Optional lexical, graph, and semantic weight overrides for `search_hybrid`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridChannelWeightsParams {
     pub lexical: Option<f32>,
@@ -220,7 +248,8 @@ pub struct SearchHybridChannelWeightsParams {
 /// Parameters for `search_hybrid`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
-    /// Broad natural-language or exact-phrase repository query.
+    /// Discovery-style natural-language or subsystem query.
+    /// For direct exact strings or regexes use `search_text`; for known identifiers use `search_symbol`.
     pub query: String,
     /// Optional repository scope.
     pub repository_id: Option<String>,
@@ -238,6 +267,7 @@ pub struct SearchHybridParams {
     pub include_context_efficiency: Option<bool>,
 }
 
+/// One blended hybrid-search match with channel scores and navigation hints.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -273,6 +303,7 @@ pub struct SearchHybridMatch {
     pub rank_reasons: Vec<SearchHybridRankReason>,
 }
 
+/// Short explanation of the strongest signal that lifted a hybrid match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchHybridRankReason {
@@ -284,6 +315,7 @@ pub enum SearchHybridRankReason {
     WitnessOnlyFallback,
 }
 
+/// Follow-up navigation affordances suggested for one hybrid match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridNavigationHint {
     /// True when the match is a reasonable first pivot for `read_file` or symbol follow-up.
@@ -294,6 +326,7 @@ pub struct SearchHybridNavigationHint {
     pub go_to_definition: bool,
 }
 
+/// Utility summary for turning hybrid discovery results into live navigation pivots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridUtilitySummary {
     /// Count of returned matches that look like useful live-navigation pivots.
@@ -311,12 +344,14 @@ pub struct SearchHybridUtilitySummary {
     pub symbol_navigation_ready: bool,
 }
 
+/// One structured diagnostic emitted by a hybrid search channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridChannelDiagnostic {
     pub code: String,
     pub message: String,
 }
 
+/// Health and throughput metadata for one hybrid search channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridChannelMetadata {
     pub status: ChannelHealthStatus,
@@ -330,6 +365,7 @@ pub struct SearchHybridChannelMetadata {
     pub diagnostics: Vec<SearchHybridChannelDiagnostic>,
 }
 
+/// Aggregate manifest walk and read diagnostic counts for hybrid search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridDiagnosticsSummary {
     pub walk: usize,
@@ -337,6 +373,7 @@ pub struct SearchHybridDiagnosticsSummary {
     pub total: usize,
 }
 
+/// Timing and candidate counts for one hybrid-search pipeline stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridStageSample {
     pub elapsed_us: u64,
@@ -354,6 +391,7 @@ impl From<&crate::searcher::SearchStageSample> for SearchHybridStageSample {
     }
 }
 
+/// Stage-by-stage attribution for one hybrid-search execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridStageAttribution {
     pub candidate_intake: SearchHybridStageSample,
@@ -383,6 +421,7 @@ impl From<&crate::searcher::SearchStageAttribution> for SearchHybridStageAttribu
     }
 }
 
+/// Per-repository freshness inputs recorded in search response metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResponseFreshnessRepositoryMetadata {
     pub repository_id: String,
@@ -397,6 +436,7 @@ pub struct ResponseFreshnessRepositoryMetadata {
     pub model: Option<String>,
 }
 
+/// Freshness basis describing whether a search response is safe to reuse from the runtime cache.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResponseFreshnessBasisMetadata {
     pub mode: String,
@@ -405,6 +445,7 @@ pub struct ResponseFreshnessBasisMetadata {
     pub repositories: Vec<ResponseFreshnessRepositoryMetadata>,
 }
 
+/// Semantic accelerator tier and health reported for hybrid search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridSemanticAcceleratorMetadata {
     pub tier: String,
@@ -415,6 +456,7 @@ pub struct SearchHybridSemanticAcceleratorMetadata {
     pub reason: Option<String>,
 }
 
+/// Language-specific semantic capabilities consulted during hybrid search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridLanguageCapabilityMetadata {
     pub requested_language: String,
@@ -426,6 +468,7 @@ pub struct SearchHybridLanguageCapabilityMetadata {
     pub capabilities: BTreeMap<String, String>,
 }
 
+/// Classified query shape used to tune hybrid channel weighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchHybridQueryShape {
@@ -434,6 +477,7 @@ pub enum SearchHybridQueryShape {
     Neutral,
 }
 
+/// Exact symbol or text pivot assistance applied during hybrid ranking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridExactPivotAssistance {
     pub applied: bool,
@@ -442,6 +486,7 @@ pub struct SearchHybridExactPivotAssistance {
     pub boosted_match_count: usize,
 }
 
+/// Structured diagnostics and freshness metadata for `search_hybrid`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMetadata {
     pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
@@ -532,6 +577,7 @@ pub struct SearchSymbolParams {
     pub response_mode: Option<ResponseMode>,
 }
 
+/// Response from `search_symbol` with optional `result_handle` for `read_match`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolResponse {
     pub matches: Vec<SymbolMatch>,
@@ -544,6 +590,7 @@ pub struct SearchSymbolResponse {
     pub note: Option<String>,
 }
 
+/// Path-class filter for symbol search over runtime, project, or support files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSymbolPathClass {
@@ -580,7 +627,13 @@ mod tests {
             returned_unique_paths: Some(1),
             returned_unique_file_bytes: Some(80),
             returned_source_bytes_estimate: Some(20),
-            narrowing_ratio_estimate: Some(6.0),
+            matched_file_context_saved_bytes_estimate: Some(60),
+            matched_file_context_saved_percent_estimate: Some(75.0),
+            corpus_context_saved_bytes_estimate: Some(100),
+            corpus_context_saved_percent_estimate: Some(83.33),
+            corpus_narrowing_ratio_estimate: Some(6),
+            query_duration_ms: Some(12),
+            narrowing_ratio_estimate: Some(6),
             stage_attribution: None,
         })
         .expect("context-efficiency metadata should serialize");
@@ -594,7 +647,13 @@ mod tests {
                 "returned_unique_paths": 1,
                 "returned_unique_file_bytes": 80,
                 "returned_source_bytes_estimate": 20,
-                "narrowing_ratio_estimate": 6.0
+                "matched_file_context_saved_bytes_estimate": 60,
+                "matched_file_context_saved_percent_estimate": 75.0,
+                "corpus_context_saved_bytes_estimate": 100,
+                "corpus_context_saved_percent_estimate": 83.33,
+                "corpus_narrowing_ratio_estimate": 6,
+                "query_duration_ms": 12,
+                "narrowing_ratio_estimate": 6
             })
         );
     }
@@ -612,6 +671,12 @@ mod tests {
             returned_unique_paths: None,
             returned_unique_file_bytes: None,
             returned_source_bytes_estimate: None,
+            matched_file_context_saved_bytes_estimate: None,
+            matched_file_context_saved_percent_estimate: None,
+            corpus_context_saved_bytes_estimate: None,
+            corpus_context_saved_percent_estimate: None,
+            corpus_narrowing_ratio_estimate: None,
+            query_duration_ms: None,
             narrowing_ratio_estimate: None,
             stage_attribution: Some(ContextEfficiencyStageAttribution {
                 candidate_input_count: 8,

@@ -10,10 +10,12 @@ pub(crate) struct PolicyProgram {
 }
 
 impl PolicyProgram {
+    /// Starts evaluation at `score` without recording rule traces.
     pub(crate) fn new(score: f32) -> Self {
         Self { score, trace: None }
     }
 
+    /// Starts evaluation at `score` and records each applied rule effect.
     pub(crate) fn with_trace(score: f32) -> Self {
         Self {
             score,
@@ -21,6 +23,7 @@ impl PolicyProgram {
         }
     }
 
+    /// Starts traced or untraced evaluation depending on `enabled`.
     pub(crate) fn with_optional_trace(score: f32, enabled: bool) -> Self {
         if enabled {
             Self::with_trace(score)
@@ -29,6 +32,7 @@ impl PolicyProgram {
         }
     }
 
+    /// Applies one additive or multiplicative rule effect in declaration order.
     pub(crate) fn apply_effect(
         &mut self,
         rule_id: &'static str,
@@ -53,6 +57,7 @@ impl PolicyProgram {
         }
     }
 
+    /// Returns the final score and optional per-rule trace.
     pub(crate) fn finish(self) -> PolicyEvaluation {
         PolicyEvaluation {
             score: self.score,

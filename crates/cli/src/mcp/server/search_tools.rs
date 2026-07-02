@@ -60,8 +60,70 @@ impl FriggMcpServer {
             returned_unique_paths: metadata.returned_unique_paths,
             returned_unique_file_bytes: metadata.returned_unique_file_bytes,
             returned_source_bytes_estimate: metadata.returned_source_bytes_estimate,
+            matched_file_context_saved_bytes_estimate: metadata
+                .matched_file_context_saved_bytes_estimate,
+            matched_file_context_saved_percent_estimate: metadata
+                .matched_file_context_saved_percent_estimate,
+            corpus_context_saved_bytes_estimate: metadata.corpus_context_saved_bytes_estimate,
+            corpus_context_saved_percent_estimate: metadata.corpus_context_saved_percent_estimate,
+            corpus_narrowing_ratio_estimate: metadata.corpus_narrowing_ratio_estimate,
+            query_duration_ms: metadata.query_duration_ms,
             narrowing_ratio_estimate: metadata.narrowing_ratio_estimate,
         }
+    }
+
+    pub(super) fn context_efficiency_elapsed_ms(started_at: std::time::Instant) -> u64 {
+        u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn signed_byte_delta(baseline: u64, returned: u64) -> i64 {
+        if baseline >= returned {
+            i64::try_from(baseline - returned).unwrap_or(i64::MAX)
+        } else {
+            -i64::try_from(returned - baseline).unwrap_or(i64::MAX)
+        }
+    }
+
+    fn rounded_percent(value: f64) -> f64 {
+        (value * 100.0).round() / 100.0
+    }
+
+    fn rounded_ratio_to_u64(numerator: u64, denominator: u64) -> u64 {
+        let denominator = denominator.max(1);
+        let rounded =
+            (u128::from(numerator) + u128::from(denominator / 2)) / u128::from(denominator);
+        rounded.min(u128::from(u64::MAX)) as u64
+    }
+
+    pub(super) fn finalize_context_efficiency_metadata(
+        mut metadata: ContextEfficiencyMetadata,
+    ) -> ContextEfficiencyMetadata {
+        if let Some(returned_source_bytes) = metadata.returned_source_bytes_estimate {
+            if let Some(returned_unique_file_bytes) = metadata.returned_unique_file_bytes
+                && returned_unique_file_bytes > 0
+            {
+                let saved =
+                    Self::signed_byte_delta(returned_unique_file_bytes, returned_source_bytes);
+                metadata.matched_file_context_saved_bytes_estimate = Some(saved);
+                metadata.matched_file_context_saved_percent_estimate =
+                    Some(saved as f64 / returned_unique_file_bytes as f64 * 100.0);
+            }
+
+            let corpus_saved =
+                Self::signed_byte_delta(metadata.indexed_readable_bytes, returned_source_bytes);
+            metadata.corpus_context_saved_bytes_estimate = Some(corpus_saved);
+            if metadata.indexed_readable_bytes > 0 {
+                let percent = corpus_saved as f64 / metadata.indexed_readable_bytes as f64 * 100.0;
+                metadata.corpus_context_saved_percent_estimate =
+                    Some(Self::rounded_percent(percent));
+            }
+            let corpus_ratio =
+                Self::rounded_ratio_to_u64(metadata.indexed_readable_bytes, returned_source_bytes);
+            metadata.corpus_narrowing_ratio_estimate = Some(corpus_ratio);
+            metadata.narrowing_ratio_estimate = Some(corpus_ratio);
+        }
+
+        metadata
     }
 
     pub(crate) fn append_context_efficiency_log_for_workspaces(
@@ -132,6 +194,20 @@ impl FriggMcpServer {
         })
     }
 
+    fn returned_unique_file_bytes_if_known(
+        summaries: &BTreeMap<String, ManifestMetadataSummary>,
+        paths_by_repository: &BTreeMap<String, Vec<String>>,
+    ) -> Option<u64> {
+        let mut total = 0_u64;
+        for (repository_id, paths) in paths_by_repository {
+            let summary = summaries.get(repository_id)?;
+            total = total.saturating_add(
+                summary.returned_unique_file_bytes_if_known(paths.iter().map(String::as_str))?,
+            );
+        }
+        Some(total)
+    }
+
     pub(super) fn search_text_context_efficiency_metadata(
         workspaces: &[AttachedWorkspace],
         matches: &[TextMatch],
@@ -182,30 +258,31 @@ impl FriggMcpServer {
                 .or_default()
                 .push(path.clone());
         }
-        let returned_unique_file_bytes = paths_by_repository
-            .iter()
-            .filter_map(|(repository_id, paths)| {
-                summaries.get(repository_id).map(|summary| {
-                    summary.returned_unique_file_bytes(paths.iter().map(String::as_str))
-                })
-            })
-            .fold(0_u64, u64::saturating_add);
-        let denominator = returned_source_bytes_estimate.max(1) as f64;
+        let returned_unique_file_bytes =
+            Self::returned_unique_file_bytes_if_known(&summaries, &paths_by_repository);
 
-        Ok(ContextEfficiencyMetadata {
-            indexed_readable_files,
-            indexed_readable_bytes,
-            indexed_min_mtime_ns,
-            indexed_max_mtime_ns,
-            candidate_input_count: None,
-            candidate_output_count: None,
-            returned_match_count: Some(total_matches),
-            returned_unique_paths: Some(returned_paths.len()),
-            returned_unique_file_bytes: Some(returned_unique_file_bytes),
-            returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
-            narrowing_ratio_estimate: Some(indexed_readable_bytes as f64 / denominator),
-            stage_attribution: None,
-        })
+        Ok(Self::finalize_context_efficiency_metadata(
+            ContextEfficiencyMetadata {
+                indexed_readable_files,
+                indexed_readable_bytes,
+                indexed_min_mtime_ns,
+                indexed_max_mtime_ns,
+                candidate_input_count: None,
+                candidate_output_count: None,
+                returned_match_count: Some(total_matches),
+                returned_unique_paths: Some(returned_paths.len()),
+                returned_unique_file_bytes,
+                returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
+                matched_file_context_saved_bytes_estimate: None,
+                matched_file_context_saved_percent_estimate: None,
+                corpus_context_saved_bytes_estimate: None,
+                corpus_context_saved_percent_estimate: None,
+                corpus_narrowing_ratio_estimate: None,
+                query_duration_ms: None,
+                narrowing_ratio_estimate: None,
+                stage_attribution: None,
+            },
+        ))
     }
 
     pub(super) fn search_hybrid_context_efficiency_metadata(
@@ -258,14 +335,8 @@ impl FriggMcpServer {
                 .or_default()
                 .push(path.clone());
         }
-        let returned_unique_file_bytes = paths_by_repository
-            .iter()
-            .filter_map(|(repository_id, paths)| {
-                summaries.get(repository_id).map(|summary| {
-                    summary.returned_unique_file_bytes(paths.iter().map(String::as_str))
-                })
-            })
-            .fold(0_u64, u64::saturating_add);
+        let returned_unique_file_bytes =
+            Self::returned_unique_file_bytes_if_known(&summaries, &paths_by_repository);
 
         let candidate_input_count =
             stage_attribution.map(|attribution| attribution.candidate_intake.input_count);
@@ -276,21 +347,27 @@ impl FriggMcpServer {
                 candidate_input_count: attribution.candidate_intake.input_count,
                 candidate_output_count: attribution.candidate_intake.output_count,
             });
-        let denominator = returned_source_bytes_estimate.max(1) as f64;
-
-        Ok(ContextEfficiencyMetadata {
-            indexed_readable_files,
-            indexed_readable_bytes,
-            indexed_min_mtime_ns,
-            indexed_max_mtime_ns,
-            candidate_input_count,
-            candidate_output_count,
-            returned_match_count: Some(matches.len()),
-            returned_unique_paths: Some(returned_paths.len()),
-            returned_unique_file_bytes: Some(returned_unique_file_bytes),
-            returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
-            narrowing_ratio_estimate: Some(indexed_readable_bytes as f64 / denominator),
-            stage_attribution,
-        })
+        Ok(Self::finalize_context_efficiency_metadata(
+            ContextEfficiencyMetadata {
+                indexed_readable_files,
+                indexed_readable_bytes,
+                indexed_min_mtime_ns,
+                indexed_max_mtime_ns,
+                candidate_input_count,
+                candidate_output_count,
+                returned_match_count: Some(matches.len()),
+                returned_unique_paths: Some(returned_paths.len()),
+                returned_unique_file_bytes,
+                returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
+                matched_file_context_saved_bytes_estimate: None,
+                matched_file_context_saved_percent_estimate: None,
+                corpus_context_saved_bytes_estimate: None,
+                corpus_context_saved_percent_estimate: None,
+                corpus_narrowing_ratio_estimate: None,
+                query_duration_ms: None,
+                narrowing_ratio_estimate: None,
+                stage_attribution,
+            },
+        ))
     }
 }

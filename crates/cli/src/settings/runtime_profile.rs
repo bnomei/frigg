@@ -21,9 +21,9 @@ impl RuntimeTransportKind {
     }
 }
 
+/// Resolved runtime shape that drives persistence and freshness behavior for a process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-/// Resolved runtime shape that drives persistence and freshness behavior for a process.
 pub enum RuntimeProfile {
     StdioEphemeral,
     StdioAttached,

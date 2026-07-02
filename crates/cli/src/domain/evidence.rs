@@ -56,6 +56,7 @@ pub struct EvidenceDocumentRef {
     pub column: usize,
 }
 
+/// Anchor shape used to cite an evidence hit within a repository document.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -136,6 +137,7 @@ impl EvidenceHit {
     }
 }
 
+/// Health status reported for one evidence channel in a retrieval response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelHealthStatus {
@@ -158,6 +160,7 @@ impl ChannelHealthStatus {
     }
 }
 
+/// Health envelope for an evidence channel with optional operator reason text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelHealth {
     pub status: ChannelHealthStatus,
@@ -175,12 +178,14 @@ impl ChannelHealth {
     }
 }
 
+/// Structured diagnostic emitted when an evidence channel is degraded or filtered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelDiagnostic {
     pub code: String,
     pub message: String,
 }
 
+/// Candidate and hit counts recorded for one evidence channel pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelStats {
     pub candidate_count: usize,

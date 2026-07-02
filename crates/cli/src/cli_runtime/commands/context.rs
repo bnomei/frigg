@@ -7,6 +7,7 @@ use frigg::context_efficiency::{ContextSummaryWindow, summarize_context_logs_for
 use frigg::settings::FriggConfig;
 use serde_json::to_string_pretty;
 
+/// Loads context-efficiency JSONL logs for configured roots and prints a compact summary window.
 pub(crate) fn run_context_summary_command(
     config: &FriggConfig,
     since: Option<&str>,

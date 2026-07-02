@@ -17,6 +17,7 @@ use super::resolution::{
 };
 use super::symbol_from_node;
 
+/// One PHP declaration edge such as class extension or trait use extracted from syntax.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PhpDeclarationRelation {
     pub(crate) source_kind: SymbolKind,
@@ -26,6 +27,7 @@ pub(crate) struct PhpDeclarationRelation {
     pub(crate) relation: RelationKind,
 }
 
+/// Combined PHP symbol inventory, declaration relations, and evidence for one source file.
 #[derive(Debug, Clone)]
 pub(crate) struct PhpGraphSourceAnalysis {
     pub(crate) symbols: Vec<SymbolDefinition>,
@@ -61,6 +63,7 @@ pub(crate) fn symbol_indices_by_lower_name(
     indices
 }
 
+/// Parses PHP source and returns sorted declaration relations used for graph edge construction.
 pub(crate) fn extract_declaration_relations_from_source(
     path: &Path,
     source: &str,
@@ -266,6 +269,7 @@ pub(crate) fn heuristic_implementation_candidates_for_target(
     matches
 }
 
+/// Builds the full PHP graph analysis bundle for one file, including symbols and evidence.
 pub(crate) fn extract_graph_analysis_from_source(
     path: &Path,
     source: &str,

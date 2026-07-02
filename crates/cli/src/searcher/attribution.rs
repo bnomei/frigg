@@ -10,12 +10,16 @@ use serde::Serialize;
 /// Elapsed microseconds and input/output counts for one hybrid-search pipeline stage.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SearchStageSample {
+    /// Wall-clock microseconds spent in the stage.
     pub elapsed_us: u64,
+    /// Records or candidates entering the stage.
     pub input_count: usize,
+    /// Records or candidates leaving the stage.
     pub output_count: usize,
 }
 
 impl SearchStageSample {
+    /// Builds a stage sample from measured timing and cardinality.
     pub const fn new(elapsed_us: u64, input_count: usize, output_count: usize) -> Self {
         Self {
             elapsed_us,
@@ -29,14 +33,23 @@ impl SearchStageSample {
 /// final diversification.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SearchStageAttribution {
+    /// Manifest and filesystem candidate discovery.
     pub candidate_intake: SearchStageSample,
+    /// Snapshot freshness validation against stored provenance.
     pub freshness_validation: SearchStageSample,
+    /// Lexical seed scan over the candidate universe.
     pub scan: SearchStageSample,
+    /// Path-witness frontier scoring and recall.
     pub witness_scoring: SearchStageSample,
+    /// Graph-precise expansion from lexical seeds.
     pub graph_expansion: SearchStageSample,
+    /// Query embedding and vector top-k retrieval.
     pub semantic_retrieval: SearchStageSample,
+    /// Multi-channel score blending into ranked anchors.
     pub anchor_blending: SearchStageSample,
+    /// Coverage grouping before diversification.
     pub document_aggregation: SearchStageSample,
+    /// Intent-aware final match selection.
     pub final_diversification: SearchStageSample,
 }
 

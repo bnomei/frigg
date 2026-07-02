@@ -1,4 +1,7 @@
 //! CLI storage bootstrap and maintenance commands for init, repair, and prune.
+//!
+//! `init` may also run synchronous precise-artifact generation when configured SCIP generators
+//! are needed but their workspace artifacts are still missing.
 
 use std::error::Error;
 use std::io;
@@ -7,12 +10,16 @@ use std::path::Path;
 use frigg::settings::FriggConfig;
 use frigg::storage::Storage;
 
+use frigg::mcp::FriggMcpServer;
+
 use super::super::storage_auto_heal::initialize_storage_with_auto_repair;
+use super::{CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation};
 use crate::cli_runtime::storage_paths::{
     ensure_storage_db_path_for_write, resolve_storage_db_path,
 };
 use crate::cli_runtime::{CliOutput, OutputLevel, field, format_output_event_line, reported_error};
 
+/// Hidden storage maintenance operations invoked by repair and prune subcommands.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum StorageMaintenanceCommand {
     RepairSemanticVectorStore,
@@ -95,6 +102,7 @@ fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) ->
     )
 }
 
+/// Emits a structured storage failure line with an operator-facing next-step hint.
 pub(crate) fn report_storage_failure(
     output: &CliOutput,
     command_name: &str,
@@ -128,12 +136,15 @@ pub(crate) fn run_storage_init_command(config: &FriggConfig) -> Result<(), Box<d
     run_storage_init_command_with_output(config, &CliOutput::normal())
 }
 
+/// Bootstraps storage tables for every workspace root and may run synchronous precise generation.
 pub(crate) fn run_storage_init_command_with_output(
     config: &FriggConfig,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let repositories = config.repositories();
     let command_name = "init";
+    let precise_server = FriggMcpServer::new(config.clone());
+    let mut total_precise = CliPreciseGenerationCounters::default();
 
     for repo in &repositories {
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
@@ -202,24 +213,39 @@ pub(crate) fn run_storage_init_command_with_output(
             )?;
         }
 
+        let precise_counters = run_cli_precise_generation(
+            &precise_server,
+            *output,
+            command_name,
+            &repo.repository_id.0,
+            root,
+            &[],
+            &[],
+        );
+        total_precise.add(precise_counters);
+
+        let mut repo_fields = vec![
+            field("status", "ok"),
+            field("repo", &repo.repository_id.0),
+            field("db", db_path.display()),
+        ];
+        repo_fields.extend(precise_counter_fields(precise_counters));
         output.progress_event(
             OutputLevel::Ok,
             command_name,
             "repo",
-            &[
-                field("status", "ok"),
-                field("repo", &repo.repository_id.0),
-                field("db", db_path.display()),
-            ],
+            &repo_fields,
             Some(&root.display().to_string()),
         )?;
     }
 
+    let mut summary_fields = vec![field("status", "ok"), field("repos", repositories.len())];
+    summary_fields.extend(precise_counter_fields(total_precise));
     output.summary_event(
         OutputLevel::Ok,
         command_name,
         "complete",
-        &[field("status", "ok"), field("repos", repositories.len())],
+        &summary_fields,
         None,
     )?;
     Ok(())
@@ -233,6 +259,7 @@ pub(crate) fn run_storage_maintenance_command(
     run_storage_maintenance_command_with_output(config, command, &CliOutput::normal())
 }
 
+/// Runs hidden repair or prune maintenance across configured workspace roots.
 pub(crate) fn run_storage_maintenance_command_with_output(
     config: &FriggConfig,
     command: StorageMaintenanceCommand,

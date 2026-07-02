@@ -11,7 +11,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 use crate::mcp::types::{
-    WorkspacePreciseFailureClass, WorkspacePreciseGenerationAction, WorkspaceRecommendedAction,
+    WorkspacePreciseFailureClass, WorkspacePreciseGenerationAction,
+    WorkspacePreciseGenerationPlanItem, WorkspacePreciseGenerationPlanSummary,
+    WorkspacePreciseGenerationRunItem, WorkspacePreciseGenerationRunSummary,
+    WorkspaceRecommendedAction,
 };
 
 mod config;

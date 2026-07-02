@@ -1,6 +1,10 @@
 //! Search orchestration that turns manifests, projections, lexical scans, graph edges, and
 //! optional embeddings into stable retrieval results. This layer sits between raw repository
 //! artifacts and delivery surfaces such as MCP tools or playbook probes.
+//!
+//! [`TextSearcher`] is the primary entry point. It assembles a candidate universe from manifest
+//! snapshots and filesystem walks, fans out across lexical, path-witness, graph, and semantic
+//! channels, then fuses evidence through the ranker and post-selection policy guardrails.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -39,11 +43,13 @@ use crate::domain::{
     model::{RepositoryId, RepositoryRecord, TextMatch, stable_repository_id_for_root},
 };
 use crate::languages::{LanguageCapability, SymbolLanguage, parse_supported_language};
+/// Manifest validation cache shared with indexing for candidate freshness checks.
 pub use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::settings::DEFAULT_MAX_FILE_BYTES;
 use crate::settings::{FriggConfig, SemanticRuntimeCredentials};
 use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, latest_storage_schema_version};
 use aho_corasick::AhoCorasick;
+/// Stage timing and cardinality samples for hybrid search profiling.
 pub use attribution::{SearchStageAttribution, SearchStageSample};
 use graph_channel::{HybridGraphArtifact, HybridGraphArtifactCacheKey, search_graph_channel_hits};
 pub(crate) use hybrid_match::{
@@ -92,8 +98,10 @@ use query_terms::{
 use ranker::blend_hybrid_evidence;
 #[cfg(test)]
 use ranker::group_hybrid_ranked_evidence;
+/// Blends lexical, graph, and semantic channel hits into a bounded ranked anchor list.
 pub use ranker::rank_hybrid_evidence;
 use regex::Regex;
+/// Bounded regex compilation helpers used by [`TextSearcher::search_regex`].
 pub use regex_support::{RegexSearchError, compile_safe_regex};
 use regex_support::{build_regex_prefilter_plan, regex_error_to_frigg_error};
 #[cfg(test)]
@@ -124,6 +132,7 @@ use surfaces::{
     is_runtime_companion_surface_path, is_runtime_config_artifact_path, is_scripts_ops_path,
     is_test_harness_path, is_test_support_path, is_workspace_config_surface_path,
 };
+/// Public query, result, and channel types for lexical and hybrid retrieval APIs.
 pub use types::{
     HybridChannelHit, HybridChannelWeights, HybridDocumentRef, HybridExecutionNote,
     HybridRankedEvidence, HybridSemanticStatus, SearchDiagnostic, SearchDiagnosticKind,
@@ -275,11 +284,17 @@ pub struct TextSearcher {
         Arc<RwLock<BTreeMap<HybridGraphArtifactCacheKey, Arc<HybridGraphArtifact>>>>,
 }
 
+/// Maximum byte length accepted for a user-supplied regex search pattern.
 pub const MAX_REGEX_PATTERN_BYTES: usize = 512;
+/// Maximum alternation count allowed in a regex search pattern.
 pub const MAX_REGEX_ALTERNATIONS: usize = 32;
+/// Maximum capturing-group count allowed in a regex search pattern.
 pub const MAX_REGEX_GROUPS: usize = 32;
+/// Maximum quantifier count allowed in a regex search pattern.
 pub const MAX_REGEX_QUANTIFIERS: usize = 64;
+/// Compiled-regex size budget passed to the `regex` builder.
 pub const MAX_REGEX_SIZE_LIMIT_BYTES: usize = 1_000_000;
+/// Compiled-regex DFA size budget passed to the `regex` builder.
 pub const MAX_REGEX_DFA_SIZE_LIMIT_BYTES: usize = 1_000_000;
 const BOUNDED_SEARCH_RESULT_LIMIT_THRESHOLD: usize = 256;
 const HYBRID_LEXICAL_RECALL_MAX_TOKENS: usize = 12;
@@ -320,6 +335,7 @@ fn stable_cache_fingerprint_material() -> String {
 }
 
 impl TextSearcher {
+    /// Creates a searcher from workspace configuration and a fresh manifest candidate cache.
     pub fn new(config: FriggConfig) -> Self {
         Self::with_validated_manifest_candidate_cache(
             config,
@@ -446,10 +462,12 @@ impl TextSearcher {
             .load_or_build_path_witness_projections_for_repository(repository, snapshot_id)
     }
 
+    /// Runs literal substring search across configured repositories with default filters.
     pub fn search(&self, query: SearchTextQuery) -> FriggResult<Vec<TextMatch>> {
         self.search_literal_with_filters(query, SearchFilters::default())
     }
 
+    /// Runs literal substring search, optionally scoping to one repository id.
     pub fn search_literal(
         &self,
         query: SearchTextQuery,
@@ -464,6 +482,7 @@ impl TextSearcher {
         )
     }
 
+    /// Runs literal search with repository and language filters.
     pub fn search_literal_with_filters(
         &self,
         query: SearchTextQuery,
@@ -473,6 +492,7 @@ impl TextSearcher {
             .map(|output| output.matches)
     }
 
+    /// Like [`Self::search_literal_with_filters`] but returns diagnostics and backend notes.
     pub fn search_literal_with_filters_diagnostics(
         &self,
         query: SearchTextQuery,
@@ -552,6 +572,7 @@ impl TextSearcher {
         )
     }
 
+    /// Runs bounded-regex search, optionally scoping to one repository id.
     pub fn search_regex(
         &self,
         query: SearchTextQuery,
@@ -566,6 +587,7 @@ impl TextSearcher {
         )
     }
 
+    /// Runs regex search with repository and language filters.
     pub fn search_regex_with_filters(
         &self,
         query: SearchTextQuery,
@@ -575,6 +597,7 @@ impl TextSearcher {
             .map(|output| output.matches)
     }
 
+    /// Like [`Self::search_regex_with_filters`] but returns diagnostics and backend notes.
     pub fn search_regex_with_filters_diagnostics(
         &self,
         query: SearchTextQuery,
@@ -633,6 +656,7 @@ impl TextSearcher {
         )
     }
 
+    /// Runs multi-channel hybrid retrieval with default filters.
     pub fn search_hybrid(
         &self,
         query: SearchHybridQuery,
@@ -640,6 +664,7 @@ impl TextSearcher {
         self.search_hybrid_with_filters(query, SearchFilters::default())
     }
 
+    /// Runs hybrid retrieval with repository and language filters.
     pub fn search_hybrid_with_filters(
         &self,
         query: SearchHybridQuery,

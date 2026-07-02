@@ -24,6 +24,7 @@ use rmcp::handler::server::wrapper::Json;
 use serde_json::Value;
 use tracing::info;
 
+/// Indexed symbol corpus for one repository, including lookup indexes and language evidence.
 #[derive(Clone)]
 pub(crate) struct RepositorySymbolCorpus {
     pub repository_id: String,
@@ -47,6 +48,7 @@ pub(crate) struct RepositorySymbolCorpus {
     pub diagnostics: RepositoryDiagnosticsSummary,
 }
 
+/// Aggregate diagnostic counts collected while building one repository symbol corpus.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepositoryDiagnosticsSummary {
     pub manifest_walk_count: usize,
@@ -54,12 +56,14 @@ pub(crate) struct RepositoryDiagnosticsSummary {
     pub symbol_extraction_count: usize,
 }
 
+/// Cache key for one repository symbol corpus snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SymbolCorpusCacheKey {
     pub repository_id: String,
     pub manifest_token: String,
 }
 
+/// Ranked symbol candidate considered during navigation target resolution.
 #[derive(Clone)]
 pub(crate) struct SymbolCandidate {
     pub rank: u8,
@@ -70,6 +74,7 @@ pub(crate) struct SymbolCandidate {
     pub symbol: SymbolDefinition,
 }
 
+/// Unambiguous navigation target selected from one symbol candidate.
 #[derive(Clone)]
 pub(crate) struct ResolvedSymbolTarget {
     pub candidate: SymbolCandidate,
@@ -78,6 +83,7 @@ pub(crate) struct ResolvedSymbolTarget {
     pub selected_rank_candidate_count: usize,
 }
 
+/// Ambiguous navigation target requiring caller disambiguation.
 #[derive(Clone)]
 pub(crate) struct DisambiguationRequiredSymbolTarget {
     pub candidates: Vec<SymbolCandidate>,
@@ -85,12 +91,14 @@ pub(crate) struct DisambiguationRequiredSymbolTarget {
     pub selected_rank_candidate_count: usize,
 }
 
+/// Result of resolving one navigation symbol query to a target or candidate set.
 #[derive(Clone)]
 pub(crate) enum NavigationTargetSelection {
     Resolved(ResolvedSymbolTarget),
     DisambiguationRequired(DisambiguationRequiredSymbolTarget),
 }
 
+/// Navigation target resolution envelope shared by read-only navigation tools.
 #[derive(Clone)]
 pub(crate) struct ResolvedNavigationTarget {
     pub symbol_query: String,
@@ -438,6 +446,7 @@ pub(crate) struct PreciseArtifactFailureSample {
     pub detail: String,
 }
 
+/// Precise-artifact discovery and ingest counters collected during graph build.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PreciseIngestStats {
     pub candidate_directories: Vec<String>,
@@ -464,6 +473,7 @@ pub(crate) struct FindReferencesResourceBudgets {
     pub source_max_elapsed_ms: u64,
 }
 
+/// Cache key for one ingested precise symbol graph.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PreciseGraphCacheKey {
     pub repository_id: String,
@@ -471,6 +481,7 @@ pub(crate) struct PreciseGraphCacheKey {
     pub corpus_signature: String,
 }
 
+/// Cached precise graph with ingest stats and artifact discovery metadata.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedPreciseGraph {
     pub graph: Arc<SymbolGraph>,
@@ -480,6 +491,7 @@ pub(crate) struct CachedPreciseGraph {
     pub coverage_mode: PreciseCoverageMode,
 }
 
+/// How completely precise artifacts cover navigation for one repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreciseCoverageMode {
     Full,
@@ -505,6 +517,7 @@ pub(crate) struct ScipArtifactDigest {
     pub mtime_ns: Option<u64>,
 }
 
+/// Discovered SCIP artifact and candidate-directory digests for precise ingest.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ScipArtifactDiscovery {
     pub candidate_directories: Vec<String>,

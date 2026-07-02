@@ -17,6 +17,7 @@ pub(crate) fn find_enclosing_git_root(start: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Resolves the provenance SQLite path for a workspace root with structured CLI error formatting.
 pub(crate) fn resolve_storage_db_path(
     workspace_root: &Path,
     command_name: &str,
@@ -36,6 +37,7 @@ pub(crate) fn resolve_storage_db_path(
     })
 }
 
+/// Ensures the storage database parent directory exists before bootstrap or index writes.
 pub(crate) fn ensure_storage_db_path_for_write(
     workspace_root: &Path,
     command_name: &str,

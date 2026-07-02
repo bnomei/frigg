@@ -12,6 +12,7 @@ pub struct HeuristicReferenceResolver<'a> {
 }
 
 impl<'a> HeuristicReferenceResolver<'a> {
+    /// Builds a resolver seeded with graph relation hints for `symbol_id`, or returns `None` when absent.
     pub fn new(
         repository_id: &'a str,
         symbol_id: &str,
@@ -76,6 +77,7 @@ impl<'a> HeuristicReferenceResolver<'a> {
         })
     }
 
+    /// Scans one source file for lexical mentions of the target symbol name.
     pub fn ingest_source(&mut self, path: &Path, source: &str) {
         if !is_identifier_token(&self.target_symbol.name) {
             return;
@@ -145,6 +147,7 @@ impl<'a> HeuristicReferenceResolver<'a> {
         }
     }
 
+    /// Returns deduplicated heuristic references sorted for stable reporting.
     pub fn finish(self) -> Vec<HeuristicReference> {
         let mut references = self.by_location.into_values().collect::<Vec<_>>();
         references.sort_by(heuristic_reference_order);

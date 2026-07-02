@@ -5,21 +5,23 @@ use serde::{Deserialize, Serialize};
 
 use super::workspace::WorkspacePreciseGeneratorSummary;
 
+/// Per-session workspace adoption state for one known repository.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RepositorySessionSummary {
     pub adopted: bool,
     pub active_session_count: usize,
 }
 
+/// Filesystem watch lease state for a repository root.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RepositoryWatchSummary {
     pub active: bool,
     pub lease_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// Repository-level status view returned by discovery and workspace lifecycle tools before clients
 /// ask deeper search or navigation questions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RepositorySummary {
     pub repository_id: String,
     pub display_name: String,
@@ -38,9 +40,11 @@ pub struct ListRepositoriesResponse {
     pub repositories: Vec<RepositorySummary>,
 }
 
+/// Empty parameter object for `list_repositories`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ListRepositoriesParams {}
 
+/// How workspace attach resolves an input path to a repository root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceResolveMode {
@@ -50,6 +54,7 @@ pub enum WorkspaceResolveMode {
     Direct,
 }
 
+/// Persisted `.frigg/` storage readiness for workspace indexing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceStorageIndexState {
@@ -59,6 +64,7 @@ pub enum WorkspaceStorageIndexState {
     Error,
 }
 
+/// `.frigg/` storage location and initialization state for one workspace.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceStorageSummary {
     pub db_path: String,
@@ -69,6 +75,7 @@ pub struct WorkspaceStorageSummary {
     pub error: Option<String>,
 }
 
+/// Readiness of one indexed retrieval substrate such as lexical, semantic, or SCIP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceIndexComponentState {
@@ -79,6 +86,7 @@ pub enum WorkspaceIndexComponentState {
     Error,
 }
 
+/// Status snapshot for one workspace index component and its backing snapshot metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexComponentSummary {
     pub state: WorkspaceIndexComponentState,
@@ -96,6 +104,7 @@ pub struct WorkspaceIndexComponentSummary {
     pub artifact_count: Option<usize>,
 }
 
+/// How completely ingested precise artifacts cover a repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseCoverageMode {
@@ -104,6 +113,7 @@ pub enum WorkspacePreciseCoverageMode {
     None,
 }
 
+/// Runtime precise-artifact ingest outcome for a workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseIngestState {
@@ -114,6 +124,7 @@ pub enum WorkspacePreciseIngestState {
     Error,
 }
 
+/// One failed SCIP artifact sample from precise ingest.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseArtifactFailureSummary {
     pub artifact_label: String,
@@ -121,6 +132,7 @@ pub struct WorkspacePreciseArtifactFailureSummary {
     pub detail: String,
 }
 
+/// Precise-artifact discovery and ingest totals for a workspace.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseIngestSummary {
     pub state: WorkspacePreciseIngestState,
@@ -138,9 +150,9 @@ pub struct WorkspacePreciseIngestSummary {
     pub failed_artifacts: Vec<WorkspacePreciseArtifactFailureSummary>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// High-level view of which retrieval substrates are ready for a workspace and therefore how rich
 /// downstream search or navigation responses can be.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexHealthSummary {
     pub lexical: WorkspaceIndexComponentSummary,
     pub semantic: WorkspaceIndexComponentSummary,

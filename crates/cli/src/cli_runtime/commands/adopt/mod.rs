@@ -1,3 +1,8 @@
+//! CLI `adopt` command: plans and applies Frigg-managed entries across agent docs, MCP JSON, and Claude hooks.
+//!
+//! Supports dry-run, check, uninstall, and force modes while preserving sibling config content and
+//! rejecting symlink escapes before writes.
+
 use std::error::Error;
 use std::fs;
 use std::io;
@@ -19,6 +24,7 @@ mod targets;
 use plan::{AdoptPlan, AdoptPlanAction, AdoptPlanEntry};
 use targets::select_targets;
 
+/// Plans adopt work for every configured repository, then applies or reports changes through `CliOutput`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_adopt_command_with_output(
     config: &FriggConfig,

@@ -4,15 +4,15 @@ pub(super) use std::path::{Path, PathBuf};
 pub(super) use std::{env, fs};
 
 pub(super) use super::super::{
-    CURRENT_SCHEMA_VERSION, DEFAULT_VECTOR_DIMENSIONS, EntrypointSurfaceProjection, ManifestEntry,
-    PathAnchorSketchProjection, PathRelationProjection, PathSurfaceTermProjection,
-    PathWitnessProjection, REQUIRED_TABLES, RetrievalProjectionBundle,
+    CURRENT_SCHEMA_VERSION, DEFAULT_SQLITE_BUSY_TIMEOUT_MS, DEFAULT_VECTOR_DIMENSIONS,
+    EntrypointSurfaceProjection, ManifestEntry, PathAnchorSketchProjection, PathRelationProjection,
+    PathSurfaceTermProjection, PathWitnessProjection, REQUIRED_TABLES, RetrievalProjectionBundle,
     RetrievalProjectionHeadRecord, SQLITE_VEC_REQUIRED_VERSION, SemanticChunkEmbeddingRecord,
     Storage, SubtreeCoverageProjection, TestSubjectProjection, VECTOR_TABLE_NAME,
     ensure_sqlite_vec_pinned_version,
     initialize_vector_store_on_connection_with_detected_capability, open_connection,
-    reset_semantic_read_trace, snapshot_semantic_read_trace, table_exists,
-    verify_vector_store_on_connection_with_detected_capability,
+    reset_semantic_read_trace, snapshot_semantic_read_trace, sqlite_busy_timeout_ms_from_raw,
+    table_exists, verify_vector_store_on_connection_with_detected_capability,
 };
 pub(super) use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 pub(super) use rusqlite::Connection;

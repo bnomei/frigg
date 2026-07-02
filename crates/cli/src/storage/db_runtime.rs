@@ -16,8 +16,12 @@ use super::{
     RepositoryManifestSnapshot, SNAPSHOT_KIND_MANIFEST,
 };
 
-const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Environment variable override for SQLite `busy_timeout` in milliseconds.
+pub(crate) const SQLITE_BUSY_TIMEOUT_ENV: &str = "FRIGG_SQLITE_BUSY_TIMEOUT_MS";
+/// Default SQLite busy-timeout used when [`SQLITE_BUSY_TIMEOUT_ENV`] is unset.
+pub(crate) const DEFAULT_SQLITE_BUSY_TIMEOUT_MS: u64 = 30_000;
 
+/// Test-only counters for semantic read-path instrumentation.
 #[cfg(test)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticReadTrace {
@@ -203,15 +207,46 @@ fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> FriggResult<Conn
             path.display()
         ))
     })?;
-    conn.busy_timeout(SQLITE_BUSY_TIMEOUT).map_err(|err| {
-        FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
-    })?;
+    let busy_timeout_ms = sqlite_busy_timeout_ms()?;
+    conn.busy_timeout(Duration::from_millis(busy_timeout_ms))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
+        })?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|err| {
             FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}"))
         })?;
     ensure_sqlite_vec_registration_readiness(&conn)?;
     Ok(conn)
+}
+
+fn sqlite_busy_timeout_ms() -> FriggResult<u64> {
+    match std::env::var(SQLITE_BUSY_TIMEOUT_ENV) {
+        Ok(raw) => sqlite_busy_timeout_ms_from_raw(Some(&raw)),
+        Err(std::env::VarError::NotPresent) => sqlite_busy_timeout_ms_from_raw(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(FriggError::InvalidInput(format!(
+            "{SQLITE_BUSY_TIMEOUT_ENV} must be a positive integer number of milliseconds"
+        ))),
+    }
+}
+
+/// Parses a SQLite busy-timeout override, defaulting to [`DEFAULT_SQLITE_BUSY_TIMEOUT_MS`].
+pub(crate) fn sqlite_busy_timeout_ms_from_raw(raw: Option<&str>) -> FriggResult<u64> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_SQLITE_BUSY_TIMEOUT_MS);
+    };
+    let trimmed = raw.trim();
+    let timeout_ms = trimmed.parse::<u64>().map_err(|err| {
+        FriggError::InvalidInput(format!(
+            "{SQLITE_BUSY_TIMEOUT_ENV} must be a positive integer number of milliseconds, received '{trimmed}': {err}"
+        ))
+    })?;
+    if timeout_ms == 0 {
+        return Err(FriggError::InvalidInput(format!(
+            "{SQLITE_BUSY_TIMEOUT_ENV} must be greater than 0 milliseconds"
+        )));
+    }
+    Ok(timeout_ms)
 }
 
 pub(super) fn load_manifest_entries_for_snapshot(

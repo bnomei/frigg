@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use super::RuntimeTransportKind;
 
+/// Default debounce interval before watch-triggered index refresh runs.
 pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 2_000;
+/// Default retry interval after a watch-driven index refresh failure.
 pub const DEFAULT_WATCH_RETRY_MS: u64 = 5_000;
 
+/// Watch enablement mode resolved against transport defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchMode {

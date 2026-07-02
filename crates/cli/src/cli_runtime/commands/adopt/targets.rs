@@ -1,3 +1,5 @@
+//! Adopt target selection from explicit flags, `--all`, or detected project client markers.
+
 use std::path::Path;
 
 use crate::cli_args::AdoptTarget;
@@ -14,6 +16,7 @@ pub(crate) const NON_HOOK_V1_TARGETS: [AdoptTarget; 7] = [
 
 pub(crate) const DEFAULT_TARGETS: [AdoptTarget; 2] = [AdoptTarget::AgentsMd, AdoptTarget::ClaudeMd];
 
+/// Resolves the adopt target set from `--all`, explicit `--target` flags, or repository markers.
 pub(crate) fn select_targets(
     root: &Path,
     requested_targets: &[AdoptTarget],
@@ -36,6 +39,7 @@ pub(crate) fn select_targets(
     targets
 }
 
+/// Infers adopt targets from existing client config files, defaulting to agent docs when none match.
 pub(crate) fn detect_known_project_client_markers(root: &Path) -> Vec<AdoptTarget> {
     let mut targets = Vec::new();
     for target in NON_HOOK_V1_TARGETS {

@@ -85,6 +85,7 @@ impl std::fmt::Display for RelationKind {
     }
 }
 
+/// Directed heuristic relation edge between two registered symbol nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolRelation {
     pub from_symbol: String,
@@ -92,12 +93,14 @@ pub struct SymbolRelation {
     pub relation: RelationKind,
 }
 
+/// Neighbor symbol returned from graph traversal with its connecting relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjacentSymbol {
     pub relation: RelationKind,
     pub symbol: SymbolNode,
 }
 
+/// Confidence tier assigned to heuristic symbol relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HeuristicConfidence {
     Low,
@@ -140,6 +143,7 @@ impl std::fmt::Display for HeuristicConfidence {
     }
 }
 
+/// Heuristic relation suggestion with source, target, and confidence metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeuristicRelationHint {
     pub source_symbol: SymbolNode,
@@ -148,8 +152,10 @@ pub struct HeuristicRelationHint {
     pub confidence: HeuristicConfidence,
 }
 
+/// SCIP symbol-role bitmask value marking a definition occurrence.
 pub const SCIP_SYMBOL_ROLE_DEFINITION: u32 = 0x1;
 
+/// Precise SCIP relationship kind stored in the symbol graph substrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PreciseRelationshipKind {
     Definition,
@@ -175,6 +181,7 @@ impl std::fmt::Display for PreciseRelationshipKind {
     }
 }
 
+/// Inclusive source range for a precise SCIP occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreciseRange {
     pub start_line: usize,
@@ -183,6 +190,7 @@ pub struct PreciseRange {
     pub end_column: usize,
 }
 
+/// Precise symbol metadata keyed by repository and SCIP symbol identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreciseSymbolRecord {
     pub repository_id: String,
@@ -191,6 +199,7 @@ pub struct PreciseSymbolRecord {
     pub kind: String,
 }
 
+/// Precise symbol occurrence with repository path coordinates and SCIP roles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreciseOccurrenceRecord {
     pub repository_id: String,
@@ -222,6 +231,7 @@ impl PreciseOccurrenceRecord {
     }
 }
 
+/// Precise directed relationship between two SCIP symbol identifiers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreciseRelationshipRecord {
     pub repository_id: String,
@@ -257,6 +267,7 @@ pub(crate) fn precise_navigation_identifier(raw: &str) -> Option<String> {
     }
 }
 
+/// Cardinality summary for precise symbol graph records currently loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreciseGraphCounts {
     pub symbols: usize,
@@ -298,6 +309,7 @@ impl Default for ScipResourceBudgets {
     }
 }
 
+/// Stable invalid-input code for SCIP decode and normalization failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScipInvalidInputCode {
     JsonDecode,
@@ -329,6 +341,7 @@ impl std::fmt::Display for ScipInvalidInputCode {
     }
 }
 
+/// Structured invalid-input diagnostic emitted during SCIP ingest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScipInvalidInputDiagnostic {
     pub artifact_label: String,
@@ -351,6 +364,7 @@ impl std::fmt::Display for ScipInvalidInputDiagnostic {
     }
 }
 
+/// Resource budget dimension exceeded during SCIP ingest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScipResourceBudgetCode {
     PayloadBytes,
@@ -374,6 +388,7 @@ impl std::fmt::Display for ScipResourceBudgetCode {
     }
 }
 
+/// Structured resource-budget diagnostic emitted during SCIP ingest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScipResourceBudgetDiagnostic {
     pub artifact_label: String,
@@ -406,6 +421,7 @@ pub enum ScipIngestError {
     },
 }
 
+/// Result alias for SCIP ingest operations bounded by validation and budgets.
 pub type ScipIngestResult<T> = Result<T, ScipIngestError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -521,6 +537,7 @@ enum ScipFileIngestMode {
     Overlay,
 }
 
+/// Failure modes for heuristic symbol graph mutation and traversal.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SymbolGraphError {
     #[error("symbol graph relation insertion failed: unknown from symbol '{0}'")]
@@ -530,11 +547,12 @@ pub enum SymbolGraphError {
     UnknownToSymbol(String),
 }
 
+/// Result alias for symbol graph operations.
 pub type SymbolGraphResult<T> = Result<T, SymbolGraphError>;
 
-#[derive(Debug, Clone, Default)]
 /// Repository-scoped symbol relation graph that can absorb precise SCIP data while still serving
 /// as the shared navigation substrate for heuristic and fallback workflows.
+#[derive(Debug, Clone, Default)]
 pub struct SymbolGraph {
     graph: DiGraph<SymbolNode, RelationKind>,
     node_by_symbol: BTreeMap<String, NodeIndex>,

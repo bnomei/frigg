@@ -12,6 +12,7 @@ use thiserror::Error;
 /// Result type shared by semantic indexing and query-time embedding calls.
 pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 
+/// Provider identity used in normalized embedding responses and failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingProviderKind {
@@ -32,6 +33,7 @@ impl EmbeddingProviderKind {
     }
 }
 
+/// Embedding task shape that steers provider-specific request mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingPurpose {
@@ -40,6 +42,7 @@ pub enum EmbeddingPurpose {
     Query,
 }
 
+/// Optional per-provider input and dimension limits enforced before transport.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EmbeddingProviderLimits {
     pub max_inputs_per_request: Option<usize>,
@@ -47,6 +50,7 @@ pub struct EmbeddingProviderLimits {
     pub max_dimensions: Option<usize>,
 }
 
+/// Exponential backoff policy for retryable embedding transport failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryPolicy {
     pub max_retries: usize,
@@ -73,6 +77,7 @@ impl RetryPolicy {
     }
 }
 
+/// HTTP endpoint, timeout, and retry settings for the OpenAI embedding provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiEmbeddingProviderConfig {
     pub endpoint: String,
@@ -90,6 +95,7 @@ impl Default for OpenAiEmbeddingProviderConfig {
     }
 }
 
+/// HTTP endpoint, timeout, and retry settings for the Google embedding provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoogleEmbeddingProviderConfig {
     pub endpoint: String,
@@ -107,8 +113,8 @@ impl Default for GoogleEmbeddingProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Provider-agnostic embedding request used by indexing and search code paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmbeddingRequest {
     pub model: String,
     pub input: Vec<String>,
@@ -148,21 +154,23 @@ impl EmbeddingRequest {
     }
 }
 
+/// Single embedding vector with its batch index in a provider response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddingVector {
     pub index: usize,
     pub values: Vec<f32>,
 }
 
+/// Token usage metadata returned by remote embedding providers when available.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EmbeddingUsage {
     pub prompt_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 /// Normalized embedding response so callers can consume vectors without branching on provider
 /// wire formats.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddingResponse {
     pub provider: EmbeddingProviderKind,
     pub model: String,
@@ -171,9 +179,9 @@ pub struct EmbeddingResponse {
     pub usage: Option<EmbeddingUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Vector backend health summary used to decide whether semantic storage can participate in the
 /// broader retrieval pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VectorStoreReadiness {
     pub backend: String,
     pub extension_version: String,
@@ -231,6 +239,7 @@ pub fn verify_sqlite_vec_readiness(
     Ok(readiness)
 }
 
+/// Whether an embedding failure should be retried by transport helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Retryability {
@@ -238,6 +247,7 @@ pub enum Retryability {
     NonRetryable,
 }
 
+/// Top-level embedding failure category surfaced to callers and logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingErrorCategory {
@@ -246,6 +256,7 @@ pub enum EmbeddingErrorCategory {
     Transport,
 }
 
+/// Field-level validation failure for an embedding request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationFailure {
     pub field: String,
@@ -273,6 +284,7 @@ impl std::fmt::Display for ValidationFailure {
 
 impl std::error::Error for ValidationFailure {}
 
+/// Provider-reported embedding failure with retryability and status metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderFailure {
     pub provider: EmbeddingProviderKind,
@@ -337,6 +349,7 @@ impl std::fmt::Display for ProviderFailure {
     }
 }
 
+/// Transport-layer embedding failure for HTTP or vector-store operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransportFailure {
     pub provider: EmbeddingProviderKind,
@@ -390,6 +403,7 @@ impl std::fmt::Display for TransportFailure {
     }
 }
 
+/// Unified embedding error envelope used by indexing and query-time recall.
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EmbeddingError {
     #[error("{0}")]

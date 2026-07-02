@@ -1,4 +1,7 @@
-//! Background precise-artifact generation tasks spawned after index refresh or workspace attach.
+//! Precise-artifact generation for synchronous CLI runs and background index or attach tasks.
+//!
+//! Generator selection keys off manifest path deltas and workspace markers, then invokes external
+//! SCIP tools with bounded timeouts and writes artifacts under `.frigg/`.
 
 use super::*;
 
@@ -68,7 +71,7 @@ impl FriggMcpServer {
                 version_arg_sets: &[&["--version"], &["version"]],
                 generate_args: &["scip", "."],
                 infer_tsconfig: false,
-                trigger_markers: &["Cargo.toml", "Cargo.lock", "src/lib.rs", "src/main.rs"],
+                trigger_markers: &["Cargo.toml", "Cargo.lock"],
                 output_artifact_name: "rust.scip",
                 stdout_artifact_fallback: true,
                 output_flag: None,
@@ -943,17 +946,33 @@ impl FriggMcpServer {
             &precise_config.generation_excludes,
         );
         if changed_paths.is_empty() && deleted_paths.is_empty() {
+            // Cold-start paths (`init`, first attach): rerun when prior generation failed or the artifact file is gone.
+            let expected_artifact =
+                Self::precise_generator_expected_output_path(&workspace.root, spec);
             return match self.scip_cached_workspace_precise_generation(
                 &workspace.repository_id,
                 spec.generator_id,
             ) {
-                None => true,
-                Some(summary) => matches!(
-                    summary.status,
+                None => !expected_artifact.is_file(),
+                Some(summary) => match summary.status {
                     WorkspacePreciseGenerationStatus::Failed
-                        | WorkspacePreciseGenerationStatus::MissingTool
-                        | WorkspacePreciseGenerationStatus::Timeout
-                ),
+                    | WorkspacePreciseGenerationStatus::MissingTool
+                    | WorkspacePreciseGenerationStatus::Timeout => true,
+                    WorkspacePreciseGenerationStatus::Succeeded => {
+                        summary.artifact_path.as_deref().is_some_and(|path| {
+                            let path = Path::new(path);
+                            let path = if path.is_absolute() {
+                                path.to_path_buf()
+                            } else {
+                                workspace.root.join(path)
+                            };
+                            !path.is_file()
+                        })
+                    }
+                    WorkspacePreciseGenerationStatus::Skipped
+                    | WorkspacePreciseGenerationStatus::Unsupported
+                    | WorkspacePreciseGenerationStatus::NotConfigured => false,
+                },
             };
         }
         changed_paths
@@ -968,6 +987,76 @@ impl FriggMcpServer {
                 )
             })
             .any(|path| Self::generator_dirty_path_matches(spec, path))
+    }
+
+    fn workspace_for_precise_generation(
+        &self,
+        repository_id: &str,
+    ) -> Result<AttachedWorkspace, String> {
+        self.runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_by_any_repository_id(repository_id)
+            .ok_or_else(|| format!("repository '{repository_id}' is not configured"))
+    }
+
+    fn selected_precise_generation_specs(
+        &self,
+        workspace: &AttachedWorkspace,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) -> Vec<PreciseGeneratorSpec> {
+        Self::precise_generator_specs()
+            .into_iter()
+            .filter(|spec| {
+                self.workspace_precise_generation_needed(
+                    workspace,
+                    spec,
+                    changed_paths,
+                    deleted_paths,
+                )
+            })
+            .collect()
+    }
+
+    fn precise_generation_plan_item(
+        workspace: &AttachedWorkspace,
+        spec: &PreciseGeneratorSpec,
+    ) -> WorkspacePreciseGenerationPlanItem {
+        WorkspacePreciseGenerationPlanItem {
+            generator_id: spec.generator_id.to_owned(),
+            language: Self::precise_generator_language_label(spec).to_owned(),
+            tool: spec.tool_name.to_owned(),
+            expected_output_path: Self::precise_generator_expected_output_path(
+                &workspace.root,
+                spec,
+            )
+            .display()
+            .to_string(),
+        }
+    }
+
+    /// CLI-facing plan for which SCIP generators would run for the given path delta.
+    #[doc(hidden)]
+    pub fn precise_generation_plan_for_repository(
+        &self,
+        repository_id: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) -> Result<WorkspacePreciseGenerationPlanSummary, String> {
+        let workspace = self.workspace_for_precise_generation(repository_id)?;
+        let generators = self
+            .selected_precise_generation_specs(&workspace, changed_paths, deleted_paths)
+            .iter()
+            .map(|spec| Self::precise_generation_plan_item(&workspace, spec))
+            .collect::<Vec<_>>();
+        let action = if generators.is_empty() {
+            WorkspacePreciseGenerationAction::SkippedNoWork
+        } else {
+            WorkspacePreciseGenerationAction::Triggered
+        };
+        Ok(WorkspacePreciseGenerationPlanSummary { action, generators })
     }
 
     fn write_precise_artifact(
@@ -1389,6 +1478,65 @@ impl FriggMcpServer {
         }
 
         finish(generation_result)
+    }
+
+    /// CLI-facing synchronous run of selected SCIP generators, with cache invalidation and graph prewarm on success.
+    #[doc(hidden)]
+    pub fn run_precise_generation_for_repository(
+        &self,
+        repository_id: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) -> Result<WorkspacePreciseGenerationRunSummary, String> {
+        let workspace = self.workspace_for_precise_generation(repository_id)?;
+        let selected =
+            self.selected_precise_generation_specs(&workspace, changed_paths, deleted_paths);
+        if selected.is_empty() {
+            return Ok(WorkspacePreciseGenerationRunSummary {
+                action: WorkspacePreciseGenerationAction::SkippedNoWork,
+                generators: Vec::new(),
+            });
+        }
+
+        let mut generators = Vec::new();
+        let mut any_success = false;
+        for spec in selected {
+            let summary = self.run_workspace_precise_generation(&workspace, &spec);
+            if summary.status == WorkspacePreciseGenerationStatus::Succeeded {
+                any_success = true;
+            }
+            self.scip_cache_workspace_precise_generation(
+                &workspace.repository_id,
+                spec.generator_id,
+                summary.clone(),
+            );
+            let plan_item = Self::precise_generation_plan_item(&workspace, &spec);
+            generators.push(WorkspacePreciseGenerationRunItem {
+                generator_id: plan_item.generator_id,
+                language: plan_item.language,
+                tool: plan_item.tool,
+                expected_output_path: plan_item.expected_output_path,
+                summary,
+            });
+        }
+
+        self.invalidate_repository_summary_cache(&workspace.repository_id);
+        self.invalidate_repository_search_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
+        if any_success && let Err(err) = self.prewarm_precise_graph_for_workspace(&workspace) {
+            warn!(
+                repository_id = %workspace.repository_id,
+                root = %workspace.root.display(),
+                error = %err,
+                "failed to prewarm precise graph after synchronous generation"
+            );
+        }
+
+        Ok(WorkspacePreciseGenerationRunSummary {
+            action: WorkspacePreciseGenerationAction::Triggered,
+            generators,
+        })
     }
 
     pub(in crate::mcp::server) fn record_pending_precise_dirty_paths(

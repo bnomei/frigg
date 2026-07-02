@@ -10,6 +10,7 @@ use frigg::settings::{
 
 use crate::{Cli, Command};
 
+/// Builds base `FriggConfig` from CLI flags and optional watch defaults for utility commands.
 pub(crate) fn resolve_base_config(
     cli: &Cli,
     workspace_roots_required: bool,
@@ -34,6 +35,7 @@ pub(crate) fn resolve_base_config(
     Ok(config)
 }
 
+/// Resolves the operating profile for one utility subcommand, including index semantic settings.
 pub(crate) fn resolve_command_config(
     cli: &Cli,
     command: Command,
@@ -57,6 +59,7 @@ pub(crate) fn resolve_command_config(
     }
 }
 
+/// Resolves serve-time configuration, including semantic runtime flags and serving validation.
 pub(crate) fn resolve_startup_config(
     cli: &Cli,
     transport_kind: RuntimeTransportKind,
@@ -67,6 +70,7 @@ pub(crate) fn resolve_startup_config(
     Ok(config)
 }
 
+/// Maps CLI semantic-runtime flags into the normalized runtime contract used by index and serve.
 pub(crate) fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfig {
     let enabled = cli.semantic_runtime_enabled.unwrap_or(false);
     SemanticRuntimeConfig {
@@ -86,6 +90,7 @@ pub(crate) fn resolve_lexical_runtime_config(cli: &Cli) -> LexicalRuntimeConfig 
     }
 }
 
+/// Maps CLI watch flags onto transport-aware debounce and retry defaults.
 pub(crate) fn resolve_watch_config(
     cli: &Cli,
     watch_default_transport: Option<RuntimeTransportKind>,

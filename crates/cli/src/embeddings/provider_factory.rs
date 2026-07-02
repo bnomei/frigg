@@ -11,12 +11,14 @@ use super::{
     GoogleEmbeddingProvider, LocalEmbeddingProvider, OpenAiEmbeddingProvider, ProviderFailure,
 };
 
+/// Policy controlling whether local model artifacts may be prepared during provider construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalArtifactPolicy {
     RequirePrepared,
     AllowPreparation,
 }
 
+/// Inputs required to construct a semantic embedding provider for indexing or recall.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticEmbeddingProviderFactoryConfig<'a> {
     pub provider: SemanticRuntimeProvider,
@@ -25,6 +27,7 @@ pub struct SemanticEmbeddingProviderFactoryConfig<'a> {
     pub local_artifact_policy: LocalArtifactPolicy,
 }
 
+/// Builds the active semantic embedding provider from runtime configuration and credentials.
 pub fn build_semantic_embedding_provider(
     config: SemanticEmbeddingProviderFactoryConfig<'_>,
 ) -> EmbeddingResult<Arc<dyn EmbeddingProvider>> {

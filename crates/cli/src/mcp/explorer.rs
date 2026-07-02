@@ -30,6 +30,7 @@ impl From<io::Error> for LossyLineSliceError {
     }
 }
 
+/// Bounded lossy UTF-8 line slice returned by shared file-content snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LossyLineSlice {
     pub content: String,
@@ -38,6 +39,7 @@ pub(crate) struct LossyLineSlice {
     pub lossy_utf8: bool,
 }
 
+/// Literal or safe-regex matcher used by explore probe and refine scans.
 #[derive(Debug, Clone)]
 pub(crate) enum ExploreMatcher {
     Literal(String),
@@ -59,12 +61,14 @@ impl ExploreMatcher {
     }
 }
 
+/// Inclusive 1-based line scope for one explore scan.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExploreScopeRequest {
     pub start_line: usize,
     pub end_line: Option<usize>,
 }
 
+/// One in-scope explore match with excerpt and anchor metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExploreSpanMatch {
     pub start_line: usize,
@@ -75,6 +79,7 @@ pub(crate) struct ExploreSpanMatch {
     pub anchor: ExploreAnchor,
 }
 
+/// Aggregate result from scanning one file scope through the explorer helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExploreScanResult {
     pub total_lines: usize,

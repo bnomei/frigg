@@ -130,6 +130,7 @@ pub(crate) fn collect_symbols_from_source(
     collect_property_symbols(source, path, symbols, "@aware");
 }
 
+/// Blade template relation categories used when resolving view and component graph edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum BladeRelationKind {
     Extends,
@@ -157,6 +158,7 @@ pub(crate) struct FluxComponentHint {
     pub(crate) local_overlay: bool,
 }
 
+/// Blade template evidence bundle covering relations, Livewire usage, and Flux component hints.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BladeSourceEvidence {
     pub(crate) relations: Vec<BladeRelationEvidence>,
@@ -168,6 +170,7 @@ pub(crate) struct BladeSourceEvidence {
 
 pub(crate) const FLUX_REGISTRY_VERSION: &str = "2026-03-08-mvp";
 
+/// Extracts Blade relation and component evidence from template source and module symbols.
 pub(crate) fn extract_source_evidence_from_source(
     source: &str,
     file_symbols: &[SymbolDefinition],
@@ -306,6 +309,7 @@ pub(crate) fn mark_local_flux_overlays(
     }
 }
 
+/// Resolves Blade relation evidence into graph edges between indexed symbols.
 pub(crate) fn resolve_relation_evidence_edges(
     symbols: &[SymbolDefinition],
     symbol_index_by_stable_id: &BTreeMap<String, usize>,

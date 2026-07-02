@@ -1,3 +1,5 @@
+//! Managed markdown block insertion and removal for agent directive adoption targets.
+
 use frigg::agent_directive;
 
 pub(crate) const MANAGED_BLOCK_START: &str = agent_directive::MANAGED_BLOCK_START;
@@ -5,6 +7,7 @@ pub(crate) const MANAGED_BLOCK_END: &str = agent_directive::MANAGED_BLOCK_END;
 const LEGACY_MANAGED_BLOCK_START_PREFIX: &str = "FRIGG:BEGIN v";
 const LEGACY_MANAGED_BLOCK_END: &str = "FRIGG:END";
 
+/// Outcome of inserting, updating, or removing a managed markdown adoption block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ManagedBlockEdit {
     Changed(String),
@@ -26,6 +29,7 @@ impl std::fmt::Display for ManagedBlockError {
 
 impl std::error::Error for ManagedBlockError {}
 
+/// Returns the canonical managed markdown block rendered for agent directive targets.
 pub(crate) fn desired_markdown() -> String {
     agent_directive::render_managed_block()
 }
@@ -36,6 +40,7 @@ pub(crate) fn has_managed_block(contents: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Inserts or replaces the managed block in markdown contents without touching surrounding text.
 pub(crate) fn upsert_managed_block(
     contents: &str,
     desired_block: &str,
@@ -60,6 +65,7 @@ pub(crate) fn upsert_managed_block(
     Ok(ManagedBlockEdit::Changed(updated))
 }
 
+/// Removes the managed block and any adjacent adoption whitespace when uninstalling markdown targets.
 pub(crate) fn remove_managed_block(contents: &str) -> Result<ManagedBlockEdit, ManagedBlockError> {
     let Some(span) = locate_managed_block(contents)? else {
         return Ok(ManagedBlockEdit::Unchanged);

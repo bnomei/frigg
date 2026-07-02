@@ -41,6 +41,7 @@ pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 
 /// Callback invoked for user-facing watch progress events.
 pub type WatchEventReporter = Arc<dyn Fn(WatchEvent) + Send + Sync + 'static>;
 
+/// User-facing watch lifecycle and index-progress events emitted by the shared supervisor.
 #[derive(Debug, Clone)]
 pub enum WatchEvent {
     RuntimeStarted {
@@ -194,7 +195,7 @@ pub struct WatchRuntime {
 }
 
 impl WatchRuntime {
-    // Lease boundary: first holder registers the recursive watcher and queues startup refresh.
+    /// Registers a watch lease for one attached workspace and queues startup refresh on first holder.
     pub(crate) fn acquire_lease(&self, workspace: &AttachedWorkspace) -> FriggResult<usize> {
         let repository = watched_repository_for_workspace(workspace)?;
 
@@ -255,7 +256,7 @@ impl WatchRuntime {
         Ok(lease_count)
     }
 
-    // Lease boundary: last holder unregisters the watcher and bumps the repository epoch.
+    /// Releases one watch lease and unregisters the watcher when the last holder drops.
     pub(crate) fn release_lease(&self, repository_id: &str) -> usize {
         let root = self
             .repositories
@@ -325,6 +326,7 @@ impl WatchRuntime {
         remaining
     }
 
+    /// Returns whether a repository root currently has active watch leases.
     pub(crate) fn lease_status(&self, repository_id: &str) -> WatchLeaseStatus {
         let lease_count = self
             .lease_counts

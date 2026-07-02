@@ -65,6 +65,20 @@ fn run_frigg(root: &Path, args: &[&str]) -> Output {
     command.output().expect("run frigg binary")
 }
 
+fn run_frigg_with_path(root: &Path, args: &[&str], path: &Path) -> Output {
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![path.to_path_buf()];
+    path_entries.extend(std::env::split_paths(&inherited_path));
+    let path_value = std::env::join_paths(path_entries).expect("test PATH should be joinable");
+    let mut command = frigg_command();
+    command
+        .env("PATH", path_value)
+        .arg("--workspace-root")
+        .arg(root)
+        .args(args);
+    command.output().expect("run frigg binary")
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -105,6 +119,63 @@ fn init_normal_emits_summary_only_on_stdout() {
     assert!(stdout.contains("ok init: complete status=ok repos=1"));
     assert!(!stdout.contains("ok init: repo"));
     assert_eq!(stderr(&output), "");
+    cleanup_workspace(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_verbose_generates_precise_artifact() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_workspace_root("init-precise");
+    create_simple_workspace(&root);
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write cargo manifest");
+
+    let bin_dir = root.join("fake-bin");
+    fs::create_dir_all(&bin_dir).expect("create fake bin dir");
+    let rust_analyzer = bin_dir.join("rust-analyzer");
+    fs::write(
+        &rust_analyzer,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
+  printf '%s\n' "rust-analyzer test"
+  exit 0
+fi
+if [ "$1" = "scip" ]; then
+  printf '%s' "fake-rust-scip" > index.scip
+  exit 0
+fi
+exit 1
+"#,
+    )
+    .expect("write fake rust-analyzer");
+    let mut permissions = fs::metadata(&rust_analyzer)
+        .expect("fake rust-analyzer metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&rust_analyzer, permissions).expect("fake rust-analyzer executable");
+
+    let output = run_frigg_with_path(&root, &["--verbose", "init"], &bin_dir);
+
+    assert_success(&output);
+    let stdout = stdout(&output);
+    let stderr = stderr(&output);
+    assert!(stdout.contains("ok init: complete status=ok repos=1"));
+    assert!(stdout.contains("precise_generators=1"));
+    assert!(stdout.contains("precise_succeeded=1"));
+    assert!(stderr.contains("info precise: plan status=starting repo=repo-001 command=init"));
+    assert!(
+        stderr
+            .contains("ok precise: generator status=ok repo=repo-001 command=init generator=rust")
+    );
+    assert_eq!(
+        fs::read(root.join(".frigg/scip/rust.scip")).expect("generated rust scip"),
+        b"fake-rust-scip"
+    );
     cleanup_workspace(&root);
 }
 

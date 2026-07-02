@@ -66,6 +66,8 @@ Built-in watch mode runs behind `frigg serve` and keeps adopted repositories fre
 
 If a watch refresh fails, Frigg logs `built-in watch mode refresh failed; retry scheduled`, marks the refresh pending again, and waits `watch.retry_ms` before retrying. The default retry delay is controlled by `--watch-retry-ms` or `FRIGG_WATCH_RETRY_MS`.
 
+If the failure cause is `database is locked`, another Frigg process, test, or stale in-flight refresh is holding SQLite's writer lock on `.frigg/storage.sqlite3`. Frigg waits up to `FRIGG_SQLITE_BUSY_TIMEOUT_MS` before surfacing that error; the default is 30000 ms. For test-heavy local development, increase that value or disable built-in watch mode while tests are writing the same repository storage.
+
 | Watch condition | Meaning | Operator action |
 | --- | --- | --- |
 | Debouncing | A file event was observed and Frigg is waiting for the debounce window before refreshing. | Wait for the debounce interval; this is normal during active edits. |

@@ -1,3 +1,5 @@
+//! JSON merge helpers for Frigg MCP server entries and Claude PreToolUse hooks in project settings.
+
 use serde_json::{Map, Value, json};
 
 pub(crate) const DEFAULT_MCP_SERVER_URL: &str = "http://127.0.0.1:37444/mcp";
@@ -8,6 +10,7 @@ const CLAUDE_PRE_TOOL_USE_KEY: &str = "PreToolUse";
 const CLAUDE_HOOK_MATCHER: &str = "Grep|Bash|Read";
 const CLAUDE_HOOK_COMMAND: &str = "frigg hook pretooluse";
 
+/// Classifies whether the desired Frigg MCP server entry is absent, current, or user-diverged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum McpEntryState {
     Missing,
@@ -15,12 +18,14 @@ pub(crate) enum McpEntryState {
     Diverged,
 }
 
+/// Classifies whether the desired Claude PreToolUse hook command is absent or already installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClaudeHookState {
     Missing,
     Desired,
 }
 
+/// Outcome of a JSON merge or removal attempt against an adopt target file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum McpJsonEdit {
     Changed(String),
@@ -54,6 +59,7 @@ impl std::error::Error for McpJsonError {
     }
 }
 
+/// Returns the canonical Frigg MCP HTTP server entry written by adopt.
 pub(crate) fn desired_mcp_server() -> Value {
     json!({
         "type": "http",
@@ -61,6 +67,7 @@ pub(crate) fn desired_mcp_server() -> Value {
     })
 }
 
+/// Classifies the Frigg MCP server entry in existing `.mcp.json` or Cursor MCP config contents.
 pub(crate) fn classify_mcp_entry(contents: &str) -> Result<McpEntryState, McpJsonError> {
     let value: Value = serde_json::from_str(contents).map_err(McpJsonError::Parse)?;
     let root = value.as_object().ok_or(McpJsonError::InvalidShape(
@@ -94,6 +101,7 @@ pub(crate) fn desired_mcp_config() -> Value {
     Value::Object(root)
 }
 
+/// Inserts or updates the Frigg MCP server entry while preserving unrelated JSON keys.
 pub(crate) fn upsert_mcp_server(
     contents: Option<&str>,
     force: bool,
@@ -114,6 +122,7 @@ pub(crate) fn upsert_mcp_server(
     serialize_if_changed(Value::Object(root), contents)
 }
 
+/// Removes the Frigg MCP server entry, skipping diverged entries unless `force` is set.
 pub(crate) fn remove_mcp_server(contents: &str, force: bool) -> Result<McpJsonEdit, McpJsonError> {
     let mut root = parse_object_root(contents)?;
     let Some(servers) = root.get_mut(MCP_SERVERS_KEY) else {
@@ -150,6 +159,7 @@ fn desired_claude_pre_tool_use_entry() -> Value {
     })
 }
 
+/// Classifies whether the Frigg PreToolUse hook is present in Claude settings JSON.
 pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, McpJsonError> {
     let root = parse_object_root(contents)?;
     if contains_desired_claude_hook(&Value::Object(root)) {
@@ -159,6 +169,7 @@ pub(crate) fn classify_claude_hook(contents: &str) -> Result<ClaudeHookState, Mc
     }
 }
 
+/// Inserts the Frigg PreToolUse hook command while preserving sibling Claude settings and hooks.
 pub(crate) fn upsert_claude_hook(contents: Option<&str>) -> Result<McpJsonEdit, McpJsonError> {
     let Some(contents) = contents else {
         return serialize_changed(json!({

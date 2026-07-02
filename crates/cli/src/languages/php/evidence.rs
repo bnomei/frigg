@@ -55,6 +55,7 @@ pub(crate) struct PhpLiteralEvidence {
     pub(crate) line: usize,
 }
 
+/// Aggregated PHP type, target, and literal evidence extracted from one parsed source file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PhpSourceEvidence {
     pub(crate) canonical_names_by_stable_id: BTreeMap<String, String>,
@@ -63,6 +64,7 @@ pub(crate) struct PhpSourceEvidence {
     pub(crate) literal_evidence: Vec<PhpLiteralEvidence>,
 }
 
+/// Extracts PHP graph evidence from parsed source and the file's symbol inventory.
 pub(crate) fn extract_source_evidence_from_source(
     path: &Path,
     source: &str,
@@ -91,6 +93,7 @@ pub(crate) fn extract_source_evidence_from_source(
     Ok(evidence)
 }
 
+/// Resolves PHP target-evidence records into concrete graph relation edges.
 pub(crate) fn resolve_target_evidence_edges(
     symbols: &[SymbolDefinition],
     symbol_index_by_stable_id: &BTreeMap<String, usize>,

@@ -252,6 +252,7 @@ impl Drop for PooledParser {
     }
 }
 
+/// Feature surface used to decide which languages participate in a Tree-sitter-backed tool path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LanguageCapability {
     DocumentSymbols,
@@ -313,6 +314,7 @@ impl LanguageCapabilityTier {
     }
 }
 
+/// Broader capability matrix entry used when reporting language support tiers to operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LanguageSupportCapability {
     DocumentSymbols,
@@ -381,6 +383,7 @@ impl SymbolLanguage {
         Self::Nim,
     ];
 
+    /// Resolves the language adapter key from a repository-relative file path.
     pub fn from_path(path: &Path) -> Option<Self> {
         if blade::is_blade_path(path) {
             return Some(Self::Blade);
@@ -416,6 +419,7 @@ impl SymbolLanguage {
         }
     }
 
+    /// Parses user-facing language aliases such as `ts`, `py`, or `blade`.
     pub fn parse_alias(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "rust" | "rs" => Some(Self::Rust),
@@ -465,6 +469,7 @@ impl SymbolLanguage {
         }
     }
 
+    /// Returns whether this language key matches the path's extension or special filename rules.
     pub fn matches_path(self, path: &Path) -> bool {
         Self::from_path(path) == Some(self)
     }
@@ -558,6 +563,7 @@ fn supported_language_label(capability: LanguageCapability) -> String {
     }
 }
 
+/// Parses a language alias and checks support for the requested Tree-sitter capability.
 pub(crate) fn parse_supported_language(
     raw: &str,
     capability: LanguageCapability,
@@ -574,6 +580,7 @@ pub(crate) fn supported_language_for_path(
     language.supports(capability).then_some(language)
 }
 
+/// Maps a manifest path to the semantic chunk language label used by embedding refresh.
 pub(crate) fn semantic_chunk_language_for_path(path: &Path) -> Option<&'static str> {
     if blade::is_blade_path(path) {
         return Some(SymbolLanguage::Blade.as_str());
@@ -604,12 +611,14 @@ pub(crate) fn semantic_chunk_language_for_path(path: &Path) -> Option<&'static s
     None
 }
 
+/// Language-specific strategy for resolving heuristic implementation candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HeuristicImplementationStrategy {
     RustImplBlocks,
     PhpDeclarationRelations,
 }
 
+/// Returns the heuristic implementation strategy supported by a language, if any.
 pub(crate) fn heuristic_implementation_strategy(
     language: SymbolLanguage,
 ) -> Option<HeuristicImplementationStrategy> {
@@ -644,6 +653,7 @@ pub(crate) fn parser_for_language(language: SymbolLanguage) -> FriggResult<Poole
     parser_for_tree_sitter_language(ParserPoolKey::for_language(language), language)
 }
 
+/// Borrows a pooled Tree-sitter parser configured for the language and path-specific grammar variant.
 pub(crate) fn parser_for_path(language: SymbolLanguage, path: &Path) -> FriggResult<PooledParser> {
     parser_for_tree_sitter_language(ParserPoolKey::for_path(language, path), language)
 }
@@ -679,6 +689,7 @@ fn parser_for_tree_sitter_language(
     })
 }
 
+/// Extracts a normalized symbol kind and name from one Tree-sitter node when the adapter recognizes it.
 pub(crate) fn symbol_from_node(
     language: SymbolLanguage,
     source: &str,

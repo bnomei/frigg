@@ -10,6 +10,7 @@ use crate::indexer::{SymbolDefinition, SymbolKind};
 use super::super::registry::{SymbolLanguage, node_field_text};
 use super::declarations::PhpDeclarationRelation;
 
+/// Namespace and `use` alias state used to canonicalize PHP class-like names during graph analysis.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PhpNameResolutionContext {
     pub(crate) namespace: Option<String>,

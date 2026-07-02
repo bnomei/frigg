@@ -2,7 +2,7 @@
 
 ## `search_hybrid`
 
-Use `search_hybrid` first for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step.
+Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal or regex text, and use `search_symbol` for known identifiers.
 
 Important inputs:
 - `query`
@@ -47,6 +47,7 @@ What to inspect in `metadata`:
 - `freshness_basis`
 
 Interpretation rules:
+- direct exact string, regex, or known symbol query: start with `search_text` or `search_symbol` instead of `search_hybrid`
 - `warning` present: ranking is weaker than normal, pivot sooner
 - `semantic_status != ok`: semantic is missing, disabled, or degraded
 - `lexical_only_mode = true`: broad natural-language ranking is weaker; use matches as candidate pivots and move to `search_symbol`, `search_text`, `read_file`, or navigation sooner
@@ -86,7 +87,7 @@ Practical caution:
 
 ## `search_text`
 
-Use `search_text` when you need exact or regex search plus Frigg semantics:
+Use `search_text` when you need direct exact or regex search plus Frigg semantics:
 - canonical repository-relative paths
 - repository scoping
 - regex search over indexed files

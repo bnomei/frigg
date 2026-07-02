@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::model::stable_repository_id_for_root;
 use crate::storage::resolve_provenance_db_path;
 
+/// One workspace known to the process-wide registry with stable and runtime repository ids.
 #[derive(Debug, Clone)]
 pub(crate) struct AttachedWorkspace {
     pub repository_id: String,
@@ -18,6 +19,7 @@ pub(crate) struct AttachedWorkspace {
     pub db_path: PathBuf,
 }
 
+/// Process-wide workspace catalog keyed by canonical repository root.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WorkspaceRegistry {
     workspaces: Vec<AttachedWorkspace>,
@@ -105,7 +107,7 @@ impl WorkspaceRegistry {
         )
     }
 
-    // Session adoption boundary: increment active-session refcount for watch lease sharing.
+    /// Increment active-session refcount so watch leases can be shared across MCP sessions.
     pub(crate) fn mark_session_adopted(&mut self, repository_id: &str) -> usize {
         let count = self
             .active_session_counts
@@ -115,7 +117,7 @@ impl WorkspaceRegistry {
         *count
     }
 
-    // Session adoption boundary: decrement refcount and drop tracking at zero remaining sessions.
+    /// Decrement active-session refcount and drop tracking when no sessions remain adopted.
     pub(crate) fn mark_session_released(&mut self, repository_id: &str) -> usize {
         let Some(count) = self.active_session_counts.get_mut(repository_id) else {
             return 0;

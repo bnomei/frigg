@@ -124,6 +124,7 @@ pub enum SearchGoal {
     EntryPointBuildFlow,
 }
 
+/// Framework vocabulary used to bias planner term bundles and witness selection.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -145,6 +146,7 @@ pub enum FrameworkHint {
     Mcp,
 }
 
+/// Artifact-family bias applied when ranking witness and lexical candidates.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -163,6 +165,7 @@ pub enum ArtifactBias {
     ScriptsOps,
 }
 
+/// Planner strictness tier controlling witness focus and anchor bias.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
@@ -173,6 +176,7 @@ pub enum PlannerStrictness {
     ExactAnchorBiased,
 }
 
+/// Policy for whether playbook self-references are penalized during retrieval.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]

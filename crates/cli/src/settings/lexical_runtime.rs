@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// Lexical search backend selection for manifest-backed text retrieval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LexicalBackendMode {
