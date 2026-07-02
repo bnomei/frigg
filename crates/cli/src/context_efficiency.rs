@@ -2,8 +2,13 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+
+use chrono::Utc;
+use serde::Serialize;
 
 use crate::storage::RepositoryManifestMetadataSnapshot;
 
@@ -174,6 +179,85 @@ pub(crate) fn need_context_efficiency_with_log_state(
     include_context_efficiency == Some(true) || context_efficiency_log_enabled
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct ContextEfficiencyLogMetrics {
+    pub(crate) indexed_readable_files: usize,
+    pub(crate) indexed_readable_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) indexed_min_mtime_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) indexed_max_mtime_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) candidate_input_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) candidate_output_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) returned_match_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) returned_unique_paths: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) returned_unique_file_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) returned_source_bytes_estimate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) narrowing_ratio_estimate: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct ContextEfficiencyLogRow {
+    pub(crate) timestamp: String,
+    pub(crate) tool: String,
+    pub(crate) repository_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) snapshot_id: Option<String>,
+    #[serde(flatten)]
+    pub(crate) metrics: ContextEfficiencyLogMetrics,
+}
+
+impl ContextEfficiencyLogRow {
+    pub(crate) fn new(
+        tool: impl Into<String>,
+        repository_id: impl Into<String>,
+        snapshot_id: Option<String>,
+        metrics: ContextEfficiencyLogMetrics,
+    ) -> Self {
+        Self {
+            timestamp: Utc::now().to_rfc3339(),
+            tool: tool.into(),
+            repository_id: repository_id.into(),
+            snapshot_id,
+            metrics,
+        }
+    }
+}
+
+pub(crate) fn append_context_efficiency_log_row_if_enabled(
+    workspace_root: &Path,
+    log_enabled: bool,
+    row: &ContextEfficiencyLogRow,
+) -> io::Result<()> {
+    if !log_enabled {
+        return Ok(());
+    }
+    append_context_efficiency_log_row(workspace_root, row)
+}
+
+pub(crate) fn append_context_efficiency_log_row(
+    workspace_root: &Path,
+    row: &ContextEfficiencyLogRow,
+) -> io::Result<()> {
+    let frigg_dir = workspace_root.join(".frigg");
+    std::fs::create_dir_all(&frigg_dir)?;
+    let log_path = frigg_dir.join("context.jsonl");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    serde_json::to_writer(&mut file, row)?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn clear_manifest_metadata_cache_for_tests() {
     let mut cache = manifest_metadata_cache()
@@ -286,5 +370,82 @@ mod tests {
                 ))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn context_efficiency_jsonl_append_is_env_gated_by_caller() {
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-log-disabled-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let row = ContextEfficiencyLogRow::new(
+            "search_text",
+            "repo-1",
+            Some("snapshot-1".to_owned()),
+            ContextEfficiencyLogMetrics {
+                indexed_readable_files: 3,
+                indexed_readable_bytes: 90,
+                indexed_min_mtime_ns: None,
+                indexed_max_mtime_ns: None,
+                candidate_input_count: None,
+                candidate_output_count: None,
+                returned_match_count: Some(2),
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes: Some(20),
+                returned_source_bytes_estimate: Some(5),
+                narrowing_ratio_estimate: Some(18.0),
+            },
+        );
+
+        append_context_efficiency_log_row_if_enabled(&root, false, &row)
+            .expect("disabled logging should be a no-op");
+
+        assert!(!root.join(".frigg/context.jsonl").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_jsonl_append_is_compact_and_bounded() {
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-log-enabled-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let row = ContextEfficiencyLogRow::new(
+            "read_file",
+            "repo-1",
+            Some("snapshot-1".to_owned()),
+            ContextEfficiencyLogMetrics {
+                indexed_readable_files: 2,
+                indexed_readable_bytes: 140,
+                indexed_min_mtime_ns: Some(10),
+                indexed_max_mtime_ns: Some(20),
+                candidate_input_count: None,
+                candidate_output_count: None,
+                returned_match_count: None,
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes: Some(100),
+                returned_source_bytes_estimate: Some(9),
+                narrowing_ratio_estimate: Some(15.555555555555555),
+            },
+        );
+
+        append_context_efficiency_log_row_if_enabled(&root, true, &row)
+            .expect("enabled logging should append");
+
+        let logged = std::fs::read_to_string(root.join(".frigg/context.jsonl"))
+            .expect("context log should be readable");
+        assert_eq!(logged.lines().count(), 1);
+        let value: serde_json::Value =
+            serde_json::from_str(logged.trim()).expect("context row should be json");
+        assert_eq!(value["tool"], "read_file");
+        assert_eq!(value["repository_id"], "repo-1");
+        assert_eq!(value["snapshot_id"], "snapshot-1");
+        assert!(value.get("query").is_none());
+        assert!(value.get("content").is_none());
+        assert!(value.get("excerpt").is_none());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -1,7 +1,9 @@
 //! Search-oriented MCP tools: text, hybrid, symbol, structural, syntax inspection, and document outlines.
 
 use super::*;
-use crate::context_efficiency::ManifestMetadataSummary;
+use crate::context_efficiency::{
+    ContextEfficiencyLogMetrics, ContextEfficiencyLogRow, ManifestMetadataSummary,
+};
 use crate::domain::{ChannelHealthStatus, SourceClass, model::TextMatch};
 use crate::mcp::types::{
     ContextEfficiencyMetadata, ContextEfficiencyStageAttribution, SearchHybridChannelDiagnostic,
@@ -30,6 +32,85 @@ mod tests;
 pub(crate) use self::hybrid::SearchHybridWarningContext;
 
 impl FriggMcpServer {
+    pub(super) fn context_efficiency_metadata_for_controls<T>(
+        include_context_efficiency: Option<bool>,
+        log_enabled: bool,
+        build: impl FnOnce() -> Result<T, ErrorData>,
+    ) -> Result<Option<T>, ErrorData> {
+        if include_context_efficiency == Some(true) {
+            build().map(Some)
+        } else if log_enabled {
+            Ok(build().ok())
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(crate) fn context_efficiency_log_metrics(
+        metadata: &ContextEfficiencyMetadata,
+    ) -> ContextEfficiencyLogMetrics {
+        ContextEfficiencyLogMetrics {
+            indexed_readable_files: metadata.indexed_readable_files,
+            indexed_readable_bytes: metadata.indexed_readable_bytes,
+            indexed_min_mtime_ns: metadata.indexed_min_mtime_ns,
+            indexed_max_mtime_ns: metadata.indexed_max_mtime_ns,
+            candidate_input_count: metadata.candidate_input_count,
+            candidate_output_count: metadata.candidate_output_count,
+            returned_match_count: metadata.returned_match_count,
+            returned_unique_paths: metadata.returned_unique_paths,
+            returned_unique_file_bytes: metadata.returned_unique_file_bytes,
+            returned_source_bytes_estimate: metadata.returned_source_bytes_estimate,
+            narrowing_ratio_estimate: metadata.narrowing_ratio_estimate,
+        }
+    }
+
+    pub(crate) fn append_context_efficiency_log_for_workspaces(
+        tool_name: &str,
+        workspaces: &[AttachedWorkspace],
+        metadata: &ContextEfficiencyMetadata,
+    ) {
+        let log_enabled = crate::context_efficiency::context_efficiency_log_enabled();
+        Self::append_context_efficiency_log_for_workspaces_with_log_state(
+            tool_name,
+            workspaces,
+            metadata,
+            log_enabled,
+        );
+    }
+
+    fn append_context_efficiency_log_for_workspaces_with_log_state(
+        tool_name: &str,
+        workspaces: &[AttachedWorkspace],
+        metadata: &ContextEfficiencyMetadata,
+        log_enabled: bool,
+    ) {
+        if !log_enabled {
+            return;
+        }
+
+        let metrics = Self::context_efficiency_log_metrics(metadata);
+        for workspace in workspaces {
+            let snapshot_id = Storage::new(&workspace.db_path)
+                .load_latest_context_efficiency_manifest_summary_for_repository(
+                    &workspace.repository_id,
+                )
+                .ok()
+                .flatten()
+                .map(|summary| summary.snapshot_id);
+            let row = ContextEfficiencyLogRow::new(
+                tool_name,
+                workspace.repository_id.clone(),
+                snapshot_id,
+                metrics.clone(),
+            );
+            let _ = crate::context_efficiency::append_context_efficiency_log_row_if_enabled(
+                &workspace.root,
+                log_enabled,
+                &row,
+            );
+        }
+    }
+
     pub(super) fn search_lexical_backend_metadata(
         backend: Option<SearchLexicalBackend>,
     ) -> Option<SearchLexicalBackendMetadata> {

@@ -94,9 +94,12 @@ impl FriggMcpServer {
                 let mut match_anchors: Option<Value> = None;
                 let mut response_source_refs = json!({});
                 let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
+                    let context_efficiency_log_enabled =
+                        crate::context_efficiency::context_efficiency_log_enabled();
                     let need_context_efficiency =
-                        crate::context_efficiency::need_context_efficiency(
+                        crate::context_efficiency::need_context_efficiency_with_log_state(
                             params_for_blocking.include_context_efficiency,
+                            context_efficiency_log_enabled,
                         );
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
@@ -296,15 +299,24 @@ impl FriggMcpServer {
                         },
                     );
                     match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
-                    let context_efficiency = if need_context_efficiency {
-                        Some(Self::search_hybrid_context_efficiency_metadata(
+                    let context_efficiency = Self::context_efficiency_metadata_for_controls(
+                        params_for_blocking.include_context_efficiency,
+                        context_efficiency_log_enabled,
+                        || {
+                            Self::search_hybrid_context_efficiency_metadata(
+                                &scoped_workspaces,
+                                &matches,
+                                stage_attribution.as_ref(),
+                            )
+                        },
+                    )?;
+                    if let Some(context_efficiency) = context_efficiency.as_ref() {
+                        Self::append_context_efficiency_log_for_workspaces(
+                            "search_hybrid",
                             &scoped_workspaces,
-                            &matches,
-                            stage_attribution.as_ref(),
-                        )?)
-                    } else {
-                        None
-                    };
+                            context_efficiency,
+                        );
+                    }
 
                     let metadata = Some(SearchHybridMetadata {
                         channels: channel_metadata.clone().unwrap_or_default(),

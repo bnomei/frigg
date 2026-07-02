@@ -22,9 +22,12 @@ impl FriggMcpServer {
                 let mut read_diagnostics_count = 0usize;
                 let mut response_source_refs = json!({});
                 let result = (|| -> Result<Json<SearchTextResponse>, ErrorData> {
+                    let context_efficiency_log_enabled =
+                        crate::context_efficiency::context_efficiency_log_enabled();
                     let need_context_efficiency =
-                        crate::context_efficiency::need_context_efficiency(
+                        crate::context_efficiency::need_context_efficiency_with_log_state(
                             params_for_blocking.include_context_efficiency,
+                            context_efficiency_log_enabled,
                         );
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
@@ -212,11 +215,24 @@ impl FriggMcpServer {
                     let mut presented =
                         server.present_search_text_response(response, &params_for_blocking)?;
                     if need_context_efficiency {
-                        let context_efficiency = Self::search_text_context_efficiency_metadata(
-                            &scoped_workspaces,
-                            &presented.matches,
-                            presented.total_matches,
+                        let context_efficiency = Self::context_efficiency_metadata_for_controls(
+                            params_for_blocking.include_context_efficiency,
+                            context_efficiency_log_enabled,
+                            || {
+                                Self::search_text_context_efficiency_metadata(
+                                    &scoped_workspaces,
+                                    &presented.matches,
+                                    presented.total_matches,
+                                )
+                            },
                         )?;
+                        if let Some(context_efficiency) = context_efficiency.as_ref() {
+                            Self::append_context_efficiency_log_for_workspaces(
+                                "search_text",
+                                &scoped_workspaces,
+                                context_efficiency,
+                            );
+                        }
                         if params_for_blocking.include_context_efficiency == Some(true) {
                             presented
                                 .metadata
@@ -225,7 +241,7 @@ impl FriggMcpServer {
                                     lexical_backend_note: None,
                                     context_efficiency: None,
                                 })
-                                .context_efficiency = Some(context_efficiency);
+                                .context_efficiency = context_efficiency;
                         }
                     }
                     if let Some(metadata) = &presented.metadata {
