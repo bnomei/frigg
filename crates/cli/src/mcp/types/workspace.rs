@@ -376,6 +376,8 @@ pub struct ReadFileParams {
     pub max_bytes: Option<usize>,
     pub line_start: Option<usize>,
     pub line_end: Option<usize>,
+    /// Omit or set `text` for pure MCP text output; set `json` when callers need structured
+    /// metadata or a machine-readable `content` field.
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include bounded context-efficiency metadata in the response. Defaults to false.
     pub include_context_efficiency: Option<bool>,
@@ -398,6 +400,8 @@ pub struct ReadMatchParams {
     pub match_id: String,
     pub before: Option<usize>,
     pub after: Option<usize>,
+    /// Omit or set `text` for pure MCP text output; set `json` when callers need structured
+    /// metadata or a machine-readable `content` field.
     pub presentation_mode: Option<ReadPresentationMode>,
     /// Include bounded context-efficiency metadata in the response. Defaults to false.
     pub include_context_efficiency: Option<bool>,

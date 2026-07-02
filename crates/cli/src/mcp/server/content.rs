@@ -891,15 +891,12 @@ impl FriggMcpServer {
             ReadPresentationMode::Text => {
                 let (line_start, line_end) =
                     Self::read_file_effective_line_window(params, &response.content);
-                let context_efficiency = response.context_efficiency;
                 Ok(Self::text_read_surface_result(
                     &response.repository_id,
                     &response.path,
                     line_start,
                     line_end,
-                    response.bytes,
                     response.content,
-                    context_efficiency,
                 ))
             }
         }
@@ -915,15 +912,12 @@ impl FriggMcpServer {
             ReadPresentationMode::Text => {
                 let (line_start, line_end) =
                     Self::effective_line_window(response.line_start, &response.content);
-                let context_efficiency = response.context_efficiency;
                 Ok(Self::text_read_surface_result(
                     &response.repository_id,
                     &response.path,
                     line_start,
                     line_end,
-                    response.bytes,
                     response.content,
-                    context_efficiency,
                 ))
             }
         }
@@ -951,9 +945,7 @@ impl FriggMcpServer {
                     &response.path,
                     window.start_line,
                     window.end_line,
-                    window.bytes,
                     window.content,
-                    response.metadata.context_efficiency,
                 ))
             }
         }
@@ -1040,27 +1032,19 @@ impl FriggMcpServer {
         path: &str,
         line_start: usize,
         line_end: usize,
-        bytes: usize,
         content: String,
-        context_efficiency: Option<ContextEfficiencyMetadata>,
     ) -> CallToolResult {
-        let mut result = CallToolResult::success(vec![Content::text(
-            Self::format_text_read_surface(repository_id, path, line_start, line_end, &content),
-        )]);
-        let mut structured_content = json!({
-            "repository_id": repository_id,
-            "path": path,
-            "line_start": line_start,
-            "line_end": line_end,
-            "bytes": bytes,
-        });
-        if let Some(context_efficiency) = context_efficiency
-            && let Some(object) = structured_content.as_object_mut()
-        {
-            object.insert("context_efficiency".to_owned(), json!(context_efficiency));
-        }
-        result.structured_content = Some(structured_content);
-        result
+        // Keep text-mode read surfaces pure MCP text. Codex and some other clients prefer
+        // `structuredContent` over `content` when both are present, which can hide the source body
+        // from the model. Callers that need machine-readable path, byte, or context-efficiency
+        // metadata should request `presentation_mode=json` instead.
+        CallToolResult::success(vec![Content::text(Self::format_text_read_surface(
+            repository_id,
+            path,
+            line_start,
+            line_end,
+            &content,
+        ))])
     }
 
     fn format_text_read_surface(

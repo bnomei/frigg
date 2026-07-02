@@ -115,45 +115,9 @@ async fn core_read_file_defaults_to_text_first_output() {
         .await
         .expect("default read_file should succeed");
 
-    assert_eq!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("repository_id"))
-            .and_then(|value| value.as_str()),
-        Some(repository_id.as_str())
-    );
-    assert_eq!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("path"))
-            .and_then(|value| value.as_str()),
-        Some("src/lib.rs")
-    );
-    assert_eq!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_start"))
-            .and_then(|value| value.as_u64()),
-        Some(2)
-    );
-    assert_eq!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_end"))
-            .and_then(|value| value.as_u64()),
-        Some(2)
-    );
     assert!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("content"))
-            .is_none(),
-        "default text-first read_file should not duplicate the file body in structured_content"
+        result.structured_content.is_none(),
+        "text-mode read_file must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&result);
     assert!(text.contains(&format!("repository_id: {repository_id}")));
@@ -180,12 +144,8 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
         .await
         .expect("default read_file should succeed");
     assert!(
-        default_read
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("context_efficiency"))
-            .is_none(),
-        "default read_file should omit context-efficiency metadata"
+        default_read.structured_content.is_none(),
+        "text-mode read_file should not include structured metadata"
     );
 
     let requested_read = server
@@ -205,27 +165,32 @@ async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
         tool_result_text(&default_read),
         "context-efficiency metadata must not change the text body"
     );
-    assert_eq!(
-        requested_read
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("context_efficiency"))
-            .and_then(|value| value.get("returned_unique_paths"))
-            .and_then(|value| value.as_u64()),
-        Some(1)
+    assert!(
+        requested_read.structured_content.is_none(),
+        "text-mode read_file should stay pure text even when metadata is requested"
     );
+
+    let requested_json: ReadFileResponse = structured_tool_result(
+        server
+            .read_file(Parameters(ReadFileParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some("repo-001".to_owned()),
+                max_bytes: Some(128),
+                line_start: Some(2),
+                line_end: Some(2),
+                presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: Some(true),
+            }))
+            .await
+            .expect("context-efficiency JSON read_file should succeed"),
+    );
+    let requested_json_context = requested_json
+        .context_efficiency
+        .expect("JSON read_file should include requested context-efficiency metadata");
+    assert_eq!(requested_json_context.returned_unique_paths, Some(1));
     assert_eq!(
-        requested_read
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("context_efficiency"))
-            .and_then(|value| value.get("returned_source_bytes_estimate"))
-            .and_then(|value| value.as_u64()),
-        requested_read
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("bytes"))
-            .and_then(|value| value.as_u64())
+        requested_json_context.returned_source_bytes_estimate,
+        Some(requested_json.bytes.try_into().unwrap())
     );
 
     let search = server
@@ -586,36 +551,9 @@ async fn core_read_match_defaults_to_text_first_output() {
         .await
         .expect("default read_match should succeed");
 
-    assert_eq!(
-        opened
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("path"))
-            .and_then(|value| value.as_str()),
-        Some("src/lib.rs")
-    );
-    assert_eq!(
-        opened
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_start"))
-            .and_then(|value| value.as_u64()),
-        Some(1)
-    );
-    assert_eq!(
-        opened
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_end"))
-            .and_then(|value| value.as_u64()),
-        Some(3)
-    );
     assert!(
-        opened
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("content"))
-            .is_none()
+        opened.structured_content.is_none(),
+        "text-mode read_match must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&opened);
     assert!(text.contains("path: src/lib.rs"));
@@ -1755,36 +1693,9 @@ async fn extended_explore_zoom_defaults_to_text_first_output() {
         .await
         .expect("default explore zoom should succeed");
 
-    assert_eq!(
-        response
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("path"))
-            .and_then(|value| value.as_str()),
-        Some("src/lib.rs")
-    );
-    assert_eq!(
-        response
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_start"))
-            .and_then(|value| value.as_u64()),
-        Some(1)
-    );
-    assert_eq!(
-        response
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("line_end"))
-            .and_then(|value| value.as_u64()),
-        Some(3)
-    );
     assert!(
-        response
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("content"))
-            .is_none()
+        response.structured_content.is_none(),
+        "text-mode explore zoom must not include structured_content because some clients hide content[] when structuredContent is present"
     );
     let text = tool_result_text(&response);
     assert!(text.contains("path: src/lib.rs"));

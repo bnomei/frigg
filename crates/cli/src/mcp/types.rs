@@ -152,7 +152,10 @@ pub enum ResponseMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadPresentationMode {
+    /// Return only MCP text `content[]`. Do not attach `structuredContent` in this mode:
+    /// some MCP clients prefer structured output over text and would hide the source body.
     Text,
+    /// Return a structured JSON object with explicit `content`, path, byte, and metadata fields.
     Json,
 }
 
