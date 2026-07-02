@@ -102,6 +102,13 @@ impl RefreshQueueState {
         self.retry_deadline = Some(now + retry);
     }
 
+    fn mark_blocked(&mut self) {
+        self.pending = false;
+        self.rerun_requested = false;
+        self.debounce_deadline = None;
+        self.retry_deadline = None;
+    }
+
     fn ready_at(&self) -> Option<Instant> {
         if !self.pending {
             return None;
@@ -194,6 +201,14 @@ impl RepositoryWatchState {
         match class {
             WatchRefreshClass::ManifestFast => self.manifest_fast.mark_failed(now, retry),
             WatchRefreshClass::SemanticFollowup => self.semantic_followup.mark_failed(now, retry),
+        }
+    }
+
+    fn mark_blocked(&mut self, class: WatchRefreshClass) {
+        self.active_class = self.active_class.filter(|active| *active != class);
+        match class {
+            WatchRefreshClass::ManifestFast => self.manifest_fast.mark_blocked(),
+            WatchRefreshClass::SemanticFollowup => self.semantic_followup.mark_blocked(),
         }
     }
 
@@ -380,6 +395,20 @@ impl WatchSchedulerState {
         self.in_flight_set_mut(class).remove(&repository_id);
         if let Some(state) = self.repositories.get_mut(&repository_id) {
             state.mark_failed(class, now, retry);
+        }
+    }
+
+    pub(super) fn mark_blocked(
+        &mut self,
+        repository_id: impl Into<RepositorySelector>,
+        class: WatchRefreshClass,
+    ) {
+        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
+            return;
+        };
+        self.in_flight_set_mut(class).remove(&repository_id);
+        if let Some(state) = self.repositories.get_mut(&repository_id) {
+            state.mark_blocked(class);
         }
     }
 

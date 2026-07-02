@@ -112,6 +112,13 @@ pub enum WatchEvent {
         retry_ms: u128,
         error: String,
     },
+    RefreshBlocked {
+        repository_id: String,
+        root: PathBuf,
+        refresh_class: &'static str,
+        reason: &'static str,
+        error: String,
+    },
     StaleCompletionIgnored {
         repository_id: String,
         refresh_class: &'static str,
@@ -904,27 +911,57 @@ fn handle_index_completed(
             }
         }
         Err(error) => {
-            scheduler.mark_failed(repository_id, class, now, retry);
-            warn!(
-                repository_id = %repository.repository_id,
-                root = %repository.root.display(),
-                refresh_class = %class.as_str(),
-                retry_ms = retry.as_millis(),
-                error = %error,
-                "built-in watch mode refresh failed; retry scheduled"
-            );
-            report_watch_event(
-                reporter,
-                WatchEvent::RefreshFailed {
-                    repository_id: repository.repository_id,
-                    root: repository.root,
-                    refresh_class: class.as_str(),
-                    retry_ms: retry.as_millis(),
-                    error,
-                },
-            );
+            if is_non_retryable_watch_refresh_error(&error) {
+                scheduler.mark_blocked(repository_id, class);
+                if reporter.is_none() {
+                    warn!(
+                        repository_id = %repository.repository_id,
+                        root = %repository.root.display(),
+                        refresh_class = %class.as_str(),
+                        error = %error,
+                        "built-in watch mode refresh blocked; manual repair required"
+                    );
+                }
+                report_watch_event(
+                    reporter,
+                    WatchEvent::RefreshBlocked {
+                        repository_id: repository.repository_id,
+                        root: repository.root,
+                        refresh_class: class.as_str(),
+                        reason: "storage_schema_incompatible",
+                        error,
+                    },
+                );
+            } else {
+                scheduler.mark_failed(repository_id, class, now, retry);
+                if reporter.is_none() {
+                    warn!(
+                        repository_id = %repository.repository_id,
+                        root = %repository.root.display(),
+                        refresh_class = %class.as_str(),
+                        retry_ms = retry.as_millis(),
+                        error = %error,
+                        "built-in watch mode refresh failed; retry scheduled"
+                    );
+                }
+                report_watch_event(
+                    reporter,
+                    WatchEvent::RefreshFailed {
+                        repository_id: repository.repository_id,
+                        root: repository.root,
+                        refresh_class: class.as_str(),
+                        retry_ms: retry.as_millis(),
+                        error,
+                    },
+                );
+            }
         }
     }
+}
+
+fn is_non_retryable_watch_refresh_error(error: &str) -> bool {
+    error.contains("storage schema is incompatible")
+        && error.contains("automatic schema migrations are disabled")
 }
 
 fn queue_startup_refresh_if_needed(
@@ -1311,6 +1348,16 @@ mod tests {
             scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
             "a startup freshness evaluation failure must still queue a manifest-fast refresh"
         );
+    }
+
+    #[test]
+    fn incompatible_storage_schema_errors_do_not_retry_forever() {
+        let error = "internal error: storage schema is incompatible (found 10, expected 11); automatic schema migrations are disabled for Frigg's regenerable local index";
+
+        assert!(is_non_retryable_watch_refresh_error(error));
+        assert!(!is_non_retryable_watch_refresh_error(
+            "transient filesystem read failed"
+        ));
     }
 
     #[test]

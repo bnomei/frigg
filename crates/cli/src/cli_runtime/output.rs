@@ -257,6 +257,8 @@ pub(crate) fn emit_index_plan_events(
         )?;
     }
 
+    emit_index_semantic_events(output, repository_id, plan, extra_fields)?;
+
     if plan.changed_paths.is_empty() && plan.deleted_paths.is_empty() {
         output.progress_event(
             OutputLevel::Skip,
@@ -278,6 +280,8 @@ pub(crate) fn emit_index_plan_events(
 
     emit_index_path_lines(
         output,
+        "path",
+        "paths",
         repository_id,
         "modified",
         &plan.changed_paths,
@@ -285,6 +289,8 @@ pub(crate) fn emit_index_plan_events(
     )?;
     emit_index_path_lines(
         output,
+        "path",
+        "paths",
         repository_id,
         "deleted",
         &plan.deleted_paths,
@@ -292,8 +298,69 @@ pub(crate) fn emit_index_plan_events(
     )
 }
 
+fn emit_index_semantic_events(
+    output: CliOutput,
+    repository_id: &str,
+    plan: &IndexPlan,
+    extra_fields: &[OutputField],
+) -> io::Result<()> {
+    if matches!(
+        plan.semantic_refresh.mode.as_str(),
+        "disabled" | "reuse_existing"
+    ) {
+        return Ok(());
+    }
+
+    output.progress_event(
+        OutputLevel::Info,
+        "index",
+        "semantic",
+        &with_extra_fields(
+            vec![
+                field("status", "starting"),
+                field("repo", repository_id),
+                field("mode", plan.semantic_refresh.mode.as_str()),
+                field(
+                    "provider",
+                    plan.semantic_refresh.provider.as_deref().unwrap_or("-"),
+                ),
+                field(
+                    "model",
+                    plan.semantic_refresh.model.as_deref().unwrap_or("-"),
+                ),
+                field("records", plan.semantic_refresh.records_manifest.len()),
+                field("changed", plan.semantic_refresh.changed_paths.len()),
+                field("deleted", plan.semantic_refresh.deleted_paths.len()),
+            ],
+            extra_fields,
+        ),
+        None,
+    )?;
+
+    emit_index_path_lines(
+        output,
+        "semantic_path",
+        "semantic_paths",
+        repository_id,
+        "modified",
+        &plan.semantic_refresh.changed_paths,
+        extra_fields,
+    )?;
+    emit_index_path_lines(
+        output,
+        "semantic_path",
+        "semantic_paths",
+        repository_id,
+        "deleted",
+        &plan.semantic_refresh.deleted_paths,
+        extra_fields,
+    )
+}
+
 fn emit_index_path_lines(
     output: CliOutput,
+    event: &'static str,
+    truncation_event: &'static str,
     repository_id: &str,
     action: &'static str,
     paths: &[String],
@@ -303,7 +370,7 @@ fn emit_index_path_lines(
         output.progress_event(
             OutputLevel::Info,
             "index",
-            "path",
+            event,
             &with_extra_fields(
                 vec![field("action", action), field("repo", repository_id)],
                 extra_fields,
@@ -315,7 +382,7 @@ fn emit_index_path_lines(
         output.progress_event(
             OutputLevel::Info,
             "index",
-            "paths",
+            truncation_event,
             &with_extra_fields(
                 vec![
                     field("status", "truncated"),

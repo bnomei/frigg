@@ -384,6 +384,27 @@ fn emit_watch_event(output: CliOutput, event: WatchEvent) -> std::io::Result<()>
             ],
             Some(&root.display().to_string()),
         ),
+        WatchEvent::RefreshBlocked {
+            repository_id,
+            root,
+            refresh_class,
+            reason,
+            error,
+        } => output.progress_event(
+            OutputLevel::Warn,
+            "watch",
+            "refresh",
+            &[
+                field("status", "blocked"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("reason", reason),
+                field("retry", false),
+                field("action", "delete_storage_and_reindex"),
+                field("error", error),
+            ],
+            Some(&root.display().to_string()),
+        ),
         WatchEvent::StaleCompletionIgnored {
             repository_id,
             refresh_class,
