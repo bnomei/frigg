@@ -447,6 +447,47 @@ mod tests {
     }
 
     #[test]
+    fn semantic_runtime_provider_parses_local_and_reports_defaults() {
+        let provider: SemanticRuntimeProvider = " local "
+            .parse()
+            .expect("local provider should parse with surrounding whitespace");
+
+        assert_eq!(provider, SemanticRuntimeProvider::Local);
+        assert_eq!(provider.as_str(), "local");
+        assert_eq!(provider.to_string(), "local");
+        assert_eq!(provider.default_model(), "all-MiniLM-L6-v2");
+        assert_eq!(provider.api_key_env_var(), None);
+    }
+
+    #[test]
+    fn semantic_runtime_provider_rejects_unknown_provider_clearly() {
+        let error = "ollama"
+            .parse::<SemanticRuntimeProvider>()
+            .expect_err("unknown semantic provider must be rejected");
+
+        assert!(
+            error.contains("openai, google, local"),
+            "unexpected provider parse error: {error}"
+        );
+        assert!(
+            error.contains("ollama"),
+            "provider parse error should include received value: {error}"
+        );
+    }
+
+    #[test]
+    fn semantic_runtime_cli_resolution_accepts_local_provider() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Local);
+
+        let semantic = resolve_semantic_runtime_config(&cli);
+        assert!(semantic.enabled);
+        assert_eq!(semantic.provider, Some(SemanticRuntimeProvider::Local));
+        assert_eq!(semantic.normalized_model(), Some("all-MiniLM-L6-v2"));
+    }
+
+    #[test]
     fn watch_runtime_defaults_to_off_for_stdio_with_standard_timers() {
         let cli = base_cli();
         let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));
@@ -580,6 +621,37 @@ mod tests {
         assert_eq!(
             config.semantic_runtime.normalized_model(),
             Some("text-embedding-3-small")
+        );
+    }
+
+    #[test]
+    fn startup_config_accepts_local_provider_default_semantic_model() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Local);
+
+        let config = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
+            .expect("startup config should accept local provider default semantic model");
+        assert_eq!(
+            config.semantic_runtime.normalized_model(),
+            Some("all-MiniLM-L6-v2")
+        );
+    }
+
+    #[test]
+    fn startup_config_rejects_blank_semantic_runtime_model() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Local);
+        cli.semantic_runtime_model = Some("   ".to_owned());
+
+        let error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
+            .expect_err("startup config should reject a blank semantic model");
+        assert!(
+            error
+                .to_string()
+                .contains("semantic_runtime.model must not be blank"),
+            "unexpected startup config error: {error}"
         );
     }
 
@@ -862,6 +934,55 @@ mod tests {
             error.to_string().contains("OPENAI_API_KEY"),
             "unexpected semantic startup error detail: {error}"
         );
+    }
+
+    #[test]
+    fn semantic_runtime_startup_gate_accepts_local_provider_without_credentials() {
+        let mut config = FriggConfig::from_workspace_roots(vec![PathBuf::from(".")])
+            .expect("config should load from workspace root");
+        config.semantic_runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::Local),
+            model: None,
+            strict_mode: false,
+        };
+
+        run_semantic_runtime_startup_gate_with_credentials(
+            &config,
+            &SemanticRuntimeCredentials::default(),
+        )
+        .expect("local semantic runtime should not require API credentials");
+    }
+
+    #[test]
+    fn semantic_runtime_startup_gate_keeps_google_credential_requirement() {
+        let mut config = FriggConfig::from_workspace_roots(vec![PathBuf::from(".")])
+            .expect("config should load from workspace root");
+        config.semantic_runtime = SemanticRuntimeConfig {
+            enabled: true,
+            provider: Some(SemanticRuntimeProvider::Google),
+            model: None,
+            strict_mode: false,
+        };
+
+        let error = run_semantic_runtime_startup_gate_with_credentials(
+            &config,
+            &SemanticRuntimeCredentials::default(),
+        )
+        .expect_err("google semantic runtime must still require Gemini credentials");
+        assert!(
+            error.to_string().contains("GEMINI_API_KEY"),
+            "unexpected semantic startup error detail: {error}"
+        );
+
+        run_semantic_runtime_startup_gate_with_credentials(
+            &config,
+            &SemanticRuntimeCredentials {
+                openai_api_key: None,
+                gemini_api_key: Some("test-gemini-key".to_owned()),
+            },
+        )
+        .expect("google semantic runtime should accept a valid Gemini credential");
     }
 
     #[test]

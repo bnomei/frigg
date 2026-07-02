@@ -79,18 +79,27 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
             let response = match provider {
                 SemanticRuntimeProvider::OpenAi => {
                     let client = OpenAiEmbeddingProvider::new(api_key);
-                    client.embed(request).await
+                    client.embed(request).await.map_err(|err| {
+                        FriggError::Internal(format!(
+                            "semantic query embedding provider call failed: {err}"
+                        ))
+                    })?
                 }
                 SemanticRuntimeProvider::Google => {
                     let client = GoogleEmbeddingProvider::new(api_key);
-                    client.embed(request).await
+                    client.embed(request).await.map_err(|err| {
+                        FriggError::Internal(format!(
+                            "semantic query embedding provider call failed: {err}"
+                        ))
+                    })?
                 }
-            }
-            .map_err(|err| {
-                FriggError::Internal(format!(
-                    "semantic query embedding provider call failed: {err}"
-                ))
-            })?;
+                SemanticRuntimeProvider::Local => {
+                    return Err(FriggError::Internal(
+                        "local semantic query embedding provider routing is not available yet"
+                            .to_owned(),
+                    ));
+                }
+            };
 
             if response.vectors.len() != 1 {
                 return Err(FriggError::Internal(format!(

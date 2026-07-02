@@ -7,6 +7,7 @@ use thiserror::Error;
 
 pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 pub const DEFAULT_GOOGLE_EMBEDDING_MODEL: &str = "gemini-embedding-001";
+pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const GEMINI_API_KEY_ENV_VAR: &str = "GEMINI_API_KEY";
 pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
@@ -17,6 +18,7 @@ pub const SEMANTIC_RUNTIME_INVALID_PARAMS_CODE: &str = "invalid_params";
 pub enum SemanticRuntimeProvider {
     OpenAi,
     Google,
+    Local,
 }
 
 impl SemanticRuntimeProvider {
@@ -24,13 +26,15 @@ impl SemanticRuntimeProvider {
         match self {
             Self::OpenAi => "openai",
             Self::Google => "google",
+            Self::Local => "local",
         }
     }
 
-    pub fn required_api_key_env_var(self) -> &'static str {
+    pub fn api_key_env_var(self) -> Option<&'static str> {
         match self {
-            Self::OpenAi => OPENAI_API_KEY_ENV_VAR,
-            Self::Google => GEMINI_API_KEY_ENV_VAR,
+            Self::OpenAi => Some(OPENAI_API_KEY_ENV_VAR),
+            Self::Google => Some(GEMINI_API_KEY_ENV_VAR),
+            Self::Local => None,
         }
     }
 
@@ -38,6 +42,7 @@ impl SemanticRuntimeProvider {
         match self {
             Self::OpenAi => DEFAULT_OPENAI_EMBEDDING_MODEL,
             Self::Google => DEFAULT_GOOGLE_EMBEDDING_MODEL,
+            Self::Local => DEFAULT_LOCAL_EMBEDDING_MODEL,
         }
     }
 }
@@ -56,8 +61,9 @@ impl FromStr for SemanticRuntimeProvider {
         match normalized.as_str() {
             "openai" => Ok(Self::OpenAi),
             "google" => Ok(Self::Google),
+            "local" => Ok(Self::Local),
             _ => Err(format!(
-                "semantic runtime provider must be one of: openai, google (received: {normalized})"
+                "semantic runtime provider must be one of: openai, google, local (received: {normalized})"
             )),
         }
     }
@@ -91,6 +97,7 @@ impl SemanticRuntimeCredentials {
         match provider {
             SemanticRuntimeProvider::OpenAi => self.openai_api_key.as_deref(),
             SemanticRuntimeProvider::Google => self.gemini_api_key.as_deref(),
+            SemanticRuntimeProvider::Local => None,
         }
     }
 }
@@ -189,12 +196,17 @@ impl SemanticRuntimeConfig {
         let provider = self
             .provider
             .ok_or(SemanticRuntimeConfigError::MissingProvider)?;
-        let env_var = provider.required_api_key_env_var();
-        let Some(api_key) = credentials.api_key_for(provider) else {
-            return Err(SemanticRuntimeCredentialError::MissingApiKey { provider, env_var }.into());
-        };
-        if api_key.trim().is_empty() {
-            return Err(SemanticRuntimeCredentialError::BlankApiKey { provider, env_var }.into());
+        if let Some(env_var) = provider.api_key_env_var() {
+            let Some(api_key) = credentials.api_key_for(provider) else {
+                return Err(
+                    SemanticRuntimeCredentialError::MissingApiKey { provider, env_var }.into(),
+                );
+            };
+            if api_key.trim().is_empty() {
+                return Err(
+                    SemanticRuntimeCredentialError::BlankApiKey { provider, env_var }.into(),
+                );
+            }
         }
 
         Ok(())
