@@ -434,6 +434,7 @@ mod transport;
 use transport::*;
 
 mod google;
+pub mod local_model;
 mod openai;
 pub use google::GoogleEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;

@@ -186,7 +186,12 @@ pub(crate) enum Command {
         /// Reindex changed files only using persisted manifest delta.
         #[arg(long, default_value_t = false)]
         changed: bool,
+        /// Explicitly prepare local semantic model artifacts before semantic reindexing.
+        #[arg(long = "prepare-semantic-model", default_value_t = false)]
+        prepare_semantic_model: bool,
     },
+    /// Explicitly prepare local semantic model artifacts for the active semantic runtime.
+    PrepareSemanticModel,
     /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
     RepairStorage,
     /// Emit Frigg's stable cache fingerprint for installer and CI cache keys.

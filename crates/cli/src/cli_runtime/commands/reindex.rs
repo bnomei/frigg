@@ -3,15 +3,21 @@
 use std::error::Error;
 use std::io;
 
+use frigg::embeddings::local_model::prepare_local_semantic_model;
 use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
-use frigg::settings::{FriggConfig, SemanticRuntimeCredentials};
+use frigg::settings::{FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
 
 pub(crate) fn run_reindex_command(
     config: &FriggConfig,
     changed: bool,
+    prepare_semantic_model: bool,
 ) -> Result<(), Box<dyn Error>> {
+    if prepare_semantic_model {
+        prepare_reindex_semantic_model(config)?;
+    }
+
     let repositories = config.repositories();
     let mode = if changed {
         ReindexMode::ChangedOnly
@@ -118,6 +124,38 @@ pub(crate) fn run_reindex_command(
         total_walk_diagnostics,
         total_read_diagnostics,
         total_duration_ms
+    );
+    Ok(())
+}
+
+fn prepare_reindex_semantic_model(config: &FriggConfig) -> Result<(), Box<dyn Error>> {
+    if !config.semantic_runtime.enabled {
+        return Err(Box::new(io::Error::other(
+            "reindex --prepare-semantic-model requires semantic runtime to be enabled",
+        )));
+    }
+    let Some(provider) = config.semantic_runtime.provider else {
+        return Err(Box::new(io::Error::other(
+            "reindex --prepare-semantic-model requires --semantic-runtime-provider local",
+        )));
+    };
+    if provider != SemanticRuntimeProvider::Local {
+        return Err(Box::new(io::Error::other(format!(
+            "reindex --prepare-semantic-model only prepares local artifacts; active semantic provider '{}' uses external embeddings",
+            provider.as_str()
+        ))));
+    }
+
+    let artifact = prepare_local_semantic_model(&config.semantic_runtime)
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    println!(
+        "reindex semantic_model_prepare status=ok semantic_provider=local semantic_model={} cache_root={} cache_key={}",
+        artifact.semantic_model,
+        artifact.cache_root.display(),
+        artifact.cache_key
+    );
+    println!(
+        "reindex semantic_model_prepare next_step=\"semantic rows are rebuilt by this reindex; run `frigg reindex` again after future semantic provider or model changes\""
     );
     Ok(())
 }

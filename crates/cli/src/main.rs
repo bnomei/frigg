@@ -576,7 +576,10 @@ mod tests {
     #[test]
     fn utility_commands_keep_info_log_filter() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Reindex { changed: false });
+        cli.command = Some(Command::Reindex {
+            changed: false,
+            prepare_semantic_model: false,
+        });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "info"
@@ -686,8 +689,14 @@ mod tests {
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
 
-        let config = resolve_command_config(&cli, Command::Reindex { changed: true })
-            .expect("reindex command should resolve startup config");
+        let config = resolve_command_config(
+            &cli,
+            Command::Reindex {
+                changed: true,
+                prepare_semantic_model: false,
+            },
+        )
+        .expect("reindex command should resolve startup config");
         assert!(config.semantic_runtime.enabled);
         assert_eq!(
             config.semantic_runtime.provider,
@@ -696,6 +705,60 @@ mod tests {
         assert_eq!(
             config.semantic_runtime.normalized_model(),
             Some("gemini-embedding-001")
+        );
+    }
+
+    #[test]
+    fn reindex_command_resolution_parses_prepare_semantic_model_flag() {
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "frigg",
+            "--semantic-runtime-enabled",
+            "true",
+            "--semantic-runtime-provider",
+            "local",
+            "reindex",
+            "--prepare-semantic-model",
+        ])
+        .expect("reindex --prepare-semantic-model should parse");
+
+        assert_eq!(
+            cli.semantic_runtime_provider,
+            Some(SemanticRuntimeProvider::Local)
+        );
+        assert!(matches!(
+            cli.command,
+            Some(Command::Reindex {
+                changed: false,
+                prepare_semantic_model: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn prepare_semantic_model_command_parses_and_uses_semantic_runtime_config() {
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "frigg",
+            "--workspace-root",
+            ".",
+            "--semantic-runtime-enabled",
+            "true",
+            "--semantic-runtime-provider",
+            "local",
+            "prepare-semantic-model",
+        ])
+        .expect("prepare-semantic-model should parse");
+
+        assert!(matches!(cli.command, Some(Command::PrepareSemanticModel)));
+        let config = resolve_command_config(&cli, Command::PrepareSemanticModel)
+            .expect("prepare-semantic-model should resolve command config");
+        assert!(config.semantic_runtime.enabled);
+        assert_eq!(
+            config.semantic_runtime.provider,
+            Some(SemanticRuntimeProvider::Local)
+        );
+        assert_eq!(
+            config.semantic_runtime.normalized_model(),
+            Some("all-MiniLM-L6-v2")
         );
     }
 
@@ -830,8 +893,14 @@ mod tests {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
 
-        let config = resolve_command_config(&cli, Command::Reindex { changed: true })
-            .expect("reindex command should default to the current directory");
+        let config = resolve_command_config(
+            &cli,
+            Command::Reindex {
+                changed: true,
+                prepare_semantic_model: false,
+            },
+        )
+        .expect("reindex command should default to the current directory");
         assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
     }
 
@@ -1191,9 +1260,9 @@ mod tests {
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_reindex_command(&config, false)
+        run_reindex_command(&config, false, false)
             .expect("full reindex should succeed for a simple workspace");
-        run_reindex_command(&config, true)
+        run_reindex_command(&config, true, false)
             .expect("changed-only reindex should succeed for a simple workspace");
 
         cleanup_workspace(&workspace_root);

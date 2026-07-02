@@ -5,6 +5,7 @@ mod hash;
 #[allow(dead_code)]
 mod hook;
 mod playbooks;
+mod prepare_semantic_model;
 mod reindex;
 mod storage;
 mod workload_corpus;
@@ -12,6 +13,7 @@ mod workload_corpus;
 pub(crate) use adopt::run_adopt_command;
 pub(crate) use hash::run_hash_command;
 pub(crate) use playbooks::run_hybrid_playbook_command;
+pub(crate) use prepare_semantic_model::run_prepare_semantic_model_command;
 pub(crate) use reindex::run_reindex_command;
 pub(crate) use storage::{
     StorageBootstrapCommand, StorageMaintenanceCommand, run_storage_bootstrap_command,
