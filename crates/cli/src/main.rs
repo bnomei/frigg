@@ -488,6 +488,37 @@ mod tests {
     }
 
     #[test]
+    fn semantic_runtime_readme_documents_local_provider_contract() {
+        let readme = include_str!("../../../README.md");
+
+        assert!(readme.contains(
+            "| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai`, `google`, or `local`. |"
+        ));
+        assert!(readme.contains("export FRIGG_SEMANTIC_RUNTIME_PROVIDER=local"));
+        assert!(readme.contains("`local` -> `all-MiniLM-L6-v2`"));
+        assert!(readme.contains("frigg prepare-semantic-model"));
+        assert!(readme.contains("frigg reindex --prepare-semantic-model"));
+        assert!(readme.contains(
+            "`frigg serve` does not download or mutate local model artifacts implicitly"
+        ));
+        assert!(readme.contains("After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass"));
+        assert!(readme.contains("strict mode surfaces the semantic failure as an error"));
+
+        let zero_cloud_claims = readme.matches("Zero-cloud semantic").count()
+            + readme.matches("zero-cloud semantic").count();
+        assert_eq!(
+            zero_cloud_claims, 1,
+            "README zero-cloud semantic claims should stay scoped and singular"
+        );
+        assert!(readme.contains("Zero-cloud semantic behavior applies only when `provider=local`"));
+        assert!(
+            readme.contains(
+                "OpenAI and Google semantic providers call their external embedding APIs"
+            )
+        );
+    }
+
+    #[test]
     fn watch_runtime_defaults_to_off_for_stdio_with_standard_timers() {
         let cli = base_cli();
         let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));

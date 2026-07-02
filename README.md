@@ -315,13 +315,36 @@ export FRIGG_SEMANTIC_RUNTIME_PROVIDER=google
 export GEMINI_API_KEY=<API_KEY>
 ```
 
+Local:
+
+```bash
+export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+export FRIGG_SEMANTIC_RUNTIME_PROVIDER=local
+```
+
+The local provider runs embeddings on this machine with the default model `all-MiniLM-L6-v2`. Zero-cloud semantic behavior applies only when `provider=local`; OpenAI and Google semantic providers call their external embedding APIs.
+
 Optional model override:
 
 ```bash
 export FRIGG_SEMANTIC_RUNTIME_MODEL=text-embedding-3-small
 ```
 
-After enabling semantic search for an existing repository, run one reindex pass:
+For the local provider, prepare model artifacts explicitly before serving or semantic reindexing:
+
+```bash
+frigg prepare-semantic-model
+```
+
+You can also prepare the active local semantic model as part of an explicit reindex:
+
+```bash
+frigg reindex --prepare-semantic-model
+```
+
+`frigg serve` does not download or mutate local model artifacts implicitly. If local artifacts are missing, corrupt, or unavailable, non-strict semantic mode degrades to lexical/path/graph retrieval and reports semantic degradation metadata; strict mode surfaces the semantic failure as an error.
+
+After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass:
 
 ```bash
 frigg reindex
@@ -331,6 +354,7 @@ Provider defaults:
 
 - `openai` -> `text-embedding-3-small`
 - `google` -> `gemini-embedding-001`
+- `local` -> `all-MiniLM-L6-v2`
 
 ## Optional SCIP Artifacts
 
@@ -441,7 +465,7 @@ Precedence is `CLI flag > env var > default`.
 | `--ripgrep-executable` / `FRIGG_RIPGREP_EXECUTABLE` | unset | Path to an `rg` executable used when the ripgrep backend is selected. |
 | `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP tool surface profile: `extended` or `core`. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enables optional semantic retrieval. |
-| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai` or `google`. |
+| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Optional embedding model override. |
 | `--semantic-runtime-strict-mode` / `FRIGG_SEMANTIC_RUNTIME_STRICT_MODE` | `false` | Converts semantic provider failures into user-visible errors instead of graceful fallback. |
 
