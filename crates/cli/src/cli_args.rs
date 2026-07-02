@@ -242,6 +242,15 @@ pub(crate) enum Command {
         )]
         limit: usize,
     },
+    /// Summarize local context-efficiency JSONL logs for configured workspace roots.
+    Context {
+        /// Start timestamp as RFC3339 or YYYY-MM-DD. Defaults to 30 days before --until or now.
+        #[arg(long, value_name = "DATE_OR_RFC3339")]
+        since: Option<String>,
+        /// End timestamp as RFC3339 or YYYY-MM-DD. Defaults to now.
+        #[arg(long, value_name = "DATE_OR_RFC3339")]
+        until: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

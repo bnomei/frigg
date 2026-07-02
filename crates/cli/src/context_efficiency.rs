@@ -2,18 +2,20 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs::OpenOptions;
-use std::io::{self, Write};
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
-use chrono::Utc;
-use serde::Serialize;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::storage::RepositoryManifestMetadataSnapshot;
 
 pub(crate) const CONTEXT_EFFICIENCY_LOG_ENV: &str = "FRIGG_CONTEXT_EFFICIENCY_LOG";
 const MANIFEST_METADATA_CACHE_LIMIT: usize = 64;
+const JSONL_SUMMARY_CACHE_LIMIT: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ManifestMetadataCacheKey {
@@ -179,7 +181,7 @@ pub(crate) fn need_context_efficiency_with_log_state(
     include_context_efficiency == Some(true) || context_efficiency_log_enabled
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogMetrics {
     pub(crate) indexed_readable_files: usize,
     pub(crate) indexed_readable_bytes: u64,
@@ -203,7 +205,7 @@ pub(crate) struct ContextEfficiencyLogMetrics {
     pub(crate) narrowing_ratio_estimate: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogRow {
     pub(crate) timestamp: String,
     pub(crate) tool: String,
@@ -212,6 +214,255 @@ pub(crate) struct ContextEfficiencyLogRow {
     pub(crate) snapshot_id: Option<String>,
     #[serde(flatten)]
     pub(crate) metrics: ContextEfficiencyLogMetrics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextSummaryWindow {
+    pub date_since: DateTime<Utc>,
+    pub date_until: DateTime<Utc>,
+}
+
+impl ContextSummaryWindow {
+    pub fn resolve(
+        since: Option<&str>,
+        until: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<Self, ContextSummaryError> {
+        let parsed_since = since
+            .map(parse_context_summary_datetime)
+            .transpose()
+            .map_err(ContextSummaryError::InvalidDate)?;
+        let parsed_until = until
+            .map(parse_context_summary_datetime)
+            .transpose()
+            .map_err(ContextSummaryError::InvalidDate)?;
+
+        let (date_since, date_until) = match (parsed_since, parsed_until) {
+            (Some(date_since), Some(date_until)) => (date_since, date_until),
+            (Some(date_since), None) => (date_since, now),
+            (None, Some(date_until)) => (date_until - Duration::days(30), date_until),
+            (None, None) => (now - Duration::days(30), now),
+        };
+
+        if date_since > date_until {
+            return Err(ContextSummaryError::InvalidDate(format!(
+                "date_since must be before or equal to date_until: {} > {}",
+                date_since.to_rfc3339(),
+                date_until.to_rfc3339()
+            )));
+        }
+
+        Ok(Self {
+            date_since,
+            date_until,
+        })
+    }
+
+    fn since_key(&self) -> String {
+        self.date_since.to_rfc3339()
+    }
+
+    fn until_key(&self) -> String {
+        self.date_until.to_rfc3339()
+    }
+}
+
+#[derive(Debug)]
+pub enum ContextSummaryError {
+    InvalidDate(String),
+    Io(io::Error),
+    Json(serde_json::Error),
+}
+
+impl std::fmt::Display for ContextSummaryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidDate(message) => formatter.write_str(message),
+            Self::Io(error) => error.fmt(formatter),
+            Self::Json(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ContextSummaryError {}
+
+impl From<io::Error> for ContextSummaryError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<serde_json::Error> for ContextSummaryError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ContextLogAggregate {
+    pub events: usize,
+    pub indexed_readable_files_max: usize,
+    pub indexed_readable_bytes_max: u64,
+    pub candidate_input_count: u64,
+    pub candidate_output_count: u64,
+    pub returned_match_count: u64,
+    pub returned_unique_paths: u64,
+    pub returned_unique_file_bytes: u64,
+    pub returned_source_bytes_estimate: u64,
+}
+
+impl ContextLogAggregate {
+    fn add_row(&mut self, row: &ContextEfficiencyLogRow) {
+        self.events = self.events.saturating_add(1);
+        self.indexed_readable_files_max = self
+            .indexed_readable_files_max
+            .max(row.metrics.indexed_readable_files);
+        self.indexed_readable_bytes_max = self
+            .indexed_readable_bytes_max
+            .max(row.metrics.indexed_readable_bytes);
+        self.candidate_input_count = self
+            .candidate_input_count
+            .saturating_add(row.metrics.candidate_input_count.unwrap_or_default() as u64);
+        self.candidate_output_count = self
+            .candidate_output_count
+            .saturating_add(row.metrics.candidate_output_count.unwrap_or_default() as u64);
+        self.returned_match_count = self
+            .returned_match_count
+            .saturating_add(row.metrics.returned_match_count.unwrap_or_default() as u64);
+        self.returned_unique_paths = self
+            .returned_unique_paths
+            .saturating_add(row.metrics.returned_unique_paths.unwrap_or_default() as u64);
+        self.returned_unique_file_bytes = self
+            .returned_unique_file_bytes
+            .saturating_add(row.metrics.returned_unique_file_bytes.unwrap_or_default());
+        self.returned_source_bytes_estimate = self.returned_source_bytes_estimate.saturating_add(
+            row.metrics
+                .returned_source_bytes_estimate
+                .unwrap_or_default(),
+        );
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.events = self.events.saturating_add(other.events);
+        self.indexed_readable_files_max = self
+            .indexed_readable_files_max
+            .max(other.indexed_readable_files_max);
+        self.indexed_readable_bytes_max = self
+            .indexed_readable_bytes_max
+            .max(other.indexed_readable_bytes_max);
+        self.candidate_input_count = self
+            .candidate_input_count
+            .saturating_add(other.candidate_input_count);
+        self.candidate_output_count = self
+            .candidate_output_count
+            .saturating_add(other.candidate_output_count);
+        self.returned_match_count = self
+            .returned_match_count
+            .saturating_add(other.returned_match_count);
+        self.returned_unique_paths = self
+            .returned_unique_paths
+            .saturating_add(other.returned_unique_paths);
+        self.returned_unique_file_bytes = self
+            .returned_unique_file_bytes
+            .saturating_add(other.returned_unique_file_bytes);
+        self.returned_source_bytes_estimate = self
+            .returned_source_bytes_estimate
+            .saturating_add(other.returned_source_bytes_estimate);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextLogRootSummary {
+    pub root: String,
+    pub context_log: String,
+    pub exists: bool,
+    pub repositories: Vec<String>,
+    pub tools: BTreeMap<String, usize>,
+    #[serde(flatten)]
+    pub aggregate: ContextLogAggregate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextLogSummary {
+    pub date_since: String,
+    pub date_until: String,
+    pub roots: Vec<ContextLogRootSummary>,
+    pub totals: ContextLogAggregate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextLogFileSummary {
+    exists: bool,
+    repositories: BTreeSet<String>,
+    tools: BTreeMap<String, usize>,
+    aggregate: ContextLogAggregate,
+}
+
+impl Default for ContextLogFileSummary {
+    fn default() -> Self {
+        Self {
+            exists: false,
+            repositories: BTreeSet::new(),
+            tools: BTreeMap::new(),
+            aggregate: ContextLogAggregate::default(),
+        }
+    }
+}
+
+impl ContextLogFileSummary {
+    fn into_root_summary(self, root: &Path, context_log: &Path) -> ContextLogRootSummary {
+        ContextLogRootSummary {
+            root: root.display().to_string(),
+            context_log: context_log.display().to_string(),
+            exists: self.exists,
+            repositories: self.repositories.into_iter().collect(),
+            tools: self.tools,
+            aggregate: self.aggregate,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct JsonlSummaryCacheKey {
+    context_log: PathBuf,
+    size_bytes: u64,
+    modified_ns: u128,
+    date_since: String,
+    date_until: String,
+}
+
+#[derive(Debug, Default)]
+struct JsonlSummaryCache {
+    insertion_order: VecDeque<JsonlSummaryCacheKey>,
+    entries: BTreeMap<JsonlSummaryCacheKey, ContextLogFileSummary>,
+}
+
+impl JsonlSummaryCache {
+    fn get(&self, key: &JsonlSummaryCacheKey) -> Option<ContextLogFileSummary> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: JsonlSummaryCacheKey, value: ContextLogFileSummary) {
+        if self.entries.contains_key(&key) {
+            self.entries.insert(key, value);
+            return;
+        }
+
+        self.insertion_order.push_back(key.clone());
+        self.entries.insert(key, value);
+        while self.entries.len() > JSONL_SUMMARY_CACHE_LIMIT {
+            let Some(oldest_key) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest_key);
+        }
+    }
+}
+
+static JSONL_SUMMARY_CACHE: OnceLock<Mutex<JsonlSummaryCache>> = OnceLock::new();
+
+fn jsonl_summary_cache() -> &'static Mutex<JsonlSummaryCache> {
+    JSONL_SUMMARY_CACHE.get_or_init(|| Mutex::new(JsonlSummaryCache::default()))
 }
 
 impl ContextEfficiencyLogRow {
@@ -258,6 +509,122 @@ pub(crate) fn append_context_efficiency_log_row(
     Ok(())
 }
 
+pub fn summarize_context_logs_for_roots(
+    roots: &[PathBuf],
+    window: &ContextSummaryWindow,
+) -> Result<ContextLogSummary, ContextSummaryError> {
+    let mut root_summaries = Vec::new();
+    let mut totals = ContextLogAggregate::default();
+
+    for root in roots {
+        let context_log = root.join(".frigg/context.jsonl");
+        let file_summary = summarize_context_log_file(&context_log, window)?;
+        totals.merge(&file_summary.aggregate);
+        root_summaries.push(file_summary.into_root_summary(root, &context_log));
+    }
+
+    Ok(ContextLogSummary {
+        date_since: window.since_key(),
+        date_until: window.until_key(),
+        roots: root_summaries,
+        totals,
+    })
+}
+
+fn summarize_context_log_file(
+    context_log: &Path,
+    window: &ContextSummaryWindow,
+) -> Result<ContextLogFileSummary, ContextSummaryError> {
+    let metadata = match std::fs::metadata(context_log) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(ContextLogFileSummary::default());
+        }
+        Err(error) => return Err(ContextSummaryError::Io(error)),
+    };
+
+    let key = JsonlSummaryCacheKey {
+        context_log: canonical_context_log_path(context_log),
+        size_bytes: metadata.len(),
+        modified_ns: metadata_modified_ns(&metadata),
+        date_since: window.since_key(),
+        date_until: window.until_key(),
+    };
+    if let Some(summary) = jsonl_summary_cache()
+        .lock()
+        .expect("context-efficiency jsonl summary cache mutex poisoned")
+        .get(&key)
+    {
+        return Ok(summary);
+    }
+
+    let summary = read_context_log_file_summary(context_log, window)?;
+    jsonl_summary_cache()
+        .lock()
+        .expect("context-efficiency jsonl summary cache mutex poisoned")
+        .insert(key, summary.clone());
+    Ok(summary)
+}
+
+fn read_context_log_file_summary(
+    context_log: &Path,
+    window: &ContextSummaryWindow,
+) -> Result<ContextLogFileSummary, ContextSummaryError> {
+    let file = File::open(context_log)?;
+    let mut summary = ContextLogFileSummary {
+        exists: true,
+        ..ContextLogFileSummary::default()
+    };
+
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: ContextEfficiencyLogRow = serde_json::from_str(&line)?;
+        let Ok(timestamp) = DateTime::parse_from_rfc3339(&row.timestamp) else {
+            continue;
+        };
+        let timestamp = timestamp.with_timezone(&Utc);
+        if timestamp < window.date_since || timestamp > window.date_until {
+            continue;
+        }
+
+        summary.repositories.insert(row.repository_id.clone());
+        *summary.tools.entry(row.tool.clone()).or_default() += 1;
+        summary.aggregate.add_row(&row);
+    }
+
+    Ok(summary)
+}
+
+fn parse_context_summary_datetime(input: &str) -> Result<DateTime<Utc>, String> {
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(input) {
+        return Ok(timestamp.with_timezone(&Utc));
+    }
+
+    let date = NaiveDate::parse_from_str(input, "%Y-%m-%d")
+        .map_err(|_| format!("expected RFC3339 timestamp or YYYY-MM-DD date, got {input:?}"))?;
+    let datetime = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| format!("invalid date: {input:?}"))?;
+    Ok(DateTime::from_naive_utc_and_offset(datetime, Utc))
+}
+
+fn canonical_context_log_path(context_log: &Path) -> PathBuf {
+    context_log
+        .canonicalize()
+        .unwrap_or_else(|_| context_log.to_path_buf())
+}
+
+fn metadata_modified_ns(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos())
+}
+
 #[cfg(test)]
 pub(crate) fn clear_manifest_metadata_cache_for_tests() {
     let mut cache = manifest_metadata_cache()
@@ -276,9 +643,35 @@ pub(crate) fn manifest_metadata_cache_entry_count_for_tests() -> usize {
 }
 
 #[cfg(test)]
+pub(crate) fn clear_jsonl_summary_cache_for_tests() {
+    let mut cache = jsonl_summary_cache()
+        .lock()
+        .expect("context-efficiency jsonl summary cache mutex poisoned");
+    *cache = JsonlSummaryCache::default();
+}
+
+#[cfg(test)]
+pub(crate) fn jsonl_summary_cache_entry_count_for_tests() -> usize {
+    jsonl_summary_cache()
+        .lock()
+        .expect("context-efficiency jsonl summary cache mutex poisoned")
+        .entries
+        .len()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::{ManifestMetadataEntry, RepositoryManifestMetadataSnapshot};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn context_efficiency_test_lock() -> MutexGuard<'static, ()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("context-efficiency test mutex poisoned")
+    }
 
     #[test]
     fn context_efficiency_guard_requires_response_flag_or_env_log() {
@@ -445,6 +838,248 @@ mod tests {
         assert!(value.get("query").is_none());
         assert!(value.get("content").is_none());
         assert!(value.get("excerpt").is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_summary_window_defaults_to_last_30_days() {
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+
+        let window =
+            ContextSummaryWindow::resolve(None, None, now).expect("default window should resolve");
+
+        assert_eq!(window.date_since.to_rfc3339(), "2026-06-02T12:00:00+00:00");
+        assert_eq!(window.date_until.to_rfc3339(), "2026-07-02T12:00:00+00:00");
+    }
+
+    #[test]
+    fn context_efficiency_summary_window_accepts_date_and_rfc3339_bounds() {
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+
+        let until_only = ContextSummaryWindow::resolve(None, Some("2026-07-01T12:00:00Z"), now)
+            .expect("until-only window should resolve");
+        assert_eq!(
+            until_only.date_since.to_rfc3339(),
+            "2026-06-01T12:00:00+00:00"
+        );
+        assert_eq!(
+            until_only.date_until.to_rfc3339(),
+            "2026-07-01T12:00:00+00:00"
+        );
+
+        let since_only = ContextSummaryWindow::resolve(Some("2026-06-01"), None, now)
+            .expect("since-only window should resolve");
+        assert_eq!(
+            since_only.date_since.to_rfc3339(),
+            "2026-06-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            since_only.date_until.to_rfc3339(),
+            "2026-07-02T12:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn context_efficiency_summary_missing_log_returns_empty_summary() {
+        let _guard = context_efficiency_test_lock();
+        clear_jsonl_summary_cache_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-summary-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root should be created");
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
+            .expect("window should resolve");
+
+        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+            .expect("missing context log should summarize");
+
+        assert_eq!(summary.date_since, "2026-06-01T00:00:00+00:00");
+        assert_eq!(summary.date_until, "2026-07-01T00:00:00+00:00");
+        assert_eq!(summary.roots.len(), 1);
+        assert!(!summary.roots[0].exists);
+        assert_eq!(summary.totals.events, 0);
+        assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_summary_aggregates_filtered_jsonl_without_raw_rows() {
+        let _guard = context_efficiency_test_lock();
+        clear_jsonl_summary_cache_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-summary-filtered-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let frigg_dir = root.join(".frigg");
+        std::fs::create_dir_all(&frigg_dir).expect("frigg dir should be created");
+        let log_path = frigg_dir.join("context.jsonl");
+
+        let rows = [
+            ContextEfficiencyLogRow {
+                timestamp: "2026-05-31T23:59:59Z".to_owned(),
+                tool: "search_text".to_owned(),
+                repository_id: "repo-1".to_owned(),
+                snapshot_id: Some("snapshot-1".to_owned()),
+                metrics: ContextEfficiencyLogMetrics {
+                    indexed_readable_files: 100,
+                    indexed_readable_bytes: 1000,
+                    indexed_min_mtime_ns: None,
+                    indexed_max_mtime_ns: None,
+                    candidate_input_count: Some(100),
+                    candidate_output_count: Some(10),
+                    returned_match_count: Some(10),
+                    returned_unique_paths: Some(4),
+                    returned_unique_file_bytes: Some(400),
+                    returned_source_bytes_estimate: Some(40),
+                    narrowing_ratio_estimate: Some(25.0),
+                },
+            },
+            ContextEfficiencyLogRow {
+                timestamp: "2026-06-10T00:00:00Z".to_owned(),
+                tool: "search_text".to_owned(),
+                repository_id: "repo-1".to_owned(),
+                snapshot_id: Some("snapshot-2".to_owned()),
+                metrics: ContextEfficiencyLogMetrics {
+                    indexed_readable_files: 120,
+                    indexed_readable_bytes: 1200,
+                    indexed_min_mtime_ns: None,
+                    indexed_max_mtime_ns: None,
+                    candidate_input_count: Some(50),
+                    candidate_output_count: Some(5),
+                    returned_match_count: Some(5),
+                    returned_unique_paths: Some(2),
+                    returned_unique_file_bytes: Some(200),
+                    returned_source_bytes_estimate: Some(20),
+                    narrowing_ratio_estimate: Some(60.0),
+                },
+            },
+            ContextEfficiencyLogRow {
+                timestamp: "2026-06-11T00:00:00Z".to_owned(),
+                tool: "read_file".to_owned(),
+                repository_id: "repo-1".to_owned(),
+                snapshot_id: Some("snapshot-2".to_owned()),
+                metrics: ContextEfficiencyLogMetrics {
+                    indexed_readable_files: 120,
+                    indexed_readable_bytes: 1200,
+                    indexed_min_mtime_ns: None,
+                    indexed_max_mtime_ns: None,
+                    candidate_input_count: None,
+                    candidate_output_count: None,
+                    returned_match_count: None,
+                    returned_unique_paths: Some(1),
+                    returned_unique_file_bytes: Some(80),
+                    returned_source_bytes_estimate: Some(12),
+                    narrowing_ratio_estimate: Some(100.0),
+                },
+            },
+        ];
+        let mut encoded = String::new();
+        for row in rows {
+            encoded.push_str(&serde_json::to_string(&row).expect("row should serialize"));
+            encoded.push('\n');
+        }
+        std::fs::write(&log_path, encoded).expect("log should be written");
+
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
+            .expect("window should resolve");
+        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+            .expect("context log should summarize");
+
+        assert_eq!(summary.totals.events, 2);
+        assert_eq!(summary.totals.indexed_readable_files_max, 120);
+        assert_eq!(summary.totals.indexed_readable_bytes_max, 1200);
+        assert_eq!(summary.totals.candidate_input_count, 50);
+        assert_eq!(summary.totals.returned_unique_file_bytes, 280);
+        assert_eq!(summary.roots[0].repositories, vec!["repo-1".to_owned()]);
+        assert_eq!(summary.roots[0].tools["search_text"], 1);
+        assert_eq!(summary.roots[0].tools["read_file"], 1);
+
+        let value = serde_json::to_value(&summary).expect("summary should serialize");
+        assert!(value.get("window").is_none());
+        let serialized = serde_json::to_string(&value).expect("summary should serialize");
+        assert!(!serialized.contains("2026-06-10T00:00:00Z"));
+        assert!(!serialized.contains("snapshot-2"));
+        assert!(!serialized.contains("narrowing_ratio_estimate"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_jsonl_summary_cache_keys_file_metadata_and_window() {
+        let _guard = context_efficiency_test_lock();
+        clear_jsonl_summary_cache_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-summary-cache-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".frigg")).expect("frigg dir should be created");
+        let log_path = root.join(".frigg/context.jsonl");
+        let row = ContextEfficiencyLogRow {
+            timestamp: "2026-06-10T00:00:00Z".to_owned(),
+            tool: "search_text".to_owned(),
+            repository_id: "repo-1".to_owned(),
+            snapshot_id: Some("snapshot-1".to_owned()),
+            metrics: ContextEfficiencyLogMetrics {
+                indexed_readable_files: 1,
+                indexed_readable_bytes: 10,
+                indexed_min_mtime_ns: None,
+                indexed_max_mtime_ns: None,
+                candidate_input_count: Some(1),
+                candidate_output_count: Some(1),
+                returned_match_count: Some(1),
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes: Some(10),
+                returned_source_bytes_estimate: Some(5),
+                narrowing_ratio_estimate: Some(2.0),
+            },
+        };
+        std::fs::write(
+            &log_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&row).expect("row should serialize")
+            ),
+        )
+        .expect("log should be written");
+
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let first_window =
+            ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
+                .expect("first window should resolve");
+        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+            .expect("first summary should load");
+        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+            .expect("second summary should use cache");
+        assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 1);
+
+        let second_window =
+            ContextSummaryWindow::resolve(Some("2026-06-02"), Some("2026-07-01"), now)
+                .expect("second window should resolve");
+        summarize_context_logs_for_roots(&[root.clone()], &second_window)
+            .expect("changed window should load");
+        assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 2);
+
+        std::fs::write(&log_path, "").expect("log should be truncated");
+        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+            .expect("changed file size should load");
+        assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 3);
 
         let _ = std::fs::remove_dir_all(root);
     }

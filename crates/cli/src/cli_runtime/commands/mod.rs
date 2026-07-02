@@ -1,6 +1,7 @@
 //! CLI command handlers for storage bootstrap, reindex, playbooks, and workload corpus export.
 
 mod adopt;
+mod context;
 mod hash;
 #[allow(dead_code)]
 mod hook;
@@ -11,6 +12,7 @@ mod storage;
 mod workload_corpus;
 
 pub(crate) use adopt::run_adopt_command;
+pub(crate) use context::run_context_summary_command;
 pub(crate) use hash::run_hash_command;
 pub(crate) use playbooks::run_hybrid_playbook_command;
 pub(crate) use prepare_semantic_model::run_prepare_semantic_model_command;

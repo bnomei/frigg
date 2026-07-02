@@ -11,7 +11,7 @@
 /// Canonical agent directive text and rendering helpers reused across MCP, hooks, and docs checks.
 pub mod agent_directive;
 /// Shared context-efficiency contracts, guards, and process-local summary caches.
-pub(crate) mod context_efficiency;
+pub mod context_efficiency;
 /// Shared domain vocabulary reused across indexing, retrieval, provenance, and MCP responses so
 /// each layer can exchange the same evidence model without translation glue.
 pub mod domain;
