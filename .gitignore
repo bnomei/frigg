@@ -30,3 +30,5 @@ specs
 .env
 .DS_Store
 /var
+.orchid
+.devana
