@@ -1,6 +1,7 @@
 //! Regression tests for manifest upsert/load roundtrips, snapshot isolation, and retrieval projection persistence.
 
 use super::support::*;
+use crate::context_efficiency::clear_manifest_metadata_cache_for_tests;
 use std::collections::BTreeMap;
 
 #[test]
@@ -123,6 +124,88 @@ fn manifest_load_latest_for_repository_prefers_newer_snapshot() -> FriggResult<(
     );
 
     cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn context_efficiency_manifest_summary_uses_latest_manifest_metadata() -> FriggResult<()> {
+    clear_manifest_metadata_cache_for_tests();
+    let db_path = temp_db_path("context-efficiency-manifest-summary");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/old.rs", "hash-old", 1, Some(10))],
+    )?;
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-002",
+        &[
+            manifest_entry("src/a.rs", "hash-a", 10, Some(300)),
+            manifest_entry("src/b.rs", "hash-b", 25, Some(100)),
+            manifest_entry("README.md", "hash-readme", 5, None),
+        ],
+    )?;
+
+    let summary = storage
+        .load_latest_context_efficiency_manifest_summary_for_repository("repo-1")?
+        .expect("expected latest context-efficiency manifest summary");
+
+    assert_eq!(summary.repository_id, "repo-1");
+    assert_eq!(summary.snapshot_id, "snapshot-002");
+    assert_eq!(summary.indexed_readable_files, 3);
+    assert_eq!(summary.indexed_readable_bytes, 40);
+    assert_eq!(summary.min_mtime_ns, Some(100));
+    assert_eq!(summary.max_mtime_ns, Some(300));
+    assert_eq!(
+        summary.returned_unique_file_bytes(["src/a.rs", "src/a.rs", "README.md"]),
+        15
+    );
+
+    cleanup_db(&db_path);
+    clear_manifest_metadata_cache_for_tests();
+    Ok(())
+}
+
+#[test]
+fn context_efficiency_manifest_summary_cache_invalidates_by_latest_snapshot_id() -> FriggResult<()>
+{
+    clear_manifest_metadata_cache_for_tests();
+    let db_path = temp_db_path("context-efficiency-manifest-cache-snapshot");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-001",
+        &[manifest_entry("src/a.rs", "hash-a1", 10, Some(100))],
+    )?;
+    let first = storage
+        .load_latest_context_efficiency_manifest_summary_for_repository("repo-1")?
+        .expect("expected first manifest summary");
+    assert_eq!(first.snapshot_id, "snapshot-001");
+    assert_eq!(first.indexed_readable_bytes, 10);
+
+    storage.upsert_manifest(
+        "repo-1",
+        "snapshot-002",
+        &[
+            manifest_entry("src/a.rs", "hash-a2", 11, Some(110)),
+            manifest_entry("src/b.rs", "hash-b2", 22, Some(220)),
+        ],
+    )?;
+    let second = storage
+        .load_latest_context_efficiency_manifest_summary_for_repository("repo-1")?
+        .expect("expected second manifest summary");
+
+    assert_eq!(second.snapshot_id, "snapshot-002");
+    assert_eq!(second.indexed_readable_files, 2);
+    assert_eq!(second.indexed_readable_bytes, 33);
+
+    cleanup_db(&db_path);
+    clear_manifest_metadata_cache_for_tests();
     Ok(())
 }
 

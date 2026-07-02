@@ -272,6 +272,82 @@ pub(super) fn load_manifest_entries_for_snapshot(
     })
 }
 
+#[allow(dead_code)]
+pub(super) fn load_manifest_metadata_entries_for_snapshot(
+    conn: &Connection,
+    snapshot_id: &str,
+) -> FriggResult<Vec<ManifestMetadataEntry>> {
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT path, size_bytes, mtime_ns
+            FROM file_manifest
+            WHERE snapshot_id = ?1
+            ORDER BY path ASC
+            "#,
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to prepare manifest metadata load query for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+    let rows = statement
+        .query_map([snapshot_id], |row| {
+            let size_bytes_raw: i64 = row.get(1)?;
+            let mtime_ns_raw: Option<i64> = row.get(2)?;
+            Ok(ManifestMetadataEntry {
+                path: row.get(0)?,
+                size_bytes: i64_to_u64(size_bytes_raw, "size_bytes")?,
+                mtime_ns: option_i64_to_option_u64(mtime_ns_raw, "mtime_ns")?,
+            })
+        })
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to query manifest metadata rows for snapshot '{snapshot_id}': {err}"
+            ))
+        })?;
+
+    rows.collect::<Result<Vec<_>, _>>().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to decode manifest metadata rows for snapshot '{snapshot_id}': {err}"
+        ))
+    })
+}
+
+#[allow(dead_code)]
+pub(super) fn load_latest_manifest_snapshot_id_for_repository(
+    conn: &Connection,
+    repository_id: &str,
+) -> FriggResult<Option<String>> {
+    load_latest_snapshot_id_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)
+}
+
+#[allow(dead_code)]
+pub(super) fn load_latest_snapshot_id_for_repository_and_kind(
+    conn: &Connection,
+    repository_id: &str,
+    kind: &str,
+) -> FriggResult<Option<String>> {
+    conn.query_row(
+        r#"
+        SELECT snapshot_id
+        FROM snapshot
+        WHERE repository_id = ?1 AND kind = ?2
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+        "#,
+        (repository_id, kind),
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to query latest snapshot id for repository '{repository_id}' and kind '{kind}': {err}"
+        ))
+    })
+}
+
 pub(super) fn load_latest_manifest_snapshot_for_repository(
     conn: &Connection,
     repository_id: &str,

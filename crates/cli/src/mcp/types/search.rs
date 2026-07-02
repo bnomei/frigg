@@ -169,6 +169,38 @@ pub struct SearchTextMetadata {
     pub lexical_backend_note: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ContextEfficiencyMetadata {
+    pub indexed_readable_files: usize,
+    pub indexed_readable_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_min_mtime_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_max_mtime_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_input_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_output_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_match_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_unique_paths: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_unique_file_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_source_bytes_estimate: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowing_ratio_estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_attribution: Option<ContextEfficiencyStageAttribution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ContextEfficiencyStageAttribution {
+    pub candidate_input_count: usize,
+    pub candidate_output_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridChannelWeightsParams {
     pub lexical: Option<f32>,
@@ -514,5 +546,74 @@ impl SearchSymbolPathClass {
             Self::Project => "project",
             Self::Support => "support",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn context_efficiency_metadata_omits_unknown_optional_fields() {
+        let value = serde_json::to_value(ContextEfficiencyMetadata {
+            indexed_readable_files: 3,
+            indexed_readable_bytes: 120,
+            indexed_min_mtime_ns: None,
+            indexed_max_mtime_ns: None,
+            candidate_input_count: None,
+            candidate_output_count: None,
+            returned_match_count: Some(2),
+            returned_unique_paths: Some(1),
+            returned_unique_file_bytes: Some(80),
+            returned_source_bytes_estimate: Some(20),
+            narrowing_ratio_estimate: Some(6.0),
+            stage_attribution: None,
+        })
+        .expect("context-efficiency metadata should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "indexed_readable_files": 3,
+                "indexed_readable_bytes": 120,
+                "returned_match_count": 2,
+                "returned_unique_paths": 1,
+                "returned_unique_file_bytes": 80,
+                "returned_source_bytes_estimate": 20,
+                "narrowing_ratio_estimate": 6.0
+            })
+        );
+    }
+
+    #[test]
+    fn context_efficiency_stage_attribution_is_typed() {
+        let value = serde_json::to_value(ContextEfficiencyMetadata {
+            indexed_readable_files: 1,
+            indexed_readable_bytes: 10,
+            indexed_min_mtime_ns: Some(100),
+            indexed_max_mtime_ns: Some(200),
+            candidate_input_count: Some(8),
+            candidate_output_count: Some(3),
+            returned_match_count: None,
+            returned_unique_paths: None,
+            returned_unique_file_bytes: None,
+            returned_source_bytes_estimate: None,
+            narrowing_ratio_estimate: None,
+            stage_attribution: Some(ContextEfficiencyStageAttribution {
+                candidate_input_count: 8,
+                candidate_output_count: 3,
+            }),
+        })
+        .expect("context-efficiency metadata should serialize");
+
+        assert_eq!(
+            value["stage_attribution"]["candidate_input_count"],
+            json!(8)
+        );
+        assert_eq!(
+            value["stage_attribution"]["candidate_output_count"],
+            json!(3)
+        );
     }
 }

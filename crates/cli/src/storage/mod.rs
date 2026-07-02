@@ -27,7 +27,8 @@ use db_runtime::set_schema_version;
 use db_runtime::{
     apply_migration, count_provenance_events, count_snapshots_for_repository_and_kind, i64_to_u64,
     latest_schema_version, load_latest_manifest_metadata_snapshot_for_repository,
-    load_latest_manifest_snapshot_for_repository, load_manifest_entries_for_snapshot,
+    load_latest_manifest_snapshot_for_repository, load_latest_manifest_snapshot_id_for_repository,
+    load_manifest_entries_for_snapshot, load_manifest_metadata_entries_for_snapshot,
     load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
     open_connection, option_u64_to_option_i64, prune_provenance_events_on_connection,
     read_schema_version, run_repository_roundtrip_probe, table_exists, u64_to_i64, usize_to_i64,

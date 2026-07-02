@@ -1,5 +1,10 @@
 //! Repository and manifest snapshot persistence.
 
+use crate::context_efficiency::{
+    ManifestMetadataCacheKey, ManifestMetadataSummary, cached_manifest_metadata_summary,
+    store_manifest_metadata_summary,
+};
+
 use super::*;
 
 impl Storage {
@@ -160,6 +165,37 @@ impl Storage {
     ) -> FriggResult<Option<RepositoryManifestMetadataSnapshot>> {
         let conn = open_connection(&self.db_path)?;
         load_latest_manifest_metadata_snapshot_for_repository(&conn, repository_id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn load_latest_context_efficiency_manifest_summary_for_repository(
+        &self,
+        repository_id: &str,
+    ) -> FriggResult<Option<ManifestMetadataSummary>> {
+        let conn = open_connection(&self.db_path)?;
+        let Some(snapshot_id) =
+            load_latest_manifest_snapshot_id_for_repository(&conn, repository_id)?
+        else {
+            return Ok(None);
+        };
+        let cache_key = ManifestMetadataCacheKey::from_storage_path(
+            self.db_path(),
+            repository_id,
+            &snapshot_id,
+        );
+        if let Some(summary) = cached_manifest_metadata_summary(&cache_key) {
+            return Ok(Some(summary));
+        }
+
+        let entries = load_manifest_metadata_entries_for_snapshot(&conn, &snapshot_id)?;
+        let snapshot = RepositoryManifestMetadataSnapshot {
+            repository_id: repository_id.to_owned(),
+            snapshot_id,
+            entries,
+        };
+        let summary = ManifestMetadataSummary::from_snapshot(&snapshot);
+        store_manifest_metadata_summary(cache_key, summary.clone());
+        Ok(Some(summary))
     }
 
     pub fn delete_snapshot(&self, snapshot_id: &str) -> FriggResult<()> {
