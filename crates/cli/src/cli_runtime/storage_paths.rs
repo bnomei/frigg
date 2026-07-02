@@ -1,4 +1,4 @@
-//! SQLite storage path helpers shared by CLI bootstrap, reindex, and maintenance commands.
+//! SQLite storage path helpers shared by CLI bootstrap, index, and maintenance commands.
 
 use std::io;
 use std::path::{Path, PathBuf};

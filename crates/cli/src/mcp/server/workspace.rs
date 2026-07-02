@@ -1,4 +1,4 @@
-//! Workspace lifecycle tools: attach, detach, prepare, reindex, and index/precise readiness waits.
+//! Workspace lifecycle tools: attach, detach, prepare, index, and index/precise readiness waits.
 
 use super::*;
 

@@ -1,5 +1,5 @@
 //! Debounced watch scheduler that coalesces filesystem events into manifest-fast and
-//! semantic-followup reindex work without letting concurrent refresh classes collide.
+//! semantic-followup index work without letting concurrent refresh classes collide.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;

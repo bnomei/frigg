@@ -32,11 +32,8 @@ serve port="37444" host="127.0.0.1" token="":
 init root=".":
   CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- init --workspace-root {{root}}
 
-verify root=".":
-  CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- verify --workspace-root {{root}}
+index root=".":
+  CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- index --workspace-root {{root}}
 
-reindex root=".":
-  CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- reindex --workspace-root {{root}}
-
-reindex-changed root=".":
-  CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- reindex --changed --workspace-root {{root}}
+index-changed root=".":
+  CARGO_HOME=.codex-cache/cargo-home cargo run -p frigg -- index --changed --workspace-root {{root}}

@@ -14,7 +14,7 @@ pub const PUBLIC_TOOL_NAMES: [&str; 24] = [
     "workspace_attach",
     "workspace_detach",
     "workspace_prepare",
-    "workspace_reindex",
+    "workspace_index",
     "workspace_current",
     "read_file",
     "read_match",
@@ -62,7 +62,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 20] = [
 pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 2] = ["workspace_attach", "workspace_detach"];
 /// Public tools that can change on-disk or persisted state and therefore require write-style
 /// handling.
-pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_reindex"];
+pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_index"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
 

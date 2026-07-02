@@ -1064,11 +1064,11 @@ fn graph_channel_reuses_snapshot_scoped_projected_graph_adjacency() -> FriggResu
     )?;
     let db_path = ensure_provenance_db_parent_dir(&root)?;
     Storage::new(&db_path).initialize()?;
-    crate::indexer::reindex_repository_with_runtime_config(
+    crate::indexer::index_repository_with_runtime_config(
         "repo-001",
         &root,
         &db_path,
-        crate::indexer::ReindexMode::Full,
+        crate::indexer::IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )?;
@@ -1161,11 +1161,11 @@ fn graph_channel_rebuilds_projected_graph_adjacency_after_snapshot_change() -> F
     )?;
     let db_path = ensure_provenance_db_parent_dir(&root)?;
     Storage::new(&db_path).initialize()?;
-    crate::indexer::reindex_repository_with_runtime_config(
+    crate::indexer::index_repository_with_runtime_config(
         "repo-001",
         &root,
         &db_path,
-        crate::indexer::ReindexMode::Full,
+        crate::indexer::IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )?;
@@ -1218,11 +1218,11 @@ fn graph_channel_rebuilds_projected_graph_adjacency_after_snapshot_change() -> F
             ),
         ],
     )?;
-    crate::indexer::reindex_repository_with_runtime_config(
+    crate::indexer::index_repository_with_runtime_config(
         "repo-001",
         &root,
         &db_path,
-        crate::indexer::ReindexMode::Full,
+        crate::indexer::IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )?;

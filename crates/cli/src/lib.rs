@@ -4,7 +4,7 @@
 //! long-lived agent-facing service.
 //!
 //! Semantic map:
-//! - `watch` — lease-gated filesystem supervisor and debounced reindex scheduler.
+//! - `watch` — lease-gated filesystem supervisor and debounced index scheduler.
 //! - `test_support` — lightweight config helpers for integration tests.
 
 /// Canonical agent directive text and rendering helpers reused across MCP, hooks, and docs checks.
@@ -20,7 +20,7 @@ pub mod embeddings;
 /// Symbol and relation graph primitives that power navigation-style retrieval on top of heuristic
 /// and precise artifact ingestion.
 pub mod graph;
-/// Repository artifact construction, including manifests, reindex planning, symbol extraction, and
+/// Repository artifact construction, including manifests, index planning, symbol extraction, and
 /// semantic chunk generation that feed the search and MCP layers.
 pub mod indexer;
 pub(crate) mod language_support;
@@ -44,7 +44,7 @@ pub mod storage;
 pub mod test_support;
 pub(crate) mod text_sanitization;
 pub(crate) mod vendor_grammars;
-/// Incremental freshness runtime that keeps attached workspaces reindexed without pushing watch
+/// Incremental freshness runtime that keeps attached workspaces indexed without pushing watch
 /// logic into request handlers.
 pub mod watch;
 pub(crate) mod workspace_ignores;

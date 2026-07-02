@@ -4,8 +4,8 @@
 //!
 //! Semantic map:
 //! - `repository` — per-root watch identity, ignore rules, and startup freshness probes.
-//! - `scheduler` — debounced reindex queue with manifest-fast and semantic-followup classes.
-//! - `supervisor` — lease-gated filesystem watcher and background reindex dispatcher.
+//! - `scheduler` — debounced index queue with manifest-fast and semantic-followup classes.
+//! - `supervisor` — lease-gated filesystem watcher and background index dispatcher.
 
 #[path = "watch/repository.rs"]
 mod repository;

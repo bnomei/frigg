@@ -272,7 +272,7 @@ fn collect_scip_artifact_inputs(workspace_root: &Path) -> Vec<ScipArtifactInput>
                 _ => return None,
             };
             Some(ScipArtifactInput {
-                label: format!("reindex:{}", path.display()),
+                label: format!("index:{}", path.display()),
                 path,
                 format,
             })

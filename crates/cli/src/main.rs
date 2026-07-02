@@ -15,11 +15,10 @@ pub(crate) use cli_args::{Cli, Command};
 use cli_dispatch::async_main;
 #[cfg(test)]
 use cli_runtime::{
-    StorageBootstrapCommand, StorageMaintenanceCommand, ensure_storage_db_path_for_write,
-    find_enclosing_git_root, resolve_command_config, resolve_semantic_runtime_config,
-    resolve_startup_config, resolve_storage_db_path, resolve_watch_config,
-    resolve_watch_runtime_config, run_reindex_command,
-    run_semantic_runtime_startup_gate_with_credentials, run_storage_bootstrap_command,
+    StorageMaintenanceCommand, ensure_storage_db_path_for_write, find_enclosing_git_root,
+    resolve_command_config, resolve_semantic_runtime_config, resolve_startup_config,
+    resolve_storage_db_path, resolve_watch_config, resolve_watch_runtime_config, run_index_command,
+    run_semantic_runtime_startup_gate_with_credentials, run_storage_init_command,
     run_storage_maintenance_command, run_strict_startup_vector_readiness_gate,
 };
 #[cfg(test)]
@@ -97,7 +96,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use frigg::storage::{PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR};
+    use frigg::storage::{
+        DEFAULT_VECTOR_DIMENSIONS, PROVENANCE_STORAGE_DB_FILE, PROVENANCE_STORAGE_DIR,
+        VECTOR_TABLE_NAME,
+    };
     use rusqlite::Connection;
 
     fn base_cli() -> Cli {
@@ -515,7 +517,7 @@ mod tests {
         assert!(readme.contains(
             "When `provider=local`, Frigg prepares missing local model artifacts automatically during startup"
         ));
-        assert!(readme.contains("After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass"));
+        assert!(readme.contains("After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass"));
         assert!(readme.contains("startup fails with `local_model_prepare_failed`"));
 
         let zero_cloud_claims = readme.matches("Zero-cloud semantic").count()
@@ -621,7 +623,7 @@ mod tests {
     #[test]
     fn utility_commands_default_to_warning_log_filter() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Reindex {
+        cli.command = Some(Command::Index {
             changed: false,
             prepare_semantic_model: false,
         });
@@ -635,7 +637,7 @@ mod tests {
     fn verbose_flag_enables_info_log_filter_for_utility_commands() {
         let mut cli = base_cli();
         cli.verbose = true;
-        cli.command = Some(Command::Reindex {
+        cli.command = Some(Command::Index {
             changed: false,
             prepare_semantic_model: false,
         });
@@ -669,7 +671,7 @@ mod tests {
     #[test]
     fn quiet_flag_disables_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Reindex {
+        cli.command = Some(Command::Index {
             changed: false,
             prepare_semantic_model: false,
         });
@@ -694,7 +696,7 @@ mod tests {
     #[test]
     fn non_quiet_utility_commands_keep_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Reindex {
+        cli.command = Some(Command::Index {
             changed: false,
             prepare_semantic_model: false,
         });
@@ -793,19 +795,19 @@ mod tests {
     }
 
     #[test]
-    fn reindex_command_resolution_uses_startup_semantic_config() {
+    fn index_command_resolution_uses_startup_semantic_config() {
         let mut cli = base_cli();
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
 
         let config = resolve_command_config(
             &cli,
-            Command::Reindex {
+            Command::Index {
                 changed: true,
                 prepare_semantic_model: false,
             },
         )
-        .expect("reindex command should resolve startup config");
+        .expect("index command should resolve startup config");
         assert!(config.semantic_runtime.enabled);
         assert_eq!(
             config.semantic_runtime.provider,
@@ -818,17 +820,17 @@ mod tests {
     }
 
     #[test]
-    fn reindex_command_resolution_parses_prepare_semantic_model_flag() {
+    fn index_command_resolution_parses_prepare_semantic_model_flag() {
         let cli = <Cli as clap::Parser>::try_parse_from([
             "frigg",
             "--semantic-runtime-enabled",
             "true",
             "--semantic-runtime-provider",
             "local",
-            "reindex",
+            "index",
             "--prepare-semantic-model",
         ])
-        .expect("reindex --prepare-semantic-model should parse");
+        .expect("index --prepare-semantic-model should parse");
 
         assert_eq!(
             cli.semantic_runtime_provider,
@@ -836,11 +838,48 @@ mod tests {
         );
         assert!(matches!(
             cli.command,
-            Some(Command::Reindex {
+            Some(Command::Index {
                 changed: false,
                 prepare_semantic_model: true,
             })
         ));
+    }
+
+    #[test]
+    fn index_command_accepts_legacy_reindex_alias() {
+        let cli = <Cli as clap::Parser>::try_parse_from(["frigg", "reindex", "--changed"])
+            .expect("legacy reindex alias should parse as index");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Index {
+                changed: true,
+                prepare_semantic_model: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn hidden_storage_maintenance_commands_parse_but_do_not_render_in_help() {
+        let repair_cli = <Cli as clap::Parser>::try_parse_from(["frigg", "repair-storage"])
+            .expect("hidden repair-storage command should remain callable");
+        assert!(matches!(repair_cli.command, Some(Command::RepairStorage)));
+
+        let prune_cli = <Cli as clap::Parser>::try_parse_from(["frigg", "prune-storage"])
+            .expect("hidden prune-storage command should remain callable");
+        assert!(matches!(
+            prune_cli.command,
+            Some(Command::PruneStorage {
+                keep_manifest_snapshots: DEFAULT_RETAINED_MANIFEST_SNAPSHOTS,
+            })
+        ));
+
+        let mut command = <Cli as clap::CommandFactory>::command();
+        let help = command.render_help().to_string();
+        assert!(help.contains("init"));
+        assert!(help.contains("index"));
+        assert!(!help.contains("repair-storage"));
+        assert!(!help.contains("prune-storage"));
     }
 
     #[test]
@@ -879,18 +918,6 @@ mod tests {
 
         let config = resolve_command_config(&cli, Command::Init)
             .expect("init command should resolve base config");
-        assert!(!config.semantic_runtime.enabled);
-        assert!(config.semantic_runtime.provider.is_none());
-    }
-
-    #[test]
-    fn verify_command_resolution_keeps_semantic_runtime_unset() {
-        let mut cli = base_cli();
-        cli.semantic_runtime_enabled = Some(true);
-        cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
-
-        let config = resolve_command_config(&cli, Command::Verify)
-            .expect("verify command should resolve base config");
         assert!(!config.semantic_runtime.enabled);
         assert!(config.semantic_runtime.provider.is_none());
     }
@@ -978,18 +1005,18 @@ mod tests {
     }
 
     #[test]
-    fn reindex_command_defaults_empty_workspace_roots_to_current_directory() {
+    fn index_command_defaults_empty_workspace_roots_to_current_directory() {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
 
         let config = resolve_command_config(
             &cli,
-            Command::Reindex {
+            Command::Index {
                 changed: true,
                 prepare_semantic_model: false,
             },
         )
-        .expect("reindex command should default to the current directory");
+        .expect("index command should default to the current directory");
         assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
     }
 
@@ -1210,11 +1237,38 @@ mod tests {
         let error = run_strict_startup_vector_readiness_gate(&config)
             .expect_err("startup gate must fail when non-sqlite-vec schema is active");
         assert!(
-            error
-                .to_string()
-                .contains("legacy non-sqlite-vec schema detected"),
-            "unexpected startup gate legacy-schema error: {error}"
+            error.to_string().contains("storage schema is incompatible"),
+            "unexpected startup gate incompatible-schema error: {error}"
         );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn startup_gate_repairs_semantic_vector_partition_drift() {
+        let workspace_root = temp_workspace_root("startup-vector-auto-repair");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_storage_init_command(&config)
+            .expect("init should create storage before startup repair");
+        let db_path = resolve_storage_db_path(&workspace_root, "startup")
+            .expect("storage db path should resolve after init");
+        seed_semantic_vector_drift(&db_path);
+
+        run_strict_startup_vector_readiness_gate(&config)
+            .expect("startup gate should auto-repair semantic vector drift");
+
+        let storage = Storage::new(&db_path);
+        let repaired = storage
+            .collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )
+            .expect("semantic health should be readable after startup repair");
+        assert!(repaired.vector_consistent);
 
         cleanup_workspace(&workspace_root);
     }
@@ -1299,11 +1353,11 @@ mod tests {
     fn storage_db_path_resolution_wraps_missing_workspace_root() {
         let workspace_root = temp_workspace_root("storage-db-missing-root");
 
-        let error = resolve_storage_db_path(&workspace_root, "verify")
+        let error = resolve_storage_db_path(&workspace_root, "init")
             .expect_err("storage db path resolution should fail for a missing workspace root");
         let message = error.to_string();
         assert!(
-            message.contains("verify summary status=failed"),
+            message.contains("init summary status=failed"),
             "unexpected storage db path error: {message}"
         );
         assert!(
@@ -1317,14 +1371,14 @@ mod tests {
     }
 
     #[test]
-    fn storage_bootstrap_init_reports_workspace_path_resolution_failure() {
+    fn storage_init_reports_workspace_path_resolution_failure() {
         let workspace_root = temp_workspace_root("storage-init-missing-root");
         let config = FriggConfig {
             workspace_roots: vec![workspace_root.clone()],
             ..FriggConfig::default()
         };
 
-        let error = run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
+        let error = run_storage_init_command(&config)
             .expect_err("init bootstrap should fail for a missing workspace root");
         let message = error.to_string();
         assert!(
@@ -1339,38 +1393,6 @@ mod tests {
             message.contains("failed to canonicalize workspace root"),
             "unexpected init bootstrap error: {message}"
         );
-    }
-
-    #[test]
-    fn storage_bootstrap_verify_reports_missing_db_file() {
-        let workspace_root = temp_workspace_root("storage-verify-missing-db");
-        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
-        let db_path = resolve_storage_db_path(&workspace_root, "verify")
-            .expect("storage db path should resolve for an existing workspace root");
-
-        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
-            .expect("config should load from temp workspace root");
-        let error = run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)
-            .expect_err("verify bootstrap should fail when the storage db file is missing");
-        let message = error.to_string();
-        assert!(
-            message.contains("verify failed for repository_id=repo-001"),
-            "unexpected verify bootstrap error: {message}"
-        );
-        assert!(
-            message.contains(&format!("root={}", workspace_root.display())),
-            "unexpected verify bootstrap error: {message}"
-        );
-        assert!(
-            message.contains(&format!("db={}", db_path.display())),
-            "unexpected verify bootstrap error: {message}"
-        );
-        assert!(
-            !db_path.exists(),
-            "verify should not create a missing storage db while reporting the error"
-        );
-
-        cleanup_workspace(&workspace_root);
     }
 
     #[test]
@@ -1405,19 +1427,16 @@ mod tests {
     }
 
     #[test]
-    fn storage_bootstrap_init_and_verify_succeed_for_simple_workspace() {
+    fn storage_init_verifies_simple_workspace() {
         let workspace_root = temp_workspace_root("storage-bootstrap-success");
         create_simple_workspace(&workspace_root);
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
 
-        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
-            .expect("init bootstrap should succeed for a simple workspace");
-        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Verify)
-            .expect("verify bootstrap should succeed after init");
+        run_storage_init_command(&config).expect("init should succeed for a simple workspace");
 
-        let db_path = resolve_storage_db_path(&workspace_root, "verify")
+        let db_path = resolve_storage_db_path(&workspace_root, "init")
             .expect("storage db path should resolve after init");
         assert!(db_path.is_file(), "storage db should exist after init");
 
@@ -1425,16 +1444,91 @@ mod tests {
     }
 
     #[test]
-    fn reindex_command_succeeds_for_simple_workspace() {
-        let workspace_root = temp_workspace_root("reindex-success");
+    fn storage_init_repairs_mismatched_vector_table() {
+        let workspace_root = temp_workspace_root("storage-init-vector-repair");
         create_simple_workspace(&workspace_root);
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_reindex_command(&config, false, false)
-            .expect("full reindex should succeed for a simple workspace");
-        run_reindex_command(&config, true, false)
-            .expect("changed-only reindex should succeed for a simple workspace");
+        let db_path = ensure_storage_db_path_for_write(&workspace_root, "init")
+            .expect("storage db path should be creatable");
+        let storage = Storage::new(&db_path);
+        storage
+            .initialize()
+            .expect("storage should initialize before vector corruption");
+        corrupt_vector_table_schema(&db_path);
+
+        let error = storage
+            .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)
+            .expect_err("mismatched vector table should fail before init repair");
+        assert!(
+            error.to_string().contains("vector table schema mismatch"),
+            "unexpected vector mismatch error: {error}"
+        );
+
+        run_storage_init_command(&config).expect("init should repair mismatched vector table");
+        storage
+            .verify()
+            .expect("storage should verify after init vector repair");
+
+        let conn = Connection::open(&db_path).expect("storage db should open for missing fixture");
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME};"))
+            .expect("vector table should drop for missing fixture");
+        drop(conn);
+        let error = storage
+            .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)
+            .expect_err("missing vector table should fail before init repair");
+        assert!(
+            error.to_string().contains("missing vector table"),
+            "unexpected missing vector table error: {error}"
+        );
+
+        run_storage_init_command(&config).expect("init should repair missing vector table");
+        storage
+            .verify()
+            .expect("storage should verify after missing vector repair");
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn index_command_succeeds_for_simple_workspace() {
+        let workspace_root = temp_workspace_root("index-success");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_index_command(&config, false, false)
+            .expect("full index should succeed for a simple workspace");
+        run_index_command(&config, true, false)
+            .expect("changed-only index should succeed for a simple workspace");
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
+    fn index_command_repairs_semantic_vectors_before_refresh() {
+        let workspace_root = temp_workspace_root("index-vector-auto-repair");
+        create_simple_workspace(&workspace_root);
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from temp workspace root");
+        run_storage_init_command(&config).expect("init should create storage before index repair");
+        let db_path = resolve_storage_db_path(&workspace_root, "index")
+            .expect("storage db path should resolve after init");
+        seed_semantic_vector_drift(&db_path);
+
+        run_index_command(&config, false, false).expect("index should auto-repair vector drift");
+
+        let storage = Storage::new(&db_path);
+        let repaired = storage
+            .collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )
+            .expect("semantic health should be readable after index repair");
+        assert!(repaired.vector_consistent);
 
         cleanup_workspace(&workspace_root);
     }
@@ -1446,8 +1540,7 @@ mod tests {
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
-            .expect("init bootstrap should succeed before storage pruning");
+        run_storage_init_command(&config).expect("init should succeed before storage pruning");
         let db_path = resolve_storage_db_path(&workspace_root, "prune-storage")
             .expect("storage db path should resolve after init");
         let storage = Storage::new(&db_path);
@@ -1497,8 +1590,7 @@ mod tests {
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_storage_bootstrap_command(&config, StorageBootstrapCommand::Init)
-            .expect("init bootstrap should succeed before storage repair");
+        run_storage_init_command(&config).expect("init should succeed before storage repair");
         let db_path = resolve_storage_db_path(&workspace_root, "repair-storage")
             .expect("storage db path should resolve after init");
         let storage = Storage::new(&db_path);
@@ -1629,6 +1721,65 @@ mod tests {
             content_text: "fn main() { println!(\"hello from frigg\"); }".to_owned(),
             embedding: vec![0.25, 0.75],
         }
+    }
+
+    fn corrupt_vector_table_schema(db_path: &Path) {
+        let conn = Connection::open(db_path).expect("storage db should open for vector corruption");
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME};"))
+            .expect("vector table should drop for corruption fixture");
+        conn.execute_batch(&format!(
+            "CREATE TABLE {VECTOR_TABLE_NAME} (embedding float[{}] NOT NULL);",
+            DEFAULT_VECTOR_DIMENSIONS + 1
+        ))
+        .expect("mismatched vector table should be creatable");
+    }
+
+    fn seed_semantic_vector_drift(db_path: &Path) {
+        let storage = Storage::new(db_path);
+        storage
+            .upsert_manifest(
+                "repo-001",
+                "snapshot-001",
+                &[frigg::storage::ManifestEntry {
+                    path: "src/main.rs".to_owned(),
+                    sha256: "hash-main".to_owned(),
+                    size_bytes: 42,
+                    mtime_ns: Some(100),
+                }],
+            )
+            .expect("manifest snapshot should seed before vector drift");
+        storage
+            .replace_semantic_embeddings_for_repository(
+                "repo-001",
+                "snapshot-001",
+                "openai",
+                "text-embedding-3-small",
+                &[semantic_record("snapshot-001")],
+            )
+            .expect("semantic rows should seed before vector drift");
+
+        let conn = Connection::open(db_path).expect("storage db should open for drift fixture");
+        conn.execute(
+            &format!(
+                "DELETE FROM {VECTOR_TABLE_NAME} WHERE repository_id = ?1 AND provider = ?2 AND model = ?3 AND chunk_id = ?4"
+            ),
+            (
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+                "chunk-main",
+            ),
+        )
+        .expect("vector row drift fixture should succeed");
+
+        let broken = storage
+            .collect_semantic_storage_health_for_repository_model(
+                "repo-001",
+                "openai",
+                "text-embedding-3-small",
+            )
+            .expect("broken semantic health should be readable");
+        assert!(!broken.vector_consistent);
     }
 
     fn cleanup_workspace(path: &Path) {

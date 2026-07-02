@@ -309,9 +309,9 @@ fn incremental_roundtrip_persist_load_and_diff() -> FriggResult<()> {
 }
 
 #[test]
-fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-materializes-retrieval-projections");
-    let workspace_root = temp_workspace_root("reindex-materializes-retrieval-projections");
+fn index_materializes_authoritative_retrieval_projection_heads() -> FriggResult<()> {
+    let db_path = temp_db_path("index-materializes-retrieval-projections");
+    let workspace_root = temp_workspace_root("index-materializes-retrieval-projections");
     prepare_workspace(
         &workspace_root,
         &[
@@ -334,11 +334,11 @@ fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResul
         openai_api_key: None,
         gemini_api_key: None,
     };
-    let summary = reindex_repository_with_runtime_config(
+    let summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
     )?;
@@ -426,9 +426,9 @@ fn reindex_materializes_authoritative_retrieval_projection_heads() -> FriggResul
 }
 
 #[test]
-fn reindex_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-materializes-retrieval-projections-scip");
-    let workspace_root = temp_workspace_root("reindex-materializes-retrieval-projections-scip");
+fn index_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggResult<()> {
+    let db_path = temp_db_path("index-materializes-retrieval-projections-scip");
+    let workspace_root = temp_workspace_root("index-materializes-retrieval-projections-scip");
     prepare_workspace(
         &workspace_root,
         &[
@@ -454,11 +454,11 @@ fn reindex_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggRe
         openai_api_key: None,
         gemini_api_key: None,
     };
-    let summary = reindex_repository_with_runtime_config(
+    let summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
     )?;
@@ -515,10 +515,10 @@ fn reindex_materializes_retrieval_projection_heads_with_scip_inputs() -> FriggRe
 }
 
 #[test]
-fn reindex_changed_only_repairs_missing_retrieval_projection_family_on_reused_snapshot()
+fn index_changed_only_repairs_missing_retrieval_projection_family_on_reused_snapshot()
 -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-repairs-missing-retrieval-projection-family");
-    let workspace_root = temp_workspace_root("reindex-repairs-missing-retrieval-projection-family");
+    let db_path = temp_db_path("index-repairs-missing-retrieval-projection-family");
+    let workspace_root = temp_workspace_root("index-repairs-missing-retrieval-projection-family");
     prepare_workspace(
         &workspace_root,
         &[
@@ -541,11 +541,11 @@ fn reindex_changed_only_repairs_missing_retrieval_projection_family_on_reused_sn
         openai_api_key: None,
         gemini_api_key: None,
     };
-    let initial_summary = reindex_repository_with_runtime_config(
+    let initial_summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
     )?;
@@ -608,11 +608,11 @@ fn reindex_changed_only_repairs_missing_retrieval_projection_family_on_reused_sn
             .is_empty()
     );
 
-    let changed_summary = reindex_repository_with_runtime_config(
+    let changed_summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &credentials,
     )?;
@@ -649,17 +649,13 @@ fn incremental_roundtrip_changed_only_reports_zero_for_unchanged_workspace() -> 
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary = reindex_repository_without_semantic(
+    let full_summary =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
+    let changed_summary = index_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
-    )?;
-    let changed_summary = reindex_repository_without_semantic(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
     )?;
 
     assert_eq!(full_summary.files_scanned, 2);
@@ -687,22 +683,18 @@ fn incremental_roundtrip_changed_only_detects_modified_added_and_deleted_files()
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary = reindex_repository_without_semantic(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::Full,
-    )?;
+    let full_summary =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
 
     fs::write(workspace_root.join("README.md"), "hello changed\n").map_err(FriggError::Io)?;
     fs::remove_file(workspace_root.join("src/main.rs")).map_err(FriggError::Io)?;
     fs::write(workspace_root.join("src/new.rs"), "pub fn added() {}\n").map_err(FriggError::Io)?;
 
-    let changed_summary = reindex_repository_without_semantic(
+    let changed_summary = index_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
     )?;
 
     assert_eq!(changed_summary.files_scanned, 2);
@@ -725,25 +717,21 @@ fn incremental_roundtrip_changed_only_detects_modified_added_and_deleted_files()
 }
 
 #[test]
-fn reindex_plan_changed_only_unchanged_workspace_reuses_existing_snapshot() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-plan-unchanged-db");
-    let workspace_root = temp_workspace_root("reindex-plan-unchanged-workspace");
+fn index_plan_changed_only_unchanged_workspace_reuses_existing_snapshot() -> FriggResult<()> {
+    let db_path = temp_db_path("index-plan-unchanged-db");
+    let workspace_root = temp_workspace_root("index-plan-unchanged-workspace");
     prepare_workspace(
         &workspace_root,
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let full_summary = reindex_repository_without_semantic(
+    let full_summary =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
-    )?;
-    let plan = build_reindex_plan_for_tests(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &[],
     )?;

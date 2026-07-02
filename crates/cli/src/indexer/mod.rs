@@ -27,23 +27,23 @@ use blake3::Hasher;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 
+mod index;
 mod manifest;
-mod reindex;
 mod semantic;
 mod symbols;
+#[cfg(test)]
+pub(crate) use index::build_index_plan_for_tests;
+#[cfg(test)]
+use index::index_repository_with_semantic_executor;
+pub use index::{
+    IndexDiagnostics, IndexMode, IndexPlan, IndexSummary, ManifestSnapshotPlan, ManifestStore,
+    SemanticRefreshMode, SemanticRefreshPlan, index_repository,
+    index_repository_with_runtime_config, index_repository_with_runtime_config_and_dirty_paths,
+};
 #[cfg(test)]
 use manifest::diff;
 #[cfg(test)]
 use manifest::file_digest_order;
-#[cfg(test)]
-pub(crate) use reindex::build_reindex_plan_for_tests;
-#[cfg(test)]
-use reindex::reindex_repository_with_semantic_executor;
-pub use reindex::{
-    ManifestSnapshotPlan, ManifestStore, ReindexDiagnostics, ReindexMode, ReindexPlan,
-    ReindexSummary, SemanticRefreshMode, SemanticRefreshPlan, reindex_repository,
-    reindex_repository_with_runtime_config, reindex_repository_with_runtime_config_and_dirty_paths,
-};
 #[cfg(test)]
 use semantic::{RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor};
 use semantic::{build_file_semantic_chunks, build_semantic_chunk_candidates};
@@ -104,7 +104,7 @@ pub struct SemanticChunkBenchmarkSummary {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-/// File-level delta between two manifest snapshots, reused by reindex planning and retention
+/// File-level delta between two manifest snapshots, reused by index planning and retention
 /// logic.
 pub struct ManifestDiff {
     pub added: Vec<FileDigest>,

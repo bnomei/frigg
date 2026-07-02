@@ -1,4 +1,4 @@
-//! Regression tests for snapshot pruning that keep storage bounded across reindex cycles.
+//! Regression tests for snapshot pruning that keep storage bounded across index cycles.
 
 use super::support::*;
 

@@ -1083,7 +1083,7 @@ impl FriggMcpServer {
             WorkspacePreciseFailureClass::ToolPanic => {
                 WorkspaceRecommendedAction::UpstreamToolFailure
             }
-            WorkspacePreciseFailureClass::ToolTimeout => WorkspaceRecommendedAction::RerunReindex,
+            WorkspacePreciseFailureClass::ToolTimeout => WorkspaceRecommendedAction::RerunIndex,
             WorkspacePreciseFailureClass::ToolInvalidOutput
             | WorkspacePreciseFailureClass::ToolFailed => {
                 WorkspaceRecommendedAction::UseHeuristicMode

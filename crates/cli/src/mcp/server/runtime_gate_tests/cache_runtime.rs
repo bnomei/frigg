@@ -1018,15 +1018,15 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     Storage::new(&db_path)
         .initialize()
         .expect("manifest storage should initialize");
-    crate::indexer::reindex_repository_with_runtime_config(
+    crate::indexer::index_repository_with_runtime_config(
         &declared_repository.repository_id.0,
         &declared_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline changed-only reindex should succeed");
+    .expect("baseline changed-only index should succeed");
 
     let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
     let validated_manifest_candidate_cache =
@@ -1358,15 +1358,15 @@ async fn read_match_reads_from_cached_result_handle() {
     Storage::new(&db_path)
         .initialize()
         .expect("storage should initialize");
-    crate::indexer::reindex_repository_with_runtime_config(
+    crate::indexer::index_repository_with_runtime_config(
         &declared_repository.repository_id.0,
         &declared_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline changed-only reindex should succeed");
+    .expect("baseline changed-only index should succeed");
 
     let server = FriggMcpServer::new(config);
     let workspace = server

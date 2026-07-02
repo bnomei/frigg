@@ -33,7 +33,7 @@ impl FriggMcpServer {
                     initialized: true,
                     index_state: WorkspaceStorageIndexState::Error,
                     error: Some(format!(
-                        "storage schema is incompatible (found {version}, expected {}); delete '{}' and rerun `frigg init` or `frigg reindex` to regenerate storage",
+                        "storage schema is incompatible (found {version}, expected {}); delete '{}' and rerun `frigg init` or `frigg index` to regenerate storage",
                         crate::storage::latest_storage_schema_version(),
                         workspace.db_path.display()
                     )),

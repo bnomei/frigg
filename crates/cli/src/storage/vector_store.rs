@@ -256,14 +256,14 @@ fn verify_sqlite_vec_table_schema(
 ) -> FriggResult<()> {
     if !table_exists(conn, VECTOR_TABLE_NAME)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: missing vector table '{VECTOR_TABLE_NAME}'; run `frigg init` to provision it, or run `frigg reindex` to rebuild storage"
+            "vector subsystem not ready: missing vector table '{VECTOR_TABLE_NAME}'; run `frigg init` to provision it, or run `frigg index` to rebuild storage"
         )));
     }
 
     let schema_sql = read_vector_table_schema_sql(conn)?;
     if !sqlite_vec_table_has_expected_projection_schema(conn, expected_dimensions)? {
         return Err(FriggError::Internal(format!(
-            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/provider/model partition keys and language/chunk_id metadata); automatic vector table repair is disabled during init/reindex, run `frigg repair-storage` or delete the storage DB and run `frigg reindex`"
+            "vector subsystem not ready: vector table schema mismatch (found schema '{schema_sql}', expected embedding float[{expected_dimensions}] distance_metric=cosine plus repository/provider/model partition keys and language/chunk_id metadata); rerun `frigg init` or `frigg index`, or delete the storage DB and run `frigg index`"
         )));
     }
 

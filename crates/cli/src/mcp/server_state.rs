@@ -285,12 +285,12 @@ impl RuntimeTaskRegistry {
 
 fn runtime_task_kind_name(kind: RuntimeTaskKind) -> &'static str {
     match kind {
-        RuntimeTaskKind::ChangedReindex => "changed_reindex",
+        RuntimeTaskKind::ChangedIndex => "changed_index",
         RuntimeTaskKind::SemanticRefresh => "semantic_refresh",
         RuntimeTaskKind::PrecisePrewarm => "precise_prewarm",
         RuntimeTaskKind::PreciseGenerate => "precise_generate",
         RuntimeTaskKind::WorkspacePrepare => "workspace_prepare",
-        RuntimeTaskKind::WorkspaceReindex => "workspace_reindex",
+        RuntimeTaskKind::WorkspaceIndex => "workspace_index",
     }
 }
 
@@ -317,9 +317,9 @@ mod tests {
     fn runtime_task_registry_tracks_active_and_recent_tasks() {
         let mut registry = RuntimeTaskRegistry::new();
         let first = registry.start_task(
-            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::ChangedIndex,
             "repo-001",
-            "changed_only_reindex",
+            "changed_only_index",
             Some("watch root /tmp/repo-001".to_owned()),
         );
         let second = registry.start_task(
@@ -337,7 +337,7 @@ mod tests {
         registry.finish_task(
             &first,
             RuntimeTaskStatus::Succeeded,
-            Some("reindex complete".to_owned()),
+            Some("index complete".to_owned()),
         );
         registry.finish_task(
             &second,
@@ -373,7 +373,7 @@ mod tests {
             "myrepo-abc123def456",
         ));
         assert!(!registry.has_active_task_for_any_repository(
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspaceIndex,
             &["myrepo-abc123def456", "repo-001"],
         ));
 

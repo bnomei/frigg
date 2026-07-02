@@ -410,7 +410,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
 
 #[test]
 fn security_confirmed_write_tools_are_public_and_not_misclassified() {
-    for tool_name in ["workspace_prepare", "workspace_reindex"] {
+    for tool_name in ["workspace_prepare", "workspace_index"] {
         assert!(
             PUBLIC_TOOL_NAMES.contains(&tool_name),
             "{tool_name} must be part of the public tool surface"

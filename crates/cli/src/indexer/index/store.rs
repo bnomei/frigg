@@ -39,7 +39,7 @@ impl ManifestStore {
             .upsert_repository(repository_id, root_path, display_name)
     }
 
-    pub(crate) fn initialize_for_reindex(&self, semantic_enabled: bool) -> FriggResult<()> {
+    pub(crate) fn initialize_for_index(&self, semantic_enabled: bool) -> FriggResult<()> {
         if semantic_enabled {
             self.storage.initialize()
         } else {

@@ -1,4 +1,4 @@
-//! Watch and reindex freshness policy for long-lived MCP runtimes.
+//! Watch and index freshness policy for long-lived MCP runtimes.
 
 use std::str::FromStr;
 
@@ -50,7 +50,7 @@ impl FromStr for WatchMode {
     }
 }
 
-/// Freshness policy for background watch-driven reindex after manifest changes.
+/// Freshness policy for background watch-driven index after manifest changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchConfig {
     pub mode: WatchMode,

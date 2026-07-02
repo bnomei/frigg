@@ -177,13 +177,13 @@ pub(super) fn open_existing_connection(path: &Path) -> FriggResult<Connection> {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => {
             return Err(FriggError::InvalidInput(format!(
-                "storage db path '{}' exists but is not a file; move or delete it, then run `frigg init` or `frigg reindex`",
+                "storage db path '{}' exists but is not a file; move or delete it, then run `frigg init` or `frigg index`",
                 path.display()
             )));
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Err(FriggError::NotFound(format!(
-                "storage db file is missing at '{}'; run `frigg init` or `frigg reindex` to create it",
+                "storage db file is missing at '{}'; run `frigg init` or `frigg index` to create it",
                 path.display()
             )));
         }

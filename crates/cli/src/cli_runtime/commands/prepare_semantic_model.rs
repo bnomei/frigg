@@ -66,7 +66,7 @@ fn print_prepared_summary(
         artifact.repository
     ))?;
     output.advisory(format!(
-        "prepare-semantic-model next_step=\"run `frigg reindex` after changing semantic provider or model so semantic rows match provider=local model={}\"",
+        "prepare-semantic-model next_step=\"run `frigg index` after changing semantic provider or model so semantic rows match provider=local model={}\"",
         artifact.semantic_model
     ))
 }

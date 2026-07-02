@@ -99,7 +99,7 @@ name = "precise_graph"
 harness = false
 
 [[bench]]
-name = "reindex"
+name = "index"
 harness = false
 
 [[bench]]

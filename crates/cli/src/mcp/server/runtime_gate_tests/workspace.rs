@@ -1,6 +1,6 @@
 #![allow(clippy::panic)]
 
-//! Regression tests for workspace attach/prepare/reindex adoption and index lifecycle gates.
+//! Regression tests for workspace attach/prepare/index adoption and index lifecycle gates.
 
 use super::*;
 use crate::mcp::types::{
@@ -388,8 +388,8 @@ printf '%s' "skip-mode-python-scip" > "${{6}}"
 }
 
 #[test]
-fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_reindex() {
-    let workspace_root = temp_workspace_root("reindex-allows-active-precise-generation");
+fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_index() {
+    let workspace_root = temp_workspace_root("index-allows-active-precise-generation");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -422,7 +422,7 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_re
 
     assert!(
         !server.repository_has_active_runtime_work(&workspace.repository_id),
-        "background precise generation should not block workspace_prepare/workspace_reindex"
+        "background precise generation should not block workspace_prepare/workspace_index"
     );
 
     server
@@ -438,14 +438,14 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_re
         .write()
         .expect("runtime task registry should not be poisoned")
         .start_task(
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspaceIndex,
             workspace.repository_id.clone(),
-            "workspace_reindex",
-            Some("active lexical reindex".to_owned()),
+            "workspace_index",
+            Some("active lexical index".to_owned()),
         );
     assert!(
         server.repository_has_active_runtime_work(&workspace.repository_id),
-        "workspace_reindex should continue to block overlapping workspace writes"
+        "workspace_index should continue to block overlapping workspace writes"
     );
     server
         .runtime_state

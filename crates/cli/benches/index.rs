@@ -1,4 +1,4 @@
-//! Criterion benchmarks for incremental and full repository reindex throughput.
+//! Criterion benchmarks for incremental and full repository index throughput.
 
 #[path = "common/mod.rs"]
 mod support;
@@ -7,49 +7,49 @@ use std::cell::Cell;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use frigg::indexer::{
-    ReindexMode, reindex_repository_with_runtime_config,
-    reindex_repository_with_runtime_config_and_dirty_paths,
+    IndexMode, index_repository_with_runtime_config,
+    index_repository_with_runtime_config_and_dirty_paths,
 };
 
-fn bench_reindex(c: &mut Criterion) {
-    let mut group = c.benchmark_group("reindex");
+fn bench_index(c: &mut Criterion) {
+    let mut group = c.benchmark_group("index");
 
     group.bench_function(BenchmarkId::from_parameter("full"), |b| {
         b.iter_batched(
             || {
-                let root = support::fresh_fixture_root("reindex-full");
+                let root = support::fresh_fixture_root("index-full");
                 let config = support::native_search_config(&root);
                 let db_path = support::benchmark_db_path(&root);
                 (root, config, db_path)
             },
             |(root, config, db_path)| {
-                let summary = reindex_repository_with_runtime_config(
+                let summary = index_repository_with_runtime_config(
                     "repo-001",
                     &root,
                     &db_path,
-                    ReindexMode::Full,
+                    IndexMode::Full,
                     &config.semantic_runtime,
                     &support::semantic_runtime_credentials(),
                 )
-                .expect("full reindex benchmark should succeed");
+                .expect("full index benchmark should succeed");
                 criterion::black_box(summary.files_scanned);
             },
             BatchSize::SmallInput,
         );
     });
 
-    let changed_root = support::fresh_fixture_root("reindex-changed");
+    let changed_root = support::fresh_fixture_root("index-changed");
     let changed_config = support::native_search_config(&changed_root);
     let changed_db_path = support::benchmark_db_path(&changed_root);
-    reindex_repository_with_runtime_config(
+    index_repository_with_runtime_config(
         "repo-001",
         &changed_root,
         &changed_db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &changed_config.semantic_runtime,
         &support::semantic_runtime_credentials(),
     )
-    .expect("changed-only reindex benchmark warmup should succeed");
+    .expect("changed-only index benchmark warmup should succeed");
     let hot_path = changed_root.join("src/module_000.rs");
     let revision = Cell::new(0usize);
 
@@ -66,16 +66,16 @@ fn bench_reindex(c: &mut Criterion) {
                      }}\n"
                 ),
             );
-            let summary = reindex_repository_with_runtime_config_and_dirty_paths(
+            let summary = index_repository_with_runtime_config_and_dirty_paths(
                 "repo-001",
                 &changed_root,
                 &changed_db_path,
-                ReindexMode::ChangedOnly,
+                IndexMode::ChangedOnly,
                 &changed_config.semantic_runtime,
                 &support::semantic_runtime_credentials(),
                 std::slice::from_ref(&hot_path),
             )
-            .expect("changed-only reindex benchmark should succeed");
+            .expect("changed-only index benchmark should succeed");
             criterion::black_box(summary.files_changed);
             criterion::black_box(summary.duration_ms);
         });
@@ -84,5 +84,5 @@ fn bench_reindex(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_reindex);
+criterion_group!(benches, bench_index);
 criterion_main!(benches);

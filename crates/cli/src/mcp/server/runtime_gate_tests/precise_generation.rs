@@ -1,6 +1,6 @@
 #![allow(clippy::panic)]
 
-//! Regression tests for precise-graph generation tasks, timeouts, and cache reuse after reindex.
+//! Regression tests for precise-graph generation tasks, timeouts, and cache reuse after index.
 
 use super::*;
 

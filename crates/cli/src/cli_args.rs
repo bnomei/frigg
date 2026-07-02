@@ -182,24 +182,25 @@ pub(crate) enum Command {
     },
     /// Initialize storage schema for each workspace root.
     Init,
-    /// Verify storage schema and read/write sanity for each workspace root.
-    Verify,
-    /// Reindex all files and persist an updated manifest snapshot.
-    Reindex {
-        /// Reindex changed files only using persisted manifest delta.
+    /// Index all files and persist an updated manifest snapshot.
+    #[command(alias = "reindex")]
+    Index {
+        /// Index changed files only using persisted manifest delta.
         #[arg(long, default_value_t = false)]
         changed: bool,
-        /// Explicitly prepare local semantic model artifacts before semantic reindexing.
+        /// Explicitly prepare local semantic model artifacts before semantic indexing.
         #[arg(long = "prepare-semantic-model", default_value_t = false)]
         prepare_semantic_model: bool,
     },
     /// Explicitly prepare local semantic model artifacts for the active semantic runtime.
     PrepareSemanticModel,
     /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
+    #[command(hide = true)]
     RepairStorage,
     /// Emit Frigg's stable cache fingerprint for installer and CI cache keys.
     Hash,
     /// Prune retained manifest snapshots for each workspace root.
+    #[command(hide = true)]
     PruneStorage {
         /// Number of latest manifest snapshots to retain per repository.
         #[arg(

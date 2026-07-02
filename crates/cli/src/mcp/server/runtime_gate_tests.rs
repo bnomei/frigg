@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
 use crate::domain::model::TextMatch;
-use crate::indexer::{FileMetadataDigest, ReindexMode};
+use crate::indexer::{FileMetadataDigest, IndexMode};
 use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::server_cache::{
     FileContentSnapshot, FileContentWindowCacheKey, FindDeclarationsResponseCacheKey,

@@ -101,11 +101,11 @@ fn init_normal_emits_summary_only_on_stdout() {
 }
 
 #[test]
-fn reindex_quiet_suppresses_success_chatter() {
-    let root = temp_workspace_root("reindex-quiet");
+fn index_quiet_suppresses_success_chatter() {
+    let root = temp_workspace_root("index-quiet");
     create_simple_workspace(&root);
 
-    let output = run_frigg(&root, &["--quiet", "reindex"]);
+    let output = run_frigg(&root, &["--quiet", "index"]);
 
     assert_success(&output);
     assert_eq!(stdout(&output), "");
@@ -114,23 +114,23 @@ fn reindex_quiet_suppresses_success_chatter() {
 }
 
 #[test]
-fn reindex_verbose_emits_progress_on_stderr() {
-    let root = temp_workspace_root("reindex-verbose");
+fn index_verbose_emits_progress_on_stderr() {
+    let root = temp_workspace_root("index-verbose");
     create_simple_workspace(&root);
 
-    let output = run_frigg(&root, &["--verbose", "reindex"]);
+    let output = run_frigg(&root, &["--verbose", "index"]);
 
     assert_success(&output);
     let stdout = stdout(&output);
     let stderr = stderr(&output);
-    assert!(stdout.contains("reindex summary status=ok mode=full"));
-    assert!(stderr.contains("reindex ok mode=full repository_id=repo-001"));
+    assert!(stdout.contains("index summary status=ok mode=full"));
+    assert!(stderr.contains("index ok mode=full repository_id=repo-001"));
     cleanup_workspace(&root);
 }
 
 #[test]
-fn verify_missing_storage_writes_actionable_stderr_without_creating_db() {
-    let root = temp_workspace_root("verify-missing-storage");
+fn verify_subcommand_is_not_registered() {
+    let root = temp_workspace_root("verify-removed");
     create_simple_workspace(&root);
 
     let output = run_frigg(&root, &["verify"]);
@@ -138,14 +138,36 @@ fn verify_missing_storage_writes_actionable_stderr_without_creating_db() {
     assert_failure(&output);
     assert_eq!(stdout(&output), "");
     let stderr = stderr(&output);
-    assert!(stderr.contains("verify summary status=failed"));
-    assert!(stderr.contains("storage db file is missing"));
-    assert!(stderr.contains("verify failure next: run `frigg init` or `frigg reindex`"));
+    assert!(stderr.contains("unrecognized subcommand") || stderr.contains("unexpected argument"));
+    assert!(stderr.contains("verify"));
     assert!(
         !root.join(".frigg/storage.sqlite3").exists(),
-        "verify should not create an empty storage DB"
+        "removed verify command should not touch storage"
     );
     cleanup_workspace(&root);
+}
+
+#[test]
+fn storage_maintenance_commands_are_hidden_from_normal_help() {
+    let output = frigg_command()
+        .arg("--help")
+        .output()
+        .expect("run frigg help");
+
+    assert_success(&output);
+    assert_eq!(stderr(&output), "");
+    let stdout = stdout(&output);
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("index"));
+    assert!(stdout.contains("serve"));
+    assert!(
+        !stdout.contains("repair-storage"),
+        "repair-storage should stay hidden from normal help:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("prune-storage"),
+        "prune-storage should stay hidden from normal help:\n{stdout}"
+    );
 }
 
 #[test]

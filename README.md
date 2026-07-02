@@ -64,8 +64,7 @@ Run these commands inside the repository you want Frigg to index:
 
 ```bash
 frigg init
-frigg verify
-frigg reindex
+frigg index
 frigg serve
 ```
 
@@ -180,11 +179,10 @@ jobs:
             | FRIGG_VERSION="${FRIGG_VERSION}" sh
 
       - run: frigg init
-      - run: frigg reindex
-      - run: frigg verify
+      - run: frigg index
 ```
 
-For larger repositories, optionally cache `.frigg/`. Treat `.frigg/` as regenerable build output, not as a secret store. Always restore first, then refresh and verify the restored state. Save the cache only from trusted events:
+For larger repositories, optionally cache `.frigg/`. Treat `.frigg/` as regenerable build output, not as a secret store. Always restore first, then run `frigg init` and `frigg index` to refresh and validate the restored state. Save the cache only from trusted events:
 
 ```yaml
 name: Frigg
@@ -222,8 +220,7 @@ jobs:
             frigg-${{ runner.os }}-${{ runner.arch }}-${{ env.FRIGG_VERSION }}-${{ steps.frigg-hash.outputs.frigg-hash }}-
 
       - run: frigg init
-      - run: frigg reindex --changed
-      - run: frigg verify
+      - run: frigg index --changed
 
       - name: Save Frigg state
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -297,7 +294,7 @@ Use it as the repo-backed instruction bundle for assistants that support local o
 
 Semantic retrieval is off by default. When enabled, it improves recall for natural-language queries, but Frigg still grounds answers in local lexical, path, graph, symbol, and structural evidence.
 
-Semantic refresh participates in reindex and watch-driven updates. If semantic search is enabled, Frigg may call the configured embedding provider automatically as the workspace changes, not only when you run a manual reindex.
+Semantic refresh participates in index runs and watch-driven updates. If semantic search is enabled, Frigg may call the configured embedding provider automatically as the workspace changes, not only when you run `frigg index` manually.
 
 OpenAI:
 
@@ -333,10 +330,10 @@ export FRIGG_SEMANTIC_RUNTIME_MODEL=text-embedding-3-small
 
 When `provider=local`, Frigg prepares missing local model artifacts automatically during startup. If a download is needed, startup reports `semantic_model_prepare status=started` and `status=finished`; stdio MCP mode sends those lines to stderr so stdout remains reserved for protocol frames. If local artifacts are corrupt or unavailable and cannot be prepared, startup fails with `local_model_prepare_failed` so the cache issue can be fixed explicitly.
 
-After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass:
+After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass:
 
 ```bash
-frigg reindex
+frigg index
 ```
 
 Provider defaults:
@@ -347,7 +344,7 @@ Provider defaults:
 
 ## Optional SCIP Artifacts
 
-Frigg can consume external SCIP artifacts for more precise definitions, references, implementations, and call navigation. It can also automatically detect and invoke supported generator tools during `workspace_attach` and MCP `workspace_reindex` flows for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin.
+Frigg can consume external SCIP artifacts for more precise definitions, references, implementations, and call navigation. It can also automatically detect and invoke supported generator tools during `workspace_attach` and MCP `workspace_index` flows for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin.
 
 Java source support is available, but current JVM auto-generation is intentionally scoped to Gradle/KTS workspaces with Kotlin source files. Java/JVM and other Kotlin/JVM layouts should use manual `.frigg/scip/` artifact drops.
 
@@ -375,7 +372,7 @@ Useful SCIP starting points:
 
 Laravel PHP workspaces prefer repo-local `vendor/bin/scip-laravel` when `bootstrap/app.php` is present. Otherwise Frigg uses the existing PHP `vendor/bin/scip-php` or `scip-php` lookup.
 
-Frigg distills existing artifacts into snapshot-scoped retrieval projections on the next `frigg reindex` or MCP `workspace_reindex`. Server startup alone does not change retrieval state. Without SCIP data, Frigg still works with heuristic and source-backed navigation plus path and AST-derived retrieval summaries.
+Frigg distills existing artifacts into snapshot-scoped retrieval projections on the next `frigg index` or MCP `workspace_index`. Server startup alone does not change retrieval state. Without SCIP data, Frigg still works with heuristic and source-backed navigation plus path and AST-derived retrieval summaries.
 
 Optional repository-local precise config lives at `.frigg/precise.json`:
 
@@ -392,7 +389,7 @@ Optional repository-local precise config lives at `.frigg/precise.json`:
 }
 ```
 
-`workspace_attach` and `workspace_reindex` support `wait_for_precise`, which defaults to `true`. Pass `wait_for_precise=false` to return without waiting for precise generation. This skips only the wait; it does not disable attach-time index refresh, generator discovery, or generation scheduling.
+`workspace_attach` and `workspace_index` support `wait_for_precise`, which defaults to `true`. Pass `wait_for_precise=false` to return without waiting for precise generation. This skips only the wait; it does not disable attach-time index refresh, generator discovery, or generation scheduling.
 
 ## Built-In Watch Mode
 
@@ -415,7 +412,7 @@ Frigg exposes the `extended` MCP tool surface by default. Set `FRIGG_MCP_TOOL_SU
 
 Core profile tool groups:
 
-- workspace lifecycle: `list_repositories`, `workspace_attach`, `workspace_detach`, `workspace_prepare`, `workspace_reindex`, `workspace_current`
+- workspace lifecycle: `list_repositories`, `workspace_attach`, `workspace_detach`, `workspace_prepare`, `workspace_index`, `workspace_current`
 - source reads: `read_file`, `read_match`
 - discovery: `search_text`, `search_hybrid`, `search_symbol`
 - navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`
@@ -499,7 +496,7 @@ The [showcases/](showcases/) directory contains 52 public example catalogs for r
 - Frigg avoids editing source files during normal indexing.
 - Optional semantic search may call an external embedding provider if you enable it.
 - Optional precise generators may write `.frigg/scip/` artifacts, execute repo-local or PATH-discovered tools, or apply generator-specific compatibility patches. Those external tools have their own filesystem behavior outside Frigg's source-indexing boundary.
-- Workspace and index maintenance tools such as `workspace_prepare` and `workspace_reindex` are confirm-gated and operate on Frigg state.
+- Workspace and index maintenance tools such as `workspace_prepare` and `workspace_index` are confirm-gated and operate on Frigg state.
 - Session adoption and watcher leases are runtime/session state. `workspace_current.repositories` is session-local; `list_repositories` is the global known-repository catalog.
 
 Frigg's product boundary is intentionally narrow: local code evidence over MCP, not a full IDE, hosted code intelligence platform, or framework runtime.

@@ -1,4 +1,4 @@
-//! Ordered reindex execution across manifest persistence, retrieval projections, and semantic refresh.
+//! Ordered index execution across manifest persistence, retrieval projections, and semantic refresh.
 
 use std::path::Path;
 
@@ -8,12 +8,12 @@ use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::Storage;
 
 use super::super::manifest::normalize_repository_relative_path;
-use super::plan::{ManifestSnapshotPlan, ReindexPlan, SemanticRefreshMode};
+use super::plan::{IndexPlan, ManifestSnapshotPlan, SemanticRefreshMode};
 use super::semantic::execute_semantic_refresh_plan;
 use super::store::ManifestStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReindexExecutionPhase {
+enum IndexExecutionPhase {
     PersistManifestSnapshot,
     RefreshRetrievalProjections,
     SemanticRefresh,
@@ -21,7 +21,7 @@ enum ReindexExecutionPhase {
     PruneManifestSnapshots,
 }
 
-impl ReindexExecutionPhase {
+impl IndexExecutionPhase {
     fn as_str(self) -> &'static str {
         match self {
             Self::PersistManifestSnapshot => "persist_manifest_snapshot",
@@ -34,12 +34,12 @@ impl ReindexExecutionPhase {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn execute_reindex_plan(
+pub(super) fn execute_index_plan(
     manifest_store: &ManifestStore,
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    plan: &ReindexPlan,
+    plan: &IndexPlan,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
@@ -70,7 +70,7 @@ pub(super) fn execute_reindex_plan(
 fn execute_manifest_snapshot_phase(
     manifest_store: &ManifestStore,
     workspace_root: &Path,
-    plan: &ReindexPlan,
+    plan: &IndexPlan,
 ) -> FriggResult<()> {
     match &plan.snapshot_plan {
         ManifestSnapshotPlan::ReuseExisting { .. } => Ok(()),
@@ -78,12 +78,12 @@ fn execute_manifest_snapshot_phase(
             manifest_store
                 .upsert_repository(&plan.repository_id, workspace_root, &plan.repository_id)
                 .map_err(|err| {
-                    wrap_reindex_phase_error(ReindexExecutionPhase::PersistManifestSnapshot, err)
+                    wrap_index_phase_error(IndexExecutionPhase::PersistManifestSnapshot, err)
                 })?;
             manifest_store
                 .persist_snapshot_manifest(&plan.repository_id, snapshot_id, &plan.current_manifest)
                 .map_err(|err| {
-                    wrap_reindex_phase_error(ReindexExecutionPhase::PersistManifestSnapshot, err)
+                    wrap_index_phase_error(IndexExecutionPhase::PersistManifestSnapshot, err)
                 })
         }
     }
@@ -93,7 +93,7 @@ fn execute_retrieval_projection_phase(
     manifest_store: &ManifestStore,
     repository_id: &str,
     workspace_root: &Path,
-    plan: &ReindexPlan,
+    plan: &IndexPlan,
     storage: &Storage,
 ) -> FriggResult<()> {
     let snapshot_id = plan.snapshot_plan.snapshot_id();
@@ -106,7 +106,7 @@ fn execute_retrieval_projection_phase(
                 &required_retrieval_projection_versions(),
             )
             .map_err(|err| {
-                wrap_reindex_phase_error(ReindexExecutionPhase::RefreshRetrievalProjections, err)
+                wrap_index_phase_error(IndexExecutionPhase::RefreshRetrievalProjections, err)
             })?
             .is_empty(),
     };
@@ -123,7 +123,7 @@ fn execute_retrieval_projection_phase(
     let projection_bundle =
         build_retrieval_projection_bundle(repository_id, workspace_root, &manifest_paths)
             .map_err(|err| {
-                wrap_reindex_phase_error(ReindexExecutionPhase::RefreshRetrievalProjections, err)
+                wrap_index_phase_error(IndexExecutionPhase::RefreshRetrievalProjections, err)
             })
             .and_then(|bundle| {
                 storage
@@ -133,8 +133,8 @@ fn execute_retrieval_projection_phase(
                         bundle,
                     )
                     .map_err(|err| {
-                        wrap_reindex_phase_error(
-                            ReindexExecutionPhase::RefreshRetrievalProjections,
+                        wrap_index_phase_error(
+                            IndexExecutionPhase::RefreshRetrievalProjections,
                             err,
                         )
                     })
@@ -146,8 +146,8 @@ fn execute_retrieval_projection_phase(
             {
                 return Err(FriggError::Internal(format!(
                     "{err}; {}",
-                    wrap_reindex_phase_error(
-                        ReindexExecutionPhase::RollbackManifestSnapshot,
+                    wrap_index_phase_error(
+                        IndexExecutionPhase::RollbackManifestSnapshot,
                         rollback_err,
                     )
                 )));
@@ -164,7 +164,7 @@ fn execute_semantic_refresh_phase(
     manifest_store: &ManifestStore,
     repository_id: &str,
     workspace_root: &Path,
-    plan: &ReindexPlan,
+    plan: &IndexPlan,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
@@ -187,15 +187,15 @@ fn execute_semantic_refresh_phase(
     );
 
     if let Err(err) = semantic_result {
-        let semantic_error = wrap_reindex_phase_error(ReindexExecutionPhase::SemanticRefresh, err);
+        let semantic_error = wrap_index_phase_error(IndexExecutionPhase::SemanticRefresh, err);
         if plan.snapshot_plan.rollback_on_semantic_failure() {
             if let Err(rollback_err) =
                 execute_snapshot_rollback_phase(manifest_store, plan.snapshot_plan.snapshot_id())
             {
                 return Err(FriggError::Internal(format!(
                     "{semantic_error}; {}",
-                    wrap_reindex_phase_error(
-                        ReindexExecutionPhase::RollbackManifestSnapshot,
+                    wrap_index_phase_error(
+                        IndexExecutionPhase::RollbackManifestSnapshot,
                         rollback_err,
                     )
                 )));
@@ -217,23 +217,17 @@ fn execute_snapshot_rollback_phase(
 fn execute_retention_phase(
     storage: &Storage,
     repository_id: &str,
-    plan: &ReindexPlan,
+    plan: &IndexPlan,
 ) -> FriggResult<()> {
     storage
         .prune_repository_snapshots(repository_id, plan.retained_manifest_snapshots)
-        .map_err(|err| {
-            wrap_reindex_phase_error(ReindexExecutionPhase::PruneManifestSnapshots, err)
-        })?;
+        .map_err(|err| wrap_index_phase_error(IndexExecutionPhase::PruneManifestSnapshots, err))?;
     Ok(())
 }
 
-fn wrap_reindex_phase_error(phase: ReindexExecutionPhase, err: FriggError) -> FriggError {
-    let prefix = |message: String| {
-        format!(
-            "reindex execution failed phase={}: {message}",
-            phase.as_str()
-        )
-    };
+fn wrap_index_phase_error(phase: IndexExecutionPhase, err: FriggError) -> FriggError {
+    let prefix =
+        |message: String| format!("index execution failed phase={}: {message}", phase.as_str());
 
     match err {
         FriggError::InvalidInput(message) => FriggError::InvalidInput(prefix(message)),

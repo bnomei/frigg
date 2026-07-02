@@ -50,7 +50,7 @@ fn vector_store_verify_fails_on_dimension_mismatch() -> FriggResult<()> {
         .expect_err("initialize_vector_store should not silently rebuild mismatched vector tables");
     let init_err_message = init_err.to_string();
     assert!(
-        init_err_message.contains("automatic vector table repair is disabled"),
+        init_err_message.contains("rerun `frigg init` or `frigg index`"),
         "unexpected vector-store initialize mismatch error: {init_err_message}"
     );
     storage.verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)?;

@@ -1,22 +1,26 @@
-//! CLI `reindex` command: full or changed-only manifest rebuild across configured workspace roots.
+//! CLI `index` command: full or changed-only manifest rebuild across configured workspace roots.
 
 use std::error::Error;
 use std::io;
 
 use frigg::embeddings::local_model::prepare_local_semantic_model;
-use frigg::indexer::{ManifestDiagnosticKind, ReindexMode, reindex_repository_with_runtime_config};
+use frigg::indexer::{IndexMode, ManifestDiagnosticKind, index_repository_with_runtime_config};
 use frigg::settings::{FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
+use frigg::storage::Storage;
 
-use crate::cli_runtime::CliOutput;
+use super::super::storage_auto_heal::{
+    initialize_storage_with_auto_repair, verify_storage_with_auto_repair,
+};
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
+use crate::cli_runtime::{CliOutput, report_storage_failure};
 
 #[cfg(test)]
-pub(crate) fn run_reindex_command(
+pub(crate) fn run_index_command(
     config: &FriggConfig,
     changed: bool,
     prepare_semantic_model: bool,
 ) -> Result<(), Box<dyn Error>> {
-    run_reindex_command_with_output(
+    run_index_command_with_output(
         config,
         changed,
         prepare_semantic_model,
@@ -24,21 +28,21 @@ pub(crate) fn run_reindex_command(
     )
 }
 
-pub(crate) fn run_reindex_command_with_output(
+pub(crate) fn run_index_command_with_output(
     config: &FriggConfig,
     changed: bool,
     prepare_semantic_model: bool,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     if prepare_semantic_model {
-        prepare_reindex_semantic_model(config, output)?;
+        prepare_index_semantic_model(config, output)?;
     }
 
     let repositories = config.repositories();
     let mode = if changed {
-        ReindexMode::ChangedOnly
+        IndexMode::ChangedOnly
     } else {
-        ReindexMode::Full
+        IndexMode::Full
     };
     let mode_name = mode.as_str();
     let mut total_files_scanned = 0usize;
@@ -54,16 +58,48 @@ pub(crate) fn run_reindex_command_with_output(
             Some(root) => root,
             None => {
                 let message = format!(
-                    "reindex summary status=failed mode={mode_name} repository_id={} error=workspace root lookup failed",
+                    "index summary status=failed mode={mode_name} repository_id={} error=workspace root lookup failed",
                     repo.repository_id.0
                 );
                 output.error(&message)?;
                 return Err(Box::new(io::Error::other(message)));
             }
         };
-        let db_path = ensure_storage_db_path_for_write(root, "reindex")?;
+        let db_path = ensure_storage_db_path_for_write(root, "index")?;
+        let storage = Storage::new(&db_path);
 
-        let summary = match reindex_repository_with_runtime_config(
+        match initialize_storage_with_auto_repair(&storage) {
+            Ok(repaired_categories) => {
+                if !repaired_categories.is_empty() {
+                    output.progress(format!(
+                        "index auto_repair mode={mode_name} repository_id={} root={} db={} repaired={}",
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display(),
+                        repaired_categories.join(",")
+                    ))?;
+                }
+            }
+            Err(err) => {
+                report_storage_failure(
+                    output,
+                    "index",
+                    repositories.len(),
+                    &repo.repository_id.0,
+                    root,
+                    &db_path,
+                    &err,
+                )?;
+                return Err(Box::new(io::Error::other(format!(
+                    "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display()
+                ))));
+            }
+        }
+
+        let summary = match index_repository_with_runtime_config(
             &repo.repository_id.0,
             root,
             &db_path,
@@ -74,7 +110,7 @@ pub(crate) fn run_reindex_command_with_output(
             Ok(summary) => summary,
             Err(err) => {
                 output.error(format!(
-                    "reindex summary status=failed mode={mode_name} repositories={} repository_id={} root={} db={} error={}",
+                    "index summary status=failed mode={mode_name} repositories={} repository_id={} root={} db={} error={}",
                     repositories.len(),
                     repo.repository_id.0,
                     root.display(),
@@ -82,13 +118,39 @@ pub(crate) fn run_reindex_command_with_output(
                     err
                 ))?;
                 return Err(Box::new(io::Error::other(format!(
-                    "reindex failed mode={mode_name} repository_id={} root={} db={}: {err}",
+                    "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
                     repo.repository_id.0,
                     root.display(),
                     db_path.display()
                 ))));
             }
         };
+
+        let storage_sanity = if config.semantic_runtime.enabled {
+            verify_storage_with_auto_repair(&storage).map(|_| ())
+        } else {
+            match storage.verify_relational_schema() {
+                Ok(()) => Ok(()),
+                Err(_) => verify_storage_with_auto_repair(&storage).map(|_| ()),
+            }
+        };
+        if let Err(err) = storage_sanity {
+            report_storage_failure(
+                output,
+                "index",
+                repositories.len(),
+                &repo.repository_id.0,
+                root,
+                &db_path,
+                &err,
+            )?;
+            return Err(Box::new(io::Error::other(format!(
+                "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
+                repo.repository_id.0,
+                root.display(),
+                db_path.display()
+            ))));
+        }
 
         total_files_scanned += summary.files_scanned;
         total_files_changed += summary.files_changed;
@@ -107,7 +169,7 @@ pub(crate) fn run_reindex_command_with_output(
 
         for diagnostic in &summary.diagnostics.entries {
             output.diagnostic(format!(
-                "reindex diagnostic mode={mode_name} repository_id={} kind={} path={} message={}",
+                "index diagnostic mode={mode_name} repository_id={} kind={} path={} message={}",
                 repo.repository_id.0,
                 diagnostic.kind.as_str(),
                 diagnostic
@@ -120,7 +182,7 @@ pub(crate) fn run_reindex_command_with_output(
         }
 
         output.progress(format!(
-            "reindex ok mode={mode_name} repository_id={} root={} db={} snapshot_id={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
+            "index ok mode={mode_name} repository_id={} root={} db={} snapshot_id={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
             repo.repository_id.0,
             root.display(),
             db_path.display(),
@@ -136,7 +198,7 @@ pub(crate) fn run_reindex_command_with_output(
     }
 
     output.summary(format!(
-        "reindex summary status=ok mode={mode_name} repositories={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
+        "index summary status=ok mode={mode_name} repositories={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
         repositories.len(),
         total_files_scanned,
         total_files_changed,
@@ -149,23 +211,23 @@ pub(crate) fn run_reindex_command_with_output(
     Ok(())
 }
 
-fn prepare_reindex_semantic_model(
+fn prepare_index_semantic_model(
     config: &FriggConfig,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     if !config.semantic_runtime.enabled {
         return Err(Box::new(io::Error::other(
-            "reindex --prepare-semantic-model requires semantic runtime to be enabled",
+            "index --prepare-semantic-model requires semantic runtime to be enabled",
         )));
     }
     let Some(provider) = config.semantic_runtime.provider else {
         return Err(Box::new(io::Error::other(
-            "reindex --prepare-semantic-model requires --semantic-runtime-provider local",
+            "index --prepare-semantic-model requires --semantic-runtime-provider local",
         )));
     };
     if provider != SemanticRuntimeProvider::Local {
         return Err(Box::new(io::Error::other(format!(
-            "reindex --prepare-semantic-model only prepares local artifacts; active semantic provider '{}' uses external embeddings",
+            "index --prepare-semantic-model only prepares local artifacts; active semantic provider '{}' uses external embeddings",
             provider.as_str()
         ))));
     }
@@ -173,13 +235,13 @@ fn prepare_reindex_semantic_model(
     let artifact = prepare_local_semantic_model(&config.semantic_runtime)
         .map_err(|err| io::Error::other(err.to_string()))?;
     output.progress(format!(
-        "reindex semantic_model_prepare status=ok semantic_provider=local semantic_model={} cache_root={} cache_key={}",
+        "index semantic_model_prepare status=ok semantic_provider=local semantic_model={} cache_root={} cache_key={}",
         artifact.semantic_model,
         artifact.cache_root.display(),
         artifact.cache_key
     ))?;
     output.advisory(
-        "reindex semantic_model_prepare next_step=\"semantic rows are rebuilt by this reindex; run `frigg reindex` again after future semantic provider or model changes\""
+        "index semantic_model_prepare next_step=\"semantic rows are rebuilt by this index; run `frigg index` again after future semantic provider or model changes\""
     )?;
     Ok(())
 }

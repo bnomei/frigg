@@ -200,7 +200,7 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
         .write()
         .expect("runtime task registry should not be poisoned")
         .start_task(
-            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::ChangedIndex,
             "repo-001",
             "watch_manifest_fast",
             Some("watch root /tmp/repo-001 class manifest_fast".to_owned()),
@@ -231,7 +231,7 @@ fn workspace_current_runtime_tasks_surface_class_aware_watch_phases() {
 
     assert!(
         runtime.recent_tasks.iter().any(|task| {
-            task.kind == RuntimeTaskKind::ChangedReindex
+            task.kind == RuntimeTaskKind::ChangedIndex
                 && task.phase == "watch_manifest_fast"
                 && task.detail.as_deref() == Some("watch root /tmp/repo-001 class manifest_fast")
         }),

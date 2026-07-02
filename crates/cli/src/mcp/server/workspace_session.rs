@@ -320,10 +320,10 @@ impl FriggMcpServer {
             .filter(|task| {
                 matches!(
                     task.kind,
-                    RuntimeTaskKind::ChangedReindex
+                    RuntimeTaskKind::ChangedIndex
                         | RuntimeTaskKind::SemanticRefresh
                         | RuntimeTaskKind::WorkspacePrepare
-                        | RuntimeTaskKind::WorkspaceReindex
+                        | RuntimeTaskKind::WorkspaceIndex
                 ) && (task.repository_id == repository_id
                     || workspace.as_ref().is_some_and(|workspace| {
                         workspace.runtime_repository_id != repository_id
@@ -422,7 +422,7 @@ impl FriggMcpServer {
             | WorkspaceIndexLifecyclePhase::Skipped
             | WorkspaceIndexLifecyclePhase::Stale
             | WorkspaceIndexLifecyclePhase::Timeout
-            | WorkspaceIndexLifecyclePhase::Unavailable => WorkspaceRecommendedAction::RerunReindex,
+            | WorkspaceIndexLifecyclePhase::Unavailable => WorkspaceRecommendedAction::RerunIndex,
             WorkspaceIndexLifecyclePhase::Ready
             | WorkspaceIndexLifecyclePhase::Refreshing
             | WorkspaceIndexLifecyclePhase::RefreshQueued => {
@@ -446,14 +446,14 @@ impl FriggMcpServer {
     fn spawn_workspace_attach_index_refresh(
         &self,
         workspace: &AttachedWorkspace,
-    ) -> tokio::task::JoinHandle<Result<crate::indexer::ReindexSummary, String>> {
+    ) -> tokio::task::JoinHandle<Result<crate::indexer::IndexSummary, String>> {
         let task_id = self
             .runtime_state
             .runtime_task_registry
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .start_task(
-                RuntimeTaskKind::WorkspaceReindex,
+                RuntimeTaskKind::WorkspaceIndex,
                 workspace.repository_id.clone(),
                 "attach_index_ensure",
                 Some(format!("attach index ensure {}", workspace.root.display())),
@@ -463,15 +463,15 @@ impl FriggMcpServer {
         let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
         let semantic_runtime = self.config.semantic_runtime.clone();
         tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<crate::indexer::ReindexSummary, String> {
+            let result = (|| -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
                     .map_err(|err| err.to_string())?;
                 let credentials = SemanticRuntimeCredentials::from_process_env();
-                reindex_repository_with_runtime_config(
+                index_repository_with_runtime_config(
                     &workspace.runtime_repository_id,
                     &workspace.root,
                     &db_path,
-                    ReindexMode::ChangedOnly,
+                    IndexMode::ChangedOnly,
                     &semantic_runtime,
                     &credentials,
                 )
@@ -499,7 +499,7 @@ impl FriggMcpServer {
         timeout: Duration,
     ) -> (
         WorkspaceIndexLifecycleSummary,
-        Option<crate::indexer::ReindexSummary>,
+        Option<crate::indexer::IndexSummary>,
     ) {
         let started_at = tokio::time::Instant::now();
         let (lexical_ready, semantic_ready, readiness_error) =
@@ -803,10 +803,10 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         [
-            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::ChangedIndex,
             RuntimeTaskKind::SemanticRefresh,
             RuntimeTaskKind::WorkspacePrepare,
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspaceIndex,
         ]
         .into_iter()
         .any(|kind| {

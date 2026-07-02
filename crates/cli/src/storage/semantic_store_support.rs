@@ -828,7 +828,7 @@ pub(super) fn normalize_embedding_for_vector_projection(
     }
     if embedding.len() > DEFAULT_VECTOR_DIMENSIONS {
         return Err(FriggError::Internal(format!(
-            "semantic vector sync found {}-dimension embedding for chunk '{chunk_id}', but sqlite-vec expects at most {DEFAULT_VECTOR_DIMENSIONS}; rerun semantic reindex with the current build",
+            "semantic vector sync found {}-dimension embedding for chunk '{chunk_id}', but sqlite-vec expects at most {DEFAULT_VECTOR_DIMENSIONS}; rerun semantic index with the current build",
             embedding.len()
         )));
     }

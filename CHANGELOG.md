@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Renamed the context indexing command and MCP tool from `reindex` / `workspace_reindex` to `index` / `workspace_index`; the CLI still accepts `frigg reindex` as a compatibility alias.
+
 ## 0.5.0 - 2026-06-29
 
 - Hardened MCP workspace adoption, path containment, provenance, workload-corpus redaction, and HTTP auth handling to close security and data-leak edge cases.

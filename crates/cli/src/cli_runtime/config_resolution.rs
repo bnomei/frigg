@@ -45,11 +45,10 @@ pub(crate) fn resolve_command_config(
         Command::Adopt { .. }
         | Command::Context { .. }
         | Command::Init
-        | Command::Verify
         | Command::RepairStorage
         | Command::PruneStorage { .. } => resolve_base_config(cli, true, None),
         Command::Hash => resolve_base_config(cli, false, None),
-        Command::Reindex { .. } | Command::PrepareSemanticModel => {
+        Command::Index { .. } | Command::PrepareSemanticModel => {
             let mut config = resolve_base_config(cli, true, Some(RuntimeTransportKind::Stdio))?;
             config.semantic_runtime = resolve_semantic_runtime_config(cli);
             config.validate()?;

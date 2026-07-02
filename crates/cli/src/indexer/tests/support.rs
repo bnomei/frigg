@@ -14,18 +14,17 @@ pub(super) use std::os::unix::fs::PermissionsExt;
 
 pub(super) use super::super::{
     BladeRelationKind, FileDigest, Hasher, HeuristicReferenceConfidence,
-    HeuristicReferenceEvidence, ManifestBuilder, ManifestDiagnosticKind, ManifestStore,
-    PhpDeclarationRelation, PhpTargetEvidenceKind, PhpTypeEvidenceKind, ReindexMode,
-    ReindexSummary, RuntimeSemanticEmbeddingExecutor, SEMANTIC_CHUNK_MAX_CHARS,
-    SemanticRefreshMode, SemanticRuntimeEmbeddingExecutor, SourceSpan, SymbolDefinition,
-    SymbolKind, SymbolLanguage, build_file_semantic_chunks, build_reindex_plan_for_tests,
-    build_semantic_chunk_candidates, diff, extract_blade_source_evidence_from_source,
-    extract_php_declaration_relations_from_source, extract_php_source_evidence_from_source,
-    extract_symbols_for_paths, extract_symbols_from_source, file_digest_order,
-    generated_follow_up_structural_at_location_in_source,
-    inspect_syntax_tree_with_follow_up_in_source, mark_local_flux_overlays,
-    navigation_symbol_target_rank, register_symbol_definitions,
-    reindex_repository_with_runtime_config, reindex_repository_with_semantic_executor,
+    HeuristicReferenceEvidence, IndexMode, IndexSummary, ManifestBuilder, ManifestDiagnosticKind,
+    ManifestStore, PhpDeclarationRelation, PhpTargetEvidenceKind, PhpTypeEvidenceKind,
+    RuntimeSemanticEmbeddingExecutor, SEMANTIC_CHUNK_MAX_CHARS, SemanticRefreshMode,
+    SemanticRuntimeEmbeddingExecutor, SourceSpan, SymbolDefinition, SymbolKind, SymbolLanguage,
+    build_file_semantic_chunks, build_index_plan_for_tests, build_semantic_chunk_candidates, diff,
+    extract_blade_source_evidence_from_source, extract_php_declaration_relations_from_source,
+    extract_php_source_evidence_from_source, extract_symbols_for_paths,
+    extract_symbols_from_source, file_digest_order,
+    generated_follow_up_structural_at_location_in_source, index_repository_with_runtime_config,
+    index_repository_with_semantic_executor, inspect_syntax_tree_with_follow_up_in_source,
+    mark_local_flux_overlays, navigation_symbol_target_rank, register_symbol_definitions,
     resolve_heuristic_references, search_structural_in_source, semantic_chunk_language_for_path,
 };
 pub(super) use crate::domain::{FriggError, FriggResult};
@@ -218,13 +217,13 @@ pub(super) fn semantic_runtime_enabled_local() -> SemanticRuntimeConfig {
     }
 }
 
-pub(super) fn reindex_repository_without_semantic(
+pub(super) fn index_repository_without_semantic(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
-) -> FriggResult<ReindexSummary> {
-    reindex_repository_with_runtime_config(
+    mode: IndexMode,
+) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config(
         repository_id,
         workspace_root,
         db_path,

@@ -1,9 +1,9 @@
-//! Regression tests for semantic chunking, embedding persistence across reindex, and runtime executor integration.
+//! Regression tests for semantic chunking, embedding persistence across index, and runtime executor integration.
 
 use super::support::*;
 
 #[test]
-fn semantic_indexing_reindex_persists_deterministic_embeddings_when_enabled() -> FriggResult<()> {
+fn semantic_indexing_index_persists_deterministic_embeddings_when_enabled() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-enabled-roundtrip");
     let workspace_root = temp_workspace_root("semantic-enabled-roundtrip");
     prepare_workspace(
@@ -24,11 +24,11 @@ fn semantic_indexing_reindex_persists_deterministic_embeddings_when_enabled() ->
         gemini_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
-    let first = reindex_repository_with_semantic_executor(
+    let first = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
@@ -59,11 +59,11 @@ fn semantic_indexing_reindex_persists_deterministic_embeddings_when_enabled() ->
         "semantic records should be deterministically ordered by path"
     );
 
-    let second = reindex_repository_with_semantic_executor(
+    let second = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
@@ -89,11 +89,11 @@ fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short
     )?;
 
     let semantic_runtime = semantic_runtime_enabled_local();
-    let summary = reindex_repository_with_semantic_executor(
+    let summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &SemanticRuntimeCredentials::default(),
         &ShortSemanticEmbeddingExecutor,
@@ -126,7 +126,7 @@ fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short
 }
 
 #[test]
-fn semantic_full_reindex_skips_stale_deleted_absolute_paths_outside_workspace() -> FriggResult<()> {
+fn semantic_full_index_skips_stale_deleted_absolute_paths_outside_workspace() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-full-stale-deleted-outside-root");
     let workspace_root = temp_workspace_root("semantic-full-stale-deleted-outside-root");
     prepare_workspace(
@@ -163,11 +163,11 @@ fn semantic_full_reindex_skips_stale_deleted_absolute_paths_outside_workspace() 
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
     };
-    let summary = reindex_repository_with_semantic_executor(
+    let summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &FixtureSemanticEmbeddingExecutor,
@@ -214,11 +214,11 @@ fn semantic_changed_only_full_rebuilds_when_deleted_path_cannot_be_mapped() -> F
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
     };
-    let old_summary = reindex_repository_with_semantic_executor(
+    let old_summary = index_repository_with_semantic_executor(
         "repo-001",
         &old_workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &FixtureSemanticEmbeddingExecutor,
@@ -240,11 +240,11 @@ fn semantic_changed_only_full_rebuilds_when_deleted_path_cannot_be_mapped() -> F
         &[("src/lib.rs", "pub fn current_workspace() {}\n")],
     )?;
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &new_workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &[],
     )?;
@@ -254,11 +254,11 @@ fn semantic_changed_only_full_rebuilds_when_deleted_path_cannot_be_mapped() -> F
     );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
 
-    let new_summary = reindex_repository_with_semantic_executor(
+    let new_summary = index_repository_with_semantic_executor(
         "repo-001",
         &new_workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &credentials,
         &FixtureSemanticEmbeddingExecutor,
@@ -306,11 +306,11 @@ fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggRe
         .build()
         .expect("test runtime should build");
     let summary = runtime.block_on(async {
-        reindex_repository_with_semantic_executor(
+        index_repository_with_semantic_executor(
             "repo-001",
             &workspace_root,
             &db_path,
-            ReindexMode::Full,
+            IndexMode::Full,
             &semantic_runtime,
             &credentials,
             &executor,
@@ -322,7 +322,7 @@ fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggRe
         .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
     assert!(
         !semantic_rows.is_empty(),
-        "expected semantic embeddings when reindex runs inside a tokio runtime"
+        "expected semantic embeddings when index runs inside a tokio runtime"
     );
 
     cleanup_workspace(&workspace_root);
@@ -331,7 +331,7 @@ fn semantic_indexing_enabled_succeeds_inside_existing_tokio_runtime() -> FriggRe
 }
 
 #[test]
-fn semantic_indexing_disabled_preserves_reindex_behavior() -> FriggResult<()> {
+fn semantic_indexing_disabled_preserves_index_behavior() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-disabled-preserves");
     let workspace_root = temp_workspace_root("semantic-disabled-preserves");
     prepare_workspace(
@@ -339,11 +339,11 @@ fn semantic_indexing_disabled_preserves_reindex_behavior() -> FriggResult<()> {
         &[("src/main.rs", "fn main() {}\n"), ("README.md", "hello\n")],
     )?;
 
-    let summary = reindex_repository_with_semantic_executor(
+    let summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
         &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
@@ -380,11 +380,11 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
     };
-    let valid_summary = reindex_repository_with_semantic_executor(
+    let valid_summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &valid_runtime,
         &valid_credentials,
         &executor,
@@ -395,7 +395,7 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
         .load_semantic_embeddings_for_repository_snapshot("repo-001", &valid_summary.snapshot_id)?;
     assert!(
         !before.is_empty(),
-        "expected seeded semantic records before invalid reindex attempt"
+        "expected seeded semantic records before invalid index attempt"
     );
 
     let invalid_runtime = SemanticRuntimeConfig {
@@ -405,11 +405,11 @@ fn semantic_indexing_validation_failure_keeps_existing_semantic_state() -> Frigg
         strict_mode: false,
     };
     let invalid_credentials = SemanticRuntimeCredentials::default();
-    let error = reindex_repository_with_semantic_executor(
+    let error = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &invalid_runtime,
         &invalid_credentials,
         &executor,
@@ -447,11 +447,11 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
         gemini_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
-    let first = reindex_repository_with_semantic_executor(
+    let first = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
@@ -463,11 +463,11 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
     )
     .map_err(FriggError::Io)?;
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &[],
     )?;
@@ -485,16 +485,16 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
     assert_eq!(plan.semantic_refresh.mode, SemanticRefreshMode::FullRebuild);
     assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
 
-    let error = reindex_repository_with_semantic_executor(
+    let error = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &FailingSemanticEmbeddingExecutor,
     )
-    .expect_err("failing semantic executor should abort reindex");
+    .expect_err("failing semantic executor should abort index");
     assert!(
         error
             .to_string()
@@ -512,7 +512,7 @@ fn semantic_indexing_failure_rolls_back_new_manifest_snapshot() -> FriggResult<(
         .expect("expected previous manifest snapshot to remain active");
     assert_eq!(
         latest.snapshot_id, first.snapshot_id,
-        "failed semantic reindex must not advance the latest manifest snapshot"
+        "failed semantic index must not advance the latest manifest snapshot"
     );
     let semantic_rows =
         storage.load_semantic_embeddings_for_repository_snapshot("repo-001", &first.snapshot_id)?;
@@ -544,11 +544,11 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
         gemini_api_key: None,
     };
     let first_executor = CountingSemanticEmbeddingExecutor::default();
-    let first = reindex_repository_with_semantic_executor(
+    let first = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &first_executor,
@@ -564,11 +564,11 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
     .map_err(FriggError::Io)?;
 
     let second_executor = CountingSemanticEmbeddingExecutor::default();
-    let second = reindex_repository_with_semantic_executor(
+    let second = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &credentials,
         &second_executor,
@@ -632,11 +632,11 @@ fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read(
         gemini_api_key: None,
     };
 
-    let first = reindex_repository_with_semantic_executor(
+    let first = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &CountingSemanticEmbeddingExecutor::default(),
@@ -649,11 +649,11 @@ fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read(
     )
     .map_err(FriggError::Io)?;
 
-    let second = reindex_repository_with_semantic_executor(
+    let second = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &credentials,
         &CountingSemanticEmbeddingExecutor::default(),
@@ -702,11 +702,11 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
         gemini_api_key: None,
     };
 
-    let first = reindex_repository_with_semantic_executor(
+    let first = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &FixtureSemanticEmbeddingExecutor,
@@ -731,11 +731,11 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
         .map_err(FriggError::Io)?;
 
         let executor = CountingSemanticEmbeddingExecutor::default();
-        let summary = reindex_repository_with_semantic_executor(
+        let summary = index_repository_with_semantic_executor(
             "repo-001",
             &workspace_root,
             &db_path,
-            ReindexMode::ChangedOnly,
+            IndexMode::ChangedOnly,
             &semantic_runtime,
             &credentials,
             &executor,
@@ -799,7 +799,7 @@ fn semantic_indexing_repeated_changed_only_cycles_keep_live_corpus_bounded() -> 
 }
 
 #[test]
-fn semantic_indexing_reindex_failure_surfaces_batch_context() -> FriggResult<()> {
+fn semantic_indexing_index_failure_surfaces_batch_context() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-failure-batch-context");
     let workspace_root = temp_workspace_root("semantic-failure-batch-context");
     prepare_workspace(
@@ -812,11 +812,11 @@ fn semantic_indexing_reindex_failure_surfaces_batch_context() -> FriggResult<()>
         openai_api_key: Some("test-openai-key".to_owned()),
         gemini_api_key: None,
     };
-    let error = reindex_repository_with_semantic_executor(
+    let error = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &FailingSemanticEmbeddingExecutor,
@@ -1019,7 +1019,7 @@ fn semantic_chunk_language_supports_blade_paths() {
 
 #[cfg(unix)]
 #[test]
-fn reindex_continues_with_read_diagnostics_for_unreadable_files() -> FriggResult<()> {
+fn index_continues_with_read_diagnostics_for_unreadable_files() -> FriggResult<()> {
     let db_path = temp_db_path("incremental-unreadable-db");
     let workspace_root = temp_workspace_root("incremental-unreadable-workspace");
     prepare_workspace(
@@ -1033,18 +1033,10 @@ fn reindex_continues_with_read_diagnostics_for_unreadable_files() -> FriggResult
     let unreadable_path = workspace_root.join("src/private.rs");
     set_file_mode(&unreadable_path, 0o000)?;
 
-    let first = reindex_repository_without_semantic(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::Full,
-    )?;
-    let second = reindex_repository_without_semantic(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::Full,
-    )?;
+    let first =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
+    let second =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
 
     assert_eq!(first.snapshot_id, second.snapshot_id);
     assert_eq!(first.files_scanned, 1);
@@ -1096,20 +1088,16 @@ fn changed_only_reuses_previous_digests_for_unchanged_unreadable_files() -> Frig
         ],
     )?;
 
-    let first = reindex_repository_without_semantic(
-        "repo-001",
-        &workspace_root,
-        &db_path,
-        ReindexMode::Full,
-    )?;
+    let first =
+        index_repository_without_semantic("repo-001", &workspace_root, &db_path, IndexMode::Full)?;
     let unreadable_path = workspace_root.join("src/private.rs");
     set_file_mode(&unreadable_path, 0o000)?;
 
-    let second = reindex_repository_without_semantic(
+    let second = index_repository_without_semantic(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
     )?;
 
     assert_eq!(second.snapshot_id, first.snapshot_id);
@@ -1125,19 +1113,19 @@ fn changed_only_reuses_previous_digests_for_unchanged_unreadable_files() -> Frig
 }
 
 #[test]
-fn reindex_plan_full_mode_marks_semantic_full_rebuild_when_enabled() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-plan-semantic-full-db");
-    let workspace_root = temp_workspace_root("reindex-plan-semantic-full-workspace");
+fn index_plan_full_mode_marks_semantic_full_rebuild_when_enabled() -> FriggResult<()> {
+    let db_path = temp_db_path("index-plan-semantic-full-db");
+    let workspace_root = temp_workspace_root("index-plan-semantic-full-workspace");
     prepare_workspace(
         &workspace_root,
         &[("src/main.rs", "pub fn semantic_full() {}\n")],
     )?;
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime_enabled_openai(),
         &[],
     )?;
@@ -1153,9 +1141,9 @@ fn reindex_plan_full_mode_marks_semantic_full_rebuild_when_enabled() -> FriggRes
 }
 
 #[test]
-fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-plan-semantic-delta-db");
-    let workspace_root = temp_workspace_root("reindex-plan-semantic-delta-workspace");
+fn index_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> FriggResult<()> {
+    let db_path = temp_db_path("index-plan-semantic-delta-db");
+    let workspace_root = temp_workspace_root("index-plan-semantic-delta-workspace");
     prepare_workspace(
         &workspace_root,
         &[("src/main.rs", "pub fn semantic_delta() {}\n")],
@@ -1167,11 +1155,11 @@ fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> 
         gemini_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
-    let _summary = reindex_repository_with_semantic_executor(
+    let _summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
@@ -1183,11 +1171,11 @@ fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> 
     )
     .map_err(FriggError::Io)?;
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &[],
     )?;
@@ -1209,10 +1197,10 @@ fn reindex_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> 
 }
 
 #[test]
-fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_unchanged()
+fn index_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_unchanged()
 -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-plan-semantic-reuse-db");
-    let workspace_root = temp_workspace_root("reindex-plan-semantic-reuse-workspace");
+    let db_path = temp_db_path("index-plan-semantic-reuse-db");
+    let workspace_root = temp_workspace_root("index-plan-semantic-reuse-workspace");
     prepare_workspace(
         &workspace_root,
         &[("src/main.rs", "pub fn semantic_reuse() {}\n")],
@@ -1224,21 +1212,21 @@ fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_un
         gemini_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
-    let summary = reindex_repository_with_semantic_executor(
+    let summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
     )?;
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &[],
     )?;
@@ -1268,9 +1256,9 @@ fn reindex_plan_changed_only_reuses_existing_semantic_state_when_workspace_is_un
 }
 
 #[test]
-fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> FriggResult<()> {
-    let db_path = temp_db_path("reindex-plan-semantic-stale-db");
-    let workspace_root = temp_workspace_root("reindex-plan-semantic-stale-workspace");
+fn index_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> FriggResult<()> {
+    let db_path = temp_db_path("index-plan-semantic-stale-db");
+    let workspace_root = temp_workspace_root("index-plan-semantic-stale-workspace");
     prepare_workspace(
         &workspace_root,
         &[("src/main.rs", "pub fn semantic_stale_v1() {}\n")],
@@ -1282,11 +1270,11 @@ fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() ->
         gemini_api_key: None,
     };
     let executor = FixtureSemanticEmbeddingExecutor;
-    let semantic_summary = reindex_repository_with_semantic_executor(
+    let semantic_summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &semantic_runtime,
         &credentials,
         &executor,
@@ -1298,11 +1286,11 @@ fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() ->
     )
     .map_err(FriggError::Io)?;
 
-    let manifest_only_summary = reindex_repository_with_semantic_executor(
+    let manifest_only_summary = index_repository_with_semantic_executor(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
         &RuntimeSemanticEmbeddingExecutor::new(SemanticRuntimeCredentials::default()),
@@ -1312,11 +1300,11 @@ fn reindex_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() ->
         semantic_summary.snapshot_id
     );
 
-    let plan = build_reindex_plan_for_tests(
+    let plan = build_index_plan_for_tests(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &semantic_runtime,
         &[],
     )?;

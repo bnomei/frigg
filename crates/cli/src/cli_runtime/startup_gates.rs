@@ -1,4 +1,4 @@
-//! Startup gates that block serve and semantic reindex until vector storage and embedding
+//! Startup gates that block serve and semantic index until vector storage and embedding
 //! credentials satisfy the resolved runtime contract.
 
 use std::io;
@@ -13,6 +13,7 @@ use frigg::settings::{
 use frigg::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend};
 use tracing::info;
 
+use super::storage_auto_heal::verify_storage_with_auto_repair;
 use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
 
@@ -86,6 +87,35 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
             return Err(io::Error::other(err_message));
         }
         let storage = Storage::new(&db_path);
+        let repaired_categories = match verify_storage_with_auto_repair(&storage) {
+            Ok(categories) => categories,
+            Err(err) => {
+                let err_message = format!(
+                    "startup strict vector readiness failed repository_id={} root={} db={}: {err}",
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display()
+                );
+                output.error(format!(
+                    "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
+                    repositories.len(),
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display(),
+                    err_message
+                ))?;
+                return Err(io::Error::other(err_message));
+            }
+        };
+        if !repaired_categories.is_empty() {
+            output.progress(format!(
+                "startup auto_repair repository_id={} root={} db={} repaired={}",
+                repo.repository_id.0,
+                root.display(),
+                db_path.display(),
+                repaired_categories.join(",")
+            ))?;
+        }
         let status = storage
             .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)
             .map_err(|err| {

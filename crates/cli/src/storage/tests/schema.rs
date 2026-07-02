@@ -183,7 +183,7 @@ fn verify_missing_db_fails_without_creating_file() {
         "unexpected missing-db verify error: {message}"
     );
     assert!(
-        message.contains("frigg init") || message.contains("frigg reindex"),
+        message.contains("frigg init") || message.contains("frigg index"),
         "missing-db verify error should tell the user how to create storage: {message}"
     );
     assert!(

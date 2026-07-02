@@ -331,7 +331,7 @@ async fn workspace_current_reports_stale_not_skipped_for_unindexed_repository() 
     );
     assert_eq!(
         lifecycle.recommended_action,
-        Some(WorkspaceRecommendedAction::RerunReindex)
+        Some(WorkspaceRecommendedAction::RerunIndex)
     );
 
     fs::remove_dir_all(&workspace_root).expect("temporary workspace should clean up");

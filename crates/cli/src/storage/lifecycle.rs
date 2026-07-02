@@ -30,14 +30,14 @@ impl Storage {
 
     fn incompatible_schema_error(&self, found_version: i64) -> FriggError {
         FriggError::Internal(format!(
-            "storage schema is incompatible (found {found_version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg reindex` to rebuild it",
+            "storage schema is incompatible (found {found_version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg index` to rebuild it",
             self.db_path.display()
         ))
     }
 
     fn uninitialized_schema_error(&self) -> FriggError {
         FriggError::Internal(format!(
-            "storage schema is uninitialized: '{}' has no Frigg schema_version row; run `frigg init` or `frigg reindex` to create current storage, or delete the file first if it is not a Frigg database",
+            "storage schema is uninitialized: '{}' has no Frigg schema_version row; run `frigg init` or `frigg index` to create current storage, or delete the file first if it is not a Frigg database",
             self.db_path.display()
         ))
     }
@@ -164,7 +164,7 @@ impl Storage {
         for table in REQUIRED_TABLES {
             if !table_exists(conn, table)? {
                 return Err(FriggError::Internal(format!(
-                    "storage verification failed: missing required table '{table}' in '{}'; delete the storage DB and run `frigg reindex` to rebuild current storage",
+                    "storage verification failed: missing required table '{table}' in '{}'; delete the storage DB and run `frigg index` to rebuild current storage",
                     self.db_path.display()
                 )));
             }
@@ -173,7 +173,7 @@ impl Storage {
         let version = read_schema_version(&conn)?;
         if version != CURRENT_SCHEMA_VERSION {
             return Err(FriggError::Internal(format!(
-                "storage verification failed: schema version mismatch (found {version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled; delete '{}' and run `frigg reindex` to rebuild current storage",
+                "storage verification failed: schema version mismatch (found {version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled; delete '{}' and run `frigg index` to rebuild current storage",
                 self.db_path.display()
             )));
         }

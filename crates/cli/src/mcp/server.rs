@@ -14,14 +14,14 @@ use crate::graph::{
 };
 use crate::indexer::{
     FileMetadataDigest, HeuristicReference, HeuristicReferenceConfidence,
-    HeuristicReferenceEvidence, HeuristicReferenceResolver, ManifestBuilder,
-    ManifestDiagnosticKind, ReindexMode, SourceSpan, SymbolDefinition, SymbolExtractionOutput,
+    HeuristicReferenceEvidence, HeuristicReferenceResolver, IndexMode, ManifestBuilder,
+    ManifestDiagnosticKind, SourceSpan, SymbolDefinition, SymbolExtractionOutput,
     byte_offset_for_line_column, extract_php_source_evidence_from_source,
     extract_symbols_for_paths, extract_symbols_from_source,
-    generated_follow_up_structural_at_location_in_source, inspect_syntax_tree_in_source,
-    inspect_syntax_tree_with_follow_up_in_source, navigation_symbol_target_rank,
-    php_declaration_relation_edges_for_file, php_heuristic_implementation_candidates_for_target,
-    register_symbol_definitions, reindex_repository_with_runtime_config,
+    generated_follow_up_structural_at_location_in_source, index_repository_with_runtime_config,
+    inspect_syntax_tree_in_source, inspect_syntax_tree_with_follow_up_in_source,
+    navigation_symbol_target_rank, php_declaration_relation_edges_for_file,
+    php_heuristic_implementation_candidates_for_target, register_symbol_definitions,
     resolve_php_target_evidence_edges, search_structural_in_source,
     search_structural_with_follow_up_in_source,
 };
@@ -126,15 +126,14 @@ use crate::mcp::types::{
     WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
     WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexAction,
     WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary,
-    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
+    WorkspaceIndexResponse, WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
     WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
     WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
     WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
     WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseSummary,
     WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
-    WorkspaceReindexParams, WorkspaceReindexResponse, WorkspaceResolveMode,
-    WorkspaceStorageIndexState, WorkspaceStorageSummary,
+    WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
@@ -684,7 +683,7 @@ impl FriggMcpServer {
         if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
             let repository_id = response.repository.repository_id.clone();
             if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
-                let (index_lifecycle, reindex_summary) = self
+                let (index_lifecycle, index_summary) = self
                     .ensure_workspace_index_for_attach(&workspace, wait_for_index, index_timeout)
                     .await;
                 response.index_lifecycle = index_lifecycle;
@@ -692,7 +691,7 @@ impl FriggMcpServer {
                     response.index_lifecycle.phase,
                     WorkspaceIndexLifecyclePhase::Ready
                 ) {
-                    match reindex_summary.as_ref() {
+                    match index_summary.as_ref() {
                         Some(summary) => self.maybe_spawn_workspace_precise_generation_for_paths(
                             &workspace,
                             &summary.changed_paths,
@@ -897,7 +896,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_prepare",
-        description = "Initialize or verify Frigg state for a repository, then adopt it into this session. Requires confirmation.",
+        description = "Initialize and validate Frigg state for a repository, then adopt it into this session. Requires confirmation.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -987,7 +986,7 @@ impl FriggMcpServer {
             )
         })?;
 
-        Self::notify_progress(&meta, &client, 2.0, 4.0, "verify storage").await;
+        Self::notify_progress(&meta, &client, 2.0, 4.0, "validate storage").await;
         self.runtime_state
             .validated_manifest_candidate_cache
             .write()
@@ -1094,7 +1093,7 @@ impl FriggMcpServer {
     }
 
     #[tool(
-        name = "workspace_reindex",
+        name = "workspace_index",
         description = "Refresh indexed state for a repository, then adopt it into this session. Requires confirmation.",
         annotations(
             read_only_hint = false,
@@ -1102,14 +1101,14 @@ impl FriggMcpServer {
             idempotent_hint = false
         )
     )]
-    pub async fn workspace_reindex(
+    pub async fn workspace_index(
         &self,
         meta: Meta,
         client: Peer<RoleServer>,
-        params: Parameters<WorkspaceReindexParams>,
-    ) -> Result<Json<WorkspaceReindexResponse>, ErrorData> {
+        params: Parameters<WorkspaceIndexParams>,
+    ) -> Result<Json<WorkspaceIndexResponse>, ErrorData> {
         let params = params.0;
-        Self::require_confirm("workspace_reindex", params.confirm)?;
+        Self::require_confirm("workspace_index", params.confirm)?;
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
         let started_at = Instant::now();
@@ -1125,14 +1124,14 @@ impl FriggMcpServer {
             resolve_mode = ?resolve_mode,
             requested_path = params.path.as_deref().unwrap_or(""),
             requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
-            "workspace reindex started"
+            "workspace index started"
         );
         if self.repository_has_active_runtime_work(&workspace.repository_id) {
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
-                "workspace reindex rejected because runtime work is active"
+                "workspace index rejected because runtime work is active"
             );
             return Err(Self::invalid_params(
                 "repository already has active runtime work",
@@ -1146,25 +1145,25 @@ impl FriggMcpServer {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .start_task(
-                RuntimeTaskKind::WorkspaceReindex,
+                RuntimeTaskKind::WorkspaceIndex,
                 workspace.repository_id.clone(),
-                "workspace_reindex",
-                Some(format!("reindex {}", workspace.root.display())),
+                "workspace_index",
+                Some(format!("index {}", workspace.root.display())),
             );
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "lexical refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();
-        let reindex_summary = Self::run_blocking_task("workspace_reindex", {
+        let index_summary = Self::run_blocking_task("workspace_index", {
             let workspace = workspace.clone();
-            move || -> Result<crate::indexer::ReindexSummary, String> {
+            move || -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
                     .map_err(|err| err.to_string())?;
                 let credentials = SemanticRuntimeCredentials::from_process_env();
-                reindex_repository_with_runtime_config(
+                index_repository_with_runtime_config(
                     &workspace.runtime_repository_id,
                     &workspace.root,
                     &db_path,
-                    ReindexMode::ChangedOnly,
+                    IndexMode::ChangedOnly,
                     &semantic_runtime,
                     &credentials,
                 )
@@ -1178,7 +1177,7 @@ impl FriggMcpServer {
                 root = %workspace.root.display(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 error = %err,
-                "workspace reindex failed during lexical refresh"
+                "workspace index failed during lexical refresh"
             );
             self.runtime_state
                 .runtime_task_registry
@@ -1202,7 +1201,7 @@ impl FriggMcpServer {
                     root = %workspace.root.display(),
                     duration_ms = started_at.elapsed().as_millis() as u64,
                     error = %error.message,
-                    "workspace reindex failed while adopting workspace"
+                    "workspace index failed while adopting workspace"
                 );
                 self.runtime_state
                     .runtime_task_registry
@@ -1216,8 +1215,8 @@ impl FriggMcpServer {
             })?;
         let precise_generation_action = self.maybe_spawn_workspace_precise_generation_for_paths(
             &workspace,
-            &reindex_summary.changed_paths,
-            &reindex_summary.deleted_paths,
+            &index_summary.changed_paths,
+            &index_summary.deleted_paths,
         );
         let precise = self
             .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
@@ -1234,18 +1233,18 @@ impl FriggMcpServer {
             .clone()
             .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
         repository.storage = None;
-        let mut response = WorkspaceReindexResponse {
+        let mut response = WorkspaceIndexResponse {
             repository,
             resolved_from,
             resolution,
             session_default: self.current_repository_id().as_deref()
                 == Some(workspace.repository_id.as_str()),
             storage,
-            snapshot_id: reindex_summary.snapshot_id.clone(),
-            files_scanned: reindex_summary.files_scanned,
-            files_changed: reindex_summary.files_changed,
-            files_deleted: reindex_summary.files_deleted,
-            diagnostics_count: reindex_summary.diagnostics.total_count(),
+            snapshot_id: index_summary.snapshot_id.clone(),
+            files_scanned: index_summary.files_scanned,
+            files_changed: index_summary.files_changed,
+            files_deleted: index_summary.files_deleted,
+            diagnostics_count: index_summary.diagnostics.total_count(),
             precise_lifecycle,
         };
         if params.wait_for_precise.unwrap_or(true) {
@@ -1286,7 +1285,7 @@ impl FriggMcpServer {
             diagnostics_count = response.diagnostics_count,
             precise_phase = ?response.precise_lifecycle.phase,
             duration_ms = started_at.elapsed().as_millis() as u64,
-            "workspace reindex completed"
+            "workspace index completed"
         );
         self.runtime_state
             .runtime_task_registry
@@ -1311,7 +1310,7 @@ impl FriggMcpServer {
                 },
             }),
             Some(FriggMcpServer::provenance_normalized_workload_metadata(
-                "workspace_reindex",
+                "workspace_index",
                 std::slice::from_ref(&response.repository.repository_id),
                 WorkloadPrecisionMode::Exact,
                 None,
@@ -1322,7 +1321,7 @@ impl FriggMcpServer {
         let result = Ok(Json(response));
         let provenance_result = self
             .record_provenance_blocking(
-                "workspace_reindex",
+                "workspace_index",
                 None,
                 json!({
                     "path": params.path.as_deref().map(Self::bounded_text),
@@ -1336,7 +1335,7 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("workspace_reindex", result, provenance_result)
+        self.finalize_with_provenance("workspace_index", result, provenance_result)
     }
 
     #[tool(

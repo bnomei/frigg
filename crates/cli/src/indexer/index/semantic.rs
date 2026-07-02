@@ -1,4 +1,4 @@
-//! Repository reindex orchestration from plan execution through manifest and semantic writes.
+//! Repository index orchestration from plan execution through manifest and semantic writes.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -13,24 +13,24 @@ use super::super::semantic::{
     build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
 };
 use super::super::{
-    FileDigest, ManifestBuilder, ManifestDiff, ReindexDiagnostics, SemanticRefreshMode,
+    FileDigest, IndexDiagnostics, ManifestBuilder, ManifestDiff, SemanticRefreshMode,
     SemanticRefreshPlan,
 };
-use super::execution::execute_reindex_plan;
-use super::plan::{ReindexMode, ReindexSummary, build_reindex_plan};
+use super::execution::execute_index_plan;
+use super::plan::{IndexMode, IndexSummary, build_index_plan};
 use super::store::ManifestStore;
 
 /// Runs the standard repository refresh path using semantic runtime settings resolved from the
 /// current process environment.
-pub fn reindex_repository(
+pub fn index_repository(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
-) -> FriggResult<ReindexSummary> {
+    mode: IndexMode,
+) -> FriggResult<IndexSummary> {
     let semantic_runtime = resolve_semantic_runtime_config_from_env()?;
     let credentials = SemanticRuntimeCredentials::from_process_env();
-    reindex_repository_with_runtime_config(
+    index_repository_with_runtime_config(
         repository_id,
         workspace_root,
         db_path,
@@ -40,16 +40,16 @@ pub fn reindex_repository(
     )
 }
 
-/// Runs repository reindex with caller-supplied semantic runtime configuration.
-pub fn reindex_repository_with_runtime_config(
+/// Runs repository index with caller-supplied semantic runtime configuration.
+pub fn index_repository_with_runtime_config(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
-) -> FriggResult<ReindexSummary> {
-    reindex_repository_with_runtime_config_and_dirty_paths(
+) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config_and_dirty_paths(
         repository_id,
         workspace_root,
         db_path,
@@ -60,18 +60,18 @@ pub fn reindex_repository_with_runtime_config(
     )
 }
 
-/// Runs repository reindex with explicit dirty-path hints for changed-only manifest builds.
-pub fn reindex_repository_with_runtime_config_and_dirty_paths(
+/// Runs repository index with explicit dirty-path hints for changed-only manifest builds.
+pub fn index_repository_with_runtime_config_and_dirty_paths(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     dirty_path_hints: &[PathBuf],
-) -> FriggResult<ReindexSummary> {
+) -> FriggResult<IndexSummary> {
     let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
-    reindex_repository_with_semantic_executor_and_dirty_paths(
+    index_repository_with_semantic_executor_and_dirty_paths(
         repository_id,
         workspace_root,
         db_path,
@@ -84,16 +84,16 @@ pub fn reindex_repository_with_runtime_config_and_dirty_paths(
 }
 
 #[cfg(test)]
-pub(crate) fn reindex_repository_with_semantic_executor(
+pub(crate) fn index_repository_with_semantic_executor(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
-) -> FriggResult<ReindexSummary> {
-    reindex_repository_with_semantic_executor_and_dirty_paths(
+) -> FriggResult<IndexSummary> {
+    index_repository_with_semantic_executor_and_dirty_paths(
         repository_id,
         workspace_root,
         db_path,
@@ -106,21 +106,21 @@ pub(crate) fn reindex_repository_with_semantic_executor(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reindex_repository_with_semantic_executor_and_dirty_paths(
+fn index_repository_with_semantic_executor_and_dirty_paths(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     dirty_path_hints: &[PathBuf],
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
-) -> FriggResult<ReindexSummary> {
+) -> FriggResult<IndexSummary> {
     let started_at = Instant::now();
     let db_preexisted = db_path.exists();
     let manifest_store = ManifestStore::new(db_path);
-    manifest_store.initialize_for_reindex(semantic_runtime.enabled)?;
-    let previous_manifest = if mode == ReindexMode::Full && !db_preexisted {
+    manifest_store.initialize_for_index(semantic_runtime.enabled)?;
+    let previous_manifest = if mode == IndexMode::Full && !db_preexisted {
         None
     } else {
         manifest_store.load_latest_manifest_for_repository(repository_id)?
@@ -135,26 +135,26 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
 
     let manifest_builder = ManifestBuilder::default();
     let manifest_output = match mode {
-        ReindexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
-        ReindexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
+        IndexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
+        IndexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
             .build_changed_only_with_hints_and_diagnostics(
                 workspace_root,
                 previous_entries,
                 dirty_path_hints,
             )?,
-        ReindexMode::ChangedOnly => manifest_builder.build_with_diagnostics(workspace_root)?,
+        IndexMode::ChangedOnly => manifest_builder.build_with_diagnostics(workspace_root)?,
     };
     let current_manifest = manifest_output.entries;
-    let diagnostics = ReindexDiagnostics {
+    let diagnostics = IndexDiagnostics {
         entries: manifest_output.diagnostics,
     };
-    let manifest_diff = if mode == ReindexMode::Full && previous_entries.is_empty() {
+    let manifest_diff = if mode == IndexMode::Full && previous_entries.is_empty() {
         ManifestDiff::default()
     } else {
         diff(previous_entries, &current_manifest)
     };
     let storage = semantic_runtime.enabled.then(|| Storage::new(db_path));
-    let plan = build_reindex_plan(
+    let plan = build_index_plan(
         repository_id,
         workspace_root,
         mode,
@@ -167,7 +167,7 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
         storage.as_ref(),
     )?;
 
-    execute_reindex_plan(
+    execute_index_plan(
         &manifest_store,
         repository_id,
         workspace_root,
@@ -178,7 +178,7 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
         executor,
     )?;
 
-    Ok(ReindexSummary {
+    Ok(IndexSummary {
         repository_id: repository_id.to_owned(),
         snapshot_id: plan.snapshot_plan.snapshot_id().to_owned(),
         files_scanned: plan.files_scanned,
@@ -194,7 +194,7 @@ fn reindex_repository_with_semantic_executor_and_dirty_paths(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_semantic_refresh_plan(
     repository_id: &str,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     previous_snapshot_id: Option<&str>,
     had_previous_manifest: bool,
@@ -240,13 +240,13 @@ pub(crate) fn build_semantic_refresh_plan(
     let has_unresolved_deleted_paths = manifest_diff.deleted.len() != deleted_paths.len();
 
     let (mode, records_manifest, changed_paths, deleted_paths) = match mode {
-        ReindexMode::Full => (
+        IndexMode::Full => (
             SemanticRefreshMode::FullRebuild,
             current_manifest.to_vec(),
             Vec::new(),
             Vec::new(),
         ),
-        ReindexMode::ChangedOnly
+        IndexMode::ChangedOnly
             if requires_full_semantic_refresh || has_unresolved_deleted_paths =>
         {
             (
@@ -256,7 +256,7 @@ pub(crate) fn build_semantic_refresh_plan(
                 Vec::new(),
             )
         }
-        ReindexMode::ChangedOnly
+        IndexMode::ChangedOnly
             if !changed_paths.is_empty() || !deleted_paths.is_empty() || !had_previous_manifest =>
         {
             (
@@ -271,7 +271,7 @@ pub(crate) fn build_semantic_refresh_plan(
                 deleted_paths.to_vec(),
             )
         }
-        ReindexMode::ChangedOnly => (
+        IndexMode::ChangedOnly => (
             SemanticRefreshMode::ReuseExisting,
             Vec::new(),
             Vec::new(),

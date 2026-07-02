@@ -1,4 +1,4 @@
-//! Watch supervisor: leases repository roots to MCP sessions, dispatches debounced reindex work,
+//! Watch supervisor: leases repository roots to MCP sessions, dispatches debounced index work,
 //! and uses per-repository epochs to drop stale completions after a lease is released.
 
 use std::collections::BTreeMap;
@@ -13,8 +13,8 @@ use tracing::{info, warn};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::indexer::{
-    ReindexMode, reindex_repository_with_runtime_config,
-    reindex_repository_with_runtime_config_and_dirty_paths,
+    IndexMode, index_repository_with_runtime_config,
+    index_repository_with_runtime_config_and_dirty_paths,
 };
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::RuntimeTaskRegistry;
@@ -32,7 +32,7 @@ use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState}
 
 const WATCH_TICK_MS: u64 = 50;
 
-/// Callback invoked when watch-driven reindex work invalidates MCP repository caches.
+/// Callback invoked when watch-driven index work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 enum SupervisorCommand {
@@ -43,11 +43,11 @@ enum SupervisorCommand {
     LeaseReleased {
         repository_id: String,
     },
-    ReindexCompleted {
+    IndexCompleted {
         repository_id: String,
         epoch: u64,
         class: WatchRefreshClass,
-        result: Result<crate::indexer::ReindexSummary, String>,
+        result: Result<crate::indexer::IndexSummary, String>,
     },
 }
 
@@ -61,7 +61,7 @@ impl RepositoryEpochs {
         self.epochs.entry(repository_id.to_owned()).or_insert(0);
     }
 
-    // Epoch bump invalidates in-flight reindex completions after lease release.
+    // Epoch bump invalidates in-flight index completions after lease release.
     fn bump(&mut self, repository_id: &str) {
         self.epochs
             .entry(repository_id.to_owned())
@@ -322,21 +322,21 @@ async fn run_supervisor(
                         repository_epochs.bump(&repository_id);
                         scheduler.remove_repository(&repository_id);
                     }
-                    SupervisorCommand::ReindexCompleted {
+                    SupervisorCommand::IndexCompleted {
                         repository_id,
                         epoch,
                         class,
                         result,
                     } => {
                         let current_epoch = repository_epochs.current(&repository_id);
-                        // Epoch mismatch: ignore stale reindex side effects from a prior lease.
+                        // Epoch mismatch: ignore stale index side effects from a prior lease.
                         if epoch != current_epoch {
                             warn!(
                                 repository_id = %repository_id,
                                 refresh_class = %class.as_str(),
                                 completion_epoch = epoch,
                                 current_epoch,
-                                "built-in watch mode ignoring stale reindex completion"
+                                "built-in watch mode ignoring stale index completion"
                             );
                             invalidate_caches_for_stale_completion(
                                 &repository_id,
@@ -344,7 +344,7 @@ async fn run_supervisor(
                                 repository_cache_invalidation_callback.as_ref(),
                             );
                         } else {
-                            handle_reindex_completed(
+                            handle_index_completed(
                                 &repositories,
                                 &mut scheduler,
                                 &repository_id,
@@ -421,27 +421,27 @@ async fn run_supervisor(
             let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
-            // Side effect: blocking reindex runs off the supervisor tick loop.
+            // Side effect: blocking index runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
                 let result = match class {
                     WatchRefreshClass::ManifestFast => {
                         let mut lexical_only_runtime = semantic_runtime.clone();
                         lexical_only_runtime.enabled = false;
-                        reindex_repository_with_runtime_config_and_dirty_paths(
+                        index_repository_with_runtime_config_and_dirty_paths(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
-                            ReindexMode::ChangedOnly,
+                            IndexMode::ChangedOnly,
                             &lexical_only_runtime,
                             &semantic_credentials,
                             &recent_paths,
                         )
                     }
-                    WatchRefreshClass::SemanticFollowup => reindex_repository_with_runtime_config(
+                    WatchRefreshClass::SemanticFollowup => index_repository_with_runtime_config(
                         &repository.repository_id,
                         &repository.root,
                         &repository.db_path,
-                        ReindexMode::Full,
+                        IndexMode::Full,
                         &semantic_runtime,
                         &semantic_credentials,
                     ),
@@ -463,7 +463,7 @@ async fn run_supervisor(
                     .write()
                     .expect("watch runtime task registry poisoned")
                     .finish_task(&task_id, status, detail);
-                let _ = completion_tx.send(SupervisorCommand::ReindexCompleted {
+                let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
                     repository_id: repository.repository_id.clone(),
                     epoch: dispatch_epoch,
                     class,
@@ -476,7 +476,7 @@ async fn run_supervisor(
 
 fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
     match class {
-        WatchRefreshClass::ManifestFast => RuntimeTaskKind::ChangedReindex,
+        WatchRefreshClass::ManifestFast => RuntimeTaskKind::ChangedIndex,
         WatchRefreshClass::SemanticFollowup => RuntimeTaskKind::SemanticRefresh,
     }
 }
@@ -484,13 +484,13 @@ fn watch_task_kind_for_class(class: WatchRefreshClass) -> RuntimeTaskKind {
 fn conflicting_task_kinds_for_class(class: WatchRefreshClass) -> &'static [RuntimeTaskKind] {
     match class {
         WatchRefreshClass::ManifestFast => &[
-            RuntimeTaskKind::ChangedReindex,
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::ChangedIndex,
+            RuntimeTaskKind::WorkspaceIndex,
             RuntimeTaskKind::WorkspacePrepare,
         ],
         WatchRefreshClass::SemanticFollowup => &[
             RuntimeTaskKind::SemanticRefresh,
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspaceIndex,
             RuntimeTaskKind::WorkspacePrepare,
         ],
     }
@@ -572,7 +572,7 @@ fn handle_notify_event(
 
 fn invalidate_caches_for_stale_completion(
     repository_id: &str,
-    result: &Result<crate::indexer::ReindexSummary, String>,
+    result: &Result<crate::indexer::IndexSummary, String>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
 ) -> bool {
     if result.is_ok()
@@ -585,12 +585,12 @@ fn invalidate_caches_for_stale_completion(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_reindex_completed(
+fn handle_index_completed(
     repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,
     repository_id: &str,
     class: WatchRefreshClass,
-    result: Result<crate::indexer::ReindexSummary, String>,
+    result: Result<crate::indexer::IndexSummary, String>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
     now: Instant,
     retry: Duration,
@@ -761,8 +761,8 @@ mod tests {
         assert_eq!(fresh_dispatch_epoch, epochs.current("repo-001"));
     }
 
-    fn sample_reindex_summary() -> crate::indexer::ReindexSummary {
-        crate::indexer::ReindexSummary {
+    fn sample_index_summary() -> crate::indexer::IndexSummary {
+        crate::indexer::IndexSummary {
             repository_id: "repo-001".to_owned(),
             snapshot_id: "snap-1".to_owned(),
             files_scanned: 1,
@@ -789,7 +789,7 @@ mod tests {
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
-            &Ok(sample_reindex_summary()),
+            &Ok(sample_index_summary()),
             Some(&callback),
         );
 
@@ -842,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn active_changed_reindex_defers_manifest_fast_without_draining_scheduler() {
+    fn active_changed_index_defers_manifest_fast_without_draining_scheduler() {
         let now = Instant::now();
         let retry = Duration::from_millis(250);
         let mut scheduler = WatchSchedulerState::new(0);
@@ -851,7 +851,7 @@ mod tests {
 
         let mut registry = RuntimeTaskRegistry::new();
         let task_id = registry.start_task(
-            RuntimeTaskKind::ChangedReindex,
+            RuntimeTaskKind::ChangedIndex,
             "repo-001".to_owned(),
             "watch_manifest_fast",
             None,
@@ -911,17 +911,17 @@ mod tests {
                 "repo-001",
                 "stable-repo",
             ),
-            "semantic refresh should not block manifest-fast changed reindex"
+            "semantic refresh should not block manifest-fast changed index"
         );
     }
 
     #[test]
-    fn manifest_fast_defers_to_active_mcp_workspace_reindex() {
+    fn manifest_fast_defers_to_active_mcp_workspace_index() {
         let mut registry = RuntimeTaskRegistry::new();
         let _task_id = registry.start_task(
-            RuntimeTaskKind::WorkspaceReindex,
+            RuntimeTaskKind::WorkspaceIndex,
             "stable-repo".to_owned(),
-            "workspace_reindex",
+            "workspace_index",
             None,
         );
 
@@ -932,7 +932,7 @@ mod tests {
                 "repo-001",
                 "stable-repo",
             ),
-            "manifest-fast must defer to an active MCP workspace_reindex on the same db"
+            "manifest-fast must defer to an active MCP workspace_index on the same db"
         );
         assert!(
             active_refresh_task_running_for_repository(
@@ -941,7 +941,7 @@ mod tests {
                 "repo-001",
                 "stable-repo",
             ),
-            "semantic followup must also defer to an active MCP workspace_reindex"
+            "semantic followup must also defer to an active MCP workspace_index"
         );
     }
 

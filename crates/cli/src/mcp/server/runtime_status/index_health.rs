@@ -328,9 +328,9 @@ impl FriggMcpServer {
                 .filter(|task| {
                     matches!(
                         task.kind,
-                        RuntimeTaskKind::ChangedReindex
+                        RuntimeTaskKind::ChangedIndex
                             | RuntimeTaskKind::SemanticRefresh
-                            | RuntimeTaskKind::WorkspaceReindex
+                            | RuntimeTaskKind::WorkspaceIndex
                             | RuntimeTaskKind::WorkspacePrepare
                     ) && (task.repository_id == workspace.repository_id
                         || (workspace.runtime_repository_id != workspace.repository_id
@@ -804,11 +804,11 @@ impl FriggMcpServer {
             .validate_startup(&credentials)
             .map_err(|err| err.to_string())?;
 
-        reindex_repository_with_runtime_config(
+        index_repository_with_runtime_config(
             &workspace.runtime_repository_id,
             &workspace.root,
             &workspace.db_path,
-            ReindexMode::Full,
+            IndexMode::Full,
             &self.config.semantic_runtime,
             &credentials,
         )

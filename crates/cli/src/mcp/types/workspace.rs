@@ -1,4 +1,4 @@
-//! Workspace lifecycle MCP wire types: attach, prepare, reindex, runtime tasks, and precise status.
+//! Workspace lifecycle MCP wire types: attach, prepare, index, runtime tasks, and precise status.
 
 use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
@@ -46,7 +46,7 @@ pub enum WorkspacePreciseFailureClass {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceRecommendedAction {
     InstallTool,
-    RerunReindex,
+    RerunIndex,
     CheckEnvironment,
     UpstreamToolFailure,
     UseHeuristicMode,
@@ -304,12 +304,12 @@ pub struct WorkspacePrepareResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct WorkspaceReindexParams {
-    /// File or directory path to reindex. Relative paths resolve against the Frigg server process cwd.
+pub struct WorkspaceIndexParams {
+    /// File or directory path to index. Relative paths resolve against the Frigg server process cwd.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
-    /// Whether to make the reindexed repository the session default. Omit to default to `true`.
+    /// Whether to make the indexed repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
     /// Workspace resolution strategy when using `path`. Omit to prefer the enclosing Git root before falling back to the direct directory.
     pub resolve_mode: Option<WorkspaceResolveMode>,
@@ -320,7 +320,7 @@ pub struct WorkspaceReindexParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct WorkspaceReindexResponse {
+pub struct WorkspaceIndexResponse {
     pub repository: RepositorySummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_from: Option<String>,
@@ -409,12 +409,12 @@ pub struct ReadMatchResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskKind {
-    ChangedReindex,
+    ChangedIndex,
     SemanticRefresh,
     PrecisePrewarm,
     PreciseGenerate,
     WorkspacePrepare,
-    WorkspaceReindex,
+    WorkspaceIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

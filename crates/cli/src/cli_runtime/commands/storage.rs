@@ -1,4 +1,4 @@
-//! CLI storage bootstrap and maintenance commands for init, verify, repair, and prune.
+//! CLI storage bootstrap and maintenance commands for init, repair, and prune.
 
 use std::error::Error;
 use std::io;
@@ -7,16 +7,11 @@ use std::path::Path;
 use frigg::settings::FriggConfig;
 use frigg::storage::Storage;
 
+use super::super::storage_auto_heal::initialize_storage_with_auto_repair;
 use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::{
     ensure_storage_db_path_for_write, resolve_storage_db_path,
 };
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum StorageBootstrapCommand {
-    Init,
-    Verify,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum StorageMaintenanceCommand {
@@ -27,21 +22,21 @@ pub(crate) enum StorageMaintenanceCommand {
 fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) -> String {
     if error.contains("storage db file is missing") {
         return format!(
-            "run `frigg init` or `frigg reindex` to create current storage at {}",
+            "run `frigg init` or `frigg index` to create current storage at {}",
             db_path.display()
         );
     }
 
     if error.contains("exists but is not a file") {
         return format!(
-            "move or delete {}, then run `frigg init` or `frigg reindex`",
+            "move or delete {}, then run `frigg init` or `frigg index`",
             db_path.display()
         );
     }
 
     if error.contains("storage schema is uninitialized") {
         return format!(
-            "run `frigg init` or `frigg reindex`; if {} is not a Frigg database, delete it first",
+            "run `frigg init` or `frigg index`; if {} is not a Frigg database, delete it first",
             db_path.display()
         );
     }
@@ -52,12 +47,12 @@ fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) ->
     {
         if command_name == "repair-storage" {
             return format!(
-                "`frigg repair-storage` could not rebuild vector storage; delete {} and run `frigg reindex`",
+                "`frigg repair-storage` could not rebuild vector storage; delete {} and run `frigg index`",
                 db_path.display()
             );
         }
         return format!(
-            "run `frigg repair-storage` to rebuild vector storage; if repair fails, delete {} and run `frigg reindex`",
+            "rerun `frigg init` or `frigg index`; if repair fails, delete {} and run `frigg index`",
             db_path.display()
         );
     }
@@ -67,7 +62,7 @@ fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) ->
         || error.contains("missing required table")
     {
         return format!(
-            "delete {} and run `frigg reindex` to rebuild Frigg's local index state",
+            "delete {} and run `frigg index` to rebuild Frigg's local index state",
             db_path.display()
         );
     }
@@ -75,11 +70,11 @@ fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) ->
     if error.contains("semantic_vector_partition_in_sync") {
         if command_name == "repair-storage" {
             return format!(
-                "`frigg repair-storage` could not restore invariants; delete {} and run `frigg reindex`",
+                "`frigg repair-storage` could not restore invariants; delete {} and run `frigg index`",
                 db_path.display()
             );
         }
-        return "`frigg repair-storage`; if it still fails, delete the storage DB and run `frigg reindex`"
+        return "rerun `frigg init` or `frigg index`; if it still fails, delete the storage DB and run `frigg index`"
             .to_owned();
     }
 
@@ -95,12 +90,12 @@ fn storage_failure_next_step(command_name: &str, error: &str, db_path: &Path) ->
     }
 
     format!(
-        "rerun `frigg --verbose {command_name}`; if the error persists, delete {db_path} and run `frigg reindex`",
+        "rerun `frigg --verbose {command_name}`; if the error persists, delete {db_path} and run `frigg index`",
         db_path = db_path.display()
     )
 }
 
-fn report_storage_failure(
+pub(crate) fn report_storage_failure(
     output: &CliOutput,
     command_name: &str,
     repositories_len: usize,
@@ -123,23 +118,16 @@ fn report_storage_failure(
 }
 
 #[cfg(test)]
-pub(crate) fn run_storage_bootstrap_command(
-    config: &FriggConfig,
-    command: StorageBootstrapCommand,
-) -> Result<(), Box<dyn Error>> {
-    run_storage_bootstrap_command_with_output(config, command, &CliOutput::normal())
+pub(crate) fn run_storage_init_command(config: &FriggConfig) -> Result<(), Box<dyn Error>> {
+    run_storage_init_command_with_output(config, &CliOutput::normal())
 }
 
-pub(crate) fn run_storage_bootstrap_command_with_output(
+pub(crate) fn run_storage_init_command_with_output(
     config: &FriggConfig,
-    command: StorageBootstrapCommand,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let repositories = config.repositories();
-    let command_name = match command {
-        StorageBootstrapCommand::Init => "init",
-        StorageBootstrapCommand::Verify => "verify",
-    };
+    let command_name = "init";
 
     for repo in &repositories {
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
@@ -153,33 +141,37 @@ pub(crate) fn run_storage_bootstrap_command_with_output(
                 return Err(Box::new(io::Error::other(message)));
             }
         };
-        let db_path = match command {
-            StorageBootstrapCommand::Init => ensure_storage_db_path_for_write(root, command_name)?,
-            StorageBootstrapCommand::Verify => resolve_storage_db_path(root, command_name)?,
-        };
+        let db_path = ensure_storage_db_path_for_write(root, command_name)?;
         let storage = Storage::new(&db_path);
 
-        let operation_result = match command {
-            StorageBootstrapCommand::Init => storage.initialize(),
-            StorageBootstrapCommand::Verify => storage.verify(),
+        let repaired_categories = match initialize_storage_with_auto_repair(&storage) {
+            Ok(categories) => categories,
+            Err(err) => {
+                report_storage_failure(
+                    output,
+                    command_name,
+                    repositories.len(),
+                    &repo.repository_id.0,
+                    root,
+                    &db_path,
+                    &err,
+                )?;
+                return Err(Box::new(io::Error::other(format!(
+                    "{command_name} failed for repository_id={} root={} db={}: {err}",
+                    repo.repository_id.0,
+                    root.display(),
+                    db_path.display()
+                ))));
+            }
         };
-
-        if let Err(err) = operation_result {
-            report_storage_failure(
-                output,
-                command_name,
-                repositories.len(),
-                &repo.repository_id.0,
-                root,
-                &db_path,
-                &err,
-            )?;
-            return Err(Box::new(io::Error::other(format!(
-                "{command_name} failed for repository_id={} root={} db={}: {err}",
+        if !repaired_categories.is_empty() {
+            output.progress(format!(
+                "{command_name} auto_repair repository_id={} root={} db={} repaired={}",
                 repo.repository_id.0,
                 root.display(),
-                db_path.display()
-            ))));
+                db_path.display(),
+                repaired_categories.join(",")
+            ))?;
         }
 
         output.progress(format!(
@@ -308,16 +300,46 @@ pub(crate) fn run_storage_maintenance_command_with_output(
             StorageMaintenanceCommand::Prune {
                 keep_manifest_snapshots,
             } => {
-                let deleted_manifest_snapshots = storage
+                let deleted_manifest_snapshots = match storage
                     .prune_repository_snapshots(&repo.repository_id.0, keep_manifest_snapshots)
-                    .map_err(|err| {
-                        io::Error::other(format!(
+                {
+                    Ok(deleted) => deleted,
+                    Err(err) => {
+                        report_storage_failure(
+                            output,
+                            command_name,
+                            repositories.len(),
+                            &repo.repository_id.0,
+                            root,
+                            &db_path,
+                            &err,
+                        )?;
+                        return Err(Box::new(io::Error::other(format!(
                             "{command_name} failed for repository_id={} root={} db={}: {err}",
                             repo.repository_id.0,
                             root.display(),
                             db_path.display()
-                        ))
-                    })?;
+                        ))));
+                    }
+                };
+
+                if let Err(err) = storage.verify_relational_schema() {
+                    report_storage_failure(
+                        output,
+                        command_name,
+                        repositories.len(),
+                        &repo.repository_id.0,
+                        root,
+                        &db_path,
+                        &err,
+                    )?;
+                    return Err(Box::new(io::Error::other(format!(
+                        "{command_name} failed for repository_id={} root={} db={}: {err}",
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display()
+                    ))));
+                }
 
                 total_manifest_snapshots_deleted += deleted_manifest_snapshots;
                 output.progress(format!(

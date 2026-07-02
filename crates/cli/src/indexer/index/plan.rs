@@ -1,4 +1,4 @@
-//! Reindex planning: manifest diffing, snapshot selection, and semantic refresh assembly.
+//! Index planning: manifest diffing, snapshot selection, and semantic refresh assembly.
 //!
 //! Plans record which repository paths changed, which manifest snapshot to advance from,
 //! and whether semantic embedding work stays incremental or must run as a full refresh.
@@ -28,12 +28,12 @@ use super::store::ManifestStore;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Selects whether a refresh should rebuild the whole repository view or advance it from changed
 /// paths only.
-pub enum ReindexMode {
+pub enum IndexMode {
     Full,
     ChangedOnly,
 }
 
-impl ReindexMode {
+impl IndexMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Full => "full",
@@ -45,7 +45,7 @@ impl ReindexMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Outcome of a completed refresh, used by watch runtime and user-facing tooling to describe how
 /// repository state advanced.
-pub struct ReindexSummary {
+pub struct IndexSummary {
     pub repository_id: String,
     pub snapshot_id: String,
     pub files_scanned: usize,
@@ -53,7 +53,7 @@ pub struct ReindexSummary {
     pub files_deleted: usize,
     pub changed_paths: Vec<String>,
     pub deleted_paths: Vec<String>,
-    pub diagnostics: ReindexDiagnostics,
+    pub diagnostics: IndexDiagnostics,
     pub duration_ms: u128,
 }
 
@@ -101,7 +101,7 @@ pub enum SemanticRefreshMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Concrete semantic work derived from the reindex plan, including the manifest view and path
+/// Concrete semantic work derived from the index plan, including the manifest view and path
 /// delta that embedding refresh should consume.
 pub struct SemanticRefreshPlan {
     pub mode: SemanticRefreshMode,
@@ -115,9 +115,9 @@ pub struct SemanticRefreshPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Precomputed refresh plan that ties manifest, projection, and semantic work into one explainable
 /// unit before writes begin.
-pub struct ReindexPlan {
+pub struct IndexPlan {
     pub repository_id: String,
-    pub mode: ReindexMode,
+    pub mode: IndexMode,
     pub previous_snapshot_id: Option<String>,
     pub current_manifest: Vec<FileDigest>,
     pub manifest_diff: ManifestDiff,
@@ -125,7 +125,7 @@ pub struct ReindexPlan {
     pub deleted_paths: Vec<String>,
     pub snapshot_plan: ManifestSnapshotPlan,
     pub semantic_refresh: SemanticRefreshPlan,
-    pub diagnostics: ReindexDiagnostics,
+    pub diagnostics: IndexDiagnostics,
     pub files_scanned: usize,
     pub files_changed: usize,
     pub files_deleted: usize,
@@ -135,11 +135,11 @@ pub struct ReindexPlan {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 /// Non-fatal issues collected during refresh planning so callers can surface degraded freshness
 /// without inventing a separate error channel.
-pub struct ReindexDiagnostics {
+pub struct IndexDiagnostics {
     pub entries: Vec<ManifestBuildDiagnostic>,
 }
 
-impl ReindexDiagnostics {
+impl IndexDiagnostics {
     pub fn total_count(&self) -> usize {
         self.entries.len()
     }
@@ -153,22 +153,22 @@ impl ReindexDiagnostics {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_reindex_plan(
+pub(super) fn build_index_plan(
     repository_id: &str,
     workspace_root: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     previous_snapshot_id: Option<String>,
     had_previous_manifest: bool,
     current_manifest: Vec<FileDigest>,
-    diagnostics: ReindexDiagnostics,
+    diagnostics: IndexDiagnostics,
     manifest_diff: ManifestDiff,
     storage: Option<&Storage>,
-) -> FriggResult<ReindexPlan> {
+) -> FriggResult<IndexPlan> {
     let files_scanned = current_manifest.len();
     let files_changed = match mode {
-        ReindexMode::Full => files_scanned,
-        ReindexMode::ChangedOnly => manifest_diff.added.len() + manifest_diff.modified.len(),
+        IndexMode::Full => files_scanned,
+        IndexMode::ChangedOnly => manifest_diff.added.len() + manifest_diff.modified.len(),
     };
     let files_deleted = manifest_diff.deleted.len();
     let snapshot_plan = build_manifest_snapshot_plan(
@@ -195,7 +195,7 @@ pub(super) fn build_reindex_plan(
         storage,
     )?;
 
-    Ok(ReindexPlan {
+    Ok(IndexPlan {
         repository_id: repository_id.to_owned(),
         mode,
         previous_snapshot_id,
@@ -245,13 +245,13 @@ fn dedup_paths(paths: Vec<String>) -> Vec<String> {
 
 fn build_manifest_snapshot_plan(
     repository_id: &str,
-    mode: ReindexMode,
+    mode: IndexMode,
     files_changed: usize,
     files_deleted: usize,
     previous_snapshot_id: Option<&str>,
     current_manifest: &[FileDigest],
 ) -> FriggResult<ManifestSnapshotPlan> {
-    if mode == ReindexMode::ChangedOnly
+    if mode == IndexMode::ChangedOnly
         && files_changed == 0
         && files_deleted == 0
         && previous_snapshot_id.is_some()
@@ -277,18 +277,18 @@ fn build_manifest_snapshot_plan(
 }
 
 #[cfg(test)]
-pub(crate) fn build_reindex_plan_for_tests(
+pub(crate) fn build_index_plan_for_tests(
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
-    mode: ReindexMode,
+    mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
     dirty_path_hints: &[PathBuf],
-) -> FriggResult<ReindexPlan> {
+) -> FriggResult<IndexPlan> {
     let db_preexisted = db_path.exists();
     let manifest_store = ManifestStore::new(db_path);
-    manifest_store.initialize_for_reindex(semantic_runtime.enabled)?;
-    let previous_manifest = if mode == ReindexMode::Full && !db_preexisted {
+    manifest_store.initialize_for_index(semantic_runtime.enabled)?;
+    let previous_manifest = if mode == IndexMode::Full && !db_preexisted {
         None
     } else {
         manifest_store.load_latest_manifest_for_repository(repository_id)?
@@ -303,27 +303,27 @@ pub(crate) fn build_reindex_plan_for_tests(
 
     let manifest_builder = ManifestBuilder::default();
     let manifest_output = match mode {
-        ReindexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
-        ReindexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
+        IndexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
+        IndexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
             .build_changed_only_with_hints_and_diagnostics(
                 workspace_root,
                 previous_entries,
                 dirty_path_hints,
             )?,
-        ReindexMode::ChangedOnly => manifest_builder.build_with_diagnostics(workspace_root)?,
+        IndexMode::ChangedOnly => manifest_builder.build_with_diagnostics(workspace_root)?,
     };
     let current_manifest = manifest_output.entries;
-    let diagnostics = ReindexDiagnostics {
+    let diagnostics = IndexDiagnostics {
         entries: manifest_output.diagnostics,
     };
-    let manifest_diff = if mode == ReindexMode::Full && previous_entries.is_empty() {
+    let manifest_diff = if mode == IndexMode::Full && previous_entries.is_empty() {
         ManifestDiff::default()
     } else {
         diff(previous_entries, &current_manifest)
     };
     let storage = semantic_runtime.enabled.then(|| Storage::new(db_path));
 
-    build_reindex_plan(
+    build_index_plan(
         repository_id,
         workspace_root,
         mode,

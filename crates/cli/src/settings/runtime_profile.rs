@@ -31,7 +31,7 @@ impl RuntimeProfile {
         }
     }
 
-    /// Whether durable storage and watch-driven reindex are expected for this profile.
+    /// Whether durable storage and watch-driven index are expected for this profile.
     pub fn persistent_state_available(self) -> bool {
         matches!(
             self,

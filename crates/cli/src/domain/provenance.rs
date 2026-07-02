@@ -100,7 +100,7 @@ impl WorkloadToolClass {
             "workspace_attach" => Self::WorkspaceMetadata,
             "workspace_detach" => Self::WorkspaceMetadata,
             "workspace_prepare" => Self::WorkspaceMetadata,
-            "workspace_reindex" => Self::WorkspaceMetadata,
+            "workspace_index" => Self::WorkspaceMetadata,
             "workspace_current" => Self::WorkspaceMetadata,
             _ => Self::Unknown,
         }

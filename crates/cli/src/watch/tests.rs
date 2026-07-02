@@ -1,4 +1,4 @@
-//! Unit tests for watch scheduler debouncing, refresh coalescing, repository invalidation, and supervisor-driven reindex cycles.
+//! Unit tests for watch scheduler debouncing, refresh coalescing, repository invalidation, and supervisor-driven index cycles.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use notify::{Event, EventKind};
 
 use super::*;
-use crate::indexer::{ManifestStore, ReindexMode, reindex_repository_with_runtime_config};
+use crate::indexer::{IndexMode, ManifestStore, index_repository_with_runtime_config};
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::RuntimeTaskRegistry;
 use crate::searcher::{SearchFilters, SearchTextQuery, TextSearcher};
@@ -666,15 +666,15 @@ fn startup_refresh_status_requests_semantic_bootstrap_for_valid_manifest_without
         .expect("source file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    reindex_repository_with_runtime_config(
+    index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline lexical reindex should succeed");
+    .expect("baseline lexical index should succeed");
 
     let repository = WatchedRepository {
         repository_id: "repo-001".to_owned(),
@@ -714,15 +714,15 @@ fn startup_refresh_status_skips_semantic_bootstrap_when_no_eligible_entries_exis
     fs::write(workspace_root.join("notes.bin"), "opaque").expect("fixture file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    reindex_repository_with_runtime_config(
+    index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline lexical reindex should succeed");
+    .expect("baseline lexical index should succeed");
 
     let repository = WatchedRepository {
         repository_id: "repo-001".to_owned(),
@@ -772,15 +772,15 @@ fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projec
     .expect("test file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    let summary = reindex_repository_with_runtime_config(
+    let summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline lexical reindex should succeed");
+    .expect("baseline lexical index should succeed");
     delete_retrieval_projection_family(&db_path, "repo-001", &summary.snapshot_id, "path_relation");
 
     let repository = WatchedRepository {
@@ -808,7 +808,7 @@ fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projec
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn watch_runtime_initial_sync_reindexes_when_manifest_missing() {
+async fn watch_runtime_initial_sync_indexes_when_manifest_missing() {
     let workspace_root = temp_workspace_root("initial-sync");
     fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
     fs::write(workspace_root.join("src.rs"), "fn alpha() {}\n")
@@ -917,15 +917,15 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
         .expect("source file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    let summary = reindex_repository_with_runtime_config(
+    let summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::ChangedOnly,
+        IndexMode::ChangedOnly,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline changed-only reindex should succeed");
+    .expect("baseline changed-only index should succeed");
 
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("config should load from workspace root");
@@ -961,8 +961,8 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
-    let workspace_root = temp_workspace_root("notify-reindex");
+async fn watch_runtime_notify_backend_indexes_after_real_file_change() {
+    let workspace_root = temp_workspace_root("notify-index");
     fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
     fs::write(workspace_root.join("src.rs"), "fn alpha() {}\n")
         .expect("source file should be writable");
@@ -1009,7 +1009,7 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
     )
     .await;
     let next_snapshot_id =
-        next_snapshot_id.expect("watch-triggered reindex should advance the snapshot id");
+        next_snapshot_id.expect("watch-triggered index should advance the snapshot id");
     assert_ne!(next_snapshot_id, initial_snapshot_id);
 
     let searcher = TextSearcher::new(
@@ -1025,12 +1025,12 @@ async fn watch_runtime_notify_backend_reindexes_after_real_file_change() {
             },
             SearchFilters::default(),
         )
-        .expect("literal search should succeed after watch-triggered reindex");
+        .expect("literal search should succeed after watch-triggered index");
     assert!(
         matches
             .iter()
             .any(|entry| { entry.path == "src.rs" && entry.excerpt.contains("watch-notify-beta") }),
-        "query path should observe the post-reindex file contents: {:?}",
+        "query path should observe the post-index file contents: {:?}",
         matches
             .iter()
             .map(|entry| (entry.path.clone(), entry.excerpt.clone()))
@@ -1173,15 +1173,15 @@ async fn watch_runtime_repairs_missing_retrieval_projection_family_and_invalidat
     .expect("test file should be writable");
 
     let db_path = init_storage(&workspace_root);
-    let initial_summary = reindex_repository_with_runtime_config(
+    let initial_summary = index_repository_with_runtime_config(
         "repo-001",
         &workspace_root,
         &db_path,
-        ReindexMode::Full,
+        IndexMode::Full,
         &SemanticRuntimeConfig::default(),
         &SemanticRuntimeCredentials::default(),
     )
-    .expect("baseline lexical reindex should succeed");
+    .expect("baseline lexical index should succeed");
 
     let storage = Storage::new(&db_path);
     assert!(
