@@ -1,6 +1,17 @@
 //! Regression tests for hybrid search warning metadata and lexical-only fallback response shaping.
 
 use super::*;
+use crate::mcp::types::ResponseFreshnessBasisMetadata;
+use crate::storage::ManifestEntry;
+
+fn manifest_entry(path: &str, size_bytes: u64, mtime_ns: Option<u64>) -> ManifestEntry {
+    ManifestEntry {
+        path: path.to_owned(),
+        sha256: format!("hash-{path}"),
+        size_bytes,
+        mtime_ns,
+    }
+}
 
 fn match_fixture(
     path: &str,
@@ -127,4 +138,117 @@ fn search_text_metadata_maps_ripgrep_backend() {
 #[test]
 fn search_text_metadata_returns_none_without_backend() {
     assert!(FriggMcpServer::search_text_metadata(None, None).is_none());
+}
+
+#[test]
+fn search_hybrid_params_accept_context_efficiency_opt_in() {
+    let params: SearchHybridParams = serde_json::from_value(json!({
+        "query": "runtime capture",
+        "include_context_efficiency": true
+    }))
+    .expect("search_hybrid params should accept include_context_efficiency");
+
+    assert_eq!(params.include_context_efficiency, Some(true));
+}
+
+#[test]
+fn search_hybrid_metadata_omits_context_efficiency_by_default() {
+    let metadata = SearchHybridMetadata {
+        channels: BTreeMap::new(),
+        lexical_backend: None,
+        lexical_backend_note: None,
+        semantic_requested: None,
+        semantic_enabled: None,
+        semantic_status: None,
+        semantic_reason: None,
+        semantic_candidate_count: None,
+        semantic_hit_count: None,
+        semantic_match_count: None,
+        lexical_only_mode: None,
+        query_shape: None,
+        warning: None,
+        exact_pivot_assistance: None,
+        witness_demotion_applied: None,
+        diagnostics_count: 0,
+        diagnostics: SearchHybridDiagnosticsSummary {
+            walk: 0,
+            read: 0,
+            total: 0,
+        },
+        stage_attribution: None,
+        semantic_capability: None,
+        utility: None,
+        context_efficiency: None,
+        freshness_basis: ResponseFreshnessBasisMetadata {
+            mode: "manifest".to_owned(),
+            cacheable: false,
+            repositories: vec![],
+        },
+    };
+
+    let value = serde_json::to_value(metadata).expect("metadata should serialize");
+    assert!(value.get("context_efficiency").is_none());
+}
+
+#[test]
+fn search_hybrid_context_efficiency_metadata_uses_manifest_and_excerpts() {
+    let root = std::env::temp_dir().join(format!(
+        "frigg-hybrid-context-efficiency-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".frigg")).expect("temp frigg directory should be writable");
+    let db_path = root.join(".frigg/storage.sqlite3");
+    let storage = Storage::new(&db_path);
+    storage.initialize().expect("storage should initialize");
+    storage
+        .upsert_manifest(
+            "repo-001",
+            "snapshot-001",
+            &[
+                manifest_entry("src/lib.rs", 100, Some(10)),
+                manifest_entry("README.md", 40, Some(20)),
+            ],
+        )
+        .expect("manifest should be writable");
+
+    let workspace = AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: "fixture".to_owned(),
+        root: root.clone(),
+        db_path,
+    };
+    let matches = vec![
+        match_fixture(
+            "src/lib.rs",
+            Some(SourceClass::Runtime),
+            &["runtime"],
+            true,
+            true,
+            true,
+        ),
+        match_fixture(
+            "src/lib.rs",
+            Some(SourceClass::Runtime),
+            &["runtime"],
+            true,
+            true,
+            true,
+        ),
+    ];
+
+    let metadata =
+        FriggMcpServer::search_hybrid_context_efficiency_metadata(&[workspace], &matches, None)
+            .expect("context-efficiency metadata should build");
+
+    assert_eq!(metadata.indexed_readable_files, 2);
+    assert_eq!(metadata.indexed_readable_bytes, 140);
+    assert_eq!(metadata.returned_match_count, Some(2));
+    assert_eq!(metadata.returned_unique_paths, Some(1));
+    assert_eq!(metadata.returned_unique_file_bytes, Some(100));
+    assert_eq!(metadata.returned_source_bytes_estimate, Some(14));
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(10.0));
+
+    let _ = std::fs::remove_dir_all(root);
 }

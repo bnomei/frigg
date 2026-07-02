@@ -561,6 +561,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("search_hybrid should succeed")
@@ -574,6 +575,7 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("search_hybrid should be deterministic")
@@ -842,6 +844,7 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
             weights: None,
             semantic: Some(false),
             response_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("compact search_hybrid should succeed")
@@ -860,6 +863,80 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
             .all(|matched| matched.match_id.is_some()),
         "compact search_hybrid matches should expose match ids"
     );
+
+    let explicit_false = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "hello from fixture".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: None,
+            include_context_efficiency: Some(false),
+        }))
+        .await
+        .expect("compact search_hybrid with explicit false context efficiency should succeed")
+        .0;
+    assert!(explicit_false.metadata.is_none());
+}
+
+#[tokio::test]
+async fn core_search_hybrid_compact_opt_in_keeps_context_efficiency_metadata() {
+    let workspace_root = temp_workspace_root("search-hybrid-compact-context-efficiency");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn compact_context_efficiency_marker() {}\n",
+    )
+    .expect("failed to seed source");
+
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let response = server
+        .search_hybrid(Parameters(SearchHybridParams {
+            query: "compact_context_efficiency_marker".to_owned(),
+            repository_id: Some(repository_id),
+            language: Some("rust".to_owned()),
+            limit: Some(10),
+            weights: None,
+            semantic: Some(false),
+            response_mode: None,
+            include_context_efficiency: Some(true),
+        }))
+        .await
+        .expect("compact opt-in search_hybrid should succeed")
+        .0;
+
+    let metadata = response
+        .metadata
+        .as_ref()
+        .expect("compact opt-in should retain metadata");
+    let context_efficiency = metadata
+        .context_efficiency
+        .as_ref()
+        .expect("compact opt-in should retain context-efficiency metadata");
+    assert_eq!(context_efficiency.indexed_readable_files, 1);
+    assert!(context_efficiency.indexed_readable_bytes > 0);
+    assert_eq!(context_efficiency.returned_match_count, Some(1));
+    assert_eq!(context_efficiency.returned_unique_paths, Some(1));
+    assert!(
+        context_efficiency
+            .returned_source_bytes_estimate
+            .unwrap_or(0)
+            > 0
+    );
+    assert_eq!(metadata.channels.len(), 0);
+    assert!(metadata.stage_attribution.is_none());
+    assert!(response.note.is_none());
+
+    cleanup_workspace_root(&workspace_root);
 }
 
 #[tokio::test]
@@ -890,6 +967,7 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("full search_hybrid should succeed for code-shaped query")
@@ -933,6 +1011,7 @@ async fn core_search_hybrid_code_shaped_queries_surface_exact_assistance_and_ran
             weights: None,
             semantic: Some(false),
             response_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("compact search_hybrid should succeed for code-shaped query")
@@ -964,6 +1043,7 @@ async fn core_search_hybrid_rejects_empty_query_with_typed_invalid_params() {
             weights: None,
             semantic: None,
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -1006,6 +1086,7 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
             weights: None,
             semantic: Some(true),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("non-strict semantic startup failure should degrade, not hard-fail")
@@ -1132,6 +1213,7 @@ async fn core_search_hybrid_marks_unsupported_semantic_language_filters_as_unava
             weights: None,
             semantic: Some(true),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("unsupported semantic language filters should degrade to metadata, not fail")
@@ -1219,6 +1301,7 @@ async fn core_search_hybrid_strict_semantic_requires_startup_credentials() {
             weights: None,
             semantic: Some(true),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
     {

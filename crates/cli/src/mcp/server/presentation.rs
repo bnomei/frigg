@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::domain::model::TextMatch;
-use crate::mcp::types::DocumentSymbolItem;
+use crate::mcp::types::{DocumentSymbolItem, SearchHybridDiagnosticsSummary, SearchHybridMetadata};
 
 impl FriggMcpServer {
     pub(super) fn response_mode(mode: Option<ResponseMode>) -> ResponseMode {
@@ -359,7 +359,37 @@ impl FriggMcpServer {
         response.result_handle =
             self.assign_result_handle_for_hybrid_matches("search_hybrid", &mut response.matches);
         if !Self::should_return_full_response(response_mode) {
-            response.metadata = None;
+            response.metadata = response.metadata.and_then(|mut metadata| {
+                let context_efficiency = metadata.context_efficiency.take()?;
+                Some(SearchHybridMetadata {
+                    channels: BTreeMap::new(),
+                    lexical_backend: None,
+                    lexical_backend_note: None,
+                    semantic_requested: None,
+                    semantic_enabled: None,
+                    semantic_status: None,
+                    semantic_reason: None,
+                    semantic_candidate_count: None,
+                    semantic_hit_count: None,
+                    semantic_match_count: None,
+                    lexical_only_mode: None,
+                    query_shape: None,
+                    warning: None,
+                    exact_pivot_assistance: None,
+                    witness_demotion_applied: None,
+                    diagnostics_count: 0,
+                    diagnostics: SearchHybridDiagnosticsSummary {
+                        walk: 0,
+                        read: 0,
+                        total: 0,
+                    },
+                    stage_attribution: None,
+                    semantic_capability: None,
+                    utility: None,
+                    context_efficiency: Some(context_efficiency),
+                    freshness_basis: metadata.freshness_basis,
+                })
+            });
             response.note = None;
         }
         response

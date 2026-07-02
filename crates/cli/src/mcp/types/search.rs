@@ -225,6 +225,8 @@ pub struct SearchHybridParams {
     pub semantic: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
+    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    pub include_context_efficiency: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -431,7 +433,7 @@ pub struct SearchHybridExactPivotAssistance {
     pub boosted_match_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMetadata {
     pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -471,6 +473,8 @@ pub struct SearchHybridMetadata {
     /// Utility summary for discovery-to-navigation workflows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utility: Option<SearchHybridUtilitySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_efficiency: Option<ContextEfficiencyMetadata>,
     pub freshness_basis: ResponseFreshnessBasisMetadata,
 }
 

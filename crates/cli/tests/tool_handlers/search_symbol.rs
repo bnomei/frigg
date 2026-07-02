@@ -815,6 +815,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("initial search_hybrid call should succeed")
@@ -833,6 +834,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("search_hybrid should bypass stale cache after edit")
@@ -862,6 +864,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             weights: None,
             semantic: Some(false),
             response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
         }))
         .await
         .expect("search_hybrid should not reuse stale cached matches")

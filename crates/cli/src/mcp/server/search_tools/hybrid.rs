@@ -94,6 +94,10 @@ impl FriggMcpServer {
                 let mut match_anchors: Option<Value> = None;
                 let mut response_source_refs = json!({});
                 let result = (|| -> Result<Json<SearchHybridResponse>, ErrorData> {
+                    let need_context_efficiency =
+                        crate::context_efficiency::need_context_efficiency(
+                            params_for_blocking.include_context_efficiency,
+                        );
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
@@ -137,19 +141,23 @@ impl FriggMcpServer {
                         weights
                     };
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                        SearchHybridResponseCacheKey {
-                            scoped_repository_ids: scoped_repository_ids.clone(),
-                            freshness_scopes: freshness_scopes.clone(),
-                            query: query.clone(),
-                            language: params_for_blocking.language.clone(),
-                            limit,
-                            semantic: params_for_blocking.semantic,
-                            lexical_weight_bits: weights.lexical.to_bits(),
-                            graph_weight_bits: weights.graph.to_bits(),
-                            semantic_weight_bits: weights.semantic.to_bits(),
-                        }
-                    });
+                    let cache_key = (!need_context_efficiency)
+                        .then(|| {
+                            cache_freshness.scopes.as_ref().map(|freshness_scopes| {
+                                SearchHybridResponseCacheKey {
+                                    scoped_repository_ids: scoped_repository_ids.clone(),
+                                    freshness_scopes: freshness_scopes.clone(),
+                                    query: query.clone(),
+                                    language: params_for_blocking.language.clone(),
+                                    limit,
+                                    semantic: params_for_blocking.semantic,
+                                    lexical_weight_bits: weights.lexical.to_bits(),
+                                    graph_weight_bits: weights.graph.to_bits(),
+                                    semantic_weight_bits: weights.semantic.to_bits(),
+                                }
+                            })
+                        })
+                        .flatten();
                     if cache_key.is_none() {
                         server.record_runtime_cache_event(
                             RuntimeCacheFamily::SearchHybridResponse,
@@ -288,6 +296,15 @@ impl FriggMcpServer {
                         },
                     );
                     match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
+                    let context_efficiency = if need_context_efficiency {
+                        Some(Self::search_hybrid_context_efficiency_metadata(
+                            &scoped_workspaces,
+                            &matches,
+                            stage_attribution.as_ref(),
+                        )?)
+                    } else {
+                        None
+                    };
 
                     let metadata = Some(SearchHybridMetadata {
                         channels: channel_metadata.clone().unwrap_or_default(),
@@ -318,6 +335,10 @@ impl FriggMcpServer {
                             .map(SearchHybridStageAttribution::from),
                         semantic_capability: semantic_language_capability.clone(),
                         utility: Some(Self::search_hybrid_utility_summary(&matches)),
+                        context_efficiency: params_for_blocking
+                            .include_context_efficiency
+                            .filter(|include| *include)
+                            .and(context_efficiency),
                         freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
                             .expect("search_hybrid freshness basis should deserialize"),
                     });
@@ -342,6 +363,10 @@ impl FriggMcpServer {
                             .expect("search_hybrid metadata should exist"),
                     )
                     .expect("search_hybrid metadata should serialize");
+                    response_source_refs_value
+                        .as_object_mut()
+                        .expect("search_hybrid source refs should be an object")
+                        .remove("context_efficiency");
                     response_source_refs_value
                         .as_object_mut()
                         .expect("search_hybrid source refs should be an object")

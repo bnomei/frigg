@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn context_efficiency_manifest_cache_is_bounded_fifo() {
-        clear_manifest_metadata_cache_for_tests();
+        let mut cache = ManifestMetadataCache::default();
         for index in 0..(MANIFEST_METADATA_CACHE_LIMIT + 3) {
             let key = ManifestMetadataCacheKey::new("storage", "repo", format!("snapshot-{index}"));
             let summary = ManifestMetadataSummary {
@@ -264,29 +264,27 @@ mod tests {
                 max_mtime_ns: None,
                 path_size_bytes: BTreeMap::new(),
             };
-            store_manifest_metadata_summary(key, summary);
+            cache.insert(key, summary);
         }
 
-        assert_eq!(
-            manifest_metadata_cache_entry_count_for_tests(),
-            MANIFEST_METADATA_CACHE_LIMIT
+        assert_eq!(cache.entries.len(), MANIFEST_METADATA_CACHE_LIMIT);
+        assert!(
+            cache
+                .get(&ManifestMetadataCacheKey::new(
+                    "storage",
+                    "repo",
+                    "snapshot-0"
+                ))
+                .is_none()
         );
         assert!(
-            cached_manifest_metadata_summary(&ManifestMetadataCacheKey::new(
-                "storage",
-                "repo",
-                "snapshot-0"
-            ))
-            .is_none()
+            cache
+                .get(&ManifestMetadataCacheKey::new(
+                    "storage",
+                    "repo",
+                    format!("snapshot-{}", MANIFEST_METADATA_CACHE_LIMIT + 2)
+                ))
+                .is_some()
         );
-        assert!(
-            cached_manifest_metadata_summary(&ManifestMetadataCacheKey::new(
-                "storage",
-                "repo",
-                format!("snapshot-{}", MANIFEST_METADATA_CACHE_LIMIT + 2)
-            ))
-            .is_some()
-        );
-        clear_manifest_metadata_cache_for_tests();
     }
 }
