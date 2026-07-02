@@ -224,31 +224,22 @@ fn security_public_tool_surface_remains_non_destructive_and_explicit() {
         "public MCP tool surface drifted; update security policy/tests intentionally before adding tools"
     );
 
+    let read_only_names = PUBLIC_READ_ONLY_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        read_only_names, expected_names,
+        "all public MCP tools must be source-read-only; .frigg and session-state changes stay on the read-only hint surface"
+    );
+
     for entry in parsed {
-        if PUBLIC_READ_ONLY_TOOL_NAMES.contains(&entry.name.as_str()) {
-            assert_eq!(
-                entry.read_only_hint,
-                Some(true),
-                "tool `{}` must declare read_only_hint = true",
-                entry.name
-            );
-        } else if PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&entry.name.as_str()) {
-            assert_eq!(
-                entry.read_only_hint,
-                Some(false),
-                "tool `{}` must declare read_only_hint = false because it mutates session state",
-                entry.name
-            );
-        } else if PUBLIC_WRITE_TOOL_NAMES.contains(&entry.name.as_str()) {
-            assert_eq!(
-                entry.read_only_hint,
-                Some(false),
-                "tool `{}` must declare read_only_hint = false because it mutates workspace state",
-                entry.name
-            );
-        } else {
-            panic!("unexpected public MCP tool `{}`", entry.name);
-        }
+        assert_eq!(
+            entry.read_only_hint,
+            Some(true),
+            "tool `{}` must declare read_only_hint = true",
+            entry.name
+        );
         assert_eq!(
             entry.destructive_hint,
             Some(false),
@@ -409,7 +400,29 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
 }
 
 #[test]
-fn security_confirmed_write_tools_are_public_and_not_misclassified() {
+fn security_session_state_tools_are_public_read_only_hinted_and_classified() {
+    for tool_name in ["workspace_attach", "workspace_detach"] {
+        assert!(
+            PUBLIC_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be part of the public tool surface"
+        );
+        assert!(
+            PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be declared read-only at the MCP hint layer"
+        );
+        assert!(
+            PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be classified as session-stateful"
+        );
+        assert!(
+            !PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must not be classified as confirm-gated .frigg maintenance"
+        );
+    }
+}
+
+#[test]
+fn security_confirmed_maintenance_tools_are_public_read_only_hinted_and_confirm_gated() {
     for tool_name in ["workspace_prepare", "workspace_index"] {
         assert!(
             PUBLIC_TOOL_NAMES.contains(&tool_name),
@@ -417,11 +430,11 @@ fn security_confirmed_write_tools_are_public_and_not_misclassified() {
         );
         assert!(
             PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be classified as a confirmed write tool"
+            "{tool_name} must be classified as confirm-gated .frigg maintenance"
         );
         assert!(
-            !PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must not appear on the read-only public tool surface"
+            PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
+            "{tool_name} must be declared read-only at the MCP hint layer"
         );
         assert!(
             !PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),

@@ -20,15 +20,15 @@ This runbook describes the runtime states operators are most likely to see while
 | `ready` | Attach-time index work is complete enough for the reported repository health. `lexical_ready` and `semantic_ready` show which channels are ready. | Proceed with search/navigation. If semantic is not ready but optional semantic search is disabled, this is expected. |
 | `refreshing` | Index work is active and the attach call returned before it reached a terminal state. | Wait and re-check `workspace_current`, or call `workspace_attach` again with waiting enabled if the client needs a blocking readiness check. |
 | `refresh_queued` | Refresh work was queued but has not started yet, often because another task is active. | Treat results as potentially stale until a later `ready`; inspect `active_tasks` for the in-flight task. |
-| `timeout` | Frigg waited for attach-time work but the timeout elapsed. | Increase `index_timeout_ms`, retry after the active task finishes, or run `workspace_reindex` if stale state persists. |
+| `timeout` | Frigg waited for attach-time work but the timeout elapsed. | Increase `index_timeout_ms`, retry after the active task finishes, or run `workspace_index` if stale state persists. |
 | `failed` | Attach-time refresh failed. `failure_summary` and `recommended_action` explain the failure when available. | Follow `recommended_action`; common actions are rerun reindex, check environment, or use heuristic mode while repairing precise/semantic inputs. |
-| `skipped` | The caller requested `index_mode=skip`, so no attach-time indexing ran. | Use only when stale or missing index state is acceptable. Run `workspace_reindex` or attach with `ensure` when freshness matters. |
-| `stale` | The index is not ready and no refresh is running or queued, and the caller did not request a skip. Typically seen from `workspace_current` when files changed without watch active. | Run `workspace_reindex`, or attach with `index_mode=ensure`, to refresh the repository. |
+| `skipped` | The caller requested `index_mode=skip`, so no attach-time indexing ran. | Use only when stale or missing index state is acceptable. Run `workspace_index` or attach with `ensure` when freshness matters. |
+| `stale` | The index is not ready and no refresh is running or queued, and the caller did not request a skip. Typically seen from `workspace_current` when files changed without watch active. | Run `workspace_index`, or attach with `index_mode=ensure`, to refresh the repository. |
 | `unavailable` | Frigg could not evaluate index lifecycle for this repository. | Verify the repository is attached and storage is accessible, then retry attach or reindex. |
 
-`index_mode=skip` is scoped to lexical and semantic index refresh. It still adopts the repository into the MCP session, returns current health, and may run precise-generator discovery or best-effort precise artifact generation. Use `wait_for_precise=false` when the caller wants to return without waiting for precise generation; that flag does not disable indexing or generation scheduling.
+`index_mode=skip` is scoped to lexical and semantic index refresh. It still adopts the repository into the MCP session, returns current health, and may probe or schedule precise-generator execution. Frigg treats ignored `.frigg/` runtime artifacts as outside the source-read-only scope.
 
-Use `workspace_prepare` or `workspace_reindex` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on Frigg's local `.frigg/storage.sqlite3` state.
+Use `workspace_prepare` or `workspace_index` only when you intentionally want to initialize or refresh Frigg state from a client. These tools are confirm-gated because they operate on ignored `.frigg/` state.
 
 ## Semantic degraded mode
 
@@ -38,7 +38,7 @@ Semantic retrieval is optional. When disabled or unavailable, Frigg still search
 | --- | --- | --- |
 | `ok` | Semantic retrieval participated successfully. | No action needed. |
 | `disabled` | Semantic runtime is not enabled or this query did not request semantic recall. | Expected unless semantic search was intended; enable semantic runtime and reindex if needed. |
-| `unavailable` | Semantic retrieval could not run, for example because provider configuration or stored semantic state is missing. | Check semantic environment variables and run `frigg reindex` or `workspace_reindex` after enabling semantic search. |
+| `unavailable` | Semantic retrieval could not run, for example because provider configuration or stored semantic state is missing. | Check semantic environment variables and run `frigg reindex` or `workspace_index` after enabling semantic search. |
 | `degraded` | Semantic retrieval was requested but fell back or returned partial/no semantic evidence while other channels remained usable. This is not the same as a hard failure. | Treat the answer as lexical/graph-grounded. Inspect `semantic_reason`, provider credentials, rate limits, and semantic index freshness. Reindex after provider recovery if stored embeddings are stale. |
 | `filtered` | Semantic results were filtered out by query or channel policy. | Usually no operator action; adjust query or filters if semantic recall was expected. |
 | `strict_failure` error | Strict semantic mode converts semantic provider failures into user-visible errors. | Disable strict mode for graceful fallback, or repair the provider/configuration before retrying. |
@@ -58,7 +58,7 @@ Precise navigation comes from optional SCIP artifacts and best-effort automatic 
 | `failed` | Precise generation or ingest failed. `failure_tool`, `failure_class`, `failure_summary`, and `recommended_action` identify the likely cause when available. | Follow the recommended action: install missing tools, check environment, rerun reindex, or use heuristic mode until upstream tool failures are fixed. |
 | `unavailable` | No usable precise source is available for this repository or language. | This is expected for unsupported layouts or missing optional artifacts. Use heuristic/source-backed navigation or provide `.frigg/scip/` artifacts. |
 
-Precise lifecycle phases describe generation timing separately from the compact state: `running` and `timeout` mean generation may still be in progress or incomplete, while `failed` means it reached a terminal failure. `wait_for_precise=true` on attach/reindex waits for a terminal phase when possible; `wait_for_precise=false` skips only that wait and leaves generator scheduling behavior unchanged.
+Precise lifecycle phases describe generation timing separately from the compact state: `running` and `timeout` mean generation may still be in progress or incomplete, while `failed` means it reached a terminal failure. `wait_for_precise=true` on `workspace_attach` and `workspace_index` waits for a terminal phase when possible; `wait_for_precise=false` skips only that wait and leaves generator scheduling behavior unchanged.
 
 ## Watch retries
 
@@ -70,14 +70,14 @@ If a watch refresh fails, Frigg logs `built-in watch mode refresh failed; retry 
 | --- | --- | --- |
 | Debouncing | A file event was observed and Frigg is waiting for the debounce window before refreshing. | Wait for the debounce interval; this is normal during active edits. |
 | Refreshing | A manifest or semantic follow-up refresh is running. | Search may briefly reflect the previous snapshot. Re-check after the task finishes. |
-| Retrying | The previous refresh failed and the scheduler has a retry deadline. | Check logs for the failure cause, verify storage/provider/tool availability, and wait for the next retry or run a manual `workspace_reindex` after fixing the cause. |
+| Retrying | The previous refresh failed and the scheduler has a retry deadline. | Check logs for the failure cause, verify storage/provider/tool availability, and wait for the next retry or run a manual `workspace_index` after fixing the cause. |
 | Re-run requested | Another event arrived while a refresh was active. | Frigg will queue another refresh after the active one succeeds. No manual action unless the queue never drains. |
 
 Turn watch mode off with `--watch-mode off` when an external watcher already maintains Frigg state, to avoid duplicate refresh work.
 
 ## Quick diagnosis map
 
-- Search results are stale: inspect `workspace_current`, then attach with `index_mode=ensure`; if lifecycle is `refreshing`, `refresh_queued`, or `timeout`, wait or run `workspace_reindex`.
+- Search results are stale: inspect `workspace_current`, then attach with `index_mode=ensure`; if lifecycle is `refreshing`, `refresh_queued`, or `timeout`, wait or run `workspace_index`.
 - Natural-language recall is weak but text search works: inspect semantic status. `degraded` means fallback is active; repair provider/configuration or semantic freshness if semantic recall is required.
 - Definition/reference jumps are incomplete: inspect `workspace_current.precise` and `health.precise_ingest`. `partial` means verify hits and fill missing SCIP coverage if needed.
 - Precise tools fail outright: inspect `failure_class` and `recommended_action`, then install tools, fix environment, or rerun reindex.

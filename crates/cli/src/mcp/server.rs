@@ -623,7 +623,7 @@ impl FriggMcpServer {
         name = "workspace_attach",
         description = "Adopt a repository into this session. Use this before repo-aware tools when detached or when you want a stable default repository.",
         annotations(
-            read_only_hint = false,
+            read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = false
         )
@@ -832,7 +832,7 @@ impl FriggMcpServer {
         name = "workspace_detach",
         description = "Remove a repository from this session and release its watch lease when applicable.",
         annotations(
-            read_only_hint = false,
+            read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = false
         )
@@ -898,7 +898,7 @@ impl FriggMcpServer {
         name = "workspace_prepare",
         description = "Initialize and validate Frigg state for a repository, then adopt it into this session. Requires confirmation.",
         annotations(
-            read_only_hint = false,
+            read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = false
         )
@@ -1096,7 +1096,7 @@ impl FriggMcpServer {
         name = "workspace_index",
         description = "Refresh indexed state for a repository, then adopt it into this session. Requires confirmation.",
         annotations(
-            read_only_hint = false,
+            read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = false
         )

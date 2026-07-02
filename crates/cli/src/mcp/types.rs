@@ -35,9 +35,14 @@ pub const PUBLIC_TOOL_NAMES: [&str; 24] = [
     "deep_search_replay",
     "deep_search_compose_citations",
 ];
-/// Public tools that are guaranteed not to mutate workspace or repository state.
-pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 20] = [
+/// Public tools declared read-only at the MCP hint layer. Frigg treats session state and ignored
+/// `.frigg/` state changes as read-only for this source-safety contract.
+pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 24] = [
     "list_repositories",
+    "workspace_attach",
+    "workspace_detach",
+    "workspace_prepare",
+    "workspace_index",
     "workspace_current",
     "read_file",
     "read_match",
@@ -60,8 +65,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: [&str; 20] = [
 ];
 /// Public tools whose behavior depends on per-session workspace attachment state.
 pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 2] = ["workspace_attach", "workspace_detach"];
-/// Public tools that can change on-disk or persisted state and therefore require write-style
-/// handling.
+/// Public tools that can change ignored `.frigg/` state and therefore still require confirmation.
 pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 2] = ["workspace_prepare", "workspace_index"];
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";

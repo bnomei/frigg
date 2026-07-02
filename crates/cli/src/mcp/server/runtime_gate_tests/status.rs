@@ -39,6 +39,35 @@ fn extended_only_tools_are_registered_when_runtime_option_enabled() {
 }
 
 #[test]
+fn workspace_maintenance_tools_require_explicit_confirm() {
+    for tool_name in ["workspace_prepare", "workspace_index"] {
+        for confirm in [None, Some(false)] {
+            let error = FriggMcpServer::require_confirm(tool_name, confirm)
+                .expect_err("confirm must be explicit before maintenance side effects");
+            assert_eq!(
+                error
+                    .data
+                    .as_ref()
+                    .and_then(|value| value.get("error_code"))
+                    .and_then(|value| value.as_str()),
+                Some(crate::mcp::types::WRITE_CONFIRMATION_REQUIRED_ERROR_CODE)
+            );
+            assert_eq!(
+                error
+                    .data
+                    .as_ref()
+                    .and_then(|value| value.get("tool_name"))
+                    .and_then(|value| value.as_str()),
+                Some(tool_name)
+            );
+        }
+
+        FriggMcpServer::require_confirm(tool_name, Some(true))
+            .expect("confirm=true should allow maintenance tool execution");
+    }
+}
+
+#[test]
 fn server_info_enables_resources_and_prompts() {
     let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
     let info = <FriggMcpServer as rmcp::ServerHandler>::get_info(&server);

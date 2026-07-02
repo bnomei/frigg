@@ -256,7 +256,7 @@ Frigg can also read:
 
 By default, `workspace_attach` uses `index_mode=ensure`: it adopts the repository, refreshes stale or missing lexical and semantic state when possible, waits up to 30 seconds, and reports `index_lifecycle`. Use `index_mode=skip` only when stale or missing indexed state is acceptable.
 
-Attach is not side-effect free. It can create or update `.frigg/storage.sqlite3`, update session state, report repository health, and schedule precise-generator discovery or generation when a generator applies. Optional precise generation may write `.frigg/scip/` artifacts, execute repo-local generator tools, or apply generator-specific compatibility patches.
+Attach is source read-only under Frigg's MCP policy, but not runtime-state-free. It can create or update ignored `.frigg/storage.sqlite3` state, update session state, probe repository-local precise generators, and schedule ignored `.frigg/scip/` artifact generation. Frigg treats those runtime artifacts as outside the source-read-only scope.
 
 For runtime diagnosis, see the [Frigg Operator Runbook](docs/operator-runbook.md).
 
@@ -344,7 +344,7 @@ Provider defaults:
 
 ## Optional SCIP Artifacts
 
-Frigg can consume external SCIP artifacts for more precise definitions, references, implementations, and call navigation. It can also automatically detect and invoke supported generator tools during `workspace_attach` and MCP `workspace_index` flows for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin.
+Frigg can consume external SCIP artifacts for more precise definitions, references, implementations, and call navigation. It can also automatically detect and invoke supported generator tools during MCP `workspace_attach` and confirm-gated `workspace_prepare` / `workspace_index` flows for Rust, Go, TypeScript / JavaScript, Python, PHP, and Kotlin.
 
 Java source support is available, but current JVM auto-generation is intentionally scoped to Gradle/KTS workspaces with Kotlin source files. Java/JVM and other Kotlin/JVM layouts should use manual `.frigg/scip/` artifact drops.
 
@@ -389,7 +389,7 @@ Optional repository-local precise config lives at `.frigg/precise.json`:
 }
 ```
 
-`workspace_attach` and `workspace_index` support `wait_for_precise`, which defaults to `true`. Pass `wait_for_precise=false` to return without waiting for precise generation. This skips only the wait; it does not disable attach-time index refresh, generator discovery, or generation scheduling.
+`workspace_attach` and `workspace_index` support `wait_for_precise`, which defaults to `true`. Pass `wait_for_precise=false` to return without waiting for precise generation. This skips only the wait; it does not disable generator discovery or generation scheduling. On `workspace_attach`, `index_mode=skip` skips lexical and semantic refresh only; it still preserves precise-generation scheduling.
 
 ## Built-In Watch Mode
 
@@ -496,7 +496,7 @@ The [showcases/](showcases/) directory contains 52 public example catalogs for r
 - Frigg avoids editing source files during normal indexing.
 - Optional semantic search may call an external embedding provider if you enable it.
 - Optional precise generators may write `.frigg/scip/` artifacts, execute repo-local or PATH-discovered tools, or apply generator-specific compatibility patches. Those external tools have their own filesystem behavior outside Frigg's source-indexing boundary.
-- Workspace and index maintenance tools such as `workspace_prepare` and `workspace_index` are confirm-gated and operate on Frigg state.
+- Workspace and index maintenance tools such as `workspace_prepare` and `workspace_index` are confirm-gated and operate on ignored `.frigg/` state.
 - Session adoption and watcher leases are runtime/session state. `workspace_current.repositories` is session-local; `list_repositories` is the global known-repository catalog.
 
 Frigg's product boundary is intentionally narrow: local code evidence over MCP, not a full IDE, hosted code intelligence platform, or framework runtime.
