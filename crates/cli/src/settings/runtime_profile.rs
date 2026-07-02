@@ -11,6 +11,16 @@ pub enum RuntimeTransportKind {
     RemoteHttp,
 }
 
+impl RuntimeTransportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::LoopbackHttp => "loopback_http",
+            Self::RemoteHttp => "remote_http",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 /// Resolved runtime shape that drives persistence and freshness behavior for a process.

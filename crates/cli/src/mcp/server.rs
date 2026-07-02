@@ -406,6 +406,7 @@ impl FriggMcpServer {
     const FIND_REFERENCES_DOCUMENT_BUDGET_MULTIPLIER: usize = 512;
     const PRECISE_FAILURE_SAMPLE_LIMIT: usize = 8;
     const PRECISE_DISCOVERY_SAMPLE_LIMIT: usize = 16;
+    const WORKSPACE_INDEX_RESPONSE_PATH_LIMIT: usize = 50;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
     const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -929,15 +930,20 @@ impl FriggMcpServer {
             "workspace prepare started"
         );
         if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
+                active_tasks = active_tasks.len(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "workspace prepare rejected because runtime work is active"
             );
             return Err(Self::invalid_params(
                 "repository already has active runtime work",
-                Some(json!({ "repository_id": workspace.repository_id })),
+                Some(json!({
+                    "repository_id": workspace.repository_id,
+                    "active_tasks": active_tasks,
+                })),
             ));
         }
 
@@ -1092,6 +1098,18 @@ impl FriggMcpServer {
         self.finalize_with_provenance("workspace_prepare", result, provenance_result)
     }
 
+    fn capped_workspace_index_paths(paths: &[String]) -> (Vec<String>, bool) {
+        let truncated = paths.len() > Self::WORKSPACE_INDEX_RESPONSE_PATH_LIMIT;
+        (
+            paths
+                .iter()
+                .take(Self::WORKSPACE_INDEX_RESPONSE_PATH_LIMIT)
+                .cloned()
+                .collect(),
+            truncated,
+        )
+    }
+
     #[tool(
         name = "workspace_index",
         description = "Refresh indexed state for a repository, then adopt it into this session. Requires confirmation.",
@@ -1127,15 +1145,20 @@ impl FriggMcpServer {
             "workspace index started"
         );
         if self.repository_has_active_runtime_work(&workspace.repository_id) {
+            let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
+                active_tasks = active_tasks.len(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "workspace index rejected because runtime work is active"
             );
             return Err(Self::invalid_params(
                 "repository already has active runtime work",
-                Some(json!({ "repository_id": workspace.repository_id })),
+                Some(json!({
+                    "repository_id": workspace.repository_id,
+                    "active_tasks": active_tasks,
+                })),
             ));
         }
 
@@ -1151,7 +1174,7 @@ impl FriggMcpServer {
                 Some(format!("index {}", workspace.root.display())),
             );
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
-        Self::notify_progress(&meta, &client, 1.0, 4.0, "lexical refresh").await;
+        Self::notify_progress(&meta, &client, 1.0, 4.0, "index refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();
         let index_summary = Self::run_blocking_task("workspace_index", {
             let workspace = workspace.clone();
@@ -1177,7 +1200,7 @@ impl FriggMcpServer {
                 root = %workspace.root.display(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 error = %err,
-                "workspace index failed during lexical refresh"
+                "workspace index failed during index refresh"
             );
             self.runtime_state
                 .runtime_task_registry
@@ -1190,7 +1213,7 @@ impl FriggMcpServer {
             )
         })?;
 
-        Self::notify_progress(&meta, &client, 2.0, 4.0, "semantic refresh").await;
+        Self::notify_progress(&meta, &client, 2.0, 4.0, "invalidate caches").await;
         self.invalidate_workspace_index_runtime_caches(&workspace, true);
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "finalize").await;
@@ -1233,6 +1256,10 @@ impl FriggMcpServer {
             .clone()
             .unwrap_or_else(|| Self::workspace_storage_summary(&workspace));
         repository.storage = None;
+        let (changed_paths, changed_paths_truncated) =
+            Self::capped_workspace_index_paths(&index_summary.changed_paths);
+        let (deleted_paths, deleted_paths_truncated) =
+            Self::capped_workspace_index_paths(&index_summary.deleted_paths);
         let mut response = WorkspaceIndexResponse {
             repository,
             resolved_from,
@@ -1245,6 +1272,9 @@ impl FriggMcpServer {
             files_changed: index_summary.files_changed,
             files_deleted: index_summary.files_deleted,
             diagnostics_count: index_summary.diagnostics.total_count(),
+            changed_paths,
+            deleted_paths,
+            paths_truncated: changed_paths_truncated || deleted_paths_truncated,
             precise_lifecycle,
         };
         if params.wait_for_precise.unwrap_or(true) {
@@ -1302,6 +1332,9 @@ impl FriggMcpServer {
                 "files_changed": response.files_changed,
                 "files_deleted": response.files_deleted,
                 "diagnostics_count": response.diagnostics_count,
+                "changed_paths": response.changed_paths,
+                "deleted_paths": response.deleted_paths,
+                "paths_truncated": response.paths_truncated,
                 "session_default": response.session_default,
                 "precise_lifecycle": {
                     "phase": response.precise_lifecycle.phase,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Removed legacy Cursor `.cursorrules` adoption support and the `legacy-cursor` adopt target.
+- Removed the explicit `prepare-semantic-model` CLI surface; local semantic artifacts are prepared automatically by semantic runtime startup when `provider=local`.
 - Renamed the context indexing command and MCP tool from `reindex` / `workspace_reindex` to `index` / `workspace_index`; the CLI still accepts `frigg reindex` as a compatibility alias.
 
 ## 0.5.0 - 2026-06-29

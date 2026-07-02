@@ -5,6 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use fastembed::{EmbeddingModel, ModelTrait, TextEmbedding, TextInitOptions};
+use hf_hub::api::Progress;
+use hf_hub::api::sync::ApiBuilder;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use thiserror::Error;
 
 use crate::settings::SemanticRuntimeConfig;
@@ -12,7 +15,9 @@ use crate::settings::SemanticRuntimeConfig;
 pub const FRIGG_SEMANTIC_MODEL_CACHE_ENV: &str = "FRIGG_SEMANTIC_MODEL_CACHE";
 pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
 const HF_HOME_ENV: &str = "HF_HOME";
+const HF_ENDPOINT_ENV: &str = "HF_ENDPOINT";
 const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
+const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalModelAlias {
@@ -331,9 +336,11 @@ pub fn prepare_local_semantic_model(
         });
     }
 
+    prefetch_local_model_files(&artifact)?;
+
     let options = TextInitOptions::new(DEFAULT_LOCAL_MODEL_ALIAS.fastembed_model)
         .with_cache_dir(artifact.cache_root.clone())
-        .with_show_download_progress(true);
+        .with_show_download_progress(false);
     TextEmbedding::try_new(options).map_err(|err| LocalModelError::PreparationFailed {
         model: artifact.semantic_model.clone(),
         cache_root: artifact.cache_root.clone(),
@@ -347,6 +354,101 @@ pub fn prepare_local_semantic_model(
             cache_root: missing.cache_root,
         }),
     }
+}
+
+fn prefetch_local_model_files(artifact: &LocalModelArtifact) -> LocalModelResult<()> {
+    let mut builder = ApiBuilder::new()
+        .with_cache_dir(artifact.cache_root.clone())
+        .with_progress(false);
+    if let Ok(endpoint) = std::env::var(HF_ENDPOINT_ENV) {
+        builder = builder.with_endpoint(endpoint);
+    }
+    let repo = builder
+        .build()
+        .map_err(|err| LocalModelError::PreparationFailed {
+            model: artifact.semantic_model.clone(),
+            cache_root: artifact.cache_root.clone(),
+            message: err.to_string(),
+        })?
+        .model(artifact.repository.clone());
+
+    for file in local_model_download_files(artifact) {
+        repo.download_with_progress(file, StableDownloadProgress::new())
+            .map_err(|err| LocalModelError::PreparationFailed {
+                model: artifact.semantic_model.clone(),
+                cache_root: artifact.cache_root.clone(),
+                message: format!("failed to download {file}: {err}"),
+            })?;
+    }
+
+    Ok(())
+}
+
+fn local_model_download_files(artifact: &LocalModelArtifact) -> Vec<&str> {
+    let mut files = Vec::with_capacity(artifact.required_files.len());
+    files.push(artifact.model_file.as_str());
+    files.extend(
+        artifact
+            .required_files
+            .iter()
+            .map(String::as_str)
+            .filter(|file| *file != artifact.model_file),
+    );
+    files
+}
+
+struct StableDownloadProgress {
+    progress: ProgressBar,
+}
+
+impl StableDownloadProgress {
+    fn new() -> Self {
+        Self {
+            progress: ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12)),
+        }
+    }
+}
+
+impl Progress for StableDownloadProgress {
+    fn init(&mut self, size: usize, filename: &str) {
+        self.progress.set_length(size as u64);
+        self.progress.set_style(stable_download_progress_style());
+        self.progress.set_message(download_progress_label(filename));
+    }
+
+    fn update(&mut self, size: usize) {
+        self.progress.inc(size as u64);
+    }
+
+    fn finish(&mut self) {
+        self.progress.finish();
+    }
+}
+
+fn stable_download_progress_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{msg:28} {bytes:>12}/{total_bytes:<12} {bytes_per_sec:>13} eta={eta:<8} {wide_bar:.cyan/blue}",
+    )
+    .expect("download progress template should be valid")
+}
+
+fn download_progress_label(filename: &str) -> String {
+    const ELLIPSIS: &str = "..";
+    let char_count = filename.chars().count();
+    if char_count <= DOWNLOAD_PROGRESS_LABEL_WIDTH {
+        return filename.to_owned();
+    }
+
+    let suffix_len = DOWNLOAD_PROGRESS_LABEL_WIDTH.saturating_sub(ELLIPSIS.len());
+    let suffix = filename
+        .chars()
+        .rev()
+        .take(suffix_len)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{ELLIPSIS}{suffix}")
 }
 
 pub fn resolve_model_alias(semantic_model: &str) -> LocalModelResult<&'static LocalModelAlias> {
@@ -513,6 +615,44 @@ mod tests {
                 .required_files
                 .iter()
                 .any(|file| file == "tokenizer.json")
+        );
+    }
+
+    #[test]
+    fn local_model_download_progress_label_keeps_fixed_width_tail() {
+        let short = download_progress_label("model.onnx");
+        assert_eq!(short, "model.onnx");
+
+        let long = download_progress_label("nested/path/with/a/very-long-tokenizer-config.json");
+        assert_eq!(long.chars().count(), DOWNLOAD_PROGRESS_LABEL_WIDTH);
+        assert!(long.starts_with(".."));
+        assert!(long.ends_with("tokenizer-config.json"));
+    }
+
+    #[test]
+    fn local_model_download_progress_template_is_valid() {
+        let _style = stable_download_progress_style();
+    }
+
+    #[test]
+    fn local_model_download_files_start_with_model_file() {
+        let artifact = LocalModelArtifact {
+            semantic_model: DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+            cache_root: PathBuf::from("/tmp/frigg-models"),
+            cache_key: "local--test".to_owned(),
+            repository: DEFAULT_MODEL_REPOSITORY.to_owned(),
+            repository_cache_dir: PathBuf::from("/tmp/frigg-models/repo"),
+            model_file: "model.onnx".to_owned(),
+            required_files: vec![
+                "config.json".to_owned(),
+                "model.onnx".to_owned(),
+                "tokenizer.json".to_owned(),
+            ],
+        };
+
+        assert_eq!(
+            local_model_download_files(&artifact),
+            vec!["model.onnx", "config.json", "tokenizer.json"]
         );
     }
 

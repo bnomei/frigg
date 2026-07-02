@@ -48,11 +48,17 @@ impl IndexMode {
 pub struct IndexSummary {
     pub repository_id: String,
     pub snapshot_id: String,
+    pub previous_snapshot_id: Option<String>,
+    pub snapshot_plan: String,
     pub files_scanned: usize,
     pub files_changed: usize,
     pub files_deleted: usize,
     pub changed_paths: Vec<String>,
     pub deleted_paths: Vec<String>,
+    pub semantic_refresh_mode: SemanticRefreshMode,
+    pub semantic_provider: Option<String>,
+    pub semantic_model: Option<String>,
+    pub semantic_records: usize,
     pub diagnostics: IndexDiagnostics,
     pub duration_ms: u128,
 }
@@ -88,6 +94,13 @@ impl ManifestSnapshotPlan {
             } => *rollback_on_semantic_failure,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReuseExisting { .. } => "reuse_existing",
+            Self::PersistNew { .. } => "persist_new",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +111,18 @@ pub enum SemanticRefreshMode {
     FullRebuildFromChangedOnly,
     IncrementalAdvance,
     ReuseExisting,
+}
+
+impl SemanticRefreshMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::FullRebuild => "full_rebuild",
+            Self::FullRebuildFromChangedOnly => "full_rebuild_from_changed_only",
+            Self::IncrementalAdvance => "incremental_advance",
+            Self::ReuseExisting => "reuse_existing",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

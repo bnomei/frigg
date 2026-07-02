@@ -18,7 +18,8 @@ mod supervisor;
 mod tests;
 
 pub use supervisor::{
-    RepositoryCacheInvalidationCallback, WatchRuntime, maybe_start_watch_runtime,
+    RepositoryCacheInvalidationCallback, WatchEvent, WatchEventReporter, WatchRuntime,
+    maybe_start_watch_runtime, maybe_start_watch_runtime_with_reporter,
 };
 
 #[cfg(test)]

@@ -14,8 +14,10 @@ use frigg::storage::{DEFAULT_VECTOR_DIMENSIONS, Storage, VectorStoreBackend};
 use tracing::info;
 
 use super::storage_auto_heal::verify_storage_with_auto_repair;
-use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
+use crate::cli_runtime::{
+    CliOutput, OutputField, OutputLevel, field, format_output_event_line, reported_io_error,
+};
 
 const HF_HOME_ENV: &str = "HF_HOME";
 
@@ -58,12 +60,28 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
             Some(root) => root,
             None => {
-                let message = format!(
-                    "startup summary status=failed repository_id={} error=workspace root lookup failed",
-                    repo.repository_id.0
+                let message = format_output_event_line(
+                    OutputLevel::Error,
+                    "startup",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
                 );
-                output.error(&message)?;
-                return Err(io::Error::other(message));
+                output.error_event(
+                    "startup",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
+                )?;
+                return Err(reported_io_error(message));
             }
         };
         let db_path = resolve_storage_db_path(root, "startup")?;
@@ -76,15 +94,20 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
                 root.display(),
                 root.display()
             );
-            output.error(format!(
-                "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                repositories.len(),
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                err_message
-            ))?;
-            return Err(io::Error::other(err_message));
+            output.error_event(
+                "startup",
+                "failed",
+                &[
+                    field("status", "failed"),
+                    field("repos", repositories.len()),
+                    field("repo", &repo.repository_id.0),
+                    field("db", db_path.display()),
+                    field("next", "run `frigg init` or `frigg index`"),
+                    field("error", &err_message),
+                ],
+                Some(&root.display().to_string()),
+            )?;
+            return Err(reported_io_error(err_message));
         }
         let storage = Storage::new(&db_path);
         let repaired_categories = match verify_storage_with_auto_repair(&storage) {
@@ -96,25 +119,35 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
                     root.display(),
                     db_path.display()
                 );
-                output.error(format!(
-                    "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                    repositories.len(),
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    err_message
-                ))?;
-                return Err(io::Error::other(err_message));
+                output.error_event(
+                    "startup",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repos", repositories.len()),
+                        field("repo", &repo.repository_id.0),
+                        field("db", db_path.display()),
+                        field("error", &err_message),
+                    ],
+                    Some(&root.display().to_string()),
+                )?;
+                return Err(reported_io_error(err_message));
             }
         };
         if !repaired_categories.is_empty() {
-            output.progress(format!(
-                "startup auto_repair repository_id={} root={} db={} repaired={}",
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                repaired_categories.join(",")
-            ))?;
+            output.progress_event(
+                OutputLevel::Warn,
+                "storage",
+                "auto_repair",
+                &[
+                    field("status", "ok"),
+                    field("command", "startup"),
+                    field("repo", &repo.repository_id.0),
+                    field("repaired", repaired_categories.join(",")),
+                    field("db", db_path.display()),
+                ],
+                Some(&root.display().to_string()),
+            )?;
         }
         let status = storage
             .verify_vector_store(DEFAULT_VECTOR_DIMENSIONS)
@@ -130,15 +163,19 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
         let status = match status {
             Ok(status) => status,
             Err(err) => {
-                output.error(format!(
-                    "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                    repositories.len(),
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    err
-                ))?;
-                return Err(err);
+                output.error_event(
+                    "startup",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repos", repositories.len()),
+                        field("repo", &repo.repository_id.0),
+                        field("db", db_path.display()),
+                        field("error", &err),
+                    ],
+                    Some(&root.display().to_string()),
+                )?;
+                return Err(reported_io_error(err.to_string()));
             }
         };
 
@@ -147,15 +184,19 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
                 "vector subsystem not ready: sqlite-vec backend unavailable (active backend: {})",
                 status.backend.as_str()
             );
-            output.error(format!(
-                "startup summary status=failed repositories={} repository_id={} root={} db={} error={}",
-                repositories.len(),
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                err_message
-            ))?;
-            return Err(io::Error::other(format!(
+            output.error_event(
+                "startup",
+                "failed",
+                &[
+                    field("status", "failed"),
+                    field("repos", repositories.len()),
+                    field("repo", &repo.repository_id.0),
+                    field("db", db_path.display()),
+                    field("error", &err_message),
+                ],
+                Some(&root.display().to_string()),
+            )?;
+            return Err(reported_io_error(format!(
                 "startup strict vector readiness failed repository_id={} root={} db={}: {err_message}",
                 repo.repository_id.0,
                 root.display(),
@@ -245,14 +286,21 @@ fn run_semantic_runtime_startup_gate_with_credentials_and_output(
             .map(SemanticRuntimeProvider::as_str)
             .unwrap_or("-");
         let model = config.semantic_runtime.normalized_model().unwrap_or("-");
-        output.error(format!(
-            "startup summary status=failed semantic_enabled=true semantic_provider={} semantic_model={} semantic_code={} error={}",
-            provider,
-            model,
-            startup_error.code(),
-            startup_error
-        ))?;
-        return Err(io::Error::other(format!(
+        output.error_event(
+            "startup",
+            "failed",
+            &[
+                field("status", "failed"),
+                field("semantic_enabled", true),
+                field("provider", provider),
+                field("model", model),
+                field("code", startup_error.code()),
+                field("next", "check semantic runtime configuration"),
+                field("error", &startup_error),
+            ],
+            None,
+        )?;
+        return Err(reported_io_error(format!(
             "startup semantic runtime readiness failed code={}: {}",
             startup_error.code(),
             startup_error
@@ -353,14 +401,16 @@ fn prepare_missing_or_corrupt_local_semantic_model(
     emit_model_prepare_progress(
         output,
         prepare_output,
-        format!(
-            "startup semantic_model_prepare status=started semantic_provider=local semantic_model={} cache_root={} cache_key={} repository={} reason={}",
-            artifact.semantic_model,
-            artifact.cache_root.display(),
-            artifact.cache_key,
-            artifact.repository,
-            reason
-        ),
+        OutputLevel::Info,
+        &[
+            field("status", "started"),
+            field("provider", "local"),
+            field("model", &artifact.semantic_model),
+            field("cache_key", &artifact.cache_key),
+            field("repository", &artifact.repository),
+            field("reason", reason),
+        ],
+        Some(&artifact.cache_root.display().to_string()),
     )?;
 
     match prepare_local_semantic_model(&config.semantic_runtime) {
@@ -368,13 +418,15 @@ fn prepare_missing_or_corrupt_local_semantic_model(
             emit_model_prepare_progress(
                 output,
                 prepare_output,
-                format!(
-                    "startup semantic_model_prepare status=finished semantic_provider=local semantic_model={} cache_root={} cache_key={} repository={}",
-                    prepared.semantic_model,
-                    prepared.cache_root.display(),
-                    prepared.cache_key,
-                    prepared.repository
-                ),
+                OutputLevel::Ok,
+                &[
+                    field("status", "finished"),
+                    field("provider", "local"),
+                    field("model", &prepared.semantic_model),
+                    field("cache_key", &prepared.cache_key),
+                    field("repository", &prepared.repository),
+                ],
+                Some(&prepared.cache_root.display().to_string()),
             )?;
             Ok(())
         }
@@ -384,13 +436,21 @@ fn prepare_missing_or_corrupt_local_semantic_model(
 
 fn fail_local_model_prepare(output: &CliOutput, model: &str, message: String) -> io::Result<()> {
     let startup_error = SemanticStartupGateError::LocalModelPrepare(message);
-    output.error(format!(
-        "startup summary status=failed semantic_enabled=true semantic_provider=local semantic_model={} semantic_code={} error={}",
-        model,
-        startup_error.code(),
-        startup_error
-    ))?;
-    Err(io::Error::other(format!(
+    output.error_event(
+        "startup",
+        "failed",
+        &[
+            field("status", "failed"),
+            field("semantic_enabled", true),
+            field("provider", "local"),
+            field("model", model),
+            field("code", startup_error.code()),
+            field("next", "check local semantic model cache"),
+            field("error", &startup_error),
+        ],
+        None,
+    )?;
+    Err(reported_io_error(format!(
         "startup semantic runtime readiness failed code={}: {}",
         startup_error.code(),
         startup_error
@@ -400,10 +460,16 @@ fn fail_local_model_prepare(output: &CliOutput, model: &str, message: String) ->
 fn emit_model_prepare_progress(
     output: &CliOutput,
     target: SemanticModelPrepareOutput,
-    message: String,
+    level: OutputLevel,
+    fields: &[OutputField],
+    path: Option<&str>,
 ) -> io::Result<()> {
     match target {
-        SemanticModelPrepareOutput::Stdout => output.summary(message),
-        SemanticModelPrepareOutput::Stderr => output.warning(message),
+        SemanticModelPrepareOutput::Stdout => {
+            output.summary_event(level, "startup", "semantic_model", fields, path)
+        }
+        SemanticModelPrepareOutput::Stderr => {
+            output.warning_event(level, "startup", "semantic_model", fields, path)
+        }
     }
 }

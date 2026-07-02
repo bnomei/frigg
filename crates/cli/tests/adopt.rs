@@ -84,6 +84,9 @@ fn adopt_cli_check_fails_when_pending_and_passes_when_unchanged() {
     let pending = run_frigg(&root, &["adopt", "--target", "agents-md", "--check"]);
     assert_failure(&pending);
     assert!(stdout(&pending).contains("status=pending"));
+    let pending_stderr = stderr(&pending);
+    assert!(pending_stderr.contains("error adopt: failed status=failed mode=check pending=1"));
+    assert!(!pending_stderr.contains("Error:"));
     assert!(!root.join("AGENTS.md").exists());
 
     let applied = run_frigg(&root, &["adopt", "--target", "agents-md"]);
@@ -96,7 +99,7 @@ fn adopt_cli_check_fails_when_pending_and_passes_when_unchanged() {
 }
 
 #[test]
-fn adopt_cli_applies_markdown_cursor_legacy_cursor_and_mcp_targets_idempotently() {
+fn adopt_cli_applies_markdown_cursor_and_mcp_targets_idempotently() {
     let root = temp_workspace_root("apply-targets");
     fs::create_dir_all(&root).expect("create temp root");
 
@@ -112,18 +115,21 @@ fn adopt_cli_applies_markdown_cursor_legacy_cursor_and_mcp_targets_idempotently(
             "mcp-project",
             "--target",
             "mcp-cursor",
-            "--legacy-cursor",
         ],
     );
     assert_success(&first);
-    assert!(stdout(&first).contains("writes=5"));
+    assert!(stdout(&first).contains("writes=4"));
     assert!(!stdout(&first).contains("adopt plan"));
 
-    for path in ["AGENTS.md", ".cursor/rules/frigg.mdc", ".cursorrules"] {
+    for path in ["AGENTS.md", ".cursor/rules/frigg.mdc"] {
         let contents = fs::read_to_string(root.join(path)).expect("read adopted markdown");
         assert!(contents.contains("frigg-directive:start"));
         assert!(contents.contains("frigg-directive:end"));
     }
+    assert!(
+        !root.join(".cursorrules").exists(),
+        "adopt should no longer create legacy Cursor rules"
+    );
 
     for path in [".mcp.json", ".cursor/mcp.json"] {
         let value: serde_json::Value = serde_json::from_str(
@@ -148,13 +154,28 @@ fn adopt_cli_applies_markdown_cursor_legacy_cursor_and_mcp_targets_idempotently(
             "mcp-project",
             "--target",
             "mcp-cursor",
-            "--legacy-cursor",
         ],
     );
     assert_success(&second);
-    assert!(stdout(&second).contains("unchanged=5"));
+    assert!(stdout(&second).contains("unchanged=4"));
     assert!(stdout(&second).contains("writes=0"));
     assert!(!stdout(&second).contains("adopt apply writes="));
+    cleanup_workspace(&root);
+}
+
+#[test]
+fn adopt_cli_rejects_legacy_cursor_surface() {
+    let root = temp_workspace_root("reject-legacy-cursor");
+    fs::create_dir_all(&root).expect("create temp root");
+
+    let flag = run_frigg(&root, &["adopt", "--legacy-cursor"]);
+    assert_failure(&flag);
+    assert!(stderr(&flag).contains("--legacy-cursor"));
+
+    let target = run_frigg(&root, &["adopt", "--target", "legacy-cursor"]);
+    assert_failure(&target);
+    assert!(stderr(&target).contains("legacy-cursor"));
+
     cleanup_workspace(&root);
 }
 

@@ -1,43 +1,33 @@
 //! CLI `index` command: full or changed-only manifest rebuild across configured workspace roots.
 
 use std::error::Error;
-use std::io;
 
-use frigg::embeddings::local_model::prepare_local_semantic_model;
-use frigg::indexer::{IndexMode, ManifestDiagnosticKind, index_repository_with_runtime_config};
-use frigg::settings::{FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
+use frigg::domain::FriggError;
+use frigg::indexer::{
+    IndexMode, ManifestDiagnosticKind, index_repository_with_runtime_config_and_plan_callback,
+};
+use frigg::settings::{FriggConfig, SemanticRuntimeCredentials};
 use frigg::storage::Storage;
 
 use super::super::storage_auto_heal::{
     initialize_storage_with_auto_repair, verify_storage_with_auto_repair,
 };
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
-use crate::cli_runtime::{CliOutput, report_storage_failure};
+use crate::cli_runtime::{
+    CliOutput, OutputLevel, emit_index_plan_events, field, format_output_event_line,
+    report_storage_failure, reported_error,
+};
 
 #[cfg(test)]
-pub(crate) fn run_index_command(
-    config: &FriggConfig,
-    changed: bool,
-    prepare_semantic_model: bool,
-) -> Result<(), Box<dyn Error>> {
-    run_index_command_with_output(
-        config,
-        changed,
-        prepare_semantic_model,
-        &CliOutput::normal(),
-    )
+pub(crate) fn run_index_command(config: &FriggConfig, changed: bool) -> Result<(), Box<dyn Error>> {
+    run_index_command_with_output(config, changed, &CliOutput::normal())
 }
 
 pub(crate) fn run_index_command_with_output(
     config: &FriggConfig,
     changed: bool,
-    prepare_semantic_model: bool,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
-    if prepare_semantic_model {
-        prepare_index_semantic_model(config, output)?;
-    }
-
     let repositories = config.repositories();
     let mode = if changed {
         IndexMode::ChangedOnly
@@ -57,12 +47,30 @@ pub(crate) fn run_index_command_with_output(
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
             Some(root) => root,
             None => {
-                let message = format!(
-                    "index summary status=failed mode={mode_name} repository_id={} error=workspace root lookup failed",
-                    repo.repository_id.0
+                let message = format_output_event_line(
+                    OutputLevel::Error,
+                    "index",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("mode", mode_name),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
                 );
-                output.error(&message)?;
-                return Err(Box::new(io::Error::other(message)));
+                output.error_event(
+                    "index",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("mode", mode_name),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
+                )?;
+                return Err(reported_error(message));
             }
         };
         let db_path = ensure_storage_db_path_for_write(root, "index")?;
@@ -71,13 +79,20 @@ pub(crate) fn run_index_command_with_output(
         match initialize_storage_with_auto_repair(&storage) {
             Ok(repaired_categories) => {
                 if !repaired_categories.is_empty() {
-                    output.progress(format!(
-                        "index auto_repair mode={mode_name} repository_id={} root={} db={} repaired={}",
-                        repo.repository_id.0,
-                        root.display(),
-                        db_path.display(),
-                        repaired_categories.join(",")
-                    ))?;
+                    output.progress_event(
+                        OutputLevel::Warn,
+                        "storage",
+                        "auto_repair",
+                        &[
+                            field("status", "ok"),
+                            field("command", "index"),
+                            field("mode", mode_name),
+                            field("repo", &repo.repository_id.0),
+                            field("repaired", repaired_categories.join(",")),
+                            field("db", db_path.display()),
+                        ],
+                        Some(&root.display().to_string()),
+                    )?;
                 }
             }
             Err(err) => {
@@ -90,39 +105,48 @@ pub(crate) fn run_index_command_with_output(
                     &db_path,
                     &err,
                 )?;
-                return Err(Box::new(io::Error::other(format!(
+                return Err(reported_error(format!(
                     "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
                     repo.repository_id.0,
                     root.display(),
                     db_path.display()
-                ))));
+                )));
             }
         }
 
-        let summary = match index_repository_with_runtime_config(
+        let summary = match index_repository_with_runtime_config_and_plan_callback(
             &repo.repository_id.0,
             root,
             &db_path,
             mode,
             &config.semantic_runtime,
             &SemanticRuntimeCredentials::from_process_env(),
+            |plan| {
+                emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
+                    .map_err(FriggError::from)
+            },
         ) {
             Ok(summary) => summary,
             Err(err) => {
-                output.error(format!(
-                    "index summary status=failed mode={mode_name} repositories={} repository_id={} root={} db={} error={}",
-                    repositories.len(),
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    err
-                ))?;
-                return Err(Box::new(io::Error::other(format!(
+                output.error_event(
+                    "index",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("mode", mode_name),
+                        field("repos", repositories.len()),
+                        field("repo", &repo.repository_id.0),
+                        field("db", db_path.display()),
+                        field("error", &err),
+                    ],
+                    Some(&root.display().to_string()),
+                )?;
+                return Err(reported_error(format!(
                     "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
                     repo.repository_id.0,
                     root.display(),
                     db_path.display()
-                ))));
+                )));
             }
         };
 
@@ -144,12 +168,12 @@ pub(crate) fn run_index_command_with_output(
                 &db_path,
                 &err,
             )?;
-            return Err(Box::new(io::Error::other(format!(
+            return Err(reported_error(format!(
                 "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
                 repo.repository_id.0,
                 root.display(),
                 db_path.display()
-            ))));
+            )));
         }
 
         total_files_scanned += summary.files_scanned;
@@ -167,81 +191,86 @@ pub(crate) fn run_index_command_with_output(
         total_read_diagnostics += diagnostics_read;
         total_duration_ms += summary.duration_ms;
 
-        for diagnostic in &summary.diagnostics.entries {
-            output.diagnostic(format!(
-                "index diagnostic mode={mode_name} repository_id={} kind={} path={} message={}",
-                repo.repository_id.0,
-                diagnostic.kind.as_str(),
-                diagnostic
-                    .path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "-".to_owned()),
-                diagnostic.message
-            ))?;
+        if summary.semantic_refresh_mode.as_str() != "disabled"
+            && summary.semantic_refresh_mode.as_str() != "reuse_existing"
+        {
+            output.progress_event(
+                OutputLevel::Info,
+                "index",
+                "semantic",
+                &[
+                    field("status", "ok"),
+                    field("repo", &repo.repository_id.0),
+                    field("mode", summary.semantic_refresh_mode.as_str()),
+                    field(
+                        "provider",
+                        summary.semantic_provider.as_deref().unwrap_or("-"),
+                    ),
+                    field("model", summary.semantic_model.as_deref().unwrap_or("-")),
+                    field("records", summary.semantic_records),
+                ],
+                None,
+            )?;
         }
 
-        output.progress(format!(
-            "index ok mode={mode_name} repository_id={} root={} db={} snapshot_id={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
-            repo.repository_id.0,
-            root.display(),
-            db_path.display(),
-            summary.snapshot_id,
-            summary.files_scanned,
-            summary.files_changed,
-            summary.files_deleted,
-            diagnostics_total,
-            diagnostics_walk,
-            diagnostics_read,
-            summary.duration_ms
-        ))?;
+        for diagnostic in &summary.diagnostics.entries {
+            let path = diagnostic
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string());
+            output.diagnostic_event(
+                OutputLevel::Warn,
+                "index",
+                "diagnostic",
+                &[
+                    field("kind", diagnostic.kind.as_str()),
+                    field("repo", &repo.repository_id.0),
+                    field("mode", mode_name),
+                    field("message", &diagnostic.message),
+                ],
+                path.as_deref(),
+            )?;
+        }
+
+        output.progress_event(
+            OutputLevel::Ok,
+            "index",
+            "repo",
+            &[
+                field("status", "ok"),
+                field("repo", &repo.repository_id.0),
+                field("mode", mode_name),
+                field("snapshot", &summary.snapshot_id),
+                field("scanned", summary.files_scanned),
+                field("changed", summary.files_changed),
+                field("deleted", summary.files_deleted),
+                field("diagnostics", diagnostics_total),
+                field("diagnostics_walk", diagnostics_walk),
+                field("diagnostics_read", diagnostics_read),
+                field("duration_ms", summary.duration_ms),
+                field("db", db_path.display()),
+            ],
+            Some(&root.display().to_string()),
+        )?;
     }
 
-    output.summary(format!(
-        "index summary status=ok mode={mode_name} repositories={} files_scanned={} files_changed={} files_deleted={} diagnostics_total={} diagnostics_walk={} diagnostics_read={} duration_ms={}",
-        repositories.len(),
-        total_files_scanned,
-        total_files_changed,
-        total_files_deleted,
-        total_diagnostics,
-        total_walk_diagnostics,
-        total_read_diagnostics,
-        total_duration_ms
-    ))?;
-    Ok(())
-}
-
-fn prepare_index_semantic_model(
-    config: &FriggConfig,
-    output: &CliOutput,
-) -> Result<(), Box<dyn Error>> {
-    if !config.semantic_runtime.enabled {
-        return Err(Box::new(io::Error::other(
-            "index --prepare-semantic-model requires semantic runtime to be enabled",
-        )));
-    }
-    let Some(provider) = config.semantic_runtime.provider else {
-        return Err(Box::new(io::Error::other(
-            "index --prepare-semantic-model requires --semantic-runtime-provider local",
-        )));
-    };
-    if provider != SemanticRuntimeProvider::Local {
-        return Err(Box::new(io::Error::other(format!(
-            "index --prepare-semantic-model only prepares local artifacts; active semantic provider '{}' uses external embeddings",
-            provider.as_str()
-        ))));
-    }
-
-    let artifact = prepare_local_semantic_model(&config.semantic_runtime)
-        .map_err(|err| io::Error::other(err.to_string()))?;
-    output.progress(format!(
-        "index semantic_model_prepare status=ok semantic_provider=local semantic_model={} cache_root={} cache_key={}",
-        artifact.semantic_model,
-        artifact.cache_root.display(),
-        artifact.cache_key
-    ))?;
-    output.advisory(
-        "index semantic_model_prepare next_step=\"semantic rows are rebuilt by this index; run `frigg index` again after future semantic provider or model changes\""
+    output.summary_event(
+        OutputLevel::Ok,
+        "index",
+        "complete",
+        &[
+            field("status", "ok"),
+            field("mode", mode_name),
+            field("repos", repositories.len()),
+            field("scanned", total_files_scanned),
+            field("changed", total_files_changed),
+            field("deleted", total_files_deleted),
+            field("diagnostics", total_diagnostics),
+            field("diagnostics_walk", total_walk_diagnostics),
+            field("diagnostics_read", total_read_diagnostics),
+            field("duration_ms", total_duration_ms),
+        ],
+        None,
     )?;
     Ok(())
 }

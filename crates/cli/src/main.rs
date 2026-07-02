@@ -13,6 +13,7 @@ mod http_runtime;
 use axum::http::{StatusCode, header};
 pub(crate) use cli_args::{Cli, Command};
 use cli_dispatch::async_main;
+use cli_runtime::{CliOutput, error_was_reported, field};
 #[cfg(test)]
 use cli_runtime::{
     StorageMaintenanceCommand, ensure_storage_db_path_for_write, find_enclosing_git_root,
@@ -41,7 +42,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
+    if let Err(error) = run_main() {
+        report_unhandled_cli_error(error.as_ref());
+        std::process::exit(1);
+    }
+}
+
+fn run_main() -> Result<(), Box<dyn Error>> {
     let startup_trace_active = startup_trace_enabled();
     startup_trace(startup_trace_active, "main: entered");
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -49,6 +57,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     startup_trace(startup_trace_active, "main: tokio runtime ready");
     runtime.block_on(async_main(startup_trace_active))
+}
+
+fn report_unhandled_cli_error(error: &(dyn Error + 'static)) {
+    if error_was_reported(error) {
+        return;
+    }
+
+    let message = error.to_string();
+    if is_structured_error_line(&message) {
+        eprintln!("{message}");
+        return;
+    }
+
+    let _ = CliOutput::normal().error_event(
+        "frigg",
+        "failed",
+        &[field("status", "failed"), field("error", message)],
+        None,
+    );
+}
+
+fn is_structured_error_line(message: &str) -> bool {
+    message.starts_with("error ") && message.contains(": ") && !message.contains('\n')
 }
 
 fn startup_trace_enabled() -> bool {
@@ -64,6 +95,11 @@ fn startup_trace(enabled: bool, message: &str) {
 fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'static str {
     if cli.quiet || (cli.command.is_none() && transport == RuntimeTransportKind::Stdio) {
         "error"
+    } else if cli.verbose
+        && matches!(cli.command, None | Some(Command::Serve))
+        && transport != RuntimeTransportKind::Stdio
+    {
+        "warn"
     } else if cli.verbose {
         "info"
     } else {
@@ -623,10 +659,7 @@ mod tests {
     #[test]
     fn utility_commands_default_to_warning_log_filter() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index {
-            changed: false,
-            prepare_semantic_model: false,
-        });
+        cli.command = Some(Command::Index { changed: false });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "warn"
@@ -637,13 +670,21 @@ mod tests {
     fn verbose_flag_enables_info_log_filter_for_utility_commands() {
         let mut cli = base_cli();
         cli.verbose = true;
-        cli.command = Some(Command::Index {
-            changed: false,
-            prepare_semantic_model: false,
-        });
+        cli.command = Some(Command::Index { changed: false });
         assert_eq!(
             default_tracing_filter(&cli, RuntimeTransportKind::Stdio),
             "info"
+        );
+    }
+
+    #[test]
+    fn verbose_serve_keeps_raw_info_tracing_suppressed() {
+        let mut cli = base_cli();
+        cli.verbose = true;
+        cli.command = Some(Command::Serve);
+        assert_eq!(
+            default_tracing_filter(&cli, RuntimeTransportKind::LoopbackHttp),
+            "warn"
         );
     }
 
@@ -671,10 +712,7 @@ mod tests {
     #[test]
     fn quiet_flag_disables_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index {
-            changed: false,
-            prepare_semantic_model: false,
-        });
+        cli.command = Some(Command::Index { changed: false });
         cli.quiet = true;
 
         assert!(!tracing_env_override_allowed(
@@ -696,10 +734,7 @@ mod tests {
     #[test]
     fn non_quiet_utility_commands_keep_rust_log_override() {
         let mut cli = base_cli();
-        cli.command = Some(Command::Index {
-            changed: false,
-            prepare_semantic_model: false,
-        });
+        cli.command = Some(Command::Index { changed: false });
 
         assert!(tracing_env_override_allowed(
             &cli,
@@ -800,14 +835,8 @@ mod tests {
         cli.semantic_runtime_enabled = Some(true);
         cli.semantic_runtime_provider = Some(SemanticRuntimeProvider::Google);
 
-        let config = resolve_command_config(
-            &cli,
-            Command::Index {
-                changed: true,
-                prepare_semantic_model: false,
-            },
-        )
-        .expect("index command should resolve startup config");
+        let config = resolve_command_config(&cli, Command::Index { changed: true })
+            .expect("index command should resolve startup config");
         assert!(config.semantic_runtime.enabled);
         assert_eq!(
             config.semantic_runtime.provider,
@@ -820,8 +849,8 @@ mod tests {
     }
 
     #[test]
-    fn index_command_resolution_parses_prepare_semantic_model_flag() {
-        let cli = <Cli as clap::Parser>::try_parse_from([
+    fn index_command_rejects_prepare_semantic_model_flag() {
+        let error = <Cli as clap::Parser>::try_parse_from([
             "frigg",
             "--semantic-runtime-enabled",
             "true",
@@ -830,19 +859,13 @@ mod tests {
             "index",
             "--prepare-semantic-model",
         ])
-        .expect("index --prepare-semantic-model should parse");
+        .expect_err("index --prepare-semantic-model should no longer parse");
 
-        assert_eq!(
-            cli.semantic_runtime_provider,
-            Some(SemanticRuntimeProvider::Local)
+        let message = error.to_string();
+        assert!(
+            message.contains("--prepare-semantic-model"),
+            "unexpected parse error: {message}"
         );
-        assert!(matches!(
-            cli.command,
-            Some(Command::Index {
-                changed: false,
-                prepare_semantic_model: true,
-            })
-        ));
     }
 
     #[test]
@@ -852,10 +875,7 @@ mod tests {
 
         assert!(matches!(
             cli.command,
-            Some(Command::Index {
-                changed: true,
-                prepare_semantic_model: false,
-            })
+            Some(Command::Index { changed: true })
         ));
     }
 
@@ -883,8 +903,8 @@ mod tests {
     }
 
     #[test]
-    fn prepare_semantic_model_command_parses_and_uses_semantic_runtime_config() {
-        let cli = <Cli as clap::Parser>::try_parse_from([
+    fn prepare_semantic_model_subcommand_is_not_registered() {
+        let error = <Cli as clap::Parser>::try_parse_from([
             "frigg",
             "--workspace-root",
             ".",
@@ -894,19 +914,12 @@ mod tests {
             "local",
             "prepare-semantic-model",
         ])
-        .expect("prepare-semantic-model should parse");
+        .expect_err("prepare-semantic-model should no longer parse");
 
-        assert!(matches!(cli.command, Some(Command::PrepareSemanticModel)));
-        let config = resolve_command_config(&cli, Command::PrepareSemanticModel)
-            .expect("prepare-semantic-model should resolve command config");
-        assert!(config.semantic_runtime.enabled);
-        assert_eq!(
-            config.semantic_runtime.provider,
-            Some(SemanticRuntimeProvider::Local)
-        );
-        assert_eq!(
-            config.semantic_runtime.normalized_model(),
-            Some("all-MiniLM-L6-v2")
+        let message = error.to_string();
+        assert!(
+            message.contains("prepare-semantic-model"),
+            "unexpected parse error: {message}"
         );
     }
 
@@ -1009,14 +1022,8 @@ mod tests {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
 
-        let config = resolve_command_config(
-            &cli,
-            Command::Index {
-                changed: true,
-                prepare_semantic_model: false,
-            },
-        )
-        .expect("index command should default to the current directory");
+        let config = resolve_command_config(&cli, Command::Index { changed: true })
+            .expect("index command should default to the current directory");
         assert_eq!(config.workspace_roots, vec![PathBuf::from(".")]);
     }
 
@@ -1357,7 +1364,7 @@ mod tests {
             .expect_err("storage db path resolution should fail for a missing workspace root");
         let message = error.to_string();
         assert!(
-            message.contains("init summary status=failed"),
+            message.contains("error init: failed status=failed"),
             "unexpected storage db path error: {message}"
         );
         assert!(
@@ -1382,7 +1389,7 @@ mod tests {
             .expect_err("init bootstrap should fail for a missing workspace root");
         let message = error.to_string();
         assert!(
-            message.contains("init summary status=failed"),
+            message.contains("error init: failed status=failed"),
             "unexpected init bootstrap error: {message}"
         );
         assert!(
@@ -1498,9 +1505,9 @@ mod tests {
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
-        run_index_command(&config, false, false)
+        run_index_command(&config, false)
             .expect("full index should succeed for a simple workspace");
-        run_index_command(&config, true, false)
+        run_index_command(&config, true)
             .expect("changed-only index should succeed for a simple workspace");
 
         cleanup_workspace(&workspace_root);
@@ -1518,7 +1525,7 @@ mod tests {
             .expect("storage db path should resolve after init");
         seed_semantic_vector_drift(&db_path);
 
-        run_index_command(&config, false, false).expect("index should auto-repair vector drift");
+        run_index_command(&config, false).expect("index should auto-repair vector drift");
 
         let storage = Storage::new(&db_path);
         let repaired = storage

@@ -8,17 +8,17 @@ use clap::Parser;
 use frigg::mcp::{FriggMcpServer, RuntimeTaskRegistry};
 use frigg::searcher::ValidatedManifestCandidateCache;
 use frigg::settings::{RuntimeTransportKind, runtime_profile_for_transport};
-use frigg::watch::maybe_start_watch_runtime;
+use frigg::watch::{WatchEvent, WatchEventReporter, maybe_start_watch_runtime_with_reporter};
 
 #[path = "cli_runtime/commands/hook.rs"]
 mod hook_command;
 
 use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
-    CliOutput, StorageMaintenanceCommand, resolve_command_config, resolve_startup_config,
-    resolve_watch_runtime_config, run_adopt_command_with_output, run_context_summary_command,
-    run_hash_command, run_index_command_with_output,
-    run_prepare_semantic_model_command_with_output, run_semantic_runtime_startup_gate_with_output,
+    CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events, field,
+    resolve_command_config, resolve_startup_config, resolve_watch_runtime_config,
+    run_adopt_command_with_output, run_context_summary_command, run_hash_command,
+    run_index_command_with_output, run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output,
     run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
@@ -60,7 +60,6 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             Command::Adopt {
                 target,
                 all,
-                legacy_cursor,
                 uninstall,
                 check,
                 dry_run,
@@ -71,7 +70,6 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     &config,
                     target,
                     all,
-                    legacy_cursor,
                     uninstall,
                     check,
                     dry_run,
@@ -83,22 +81,10 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_storage_init_command_with_output(&config, &cli_output)?
             }
-            Command::Index {
-                changed,
-                prepare_semantic_model,
-            } => {
+            Command::Index { changed } => {
                 let config = resolve_command_config(&cli, command.clone())?;
                 run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
-                run_index_command_with_output(
-                    &config,
-                    changed,
-                    prepare_semantic_model,
-                    &cli_output,
-                )?
-            }
-            Command::PrepareSemanticModel => {
-                let config = resolve_command_config(&cli, command.clone())?;
-                run_prepare_semantic_model_command_with_output(&config, &cli_output)?
+                run_index_command_with_output(&config, changed, &cli_output)?
             }
             Command::RepairStorage => {
                 let config = resolve_command_config(&cli, command.clone())?;
@@ -162,25 +148,268 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         Arc::clone(&validated_manifest_candidate_cache),
     );
     // Watch supervisor starts only when the resolved transport enables incremental freshness.
-    let watch_runtime = maybe_start_watch_runtime(
+    let watch_runtime = maybe_start_watch_runtime_with_reporter(
         &watch_runtime_config,
         transport_kind,
         runtime_task_registry,
         validated_manifest_candidate_cache,
         Some(server.repository_cache_invalidation_callback()),
+        watch_event_reporter(cli_output),
     )?;
     let _watch_runtime = watch_runtime.map(Arc::new);
     server.set_watch_runtime(_watch_runtime.clone());
     if let Some(runtime) = http_runtime {
         startup_trace(startup_trace_enabled, "async_main: serving http");
         // HTTP runtime path: loopback or remote MCP over streamable HTTP.
-        serve_http(runtime, server).await?;
+        serve_http(runtime, server, cli_output).await?;
     } else {
         startup_trace(startup_trace_enabled, "async_main: serving stdio");
         server.serve_stdio().await?;
     }
 
     Ok(())
+}
+
+fn watch_event_reporter(output: CliOutput) -> Option<WatchEventReporter> {
+    if !output.is_verbose() {
+        return None;
+    }
+    Some(Arc::new(move |event| {
+        let _ = emit_watch_event(output, event);
+    }))
+}
+
+fn emit_watch_event(output: CliOutput, event: WatchEvent) -> std::io::Result<()> {
+    match event {
+        WatchEvent::RuntimeStarted {
+            watch_mode,
+            transport,
+            debounce_ms,
+            retry_ms,
+        } => output.progress_event(
+            OutputLevel::Info,
+            "watch",
+            "runtime",
+            &[
+                field("status", "enabled"),
+                field("mode", watch_mode),
+                field("transport", transport.as_str()),
+                field("debounce_ms", debounce_ms),
+                field("retry_ms", retry_ms),
+            ],
+            None,
+        ),
+        WatchEvent::RuntimeDisabled {
+            watch_mode,
+            transport,
+        } => output.progress_event(
+            OutputLevel::Skip,
+            "watch",
+            "runtime",
+            &[
+                field("status", "disabled"),
+                field("mode", watch_mode),
+                field("transport", transport.as_str()),
+            ],
+            None,
+        ),
+        WatchEvent::LeaseAcquired {
+            repository_id,
+            lease_count,
+            root,
+        } => output.progress_event(
+            OutputLevel::Info,
+            "watch",
+            "lease",
+            &[
+                field("status", "acquired"),
+                field("repo", repository_id),
+                field("leases", lease_count),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::LeaseReleased {
+            repository_id,
+            remaining,
+            root,
+        } => {
+            let path = root.map(|root| root.display().to_string());
+            output.progress_event(
+                OutputLevel::Info,
+                "watch",
+                "lease",
+                &[
+                    field("status", "released"),
+                    field("repo", repository_id),
+                    field("leases", remaining),
+                ],
+                path.as_deref(),
+            )
+        }
+        WatchEvent::PathAccepted {
+            repository_id,
+            path,
+        } => output.progress_event(
+            OutputLevel::Info,
+            "watch",
+            "path",
+            &[field("action", "changed"), field("repo", repository_id)],
+            Some(&path.display().to_string()),
+        ),
+        WatchEvent::StartupFresh {
+            repository_id,
+            root,
+            snapshot_id,
+        } => output.progress_event(
+            OutputLevel::Skip,
+            "watch",
+            "queue",
+            &[
+                field("status", "fresh"),
+                field("repo", repository_id),
+                field("snapshot", snapshot_id.as_deref().unwrap_or("-")),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::RefreshQueued {
+            repository_id,
+            root,
+            refresh_class,
+            reason,
+            snapshot_id,
+            debounce_ms,
+        } => {
+            let mut fields = vec![
+                field("status", "queued"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("reason", reason),
+                field("snapshot", snapshot_id.as_deref().unwrap_or("-")),
+            ];
+            if let Some(debounce_ms) = debounce_ms {
+                fields.push(field("debounce_ms", debounce_ms));
+            }
+            output.progress_event(
+                OutputLevel::Info,
+                "watch",
+                "queue",
+                &fields,
+                Some(&root.display().to_string()),
+            )
+        }
+        WatchEvent::RefreshStarting {
+            repository_id,
+            root,
+            refresh_class,
+            debounce_ms,
+            sampled_paths,
+        } => output.progress_event(
+            OutputLevel::Info,
+            "watch",
+            "refresh",
+            &[
+                field("status", "starting"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("debounce_ms", debounce_ms),
+                field("sampled_paths", sampled_paths),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::RefreshDeferred {
+            repository_id,
+            root,
+            refresh_class,
+            reason,
+            retry_ms,
+        } => output.progress_event(
+            OutputLevel::Skip,
+            "watch",
+            "refresh",
+            &[
+                field("status", "deferred"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("reason", reason),
+                field("retry_ms", retry_ms),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::IndexPlan {
+            repository_id,
+            refresh_class,
+            plan,
+        } => {
+            let extra_fields: [OutputField; 2] =
+                [field("source", "watch"), field("class", refresh_class)];
+            emit_index_plan_events(output, &repository_id, &plan, &extra_fields)
+        }
+        WatchEvent::RefreshSucceeded {
+            repository_id,
+            root,
+            refresh_class,
+            summary,
+        } => output.progress_event(
+            OutputLevel::Ok,
+            "watch",
+            "refresh",
+            &[
+                field("status", "ok"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("snapshot", &summary.snapshot_id),
+                field("scanned", summary.files_scanned),
+                field("changed", summary.files_changed),
+                field("deleted", summary.files_deleted),
+                field("duration_ms", summary.duration_ms),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::RefreshFailed {
+            repository_id,
+            root,
+            refresh_class,
+            retry_ms,
+            error,
+        } => output.progress_event(
+            OutputLevel::Warn,
+            "watch",
+            "refresh",
+            &[
+                field("status", "retry"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("retry_ms", retry_ms),
+                field("error", error),
+            ],
+            Some(&root.display().to_string()),
+        ),
+        WatchEvent::StaleCompletionIgnored {
+            repository_id,
+            refresh_class,
+            completion_epoch,
+            current_epoch,
+        } => output.progress_event(
+            OutputLevel::Warn,
+            "watch",
+            "refresh",
+            &[
+                field("status", "stale"),
+                field("repo", repository_id),
+                field("class", refresh_class),
+                field("completion_epoch", completion_epoch),
+                field("current_epoch", current_epoch),
+            ],
+            None,
+        ),
+        WatchEvent::NotifyDropped { error } => output.progress_event(
+            OutputLevel::Warn,
+            "watch",
+            "notify",
+            &[field("status", "dropped"), field("error", error)],
+            None,
+        ),
+    }
 }
 
 fn parse_hidden_hook_event() -> Option<HookEvent> {

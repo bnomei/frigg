@@ -244,6 +244,7 @@ impl FriggMcpServer {
             generation_action,
             last_generation,
             active_task_phase,
+            active_task,
             failure_class,
             failure_summary,
             recommended_action,
@@ -304,7 +305,10 @@ impl FriggMcpServer {
         self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
     }
 
-    fn active_repository_index_tasks(&self, repository_id: &str) -> Vec<RuntimeTaskSummary> {
+    pub(in crate::mcp::server) fn active_repository_index_tasks(
+        &self,
+        repository_id: &str,
+    ) -> Vec<RuntimeTaskSummary> {
         let workspace = self
             .runtime_state
             .workspace_registry

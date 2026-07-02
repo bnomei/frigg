@@ -167,6 +167,8 @@ pub struct WorkspacePreciseLifecycleSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_task_phase: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_task: Option<RuntimeTaskSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<WorkspacePreciseFailureClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_summary: Option<String>,
@@ -333,7 +335,17 @@ pub struct WorkspaceIndexResponse {
     pub files_changed: usize,
     pub files_deleted: usize,
     pub diagnostics_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub paths_truncated: bool,
     pub precise_lifecycle: WorkspacePreciseLifecycleSummary,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -455,6 +467,9 @@ pub struct RuntimeStatusSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::types::repository::{
+        RepositorySessionSummary, RepositoryWatchSummary, WorkspaceStorageIndexState,
+    };
     use serde_json::json;
 
     #[test]
@@ -510,5 +525,71 @@ mod tests {
         .expect("read_match response should serialize");
 
         assert!(value.get("context_efficiency").is_none());
+    }
+
+    #[test]
+    fn workspace_index_response_serializes_changed_and_deleted_path_metadata() {
+        let response = WorkspaceIndexResponse {
+            repository: RepositorySummary {
+                repository_id: "repo-1".to_owned(),
+                display_name: "fixture".to_owned(),
+                root_path: "/tmp/fixture".to_owned(),
+                session: RepositorySessionSummary {
+                    adopted: true,
+                    active_session_count: 1,
+                },
+                watch: RepositoryWatchSummary {
+                    active: false,
+                    lease_count: 0,
+                },
+                storage: None,
+                health: None,
+            },
+            resolved_from: Some("/tmp/fixture/src/lib.rs".to_owned()),
+            resolution: Some(WorkspaceResolveMode::GitRoot),
+            session_default: true,
+            storage: WorkspaceStorageSummary {
+                db_path: "/tmp/fixture/.frigg/storage.sqlite3".to_owned(),
+                exists: true,
+                initialized: true,
+                index_state: WorkspaceStorageIndexState::Ready,
+                error: None,
+            },
+            snapshot_id: "snapshot-1".to_owned(),
+            files_scanned: 2,
+            files_changed: 1,
+            files_deleted: 1,
+            diagnostics_count: 0,
+            changed_paths: vec!["src/lib.rs".to_owned()],
+            deleted_paths: vec!["old.rs".to_owned()],
+            paths_truncated: true,
+            precise_lifecycle: WorkspacePreciseLifecycleSummary {
+                phase: WorkspacePreciseLifecyclePhase::Skipped,
+                waited_for_completion: false,
+                generation_action: WorkspacePreciseGenerationAction::SkippedNoWork,
+                last_generation: None,
+                active_task_phase: None,
+                active_task: None,
+                failure_class: None,
+                failure_summary: None,
+                recommended_action: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(&response).expect("workspace_index response should serialize");
+        assert_eq!(value["changed_paths"], json!(["src/lib.rs"]));
+        assert_eq!(value["deleted_paths"], json!(["old.rs"]));
+        assert_eq!(value["paths_truncated"], json!(true));
+
+        let mut omitted = response;
+        omitted.changed_paths.clear();
+        omitted.deleted_paths.clear();
+        omitted.paths_truncated = false;
+        let value = serde_json::to_value(omitted)
+            .expect("workspace_index response should serialize empty path metadata");
+        assert!(value.get("changed_paths").is_none());
+        assert!(value.get("deleted_paths").is_none());
+        assert!(value.get("paths_truncated").is_none());
     }
 }

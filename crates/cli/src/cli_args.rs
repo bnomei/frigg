@@ -10,40 +10,55 @@ use frigg::storage::DEFAULT_RETAINED_MANIFEST_SNAPSHOTS;
 #[derive(Debug, Parser)]
 #[command(name = "frigg", version, about = "Frigg MCP server")]
 pub(crate) struct Cli {
+    /// Suppress normal output.
     #[arg(long, global = true)]
     pub(crate) quiet: bool,
 
+    /// Show per-repository progress.
     #[arg(long, global = true)]
     pub(crate) verbose: bool,
 
+    /// Repository root to operate on.
     #[arg(long = "workspace-root", value_name = "PATH", global = true)]
     pub(crate) workspace_roots: Vec<PathBuf>,
 
+    /// Skip files larger than this many bytes.
+    ///
+    /// [env: FRIGG_MAX_FILE_BYTES=2097152]
     #[arg(
         long = "max-file-bytes",
         value_name = "BYTES",
         env = "FRIGG_MAX_FILE_BYTES",
+        hide_env = true,
         global = true
     )]
     pub(crate) max_file_bytes: Option<usize>,
 
+    /// Ingest full SCIP artifacts when present.
+    ///
+    /// [env: FRIGG_FULL_SCIP_INGEST=true]
     #[arg(
         long,
         env = "FRIGG_FULL_SCIP_INGEST",
+        hide_env = true,
         global = true,
         default_value_t = true
     )]
     pub(crate) full_scip_ingest: bool,
 
+    /// HTTP port for `frigg serve`.
     #[arg(long, value_name = "PORT", global = true)]
     pub(crate) mcp_http_port: Option<u16>,
 
+    /// HTTP host for `frigg serve`.
     #[arg(long, value_name = "HOST", global = true)]
     pub(crate) mcp_http_host: Option<IpAddr>,
 
+    /// Allow serving on non-loopback hosts.
     #[arg(long, global = true)]
     pub(crate) allow_remote_http: bool,
 
+    /// Bearer token for HTTP MCP requests.
     #[arg(
         long,
         value_name = "TOKEN",
@@ -53,69 +68,110 @@ pub(crate) struct Cli {
     )]
     pub(crate) mcp_http_auth_token: Option<String>,
 
+    /// Enable semantic indexing and recall.
+    ///
+    /// [env: FRIGG_SEMANTIC_RUNTIME_ENABLED=false]
     #[arg(
         long,
         value_name = "BOOL",
         env = "FRIGG_SEMANTIC_RUNTIME_ENABLED",
+        hide_env = true,
         global = true
     )]
     pub(crate) semantic_runtime_enabled: Option<bool>,
 
+    /// Semantic provider when semantic indexing is enabled.
+    ///
+    /// [env: FRIGG_SEMANTIC_RUNTIME_PROVIDER=local]
     #[arg(
         long,
         value_name = "PROVIDER",
         env = "FRIGG_SEMANTIC_RUNTIME_PROVIDER",
+        hide_env = true,
         global = true
     )]
     pub(crate) semantic_runtime_provider: Option<SemanticRuntimeProvider>,
 
+    /// Embedding model override.
+    ///
+    /// [env: FRIGG_SEMANTIC_RUNTIME_MODEL=provider default]
     #[arg(
         long,
         value_name = "MODEL",
         env = "FRIGG_SEMANTIC_RUNTIME_MODEL",
+        hide_env = true,
         global = true
     )]
     pub(crate) semantic_runtime_model: Option<String>,
 
+    /// Fail startup when semantic runtime is unhealthy.
+    ///
+    /// [env: FRIGG_SEMANTIC_RUNTIME_STRICT_MODE=false]
     #[arg(
         long,
         value_name = "BOOL",
         env = "FRIGG_SEMANTIC_RUNTIME_STRICT_MODE",
+        hide_env = true,
         global = true
     )]
     pub(crate) semantic_runtime_strict_mode: Option<bool>,
 
-    #[arg(long, value_name = "MODE", env = "FRIGG_WATCH_MODE", global = true)]
+    /// Watch behavior for served workspaces.
+    ///
+    /// [env: FRIGG_WATCH_MODE=auto]
+    #[arg(
+        long,
+        value_name = "MODE",
+        env = "FRIGG_WATCH_MODE",
+        hide_env = true,
+        global = true
+    )]
     pub(crate) watch_mode: Option<WatchMode>,
 
+    /// Lexical search backend.
+    ///
+    /// [env: FRIGG_LEXICAL_BACKEND=auto]
     #[arg(
         long,
         value_name = "MODE",
         env = "FRIGG_LEXICAL_BACKEND",
+        hide_env = true,
         global = true
     )]
     pub(crate) lexical_backend: Option<LexicalBackendMode>,
 
+    /// Path to the `rg` executable.
+    ///
+    /// [env: FRIGG_RIPGREP_EXECUTABLE=PATH lookup]
     #[arg(
         long,
         value_name = "PATH",
         env = "FRIGG_RIPGREP_EXECUTABLE",
+        hide_env = true,
         global = true
     )]
     pub(crate) ripgrep_executable: Option<PathBuf>,
 
+    /// Watch debounce delay.
+    ///
+    /// [env: FRIGG_WATCH_DEBOUNCE_MS=2000]
     #[arg(
         long,
         value_name = "MILLISECONDS",
         env = "FRIGG_WATCH_DEBOUNCE_MS",
+        hide_env = true,
         global = true
     )]
     pub(crate) watch_debounce_ms: Option<u64>,
 
+    /// Watch retry delay.
+    ///
+    /// [env: FRIGG_WATCH_RETRY_MS=5000]
     #[arg(
         long,
         value_name = "MILLISECONDS",
         env = "FRIGG_WATCH_RETRY_MS",
+        hide_env = true,
         global = true
     )]
     pub(crate) watch_retry_ms: Option<u64>,
@@ -148,11 +204,16 @@ pub(crate) enum HookEvent {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
-    /// Serve Frigg over loopback HTTP for shared local MCP sessions.
+    /// Serve MCP over loopback HTTP.
+    ///
+    /// Starts Frigg's local MCP server for editor and agent clients.
     Serve,
-    /// Plan project-local Frigg client adoption for configured workspace roots.
+    /// Add Frigg entries to agent docs and MCP configs.
+    ///
+    /// Writes managed entries to files such as `AGENTS.md`, `CLAUDE.md`, Cursor/Copilot
+    /// instruction files, and `.mcp.json`.
     Adopt {
-        /// Limit adoption to one or more client targets.
+        /// Choose which project files or configs to update.
         #[arg(
             long,
             value_enum,
@@ -161,43 +222,42 @@ pub(crate) enum Command {
             default_missing_value = "hook"
         )]
         target: Vec<AdoptTarget>,
-        /// Plan every supported non-hook v1 target.
+        /// Update every supported docs and MCP target.
         #[arg(long, default_value_t = false)]
         all: bool,
-        /// Include the legacy Cursor rules file target.
-        #[arg(long = "legacy-cursor", default_value_t = false)]
-        legacy_cursor: bool,
-        /// Plan removal of Frigg-owned adoption content.
+        /// Remove Frigg-managed entries instead.
         #[arg(long, default_value_t = false)]
         uninstall: bool,
-        /// Report pending adoption changes and fail once apply support exists.
+        /// Fail if any selected target would change.
         #[arg(long, default_value_t = false)]
         check: bool,
-        /// Print the adoption plan without writing files.
+        /// Print planned changes without writing files.
         #[arg(long = "dry-run", default_value_t = false)]
         dry_run: bool,
-        /// Allow replacing diverged Frigg MCP JSON entries once apply support exists.
+        /// Replace a diverged Frigg MCP entry.
         #[arg(long, default_value_t = false)]
         force: bool,
     },
-    /// Initialize storage schema for each workspace root.
+    /// Create or repair `.frigg/storage.sqlite3`.
+    ///
+    /// Prepares Frigg's local database without scanning source files.
     Init,
-    /// Index all files and persist an updated manifest snapshot.
+    /// Scan files and refresh the local search index.
+    ///
+    /// Walks the workspace, updates file metadata and search data, and refreshes semantic rows
+    /// when semantic runtime is enabled.
     #[command(alias = "reindex")]
     Index {
-        /// Index changed files only using persisted manifest delta.
+        /// Recheck only files that changed since the last index.
         #[arg(long, default_value_t = false)]
         changed: bool,
-        /// Explicitly prepare local semantic model artifacts before semantic indexing.
-        #[arg(long = "prepare-semantic-model", default_value_t = false)]
-        prepare_semantic_model: bool,
     },
-    /// Explicitly prepare local semantic model artifacts for the active semantic runtime.
-    PrepareSemanticModel,
     /// Rebuild the derived sqlite-vec semantic projection from live semantic rows.
     #[command(hide = true)]
     RepairStorage,
-    /// Emit Frigg's stable cache fingerprint for installer and CI cache keys.
+    /// Print the CI cache fingerprint.
+    ///
+    /// Useful for CI cache keys; most local workflows do not need it.
     Hash,
     /// Prune retained manifest snapshots for each workspace root.
     #[command(hide = true)]
@@ -209,12 +269,14 @@ pub(crate) enum Command {
         )]
         keep_manifest_snapshots: usize,
     },
-    /// Summarize local context-efficiency JSONL logs for configured workspace roots.
+    /// Summarize local context-efficiency logs.
+    ///
+    /// Reads Frigg JSONL logs and reports recent context-use totals.
     Context {
-        /// Start timestamp as RFC3339 or YYYY-MM-DD. Defaults to 30 days before --until or now.
+        /// Start date or RFC3339 time. Defaults to `now - Duration::days(30)`.
         #[arg(long, value_name = "DATE_OR_RFC3339")]
         since: Option<String>,
-        /// End timestamp as RFC3339 or YYYY-MM-DD. Defaults to now.
+        /// End date or RFC3339 time. Defaults to `now`.
         #[arg(long, value_name = "DATE_OR_RFC3339")]
         until: Option<String>,
     },
@@ -227,7 +289,6 @@ pub(crate) enum AdoptTarget {
     GeminiMd,
     Copilot,
     Cursor,
-    LegacyCursor,
     McpProject,
     McpCursor,
     Hook,
@@ -241,7 +302,6 @@ impl AdoptTarget {
             Self::GeminiMd => "GEMINI.md",
             Self::Copilot => ".github/copilot-instructions.md",
             Self::Cursor => ".cursor/rules/frigg.mdc",
-            Self::LegacyCursor => ".cursorrules",
             Self::McpProject => ".mcp.json",
             Self::McpCursor => ".cursor/mcp.json",
             Self::Hook => ".claude/settings.json",
@@ -271,7 +331,6 @@ mod tests {
             "agents-md",
             "--target",
             "mcp-project",
-            "--legacy-cursor",
             "--dry-run",
             "--check",
             "--force",
@@ -284,7 +343,6 @@ mod tests {
             Some(Command::Adopt {
                 target,
                 all,
-                legacy_cursor,
                 uninstall,
                 check,
                 dry_run,
@@ -299,7 +357,6 @@ mod tests {
                     ]
                 );
                 assert!(!all);
-                assert!(legacy_cursor);
                 assert!(uninstall);
                 assert!(check);
                 assert!(dry_run);

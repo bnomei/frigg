@@ -15,6 +15,7 @@ use rmcp::transport::StreamableHttpServerConfig;
 use tracing::{info, warn};
 
 use crate::Cli;
+use crate::cli_runtime::{CliOutput, OutputLevel, field};
 
 #[derive(Debug, Clone)]
 pub(super) struct HttpRuntimeConfig {
@@ -98,6 +99,7 @@ pub(super) fn resolve_http_runtime_config(
 pub(super) async fn serve_http(
     runtime: HttpRuntimeConfig,
     server: FriggMcpServer,
+    output: CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(runtime.bind_addr).await?;
     let mut config = StreamableHttpServerConfig::default();
@@ -109,6 +111,33 @@ pub(super) async fn serve_http(
         bind_addr = %runtime.bind_addr,
         "serving MCP over streamable HTTP at /mcp"
     );
+    output.progress_event(
+        OutputLevel::Info,
+        "serve",
+        "http",
+        &[
+            field("status", "listening"),
+            field("addr", runtime.bind_addr),
+            field("endpoint", "/mcp"),
+            field(
+                "origin_allowlist",
+                if runtime.allowed_authorities.is_some() {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            ),
+            field(
+                "auth",
+                if runtime.auth_token.is_some() {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            ),
+        ],
+        None,
+    )?;
 
     if let Some(authorities) = runtime.allowed_authorities.as_ref() {
         info!(

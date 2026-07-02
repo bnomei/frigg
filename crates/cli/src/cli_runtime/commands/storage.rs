@@ -8,10 +8,10 @@ use frigg::settings::FriggConfig;
 use frigg::storage::Storage;
 
 use super::super::storage_auto_heal::initialize_storage_with_auto_repair;
-use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::{
     ensure_storage_db_path_for_write, resolve_storage_db_path,
 };
+use crate::cli_runtime::{CliOutput, OutputLevel, field, format_output_event_line, reported_error};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum StorageMaintenanceCommand {
@@ -105,16 +105,22 @@ pub(crate) fn report_storage_failure(
     err: &dyn Error,
 ) -> io::Result<()> {
     let error = err.to_string();
-    output.error(format!(
-        "{command_name} summary status=failed repositories={repositories_len} repository_id={repository_id} root={} db={} error={error}",
-        root.display(),
-        db_path.display()
-    ))?;
-    output.error(format!("{command_name} failure detail: {error}"))?;
-    output.error(format!(
-        "{command_name} failure next: {}",
-        storage_failure_next_step(command_name, &error, db_path)
-    ))
+    output.error_event(
+        command_name,
+        "failed",
+        &[
+            field("status", "failed"),
+            field("repos", repositories_len),
+            field("repo", repository_id),
+            field("db", db_path.display()),
+            field(
+                "next",
+                storage_failure_next_step(command_name, &error, db_path),
+            ),
+            field("error", error),
+        ],
+        Some(&root.display().to_string()),
+    )
 }
 
 #[cfg(test)]
@@ -133,12 +139,28 @@ pub(crate) fn run_storage_init_command_with_output(
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
             Some(root) => root,
             None => {
-                let message = format!(
-                    "{command_name} summary status=failed repository_id={} error=workspace root lookup failed",
-                    repo.repository_id.0
+                let message = format_output_event_line(
+                    OutputLevel::Error,
+                    command_name,
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
                 );
-                output.error(&message)?;
-                return Err(Box::new(io::Error::other(message)));
+                output.error_event(
+                    command_name,
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
+                )?;
+                return Err(reported_error(message));
             }
         };
         let db_path = ensure_storage_db_path_for_write(root, command_name)?;
@@ -156,36 +178,50 @@ pub(crate) fn run_storage_init_command_with_output(
                     &db_path,
                     &err,
                 )?;
-                return Err(Box::new(io::Error::other(format!(
+                return Err(reported_error(format!(
                     "{command_name} failed for repository_id={} root={} db={}: {err}",
                     repo.repository_id.0,
                     root.display(),
                     db_path.display()
-                ))));
+                )));
             }
         };
         if !repaired_categories.is_empty() {
-            output.progress(format!(
-                "{command_name} auto_repair repository_id={} root={} db={} repaired={}",
-                repo.repository_id.0,
-                root.display(),
-                db_path.display(),
-                repaired_categories.join(",")
-            ))?;
+            output.progress_event(
+                OutputLevel::Warn,
+                "storage",
+                "auto_repair",
+                &[
+                    field("status", "ok"),
+                    field("command", command_name),
+                    field("repo", &repo.repository_id.0),
+                    field("repaired", repaired_categories.join(",")),
+                    field("db", db_path.display()),
+                ],
+                Some(&root.display().to_string()),
+            )?;
         }
 
-        output.progress(format!(
-            "{command_name} ok repository_id={} root={} db={}",
-            repo.repository_id.0,
-            root.display(),
-            db_path.display()
-        ))?;
+        output.progress_event(
+            OutputLevel::Ok,
+            command_name,
+            "repo",
+            &[
+                field("status", "ok"),
+                field("repo", &repo.repository_id.0),
+                field("db", db_path.display()),
+            ],
+            Some(&root.display().to_string()),
+        )?;
     }
 
-    output.summary(format!(
-        "{command_name} summary status=ok repositories={}",
-        repositories.len()
-    ))?;
+    output.summary_event(
+        OutputLevel::Ok,
+        command_name,
+        "complete",
+        &[field("status", "ok"), field("repos", repositories.len())],
+        None,
+    )?;
     Ok(())
 }
 
@@ -214,12 +250,28 @@ pub(crate) fn run_storage_maintenance_command_with_output(
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
             Some(root) => root,
             None => {
-                let message = format!(
-                    "{command_name} summary status=failed repository_id={} error=workspace root lookup failed",
-                    repo.repository_id.0
+                let message = format_output_event_line(
+                    OutputLevel::Error,
+                    command_name,
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
                 );
-                output.error(&message)?;
-                return Err(Box::new(io::Error::other(message)));
+                output.error_event(
+                    command_name,
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
+                )?;
+                return Err(reported_error(message));
             }
         };
         let db_path = resolve_storage_db_path(root, command_name)?;
@@ -234,12 +286,12 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                 &db_path,
                 &err,
             )?;
-            return Err(Box::new(io::Error::other(format!(
+            return Err(reported_error(format!(
                 "{command_name} failed for repository_id={} root={} db={}: {err}",
                 repo.repository_id.0,
                 root.display(),
                 db_path.display()
-            ))));
+            )));
         }
 
         match command {
@@ -256,12 +308,12 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                             &db_path,
                             &err,
                         )?;
-                        return Err(Box::new(io::Error::other(format!(
+                        return Err(reported_error(format!(
                             "{command_name} failed for repository_id={} root={} db={}: {err}",
                             repo.repository_id.0,
                             root.display(),
                             db_path.display()
-                        ))));
+                        )));
                     }
                 };
 
@@ -275,12 +327,12 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                         &db_path,
                         &err,
                     )?;
-                    return Err(Box::new(io::Error::other(format!(
+                    return Err(reported_error(format!(
                         "{command_name} failed for repository_id={} root={} db={}: {err}",
                         repo.repository_id.0,
                         root.display(),
                         db_path.display()
-                    ))));
+                    )));
                 }
 
                 total_repaired += 1;
@@ -289,13 +341,18 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                 } else {
                     repair_summary.repaired_categories.join(",")
                 };
-                output.progress(format!(
-                    "{command_name} ok repository_id={} root={} db={} repaired={}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    repaired_categories
-                ))?;
+                output.progress_event(
+                    OutputLevel::Ok,
+                    command_name,
+                    "repo",
+                    &[
+                        field("status", "ok"),
+                        field("repo", &repo.repository_id.0),
+                        field("repaired", repaired_categories),
+                        field("db", db_path.display()),
+                    ],
+                    Some(&root.display().to_string()),
+                )?;
             }
             StorageMaintenanceCommand::Prune {
                 keep_manifest_snapshots,
@@ -314,12 +371,12 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                             &db_path,
                             &err,
                         )?;
-                        return Err(Box::new(io::Error::other(format!(
+                        return Err(reported_error(format!(
                             "{command_name} failed for repository_id={} root={} db={}: {err}",
                             repo.repository_id.0,
                             root.display(),
                             db_path.display()
-                        ))));
+                        )));
                     }
                 };
 
@@ -333,44 +390,64 @@ pub(crate) fn run_storage_maintenance_command_with_output(
                         &db_path,
                         &err,
                     )?;
-                    return Err(Box::new(io::Error::other(format!(
+                    return Err(reported_error(format!(
                         "{command_name} failed for repository_id={} root={} db={}: {err}",
                         repo.repository_id.0,
                         root.display(),
                         db_path.display()
-                    ))));
+                    )));
                 }
 
                 total_manifest_snapshots_deleted += deleted_manifest_snapshots;
-                output.progress(format!(
-                    "{command_name} ok repository_id={} root={} db={} keep_manifest_snapshots={} manifest_snapshots_deleted={}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display(),
-                    keep_manifest_snapshots,
-                    deleted_manifest_snapshots
-                ))?;
+                output.progress_event(
+                    OutputLevel::Ok,
+                    command_name,
+                    "repo",
+                    &[
+                        field("status", "ok"),
+                        field("repo", &repo.repository_id.0),
+                        field("keep_manifest_snapshots", keep_manifest_snapshots),
+                        field("manifest_snapshots_deleted", deleted_manifest_snapshots),
+                        field("db", db_path.display()),
+                    ],
+                    Some(&root.display().to_string()),
+                )?;
             }
         }
     }
 
     match command {
         StorageMaintenanceCommand::RepairSemanticVectorStore => {
-            output.summary(format!(
-                "{command_name} summary status=ok repositories={} repaired={}",
-                repositories.len(),
-                total_repaired
-            ))?;
+            output.summary_event(
+                OutputLevel::Ok,
+                command_name,
+                "complete",
+                &[
+                    field("status", "ok"),
+                    field("repos", repositories.len()),
+                    field("repaired", total_repaired),
+                ],
+                None,
+            )?;
         }
         StorageMaintenanceCommand::Prune {
             keep_manifest_snapshots,
         } => {
-            output.summary(format!(
-                "{command_name} summary status=ok repositories={} keep_manifest_snapshots={} manifest_snapshots_deleted={}",
-                repositories.len(),
-                keep_manifest_snapshots,
-                total_manifest_snapshots_deleted
-            ))?;
+            output.summary_event(
+                OutputLevel::Ok,
+                command_name,
+                "complete",
+                &[
+                    field("status", "ok"),
+                    field("repos", repositories.len()),
+                    field("keep_manifest_snapshots", keep_manifest_snapshots),
+                    field(
+                        "manifest_snapshots_deleted",
+                        total_manifest_snapshots_deleted,
+                    ),
+                ],
+                None,
+            )?;
         }
     }
 

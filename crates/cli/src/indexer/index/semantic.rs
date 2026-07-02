@@ -17,7 +17,7 @@ use super::super::{
     SemanticRefreshPlan,
 };
 use super::execution::execute_index_plan;
-use super::plan::{IndexMode, IndexSummary, build_index_plan};
+use super::plan::{IndexMode, IndexPlan, IndexSummary, build_index_plan};
 use super::store::ManifestStore;
 
 /// Runs the standard repository refresh path using semantic runtime settings resolved from the
@@ -60,6 +60,29 @@ pub fn index_repository_with_runtime_config(
     )
 }
 
+/// Runs repository index and exposes the computed plan before writes or semantic refresh execute.
+#[allow(clippy::too_many_arguments)]
+pub fn index_repository_with_runtime_config_and_plan_callback(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: IndexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        &[],
+        on_plan,
+    )
+}
+
 /// Runs repository index with explicit dirty-path hints for changed-only manifest builds.
 pub fn index_repository_with_runtime_config_and_dirty_paths(
     repository_id: &str,
@@ -69,6 +92,30 @@ pub fn index_repository_with_runtime_config_and_dirty_paths(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     dirty_path_hints: &[PathBuf],
+) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        dirty_path_hints,
+        |_| Ok(()),
+    )
+}
+
+/// Runs repository index with dirty-path hints and exposes the computed plan before writes.
+#[allow(clippy::too_many_arguments)]
+pub fn index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: IndexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    dirty_path_hints: &[PathBuf],
+    on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
 ) -> FriggResult<IndexSummary> {
     let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
     index_repository_with_semantic_executor_and_dirty_paths(
@@ -80,6 +127,7 @@ pub fn index_repository_with_runtime_config_and_dirty_paths(
         credentials,
         dirty_path_hints,
         &executor,
+        on_plan,
     )
 }
 
@@ -102,6 +150,7 @@ pub(crate) fn index_repository_with_semantic_executor(
         credentials,
         &[],
         executor,
+        |_| Ok(()),
     )
 }
 
@@ -115,6 +164,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     credentials: &SemanticRuntimeCredentials,
     dirty_path_hints: &[PathBuf],
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
 ) -> FriggResult<IndexSummary> {
     let started_at = Instant::now();
     let db_preexisted = db_path.exists();
@@ -167,6 +217,8 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         storage.as_ref(),
     )?;
 
+    on_plan(&plan)?;
+
     execute_index_plan(
         &manifest_store,
         repository_id,
@@ -181,11 +233,17 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     Ok(IndexSummary {
         repository_id: repository_id.to_owned(),
         snapshot_id: plan.snapshot_plan.snapshot_id().to_owned(),
+        previous_snapshot_id,
+        snapshot_plan: plan.snapshot_plan.as_str().to_owned(),
         files_scanned: plan.files_scanned,
         files_changed: plan.files_changed,
         files_deleted: plan.files_deleted,
         changed_paths: plan.changed_paths,
         deleted_paths: plan.deleted_paths,
+        semantic_refresh_mode: plan.semantic_refresh.mode,
+        semantic_provider: plan.semantic_refresh.provider.clone(),
+        semantic_model: plan.semantic_refresh.model.clone(),
+        semantic_records: plan.semantic_refresh.records_manifest.len(),
         diagnostics: plan.diagnostics,
         duration_ms: started_at.elapsed().as_millis(),
     })

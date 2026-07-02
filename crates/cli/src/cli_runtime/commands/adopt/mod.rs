@@ -7,7 +7,9 @@ use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
 
 use crate::cli_args::AdoptTarget;
-use crate::cli_runtime::CliOutput;
+use crate::cli_runtime::{
+    CliOutput, OutputField, OutputLevel, field, format_output_event_line, reported_error,
+};
 
 mod json_merge;
 mod managed_block;
@@ -22,21 +24,13 @@ pub(crate) fn run_adopt_command_with_output(
     config: &FriggConfig,
     requested_targets: Vec<AdoptTarget>,
     all: bool,
-    legacy_cursor: bool,
     uninstall: bool,
     check: bool,
     dry_run: bool,
     force: bool,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
-    let plan = build_adopt_plan(
-        config,
-        &requested_targets,
-        all,
-        legacy_cursor,
-        uninstall,
-        force,
-    )?;
+    let plan = build_adopt_plan(config, &requested_targets, all, uninstall, force)?;
     let pending_changes = plan.pending_changes();
     let status = if plan.is_empty() {
         "noop"
@@ -47,7 +41,85 @@ pub(crate) fn run_adopt_command_with_output(
     };
 
     if dry_run || check {
-        output.result(adopt_summary_line(
+        output.result_event(
+            adopt_level_for_status(status),
+            "adopt",
+            "complete",
+            &adopt_summary_fields(
+                status,
+                config.repositories().len(),
+                &plan,
+                pending_changes,
+                dry_run,
+                check,
+                uninstall,
+                force,
+                0,
+            ),
+            None,
+        )?;
+        for entry in &plan.entries {
+            output.result_event(
+                adopt_level_for_action(entry.action),
+                "adopt",
+                "plan",
+                &adopt_plan_fields(entry),
+                Some(&entry.path.display().to_string()),
+            )?;
+        }
+    }
+
+    if check && pending_changes > 0 {
+        let message = format!("adopt check failed: {pending_changes} pending change(s)");
+        output.error_event(
+            "adopt",
+            "failed",
+            &[
+                field("status", "failed"),
+                field("mode", "check"),
+                field("pending", pending_changes),
+                field("error", &message),
+            ],
+            None,
+        )?;
+        return Err(reported_error(message));
+    }
+
+    if plan.action_count(AdoptPlanAction::Error) > 0 {
+        let message = "adopt failed: plan contains target error(s)";
+        output.error_event(
+            "adopt",
+            "failed",
+            &[
+                field("status", "failed"),
+                field("targets", plan.len()),
+                field("error", message),
+            ],
+            None,
+        )?;
+        return Err(reported_error(message));
+    }
+
+    if dry_run || check {
+        return Ok(());
+    }
+
+    for entry in &plan.entries {
+        output.progress_event(
+            adopt_level_for_action(entry.action),
+            "adopt",
+            "plan",
+            &adopt_plan_fields(entry),
+            Some(&entry.path.display().to_string()),
+        )?;
+    }
+
+    let writes = apply_plan_entries(&plan, uninstall, force)?;
+    output.summary_event(
+        adopt_level_for_status(status),
+        "adopt",
+        "complete",
+        &adopt_summary_fields(
             status,
             config.repositories().len(),
             &plan,
@@ -56,50 +128,15 @@ pub(crate) fn run_adopt_command_with_output(
             check,
             uninstall,
             force,
-            0,
-        ))?;
-        for entry in &plan.entries {
-            output.result(adopt_plan_line(entry))?;
-        }
-    }
-
-    if check && pending_changes > 0 {
-        return Err(Box::new(io::Error::other(format!(
-            "adopt check failed: {pending_changes} pending change(s)"
-        ))));
-    }
-
-    if plan.action_count(AdoptPlanAction::Error) > 0 {
-        let message = "adopt failed: plan contains target error(s)";
-        output.error(message)?;
-        return Err(Box::new(io::Error::other(message)));
-    }
-
-    if dry_run || check {
-        return Ok(());
-    }
-
-    for entry in &plan.entries {
-        output.progress(adopt_plan_line(entry))?;
-    }
-
-    let writes = apply_plan_entries(&plan, uninstall, force)?;
-    output.summary(adopt_summary_line(
-        status,
-        config.repositories().len(),
-        &plan,
-        pending_changes,
-        dry_run,
-        check,
-        uninstall,
-        force,
-        writes,
-    ))?;
+            writes,
+        ),
+        None,
+    )?;
 
     Ok(())
 }
 
-fn adopt_summary_line(
+fn adopt_summary_fields(
     status: &str,
     repositories: usize,
     plan: &AdoptPlan,
@@ -109,44 +146,59 @@ fn adopt_summary_line(
     uninstall: bool,
     force: bool,
     writes: usize,
-) -> String {
-    format!(
-        "adopt summary status={} repositories={} targets={} create={} update={} unchanged={} remove={} skipped={} error={} pending={} dry_run={} check={} uninstall={} force={} writes={}",
-        status,
-        repositories,
-        plan.len(),
-        plan.action_count(AdoptPlanAction::Create),
-        plan.action_count(AdoptPlanAction::Update),
-        plan.action_count(AdoptPlanAction::Unchanged),
-        plan.action_count(AdoptPlanAction::Remove),
-        plan.action_count(AdoptPlanAction::Skipped),
-        plan.action_count(AdoptPlanAction::Error),
-        pending_changes,
-        dry_run,
-        check,
-        uninstall,
-        force,
-        writes
-    )
+) -> Vec<OutputField> {
+    vec![
+        field("status", status),
+        field("repos", repositories),
+        field("targets", plan.len()),
+        field("create", plan.action_count(AdoptPlanAction::Create)),
+        field("update", plan.action_count(AdoptPlanAction::Update)),
+        field("unchanged", plan.action_count(AdoptPlanAction::Unchanged)),
+        field("remove", plan.action_count(AdoptPlanAction::Remove)),
+        field("skipped", plan.action_count(AdoptPlanAction::Skipped)),
+        field("error", plan.action_count(AdoptPlanAction::Error)),
+        field("pending", pending_changes),
+        field("dry_run", dry_run),
+        field("check", check),
+        field("uninstall", uninstall),
+        field("force", force),
+        field("writes", writes),
+    ]
 }
 
-fn adopt_plan_line(entry: &AdoptPlanEntry) -> String {
-    format!(
-        "adopt plan repository_id={} root={} target={:?} path={} action={} reason={} writes=0",
-        entry.repository_id,
-        entry.root.display(),
-        entry.target,
-        entry.path.display(),
-        entry.action.as_str(),
-        entry.reason.as_deref().unwrap_or("-")
-    )
+fn adopt_plan_fields(entry: &AdoptPlanEntry) -> Vec<OutputField> {
+    vec![
+        field("repo", &entry.repository_id),
+        field("target", format!("{:?}", entry.target)),
+        field("action", entry.action.as_str()),
+        field("reason", entry.reason.as_deref().unwrap_or("-")),
+        field("writes", 0),
+        field("root", entry.root.display()),
+    ]
+}
+
+fn adopt_level_for_status(status: &str) -> OutputLevel {
+    match status {
+        "pending" => OutputLevel::Warn,
+        "noop" => OutputLevel::Skip,
+        _ => OutputLevel::Ok,
+    }
+}
+
+fn adopt_level_for_action(action: AdoptPlanAction) -> OutputLevel {
+    match action {
+        AdoptPlanAction::Create | AdoptPlanAction::Update | AdoptPlanAction::Remove => {
+            OutputLevel::Info
+        }
+        AdoptPlanAction::Unchanged | AdoptPlanAction::Skipped => OutputLevel::Skip,
+        AdoptPlanAction::Error => OutputLevel::Error,
+    }
 }
 
 fn build_adopt_plan(
     config: &FriggConfig,
     requested_targets: &[AdoptTarget],
     all: bool,
-    legacy_cursor: bool,
     uninstall: bool,
     force: bool,
 ) -> io::Result<AdoptPlan> {
@@ -157,13 +209,20 @@ fn build_adopt_plan(
         let root = config
             .root_by_repository_id(&repo.repository_id.0)
             .ok_or_else(|| {
-                io::Error::other(format!(
-                    "adopt summary status=failed repository_id={} error=workspace root lookup failed",
-                    repo.repository_id.0
+                io::Error::other(format_output_event_line(
+                    OutputLevel::Error,
+                    "adopt",
+                    "failed",
+                    &[
+                        field("status", "failed"),
+                        field("repo", &repo.repository_id.0),
+                        field("error", "workspace root lookup failed"),
+                    ],
+                    None,
                 ))
             })?;
 
-        for target in select_targets(root, requested_targets, all, legacy_cursor) {
+        for target in select_targets(root, requested_targets, all) {
             let (action, reason) = classify_target_action(root, target, uninstall, force);
             entries.push(AdoptPlanEntry {
                 repository_id: repo.repository_id.0.clone(),
@@ -492,15 +551,8 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::McpProject],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan.entries[0].repository_id, "repo-001");
@@ -521,15 +573,8 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::AgentsMd],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         fs::remove_dir_all(root).expect("remove temp root");
@@ -547,15 +592,8 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::McpProject],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Skipped);
         fs::remove_dir_all(root).expect("remove temp root");
@@ -567,15 +605,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::McpProject],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(
             apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
@@ -597,15 +628,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::AgentsMd],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(
             apply_plan_entries(&plan, false, false).expect("apply markdown"),
@@ -629,7 +653,7 @@ mod tests {
         .expect("write agents");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, true, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, true, false)
             .expect("build adopt plan");
 
         assert_eq!(
@@ -651,15 +675,8 @@ mod tests {
         .expect("write mcp");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::McpProject],
-            false,
-            false,
-            false,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
+            .expect("build adopt plan");
 
         assert_eq!(
             apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
@@ -688,15 +705,8 @@ mod tests {
         .expect("write mcp");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(
-            &config,
-            &[AdoptTarget::McpProject],
-            false,
-            false,
-            true,
-            false,
-        )
-        .expect("build adopt plan");
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, true, false)
+            .expect("build adopt plan");
 
         assert_eq!(
             apply_mcp_json_entries(&plan, true, false).expect("apply mcp"),
@@ -718,7 +728,7 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
             .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
         assert_eq!(
@@ -735,7 +745,7 @@ mod tests {
             super::json_merge::desired_claude_hook_command()
         );
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
             .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         assert_eq!(
@@ -752,7 +762,7 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], true, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], true, false, false)
             .expect("build adopt plan");
         assert!(
             plan.entries
@@ -783,7 +793,7 @@ mod tests {
         .expect("write settings");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
             .expect("build adopt plan");
 
         assert_eq!(
@@ -821,7 +831,7 @@ mod tests {
         .expect("write settings");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, true, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, true, false)
             .expect("build adopt plan");
 
         assert_eq!(
@@ -858,7 +868,7 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
             .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
 
@@ -882,7 +892,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join(".cursor")).expect("create cursor symlink");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Cursor], false, false, false, false)
+        let plan = build_adopt_plan(&config, &[AdoptTarget::Cursor], false, false, false)
             .expect("build adopt plan");
 
         let err = apply_plan_entries(&plan, false, false)

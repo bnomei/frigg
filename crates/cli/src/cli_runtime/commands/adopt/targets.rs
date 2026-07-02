@@ -2,13 +2,12 @@ use std::path::Path;
 
 use crate::cli_args::AdoptTarget;
 
-pub(crate) const NON_HOOK_V1_TARGETS: [AdoptTarget; 8] = [
+pub(crate) const NON_HOOK_V1_TARGETS: [AdoptTarget; 7] = [
     AdoptTarget::ClaudeMd,
     AdoptTarget::AgentsMd,
     AdoptTarget::GeminiMd,
     AdoptTarget::Copilot,
     AdoptTarget::Cursor,
-    AdoptTarget::LegacyCursor,
     AdoptTarget::McpProject,
     AdoptTarget::McpCursor,
 ];
@@ -19,7 +18,6 @@ pub(crate) fn select_targets(
     root: &Path,
     requested_targets: &[AdoptTarget],
     all: bool,
-    legacy_cursor: bool,
 ) -> Vec<AdoptTarget> {
     let mut targets = if all {
         NON_HOOK_V1_TARGETS.to_vec()
@@ -33,10 +31,6 @@ pub(crate) fn select_targets(
         for target in requested_targets {
             push_unique(&mut targets, *target);
         }
-    }
-
-    if legacy_cursor {
-        push_unique(&mut targets, AdoptTarget::LegacyCursor);
     }
 
     targets
@@ -121,12 +115,9 @@ mod tests {
         let root = temp_dir("adopt-requested-targets");
         fs::create_dir_all(&root).expect("create temp root");
 
-        let targets = select_targets(&root, &[AdoptTarget::McpProject], false, true);
+        let targets = select_targets(&root, &[AdoptTarget::McpProject], false);
 
-        assert_eq!(
-            targets,
-            vec![AdoptTarget::McpProject, AdoptTarget::LegacyCursor]
-        );
+        assert_eq!(targets, vec![AdoptTarget::McpProject]);
         fs::remove_dir_all(root).expect("remove temp root");
     }
 
@@ -135,7 +126,7 @@ mod tests {
         let root = temp_dir("adopt-all-targets");
         fs::create_dir_all(&root).expect("create temp root");
 
-        let targets = select_targets(&root, &[], true, false);
+        let targets = select_targets(&root, &[], true);
 
         assert!(!targets.contains(&AdoptTarget::Hook));
         fs::remove_dir_all(root).expect("remove temp root");
@@ -146,7 +137,7 @@ mod tests {
         let root = temp_dir("adopt-all-hook-targets");
         fs::create_dir_all(&root).expect("create temp root");
 
-        let targets = select_targets(&root, &[AdoptTarget::Hook], true, false);
+        let targets = select_targets(&root, &[AdoptTarget::Hook], true);
 
         assert!(targets.contains(&AdoptTarget::Hook));
         fs::remove_dir_all(root).expect("remove temp root");
