@@ -61,6 +61,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) semantic_runtime_enabled: Option<bool>,
 
+    /// Semantic provider. Defaults to local when semantic runtime is enabled.
     #[arg(
         long,
         value_name = "PROVIDER",

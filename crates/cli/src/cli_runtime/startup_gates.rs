@@ -3,6 +3,10 @@
 
 use std::io;
 
+use frigg::embeddings::local_model::{
+    FRIGG_SEMANTIC_MODEL_CACHE_ENV, LocalModelArtifact, LocalModelArtifactStatus,
+    check_local_model_artifact, prepare_local_semantic_model,
+};
 use frigg::settings::{
     FriggConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider, SemanticRuntimeStartupError,
 };
@@ -12,15 +16,19 @@ use tracing::info;
 use crate::cli_runtime::CliOutput;
 use crate::cli_runtime::storage_paths::resolve_storage_db_path;
 
+const HF_HOME_ENV: &str = "HF_HOME";
+
 #[derive(Debug)]
 pub(super) enum SemanticStartupGateError {
     InvalidConfig(SemanticRuntimeStartupError),
+    LocalModelPrepare(String),
 }
 
 impl SemanticStartupGateError {
     pub(super) fn code(&self) -> &'static str {
         match self {
             Self::InvalidConfig(err) => err.code(),
+            Self::LocalModelPrepare(_) => "local_model_prepare_failed",
         }
     }
 }
@@ -29,6 +37,7 @@ impl std::fmt::Display for SemanticStartupGateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidConfig(err) => write!(f, "{err}"),
+            Self::LocalModelPrepare(message) => write!(f, "{message}"),
         }
     }
 }
@@ -141,7 +150,27 @@ pub(crate) fn run_semantic_runtime_startup_gate_with_output(
     output: &CliOutput,
 ) -> io::Result<()> {
     let credentials = SemanticRuntimeCredentials::from_process_env();
-    run_semantic_runtime_startup_gate_with_credentials_and_output(config, &credentials, output)
+    run_semantic_runtime_startup_gate_with_credentials_and_output(
+        config,
+        &credentials,
+        output,
+        SemanticModelPrepareOutput::Stdout,
+        ensure_local_semantic_model_prepared,
+    )
+}
+
+pub(crate) fn run_semantic_runtime_startup_gate_with_stderr_prepare_output(
+    config: &FriggConfig,
+    output: &CliOutput,
+) -> io::Result<()> {
+    let credentials = SemanticRuntimeCredentials::from_process_env();
+    run_semantic_runtime_startup_gate_with_credentials_and_output(
+        config,
+        &credentials,
+        output,
+        SemanticModelPrepareOutput::Stderr,
+        ensure_local_semantic_model_prepared,
+    )
 }
 
 #[cfg(test)]
@@ -153,13 +182,26 @@ pub(crate) fn run_semantic_runtime_startup_gate_with_credentials(
         config,
         credentials,
         &CliOutput::normal(),
+        SemanticModelPrepareOutput::Stdout,
+        skip_local_semantic_model_preparation,
     )
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticModelPrepareOutput {
+    Stdout,
+    Stderr,
+}
+
+type LocalModelStartupPreparer =
+    fn(&FriggConfig, &str, &CliOutput, SemanticModelPrepareOutput) -> io::Result<()>;
 
 fn run_semantic_runtime_startup_gate_with_credentials_and_output(
     config: &FriggConfig,
     credentials: &SemanticRuntimeCredentials,
     output: &CliOutput,
+    prepare_output: SemanticModelPrepareOutput,
+    local_model_preparer: LocalModelStartupPreparer,
 ) -> io::Result<()> {
     if !config.semantic_runtime.enabled {
         return Ok(());
@@ -195,6 +237,9 @@ fn run_semantic_runtime_startup_gate_with_credentials_and_output(
         .semantic_runtime
         .normalized_model()
         .expect("semantic runtime model must exist after successful validation");
+    if provider == SemanticRuntimeProvider::Local {
+        local_model_preparer(config, model, output, prepare_output)?;
+    }
     info!(
         semantic_provider = %provider.as_str(),
         semantic_model = %model,
@@ -202,4 +247,133 @@ fn run_semantic_runtime_startup_gate_with_credentials_and_output(
         "startup semantic runtime readiness passed"
     );
     Ok(())
+}
+
+#[cfg(test)]
+fn skip_local_semantic_model_preparation(
+    _config: &FriggConfig,
+    _model: &str,
+    _output: &CliOutput,
+    _prepare_output: SemanticModelPrepareOutput,
+) -> io::Result<()> {
+    Ok(())
+}
+
+fn ensure_local_semantic_model_prepared(
+    config: &FriggConfig,
+    model: &str,
+    output: &CliOutput,
+    prepare_output: SemanticModelPrepareOutput,
+) -> io::Result<()> {
+    match check_local_model_artifact(model) {
+        Ok(LocalModelArtifactStatus::Ready(artifact)) => {
+            if let Some(hf_home) = std::env::var_os(HF_HOME_ENV) {
+                return fail_local_model_prepare(
+                    output,
+                    &artifact.semantic_model,
+                    format!(
+                        "{HF_HOME_ENV} is set to {}; unset it so {FRIGG_SEMANTIC_MODEL_CACHE_ENV} or Frigg's platform cache root controls prepared local model loading from {}",
+                        std::path::PathBuf::from(hf_home).display(),
+                        artifact.cache_root.display()
+                    ),
+                );
+            }
+            info!(
+                semantic_provider = "local",
+                semantic_model = %artifact.semantic_model,
+                cache_root = %artifact.cache_root.display(),
+                cache_key = %artifact.cache_key,
+                "startup local semantic model already prepared"
+            );
+            Ok(())
+        }
+        Ok(LocalModelArtifactStatus::Missing(artifact)) => {
+            prepare_missing_or_corrupt_local_semantic_model(
+                config,
+                artifact,
+                "missing",
+                output,
+                prepare_output,
+            )
+        }
+        Err(err) => {
+            let model = config.semantic_runtime.normalized_model().unwrap_or(model);
+            let artifact = frigg::embeddings::local_model::resolve_local_model_artifact(model);
+            match artifact {
+                Ok(artifact) => prepare_missing_or_corrupt_local_semantic_model(
+                    config,
+                    artifact,
+                    "corrupt",
+                    output,
+                    prepare_output,
+                ),
+                Err(_) => fail_local_model_prepare(output, model, err.to_string()),
+            }
+        }
+    }
+}
+
+fn prepare_missing_or_corrupt_local_semantic_model(
+    config: &FriggConfig,
+    artifact: LocalModelArtifact,
+    reason: &str,
+    output: &CliOutput,
+    prepare_output: SemanticModelPrepareOutput,
+) -> io::Result<()> {
+    emit_model_prepare_progress(
+        output,
+        prepare_output,
+        format!(
+            "startup semantic_model_prepare status=started semantic_provider=local semantic_model={} cache_root={} cache_key={} repository={} reason={}",
+            artifact.semantic_model,
+            artifact.cache_root.display(),
+            artifact.cache_key,
+            artifact.repository,
+            reason
+        ),
+    )?;
+
+    match prepare_local_semantic_model(&config.semantic_runtime) {
+        Ok(prepared) => {
+            emit_model_prepare_progress(
+                output,
+                prepare_output,
+                format!(
+                    "startup semantic_model_prepare status=finished semantic_provider=local semantic_model={} cache_root={} cache_key={} repository={}",
+                    prepared.semantic_model,
+                    prepared.cache_root.display(),
+                    prepared.cache_key,
+                    prepared.repository
+                ),
+            )?;
+            Ok(())
+        }
+        Err(err) => fail_local_model_prepare(output, &artifact.semantic_model, err.to_string()),
+    }
+}
+
+fn fail_local_model_prepare(output: &CliOutput, model: &str, message: String) -> io::Result<()> {
+    let startup_error = SemanticStartupGateError::LocalModelPrepare(message);
+    output.error(format!(
+        "startup summary status=failed semantic_enabled=true semantic_provider=local semantic_model={} semantic_code={} error={}",
+        model,
+        startup_error.code(),
+        startup_error
+    ))?;
+    Err(io::Error::other(format!(
+        "startup semantic runtime readiness failed code={}: {}",
+        startup_error.code(),
+        startup_error
+    )))
+}
+
+fn emit_model_prepare_progress(
+    output: &CliOutput,
+    target: SemanticModelPrepareOutput,
+    message: String,
+) -> io::Result<()> {
+    match target {
+        SemanticModelPrepareOutput::Stdout => output.summary(message),
+        SemanticModelPrepareOutput::Stderr => output.warning(message),
+    }
 }

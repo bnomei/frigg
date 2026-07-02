@@ -1733,14 +1733,13 @@ fn hybrid_ranking_semantic_local_provider_uses_local_model_partition_and_short_v
 }
 
 #[test]
-fn hybrid_ranking_semantic_local_missing_artifact_degrades_non_strict() -> FriggResult<()> {
+fn hybrid_ranking_semantic_local_provider_failure_degrades_non_strict() -> FriggResult<()> {
     let (searcher, root) = semantic_hybrid_fixture(
         "hybrid-semantic-local-missing-non-strict",
         semantic_runtime_enabled_local(false),
     )?;
-    let semantic_executor = MockSemanticQueryEmbeddingExecutor::failure(
-        "local_model_missing: run `frigg prepare-semantic-model`",
-    );
+    let semantic_executor =
+        MockSemanticQueryEmbeddingExecutor::failure("local_model_corrupt: no complete snapshot");
 
     let output = searcher.search_hybrid_with_filters_using_executor(
         SearchHybridQuery {
@@ -1761,8 +1760,8 @@ fn hybrid_ranking_semantic_local_missing_artifact_degrades_non_strict() -> Frigg
             .note
             .semantic_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("prepare-semantic-model")),
-        "non-strict local missing artifact degradation should include reindex/preparation guidance"
+            .is_some_and(|reason| reason.contains("local_model_corrupt")),
+        "non-strict local provider failure degradation should include provider failure detail"
     );
 
     cleanup_workspace(&root);
@@ -1770,14 +1769,13 @@ fn hybrid_ranking_semantic_local_missing_artifact_degrades_non_strict() -> Frigg
 }
 
 #[test]
-fn hybrid_ranking_semantic_local_missing_artifact_fails_strict() -> FriggResult<()> {
+fn hybrid_ranking_semantic_local_provider_failure_fails_strict() -> FriggResult<()> {
     let (searcher, root) = semantic_hybrid_fixture(
         "hybrid-semantic-local-missing-strict",
         semantic_runtime_enabled_local(true),
     )?;
-    let semantic_executor = MockSemanticQueryEmbeddingExecutor::failure(
-        "local_model_missing: run `frigg prepare-semantic-model`",
-    );
+    let semantic_executor =
+        MockSemanticQueryEmbeddingExecutor::failure("local_model_corrupt: no complete snapshot");
 
     let error = searcher
         .search_hybrid_with_filters_using_executor(
@@ -1794,7 +1792,7 @@ fn hybrid_ranking_semantic_local_missing_artifact_fails_strict() -> FriggResult<
         .expect_err("strict local semantic failures should abort the hybrid query");
     let message = error.to_string();
     assert!(message.contains("semantic_status=strict_failure"));
-    assert!(message.contains("prepare-semantic-model"));
+    assert!(message.contains("local_model_corrupt"));
 
     cleanup_workspace(&root);
     Ok(())

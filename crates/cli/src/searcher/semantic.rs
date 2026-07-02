@@ -76,7 +76,7 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
                     provider,
                     model: &request.model,
                     credentials: &self.credentials,
-                    local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                    local_artifact_policy: LocalArtifactPolicy::AllowPreparation,
                 })
                 .map_err(|err| {
                     FriggError::Internal(format!(

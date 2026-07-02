@@ -319,6 +319,7 @@ Local:
 
 ```bash
 export FRIGG_SEMANTIC_RUNTIME_ENABLED=true
+# Optional: local is the default provider when semantic runtime is enabled.
 export FRIGG_SEMANTIC_RUNTIME_PROVIDER=local
 ```
 
@@ -330,19 +331,7 @@ Optional model override:
 export FRIGG_SEMANTIC_RUNTIME_MODEL=text-embedding-3-small
 ```
 
-For the local provider, prepare model artifacts explicitly before serving or semantic reindexing:
-
-```bash
-frigg prepare-semantic-model
-```
-
-You can also prepare the active local semantic model as part of an explicit reindex:
-
-```bash
-frigg reindex --prepare-semantic-model
-```
-
-`frigg serve` does not download or mutate local model artifacts implicitly. If local artifacts are missing, corrupt, or unavailable, non-strict semantic mode degrades to lexical/path/graph retrieval and reports semantic degradation metadata; strict mode surfaces the semantic failure as an error.
+When `provider=local`, Frigg prepares missing local model artifacts automatically during startup. If a download is needed, startup reports `semantic_model_prepare status=started` and `status=finished`; stdio MCP mode sends those lines to stderr so stdout remains reserved for protocol frames. If local artifacts are corrupt or unavailable and cannot be prepared, startup fails with `local_model_prepare_failed` so the cache issue can be fixed explicitly.
 
 After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass:
 
@@ -488,7 +477,7 @@ Precedence is `CLI flag > env var > default`.
 | `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP tool surface profile: `extended` or `core`. |
 | `FRIGG_CONTEXT_EFFICIENCY_LOG` | `false` | When truthy, appends compact context-efficiency rows to `.frigg/context.jsonl` independently of response metadata opt-in. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enables optional semantic retrieval. |
-| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai`, `google`, or `local`. |
+| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Optional embedding model override. |
 | `--semantic-runtime-strict-mode` / `FRIGG_SEMANTIC_RUNTIME_STRICT_MODE` | `false` | Converts semantic provider failures into user-visible errors instead of graceful fallback. |
 

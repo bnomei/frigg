@@ -19,7 +19,9 @@ use crate::cli_runtime::{
     resolve_startup_config, resolve_watch_runtime_config, run_adopt_command_with_output,
     run_context_summary_command, run_hash_command, run_hybrid_playbook_command_with_output,
     run_prepare_semantic_model_command_with_output, run_reindex_command_with_output,
-    run_semantic_runtime_startup_gate_with_output, run_storage_bootstrap_command_with_output,
+    run_semantic_runtime_startup_gate_with_output,
+    run_semantic_runtime_startup_gate_with_stderr_prepare_output,
+    run_storage_bootstrap_command_with_output,
     run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
     run_workload_corpus_export_command_with_output,
@@ -185,7 +187,11 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
     startup_trace(startup_trace_enabled, "async_main: startup config resolved");
     run_strict_startup_vector_readiness_gate_with_output(&config, &cli_output)?;
     startup_trace(startup_trace_enabled, "async_main: vector readiness passed");
-    run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
+    if transport_kind == RuntimeTransportKind::Stdio {
+        run_semantic_runtime_startup_gate_with_stderr_prepare_output(&config, &cli_output)?;
+    } else {
+        run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
+    }
     startup_trace(startup_trace_enabled, "async_main: semantic gate passed");
     let watch_runtime_config = resolve_watch_runtime_config(&config, transport_kind)?;
     startup_trace(startup_trace_enabled, "async_main: watch config resolved");

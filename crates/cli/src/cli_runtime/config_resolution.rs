@@ -4,7 +4,8 @@ use std::error::Error;
 use std::io;
 
 use frigg::settings::{
-    FriggConfig, LexicalRuntimeConfig, RuntimeTransportKind, SemanticRuntimeConfig, WatchConfig,
+    FriggConfig, LexicalRuntimeConfig, RuntimeTransportKind, SemanticRuntimeConfig,
+    SemanticRuntimeProvider, WatchConfig,
 };
 
 use crate::{Cli, Command};
@@ -75,9 +76,12 @@ pub(crate) fn resolve_startup_config(
 }
 
 pub(crate) fn resolve_semantic_runtime_config(cli: &Cli) -> SemanticRuntimeConfig {
+    let enabled = cli.semantic_runtime_enabled.unwrap_or(false);
     SemanticRuntimeConfig {
-        enabled: cli.semantic_runtime_enabled.unwrap_or(false),
-        provider: cli.semantic_runtime_provider,
+        enabled,
+        provider: cli
+            .semantic_runtime_provider
+            .or(enabled.then_some(SemanticRuntimeProvider::Local)),
         model: cli.semantic_runtime_model.clone(),
         strict_mode: cli.semantic_runtime_strict_mode.unwrap_or(false),
     }

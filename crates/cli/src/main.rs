@@ -457,6 +457,17 @@ mod tests {
     }
 
     #[test]
+    fn semantic_runtime_cli_resolution_defaults_enabled_provider_to_local() {
+        let mut cli = base_cli();
+        cli.semantic_runtime_enabled = Some(true);
+
+        let semantic = resolve_semantic_runtime_config(&cli);
+        assert!(semantic.enabled);
+        assert_eq!(semantic.provider, Some(SemanticRuntimeProvider::Local));
+        assert_eq!(semantic.normalized_model(), Some("all-MiniLM-L6-v2"));
+    }
+
+    #[test]
     fn semantic_runtime_provider_parses_local_and_reports_defaults() {
         let provider: SemanticRuntimeProvider = " local "
             .parse()
@@ -502,17 +513,15 @@ mod tests {
         let readme = include_str!("../../../README.md");
 
         assert!(readme.contains(
-            "| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai`, `google`, or `local`. |"
+            "| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `google`, or `local`. |"
         ));
         assert!(readme.contains("export FRIGG_SEMANTIC_RUNTIME_PROVIDER=local"));
         assert!(readme.contains("`local` -> `all-MiniLM-L6-v2`"));
-        assert!(readme.contains("frigg prepare-semantic-model"));
-        assert!(readme.contains("frigg reindex --prepare-semantic-model"));
         assert!(readme.contains(
-            "`frigg serve` does not download or mutate local model artifacts implicitly"
+            "When `provider=local`, Frigg prepares missing local model artifacts automatically during startup"
         ));
         assert!(readme.contains("After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic reindex pass"));
-        assert!(readme.contains("strict mode surfaces the semantic failure as an error"));
+        assert!(readme.contains("startup fails with `local_model_prepare_failed`"));
 
         let zero_cloud_claims = readme.matches("Zero-cloud semantic").count()
             + readme.matches("zero-cloud semantic").count();
@@ -702,18 +711,19 @@ mod tests {
     }
 
     #[test]
-    fn startup_config_rejects_invalid_semantic_runtime_contract() {
+    fn startup_config_defaults_enabled_semantic_runtime_to_local_provider() {
         let mut cli = base_cli();
         cli.semantic_runtime_enabled = Some(true);
-        cli.semantic_runtime_model = Some("text-embedding-3-small".to_owned());
 
-        let error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
-            .expect_err("startup config should reject enabled semantic runtime without provider");
-        assert!(
-            error
-                .to_string()
-                .contains("semantic_runtime.provider is required"),
-            "unexpected startup config error: {error}"
+        let config = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
+            .expect("startup config should default enabled semantic runtime to local provider");
+        assert_eq!(
+            config.semantic_runtime.provider,
+            Some(SemanticRuntimeProvider::Local)
+        );
+        assert_eq!(
+            config.semantic_runtime.normalized_model(),
+            Some("all-MiniLM-L6-v2")
         );
     }
 

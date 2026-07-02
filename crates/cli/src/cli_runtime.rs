@@ -26,6 +26,7 @@ pub(crate) use config_resolution::{
 pub(crate) use output::CliOutput;
 pub(crate) use startup_gates::{
     run_semantic_runtime_startup_gate_with_output,
+    run_semantic_runtime_startup_gate_with_stderr_prepare_output,
     run_strict_startup_vector_readiness_gate_with_output,
 };
 

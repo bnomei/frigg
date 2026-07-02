@@ -1261,7 +1261,11 @@ fn local_embedding_missing_and_corrupt_artifacts_map_to_provider_errors() {
     assert_eq!(missing_failure.provider, EmbeddingProviderKind::Local);
     assert_eq!(missing_failure.retryability, Retryability::NonRetryable);
     assert_eq!(missing_failure.code.as_deref(), Some("local_model_missing"));
-    assert!(missing_failure.message.contains("prepare-semantic-model"));
+    assert!(
+        missing_failure
+            .message
+            .contains("automatic local preparation")
+    );
 
     let EmbeddingError::Provider(corrupt_failure) = corrupt else {
         panic!("corrupt artifacts should map to provider failure");

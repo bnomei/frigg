@@ -127,7 +127,7 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
                     provider,
                     model: &request.model,
                     credentials: &self.credentials,
-                    local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                    local_artifact_policy: LocalArtifactPolicy::AllowPreparation,
                 })
                 .map_err(|err| {
                     FriggError::Internal(format!(
@@ -164,7 +164,8 @@ pub(super) fn resolve_semantic_runtime_config_from_env() -> FriggResult<Semantic
                 ))
             })
         })
-        .transpose()?;
+        .transpose()?
+        .or(Some(SemanticRuntimeProvider::Local));
     let model = std::env::var(FRIGG_SEMANTIC_RUNTIME_MODEL_ENV)
         .ok()
         .map(|raw| raw.trim().to_owned());

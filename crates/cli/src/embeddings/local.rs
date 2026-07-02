@@ -254,7 +254,7 @@ pub(super) fn local_model_error_to_embedding_error(error: LocalModelError) -> Em
             EmbeddingError::Provider(ProviderFailure::non_retryable(
                 EmbeddingProviderKind::Local,
                 format!(
-                    "local semantic model artifact is missing for model '{model}' in {}; run `frigg prepare-semantic-model`",
+                    "local semantic model artifact is missing for model '{model}' in {}; automatic local preparation should run before local embedding provider construction",
                     cache_root.display()
                 ),
                 Some("local_model_missing".to_owned()),
@@ -266,7 +266,7 @@ pub(super) fn local_model_error_to_embedding_error(error: LocalModelError) -> Em
             EmbeddingError::Provider(ProviderFailure::non_retryable(
                 EmbeddingProviderKind::Local,
                 format!(
-                    "local semantic model artifact for model '{model}' requires download into {}; run `frigg prepare-semantic-model`",
+                    "local semantic model artifact for model '{model}' requires download into {}; automatic local preparation should run before local embedding provider construction",
                     cache_root.display()
                 ),
                 Some("local_model_download_required".to_owned()),

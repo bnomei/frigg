@@ -84,7 +84,7 @@ pub enum LocalModelError {
     #[error("local semantic model artifact is missing for model '{model}' in {cache_root}")]
     Missing { model: String, cache_root: PathBuf },
     #[error(
-        "local semantic model artifact for model '{model}' requires download into {cache_root}; run `frigg prepare-semantic-model`, then run `frigg reindex` after changing semantic provider or model"
+        "local semantic model artifact for model '{model}' requires download into {cache_root}; Frigg prepares local artifacts automatically when semantic runtime provider=local"
     )]
     DownloadRequired { model: String, cache_root: PathBuf },
     #[error(
@@ -572,7 +572,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("run `frigg prepare-semantic-model`")
+                .contains("prepares local artifacts automatically")
         );
     }
 }
