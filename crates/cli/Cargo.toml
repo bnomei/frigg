@@ -25,6 +25,7 @@ axum.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
+fastembed.workspace = true
 ignore.workspace = true
 memchr.workspace = true
 notify.workspace = true

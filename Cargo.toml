@@ -21,7 +21,7 @@ keywords = ["mcp", "code-search", "code-navigation", "tree-sitter", "semantic-se
 license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
-rust-version = "1.85"
+rust-version = "1.88"
 version = "0.5.0"
 
 [workspace.dependencies]
@@ -32,6 +32,7 @@ axum = "0.8.8"
 blake3 = "1.8.3"
 chrono = { version = "0.4.44", features = ["clock", "serde"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
+fastembed = { version = "5.17.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 ignore = "0.4.25"
 memchr = "2.7.6"
 notify = "8.2.0"
