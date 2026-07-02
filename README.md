@@ -436,6 +436,27 @@ Read tools default to text-first output. Pass `presentation_mode=json` when a ca
 
 Structural follow-up suggestions are opt-in with `include_follow_up_structural=true`. Phase 1 covers `inspect_syntax_tree` and `search_structural`; phase 2 covers `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. `search_hybrid` and `search_symbol` do not emit these suggestions.
 
+## Context Efficiency
+
+Frigg can report context efficiency for bounded source-returning tools. The feature describes how much indexed readable surface was available in the latest repository manifest, how much source was returned, and the resulting narrowing from repository surface to response evidence.
+
+The response field is opt-in per tool call. Pass `include_context_efficiency=true` to include `context_efficiency` metadata in supported MCP responses. When the flag is omitted or false, Frigg keeps those response fields out of the tool payload.
+
+Context-efficiency metadata is computed from the current response and existing index state. It is not stored in SQLite provenance rows. The indexed readable surface comes from latest manifest metadata, and returned full-file totals use manifest sizes for the unique returned paths. This is separate from `returned_source_bytes_estimate`, which counts the returned source windows, excerpts, or read contents assembled for the response. `narrowing_ratio_estimate` is an estimate derived from those returned source bytes against the indexed readable bytes.
+
+Set `FRIGG_CONTEXT_EFFICIENCY_LOG=true` to append compact JSONL rows under the active repository's `.frigg/context.jsonl`. This logging control is independent from `include_context_efficiency=true`: logging can be enabled while response metadata remains omitted, and response metadata can be requested without enabling JSONL logging.
+
+Summarize local logs with:
+
+```bash
+frigg context
+frigg context --since 2026-06-01 --until 2026-07-01
+```
+
+`frigg context` reads `.frigg/context.jsonl` for configured workspace roots and emits compact summary JSON, not raw event rows. Without date filters it summarizes the last 30 days. The output includes root `date_since` and `date_until` fields for the resolved range.
+
+Context-efficiency v1 covers `search_hybrid`, `search_text`, `read_file`, `read_match`, and `explore`.
+
 Extended-only tools:
 
 - `explore`: bounded follow-up exploration for a single artifact after discovery
@@ -464,6 +485,7 @@ Precedence is `CLI flag > env var > default`.
 | `--lexical-backend` / `FRIGG_LEXICAL_BACKEND` | `auto` | Lexical backend: `auto`, `native`, or `ripgrep`. |
 | `--ripgrep-executable` / `FRIGG_RIPGREP_EXECUTABLE` | unset | Path to an `rg` executable used when the ripgrep backend is selected. |
 | `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP tool surface profile: `extended` or `core`. |
+| `FRIGG_CONTEXT_EFFICIENCY_LOG` | `false` | When truthy, appends compact context-efficiency rows to `.frigg/context.jsonl` independently of response metadata opt-in. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enables optional semantic retrieval. |
 | `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | unset | Semantic provider: `openai`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Optional embedding model override. |
