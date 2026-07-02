@@ -10,10 +10,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
-use crate::embeddings::{
-    EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
-    OpenAiEmbeddingProvider,
-};
+use crate::embeddings::{EmbeddingPurpose, EmbeddingRequest};
 use crate::languages::semantic_chunk_language_for_path;
 #[allow(unused_imports)]
 pub(crate) use crate::languages::{

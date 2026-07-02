@@ -112,6 +112,27 @@ impl SemanticRuntimeEmbeddingExecutor for FailingSemanticEmbeddingExecutor {
     }
 }
 
+#[derive(Debug, Default)]
+pub(super) struct ShortSemanticEmbeddingExecutor;
+
+impl SemanticRuntimeEmbeddingExecutor for ShortSemanticEmbeddingExecutor {
+    fn embed_documents<'a>(
+        &'a self,
+        _provider: SemanticRuntimeProvider,
+        _model: &'a str,
+        input: Vec<String>,
+        _trace_id: Option<String>,
+    ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(input
+                .into_iter()
+                .enumerate()
+                .map(|(index, _)| vec![1.0, index as f32 / 10.0])
+                .collect::<Vec<_>>())
+        })
+    }
+}
+
 pub(super) fn deterministic_fixture_embedding(text: &str, index: usize) -> Vec<f32> {
     let mut hasher = Hasher::new();
     hasher.update(index.to_string().as_bytes());
@@ -184,6 +205,15 @@ pub(super) fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
         enabled: true,
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    }
+}
+
+pub(super) fn semantic_runtime_enabled_local() -> SemanticRuntimeConfig {
+    SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::Local),
+        model: Some("all-MiniLM-L6-v2".to_owned()),
         strict_mode: false,
     }
 }

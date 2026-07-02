@@ -79,6 +79,53 @@ fn semantic_indexing_reindex_persists_deterministic_embeddings_when_enabled() ->
 }
 
 #[test]
+fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short_vectors()
+-> FriggResult<()> {
+    let db_path = temp_db_path("semantic-local-provider-short-vector");
+    let workspace_root = temp_workspace_root("semantic-local-provider-short-vector");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/local.rs", "pub fn local_semantic_index() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_local();
+    let summary = reindex_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        ReindexMode::Full,
+        &semantic_runtime,
+        &SemanticRuntimeCredentials::default(),
+        &ShortSemanticEmbeddingExecutor,
+    )?;
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+    assert!(!semantic_rows.is_empty());
+    assert!(semantic_rows.iter().all(|record| {
+        record.provider == "local"
+            && record.model == "all-MiniLM-L6-v2"
+            && record.embedding.len() == 2
+    }));
+
+    let health = storage.collect_semantic_storage_health_for_repository_model(
+        "repo-001",
+        "local",
+        "all-MiniLM-L6-v2",
+    )?;
+    assert!(health.vector_consistent);
+    assert_eq!(
+        health.covered_snapshot_id.as_deref(),
+        Some(summary.snapshot_id.as_str())
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_full_reindex_skips_stale_deleted_absolute_paths_outside_workspace() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-full-stale-deleted-outside-root");
     let workspace_root = temp_workspace_root("semantic-full-stale-deleted-outside-root");

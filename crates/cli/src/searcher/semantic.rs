@@ -13,8 +13,8 @@ use crate::domain::{
     EvidenceChannel, FriggError, FriggResult,
 };
 use crate::embeddings::{
-    EmbeddingProvider, EmbeddingPurpose, EmbeddingRequest, GoogleEmbeddingProvider,
-    OpenAiEmbeddingProvider,
+    EmbeddingPurpose, EmbeddingRequest, LocalArtifactPolicy,
+    SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
 };
 use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -63,11 +63,6 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
         query: String,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<f32>>> + Send + 'a>> {
         let model = model.trim().to_owned();
-        let api_key = self
-            .credentials
-            .api_key_for(provider)
-            .map(str::to_owned)
-            .unwrap_or_default();
         Box::pin(async move {
             let request = EmbeddingRequest {
                 model,
@@ -76,30 +71,23 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
                 dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
                 trace_id: None,
             };
-            let response = match provider {
-                SemanticRuntimeProvider::OpenAi => {
-                    let client = OpenAiEmbeddingProvider::new(api_key);
-                    client.embed(request).await.map_err(|err| {
-                        FriggError::Internal(format!(
-                            "semantic query embedding provider call failed: {err}"
-                        ))
-                    })?
-                }
-                SemanticRuntimeProvider::Google => {
-                    let client = GoogleEmbeddingProvider::new(api_key);
-                    client.embed(request).await.map_err(|err| {
-                        FriggError::Internal(format!(
-                            "semantic query embedding provider call failed: {err}"
-                        ))
-                    })?
-                }
-                SemanticRuntimeProvider::Local => {
-                    return Err(FriggError::Internal(
-                        "local semantic query embedding provider routing is not available yet"
-                            .to_owned(),
-                    ));
-                }
-            };
+            let client =
+                build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+                    provider,
+                    model: &request.model,
+                    credentials: &self.credentials,
+                    local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                })
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "semantic query embedding provider construction failed: {err}"
+                    ))
+                })?;
+            let response = client.embed(request).await.map_err(|err| {
+                FriggError::Internal(format!(
+                    "semantic query embedding provider call failed: {err}"
+                ))
+            })?;
 
             if response.vectors.len() != 1 {
                 return Err(FriggError::Internal(format!(

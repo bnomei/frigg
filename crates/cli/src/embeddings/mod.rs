@@ -439,9 +439,13 @@ mod google;
 mod local;
 pub mod local_model;
 mod openai;
+pub mod provider_factory;
 pub use google::GoogleEmbeddingProvider;
 pub use local::LocalEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;
+pub use provider_factory::{
+    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
+};
 
 #[cfg(test)]
 mod tests;

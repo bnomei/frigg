@@ -1275,3 +1275,49 @@ fn local_embedding_missing_and_corrupt_artifacts_map_to_provider_errors() {
             .contains("no complete Hugging Face snapshot")
     );
 }
+
+#[test]
+fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call() {
+    let openai = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+        provider: crate::settings::SemanticRuntimeProvider::OpenAi,
+        model: "text-embedding-3-small",
+        credentials: &crate::settings::SemanticRuntimeCredentials {
+            openai_api_key: Some("test-openai-key".to_owned()),
+            gemini_api_key: None,
+        },
+        local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+    })
+    .expect("openai provider should construct from credentials");
+    assert_eq!(openai.kind(), EmbeddingProviderKind::OpenAi);
+
+    let google = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+        provider: crate::settings::SemanticRuntimeProvider::Google,
+        model: "gemini-embedding-001",
+        credentials: &crate::settings::SemanticRuntimeCredentials {
+            openai_api_key: None,
+            gemini_api_key: Some("test-gemini-key".to_owned()),
+        },
+        local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+    })
+    .expect("google provider should construct from credentials");
+    assert_eq!(google.kind(), EmbeddingProviderKind::Google);
+}
+
+#[test]
+fn semantic_provider_factory_routes_local_without_requiring_api_key() {
+    let result = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+        provider: crate::settings::SemanticRuntimeProvider::Local,
+        model: "unsupported-local-model",
+        credentials: &crate::settings::SemanticRuntimeCredentials::default(),
+        local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+    });
+    let error = match result {
+        Ok(_) => panic!("unsupported local model should fail before provider construction"),
+        Err(error) => error,
+    };
+    let EmbeddingError::Validation(failure) = error else {
+        panic!("expected local validation failure for unsupported model");
+    };
+    assert_eq!(failure.field, "model");
+    assert!(failure.message.contains("unsupported-local-model"));
+}

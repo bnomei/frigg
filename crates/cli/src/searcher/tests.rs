@@ -64,6 +64,10 @@ impl MockSemanticQueryEmbeddingExecutor {
         }
     }
 
+    fn success_unpadded(vector: Vec<f32>) -> Self {
+        Self { result: Ok(vector) }
+    }
+
     fn failure(message: &str) -> Self {
         Self {
             result: Err(message.to_owned()),
@@ -138,6 +142,15 @@ fn semantic_runtime_enabled(strict_mode: bool) -> SemanticRuntimeConfig {
         enabled: true,
         provider: Some(SemanticRuntimeProvider::OpenAi),
         model: Some("text-embedding-3-small".to_owned()),
+        strict_mode,
+    }
+}
+
+fn semantic_runtime_enabled_local(strict_mode: bool) -> SemanticRuntimeConfig {
+    SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::Local),
+        model: Some("all-MiniLM-L6-v2".to_owned()),
         strict_mode,
     }
 }

@@ -13,6 +13,9 @@ use rayon::prelude::*;
 use tracing::warn;
 
 use super::*;
+use crate::embeddings::{
+    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
+};
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
 use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord};
@@ -111,11 +114,6 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
         trace_id: Option<String>,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>> {
         let model = model.trim().to_owned();
-        let api_key = self
-            .credentials
-            .api_key_for(provider)
-            .map(str::to_owned)
-            .unwrap_or_default();
         Box::pin(async move {
             let request = EmbeddingRequest {
                 model,
@@ -124,29 +122,21 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
                 dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
                 trace_id,
             };
-            let response = match provider {
-                SemanticRuntimeProvider::OpenAi => {
-                    let client = OpenAiEmbeddingProvider::new(api_key);
-                    client.embed(request).await.map_err(|err| {
-                        FriggError::Internal(format!(
-                            "semantic embedding provider call failed: {err}"
-                        ))
-                    })?
-                }
-                SemanticRuntimeProvider::Google => {
-                    let client = GoogleEmbeddingProvider::new(api_key);
-                    client.embed(request).await.map_err(|err| {
-                        FriggError::Internal(format!(
-                            "semantic embedding provider call failed: {err}"
-                        ))
-                    })?
-                }
-                SemanticRuntimeProvider::Local => {
-                    return Err(FriggError::Internal(
-                        "local semantic embedding provider routing is not available yet".to_owned(),
-                    ));
-                }
-            };
+            let client =
+                build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+                    provider,
+                    model: &request.model,
+                    credentials: &self.credentials,
+                    local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+                })
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "semantic embedding provider construction failed: {err}"
+                    ))
+                })?;
+            let response = client.embed(request).await.map_err(|err| {
+                FriggError::Internal(format!("semantic embedding provider call failed: {err}"))
+            })?;
 
             Ok(response
                 .vectors

@@ -1658,6 +1658,149 @@ fn hybrid_ranking_semantic_channel_ignores_excluded_paths_and_non_active_models(
 }
 
 #[test]
+fn hybrid_ranking_semantic_local_provider_uses_local_model_partition_and_short_vector_projection()
+-> FriggResult<()> {
+    let root = temp_workspace_root("hybrid-semantic-local-partition-short-vector");
+    prepare_workspace(
+        &root,
+        &[
+            (
+                "src/local.rs",
+                "pub fn local_semantic_match() { let _ = \"needle\"; }\n",
+            ),
+            (
+                "src/openai.rs",
+                "pub fn openai_semantic_partition() { let _ = \"needle\"; }\n",
+            ),
+        ],
+    )?;
+
+    let mut local = semantic_record(
+        "repo-001",
+        "snapshot-001",
+        "src/local.rs",
+        0,
+        vec![1.0, 0.0],
+    );
+    local.provider = "local".to_owned();
+    local.model = "all-MiniLM-L6-v2".to_owned();
+    local.embedding = vec![1.0, 0.0];
+
+    let mut openai = semantic_record(
+        "repo-001",
+        "snapshot-001",
+        "src/openai.rs",
+        0,
+        vec![1.0, 0.0],
+    );
+    openai.provider = "openai".to_owned();
+    openai.model = "text-embedding-3-small".to_owned();
+
+    seed_semantic_embeddings(&root, "repo-001", "snapshot-001", &[local, openai])?;
+
+    let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;
+    config.semantic_runtime = semantic_runtime_enabled_local(false);
+    let searcher = TextSearcher::new(config);
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "needle local semantic".to_owned(),
+            limit: 10,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(true),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &MockSemanticQueryEmbeddingExecutor::success_unpadded(vec![1.0, 0.0]),
+    )?;
+    let paths = output
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Ok);
+    assert!(paths.contains(&"src/local.rs"));
+    assert!(
+        !output
+            .matches
+            .iter()
+            .any(|entry| entry.document.path == "src/openai.rs" && entry.semantic_score > 0.0),
+        "semantic retrieval must ignore rows outside the active local provider/model partition"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_semantic_local_missing_artifact_degrades_non_strict() -> FriggResult<()> {
+    let (searcher, root) = semantic_hybrid_fixture(
+        "hybrid-semantic-local-missing-non-strict",
+        semantic_runtime_enabled_local(false),
+    )?;
+    let semantic_executor = MockSemanticQueryEmbeddingExecutor::failure(
+        "local_model_missing: run `frigg prepare-semantic-model`",
+    );
+
+    let output = searcher.search_hybrid_with_filters_using_executor(
+        SearchHybridQuery {
+            query: "needle".to_owned(),
+            limit: 10,
+            weights: HybridChannelWeights::default(),
+            semantic: Some(true),
+        },
+        SearchFilters::default(),
+        &SemanticRuntimeCredentials::default(),
+        &semantic_executor,
+    )?;
+
+    assert_eq!(output.note.semantic_status, HybridSemanticStatus::Degraded);
+    assert!(!output.note.semantic_enabled);
+    assert!(
+        output
+            .note
+            .semantic_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("prepare-semantic-model")),
+        "non-strict local missing artifact degradation should include reindex/preparation guidance"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
+fn hybrid_ranking_semantic_local_missing_artifact_fails_strict() -> FriggResult<()> {
+    let (searcher, root) = semantic_hybrid_fixture(
+        "hybrid-semantic-local-missing-strict",
+        semantic_runtime_enabled_local(true),
+    )?;
+    let semantic_executor = MockSemanticQueryEmbeddingExecutor::failure(
+        "local_model_missing: run `frigg prepare-semantic-model`",
+    );
+
+    let error = searcher
+        .search_hybrid_with_filters_using_executor(
+            SearchHybridQuery {
+                query: "needle".to_owned(),
+                limit: 10,
+                weights: HybridChannelWeights::default(),
+                semantic: Some(true),
+            },
+            SearchFilters::default(),
+            &SemanticRuntimeCredentials::default(),
+            &semantic_executor,
+        )
+        .expect_err("strict local semantic failures should abort the hybrid query");
+    let message = error.to_string();
+    assert!(message.contains("semantic_status=strict_failure"));
+    assert!(message.contains("prepare-semantic-model"));
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn hybrid_ranking_semantic_channel_can_be_disabled_per_query_toggle() -> FriggResult<()> {
     let (searcher, root) = semantic_hybrid_fixture(
         "hybrid-semantic-toggle-off",
