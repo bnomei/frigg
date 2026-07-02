@@ -79,6 +79,21 @@ impl HttpExecutor for MockHttpExecutor {
     }
 }
 
+struct MockLocalEmbeddingBackend {
+    embeddings: Vec<Vec<f32>>,
+}
+
+impl local::LocalEmbeddingBackend for MockLocalEmbeddingBackend {
+    fn embed(&mut self, input: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        assert_eq!(
+            input.len(),
+            self.embeddings.len(),
+            "mock local backend should receive the expected input batch"
+        );
+        Ok(self.embeddings.clone())
+    }
+}
+
 fn openai_provider_for_test(
     http: Arc<MockHttpExecutor>,
     sleeper: Arc<MockSleeper>,
@@ -151,6 +166,7 @@ fn provider_trait_helpers_expose_stable_defaults_and_strings() {
     let retry_policy = RetryPolicy::default();
     assert_eq!(EmbeddingProviderKind::OpenAi.as_str(), "openai");
     assert_eq!(EmbeddingProviderKind::Google.as_str(), "google");
+    assert_eq!(EmbeddingProviderKind::Local.as_str(), "local");
     assert_eq!(EmbeddingProviderKind::VectorStore.as_str(), "vector_store");
     assert_eq!(EmbeddingPurpose::default(), EmbeddingPurpose::Document);
     assert_eq!(
@@ -1026,4 +1042,236 @@ fn provider_trait_sqlite_vec_readiness_propagates_storage_failures() {
     }
 
     cleanup_db(&db_path);
+}
+
+#[tokio::test]
+async fn local_embedding_provider_preserves_order_indices_and_selected_model() {
+    let provider = LocalEmbeddingProvider::with_backend_for_test(
+        local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
+        local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+        Box::new(MockLocalEmbeddingBackend {
+            embeddings: vec![vec![0.1, 0.2, 0.3], vec![0.4, 0.5, 0.6]],
+        }),
+    );
+    let request = EmbeddingRequest {
+        model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+        input: vec!["alpha".to_owned(), "beta".to_owned()],
+        purpose: EmbeddingPurpose::Document,
+        dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
+        trace_id: Some("trace-local-success".to_owned()),
+    };
+
+    let response = provider
+        .embed(request)
+        .await
+        .expect("mocked local provider should return embeddings");
+
+    assert_eq!(provider.kind(), EmbeddingProviderKind::Local);
+    assert_eq!(response.provider, EmbeddingProviderKind::Local);
+    assert_eq!(response.model, local_model::DEFAULT_LOCAL_EMBEDDING_MODEL);
+    assert_eq!(response.trace_id.as_deref(), Some("trace-local-success"));
+    assert_eq!(response.usage, None);
+    assert_eq!(response.vectors.len(), 2);
+    assert_eq!(response.vectors[0].index, 0);
+    assert_eq!(response.vectors[0].values, vec![0.1, 0.2, 0.3]);
+    assert_eq!(response.vectors[1].index, 1);
+    assert_eq!(response.vectors[1].values, vec![0.4, 0.5, 0.6]);
+    assert_eq!(
+        provider.limits(),
+        EmbeddingProviderLimits {
+            max_inputs_per_request: Some(256),
+            max_input_chars: None,
+            max_dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
+        }
+    );
+}
+
+#[tokio::test]
+async fn local_embedding_provider_preserves_supported_alias_model_identity() {
+    let selected_alias = "AllMiniLML6V2";
+    let provider = LocalEmbeddingProvider::with_backend_for_test(
+        selected_alias,
+        local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+        Box::new(MockLocalEmbeddingBackend {
+            embeddings: vec![vec![0.1, 0.2, 0.3]],
+        }),
+    );
+    let request = EmbeddingRequest {
+        model: selected_alias.to_owned(),
+        input: vec!["alpha".to_owned()],
+        purpose: EmbeddingPurpose::Query,
+        dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
+        trace_id: Some("trace-local-alias".to_owned()),
+    };
+
+    let response = provider
+        .embed(request)
+        .await
+        .expect("supported local alias should be accepted by provider validation");
+
+    assert_eq!(response.provider, EmbeddingProviderKind::Local);
+    assert_eq!(response.model, selected_alias);
+    assert_eq!(response.vectors[0].index, 0);
+    assert_eq!(response.vectors[0].values, vec![0.1, 0.2, 0.3]);
+}
+
+#[tokio::test]
+async fn local_embedding_provider_rejects_incoherent_dimension_requests() {
+    let provider = LocalEmbeddingProvider::with_backend_for_test(
+        local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
+        local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+        Box::new(MockLocalEmbeddingBackend {
+            embeddings: vec![vec![0.1, 0.2, 0.3]],
+        }),
+    );
+    let request = EmbeddingRequest {
+        model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+        input: vec!["alpha".to_owned()],
+        purpose: EmbeddingPurpose::Query,
+        dimensions: Some(128),
+        trace_id: Some("trace-local-dimensions".to_owned()),
+    };
+
+    let error = provider
+        .embed(request)
+        .await
+        .expect_err("local provider cannot shrink fixed model output dimensions");
+
+    let EmbeddingError::Validation(failure) = error else {
+        panic!("expected validation error");
+    };
+    assert_eq!(failure.field, "dimensions");
+    assert!(failure.message.contains("outputs 384 dimensions"));
+}
+
+#[tokio::test]
+async fn local_embedding_provider_rejects_empty_and_non_finite_vectors() {
+    let provider = LocalEmbeddingProvider::with_backend_for_test(
+        local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
+        local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+        Box::new(MockLocalEmbeddingBackend {
+            embeddings: vec![vec![], vec![0.1]],
+        }),
+    );
+    let request = EmbeddingRequest {
+        model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+        input: vec!["alpha".to_owned(), "beta".to_owned()],
+        purpose: EmbeddingPurpose::Document,
+        dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
+        trace_id: Some("trace-local-invalid-vector".to_owned()),
+    };
+
+    let error = provider
+        .embed(request)
+        .await
+        .expect_err("empty local vectors should be rejected");
+
+    let EmbeddingError::Provider(failure) = error else {
+        panic!("expected provider error");
+    };
+    assert_eq!(failure.provider, EmbeddingProviderKind::Local);
+    assert_eq!(failure.code.as_deref(), Some("invalid_response"));
+    assert!(failure.message.contains("vector 0 was empty"));
+    assert_eq!(
+        failure.trace_id.as_deref(),
+        Some("trace-local-invalid-vector")
+    );
+
+    let provider = LocalEmbeddingProvider::with_backend_for_test(
+        local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
+        local_model::DEFAULT_LOCAL_MODEL_ALIAS.dimensions,
+        Box::new(MockLocalEmbeddingBackend {
+            embeddings: vec![vec![f32::NAN]],
+        }),
+    );
+    let request = EmbeddingRequest {
+        model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+        input: vec!["alpha".to_owned()],
+        purpose: EmbeddingPurpose::Document,
+        dimensions: Some(DEFAULT_VECTOR_DIMENSIONS),
+        trace_id: Some("trace-local-non-finite-vector".to_owned()),
+    };
+
+    let error = provider
+        .embed(request)
+        .await
+        .expect_err("non-finite local vectors should be rejected");
+
+    let EmbeddingError::Provider(failure) = error else {
+        panic!("expected provider error");
+    };
+    assert_eq!(failure.provider, EmbeddingProviderKind::Local);
+    assert_eq!(failure.code.as_deref(), Some("invalid_response"));
+    assert!(failure.message.contains("vector 0 contained non-finite"));
+    assert_eq!(
+        failure.trace_id.as_deref(),
+        Some("trace-local-non-finite-vector")
+    );
+}
+
+#[test]
+fn local_embedding_provider_rejects_hf_home_cache_override_before_fastembed_load() {
+    let artifact = local_model::LocalModelArtifact {
+        semantic_model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+        cache_root: PathBuf::from("/tmp/frigg-models"),
+        cache_key: "local--all-minilm-l6-v2--qdrant-all-minilm-l6-v2-onnx".to_owned(),
+        repository: "Qdrant/all-MiniLM-L6-v2-onnx".to_owned(),
+        repository_cache_dir: PathBuf::from(
+            "/tmp/frigg-models/models--Qdrant--all-MiniLM-L6-v2-onnx",
+        ),
+        model_file: "model.onnx".to_owned(),
+        required_files: vec!["model.onnx".to_owned()],
+    };
+
+    let error = local::reject_hf_home_override_for_provider(
+        &artifact,
+        Some(PathBuf::from("/tmp/external-hf-home")),
+    )
+    .expect_err("HF_HOME must not override Frigg's verified cache during provider construction");
+
+    let EmbeddingError::Provider(failure) = error else {
+        panic!("expected provider error");
+    };
+    assert_eq!(failure.provider, EmbeddingProviderKind::Local);
+    assert_eq!(failure.retryability, Retryability::NonRetryable);
+    assert_eq!(failure.code.as_deref(), Some("local_model_cache_override"));
+    assert!(failure.message.contains("HF_HOME is set"));
+    assert!(failure.message.contains("/tmp/external-hf-home"));
+    assert!(failure.message.contains("/tmp/frigg-models"));
+}
+
+#[test]
+fn local_embedding_missing_and_corrupt_artifacts_map_to_provider_errors() {
+    let missing =
+        local::local_model_error_to_embedding_error(local_model::LocalModelError::Missing {
+            model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+            cache_root: PathBuf::from("/tmp/frigg-models"),
+        });
+    let corrupt =
+        local::local_model_error_to_embedding_error(local_model::LocalModelError::Corrupt {
+            model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
+            cache_root: PathBuf::from("/tmp/frigg-models"),
+            message: "no complete Hugging Face snapshot contains all required model files"
+                .to_owned(),
+        });
+
+    let EmbeddingError::Provider(missing_failure) = missing else {
+        panic!("missing artifacts should map to provider failure");
+    };
+    assert_eq!(missing_failure.provider, EmbeddingProviderKind::Local);
+    assert_eq!(missing_failure.retryability, Retryability::NonRetryable);
+    assert_eq!(missing_failure.code.as_deref(), Some("local_model_missing"));
+    assert!(missing_failure.message.contains("prepare-semantic-model"));
+
+    let EmbeddingError::Provider(corrupt_failure) = corrupt else {
+        panic!("corrupt artifacts should map to provider failure");
+    };
+    assert_eq!(corrupt_failure.provider, EmbeddingProviderKind::Local);
+    assert_eq!(corrupt_failure.retryability, Retryability::NonRetryable);
+    assert_eq!(corrupt_failure.code.as_deref(), Some("local_model_corrupt"));
+    assert!(
+        corrupt_failure
+            .message
+            .contains("no complete Hugging Face snapshot")
+    );
 }

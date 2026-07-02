@@ -17,6 +17,7 @@ pub type EmbeddingResult<T> = Result<T, EmbeddingError>;
 pub enum EmbeddingProviderKind {
     OpenAi,
     Google,
+    Local,
     VectorStore,
 }
 
@@ -25,6 +26,7 @@ impl EmbeddingProviderKind {
         match self {
             Self::OpenAi => "openai",
             Self::Google => "google",
+            Self::Local => "local",
             Self::VectorStore => "vector_store",
         }
     }
@@ -434,9 +436,11 @@ mod transport;
 use transport::*;
 
 mod google;
+mod local;
 pub mod local_model;
 mod openai;
 pub use google::GoogleEmbeddingProvider;
+pub use local::LocalEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;
 
 #[cfg(test)]

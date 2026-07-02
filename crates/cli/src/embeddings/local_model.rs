@@ -349,7 +349,7 @@ pub fn prepare_local_semantic_model(
     }
 }
 
-fn resolve_model_alias(semantic_model: &str) -> LocalModelResult<&'static LocalModelAlias> {
+pub fn resolve_model_alias(semantic_model: &str) -> LocalModelResult<&'static LocalModelAlias> {
     let normalized = semantic_model.trim();
     if normalized.eq_ignore_ascii_case(DEFAULT_LOCAL_EMBEDDING_MODEL)
         || normalized.eq_ignore_ascii_case("AllMiniLML6V2")
