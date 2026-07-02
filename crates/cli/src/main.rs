@@ -77,9 +77,16 @@ fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'stati
     }
 }
 
-fn init_tracing(default_filter: &str) {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
+fn tracing_env_override_allowed(cli: &Cli, transport: RuntimeTransportKind) -> bool {
+    !cli.quiet && !(cli.command.is_none() && transport == RuntimeTransportKind::Stdio)
+}
+
+fn init_tracing(default_filter: &str, allow_env_override: bool) {
+    let filter = if allow_env_override {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter))
+    } else {
+        EnvFilter::new(default_filter)
+    };
     // Side effect: MCP stdio transport requires stdout for protocol frames only.
     let _ = fmt()
         .with_env_filter(filter)
@@ -653,6 +660,45 @@ mod tests {
             default_tracing_filter(&cli, RuntimeTransportKind::LoopbackHttp),
             "error"
         );
+    }
+
+    #[test]
+    fn quiet_flag_disables_rust_log_override() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Reindex {
+            changed: false,
+            prepare_semantic_model: false,
+        });
+        cli.quiet = true;
+
+        assert!(!tracing_env_override_allowed(
+            &cli,
+            RuntimeTransportKind::Stdio
+        ));
+    }
+
+    #[test]
+    fn stdio_server_disables_rust_log_override_for_protocol_safety() {
+        let cli = base_cli();
+
+        assert!(!tracing_env_override_allowed(
+            &cli,
+            RuntimeTransportKind::Stdio
+        ));
+    }
+
+    #[test]
+    fn non_quiet_utility_commands_keep_rust_log_override() {
+        let mut cli = base_cli();
+        cli.command = Some(Command::Reindex {
+            changed: false,
+            prepare_semantic_model: false,
+        });
+
+        assert!(tracing_env_override_allowed(
+            &cli,
+            RuntimeTransportKind::Stdio
+        ));
     }
 
     #[test]

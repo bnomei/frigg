@@ -49,7 +49,10 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         .as_ref()
         .map(HttpRuntimeConfig::transport_kind)
         .unwrap_or(RuntimeTransportKind::Stdio);
-    init_tracing(default_tracing_filter(&cli, transport_kind));
+    init_tracing(
+        default_tracing_filter(&cli, transport_kind),
+        crate::tracing_env_override_allowed(&cli, transport_kind),
+    );
     startup_trace(startup_trace_enabled, "async_main: tracing initialized");
 
     if let Some(command) = cli.command.clone() {
