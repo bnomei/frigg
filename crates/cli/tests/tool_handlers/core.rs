@@ -14,6 +14,7 @@ async fn core_read_file_returns_typed_not_found_error() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -40,6 +41,7 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             line_start: None,
             line_end: None,
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadFileResponse>)
@@ -59,6 +61,7 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             line_start: None,
             line_end: None,
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadFileResponse>)
@@ -83,6 +86,7 @@ async fn core_read_file_supports_line_range_slicing() {
             line_start: Some(2),
             line_end: Some(2),
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadFileResponse>)
@@ -106,6 +110,7 @@ async fn core_read_file_defaults_to_text_first_output() {
             line_start: Some(2),
             line_end: Some(2),
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("default read_file should succeed");
@@ -158,6 +163,168 @@ async fn core_read_file_defaults_to_text_first_output() {
 }
 
 #[tokio::test]
+async fn core_read_surfaces_include_context_efficiency_only_when_requested() {
+    let server = server_for_fixture().await;
+    let repository_id = public_repository_id(&server).await;
+
+    let default_read = server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            max_bytes: Some(128),
+            line_start: Some(2),
+            line_end: Some(2),
+            presentation_mode: None,
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect("default read_file should succeed");
+    assert!(
+        default_read
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("context_efficiency"))
+            .is_none(),
+        "default read_file should omit context-efficiency metadata"
+    );
+
+    let requested_read = server
+        .read_file(Parameters(ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some("repo-001".to_owned()),
+            max_bytes: Some(128),
+            line_start: Some(2),
+            line_end: Some(2),
+            presentation_mode: None,
+            include_context_efficiency: Some(true),
+        }))
+        .await
+        .expect("context-efficiency read_file should succeed");
+    assert_eq!(
+        tool_result_text(&requested_read),
+        tool_result_text(&default_read),
+        "context-efficiency metadata must not change the text body"
+    );
+    assert_eq!(
+        requested_read
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("context_efficiency"))
+            .and_then(|value| value.get("returned_unique_paths"))
+            .and_then(|value| value.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        requested_read
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("context_efficiency"))
+            .and_then(|value| value.get("returned_source_bytes_estimate"))
+            .and_then(|value| value.as_u64()),
+        requested_read
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("bytes"))
+            .and_then(|value| value.as_u64())
+    );
+
+    let search = server
+        .search_text(Parameters(SearchTextParams {
+            query: "hello from fixture".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text should succeed")
+        .0;
+    let read_match: ReadMatchResponse = structured_tool_result(
+        server
+            .read_match(Parameters(ReadMatchParams {
+                result_handle: search
+                    .result_handle
+                    .expect("search_text should return result handle"),
+                match_id: search.matches[0]
+                    .match_id
+                    .clone()
+                    .expect("search_text match should carry match id"),
+                before: None,
+                after: None,
+                presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: Some(true),
+            }))
+            .await
+            .expect("context-efficiency read_match should succeed"),
+    );
+    let read_match_context = read_match
+        .context_efficiency
+        .expect("read_match should include context-efficiency metadata");
+    assert_eq!(read_match_context.returned_unique_paths, Some(1));
+    assert_eq!(
+        read_match_context.returned_source_bytes_estimate,
+        Some(read_match.bytes.try_into().unwrap())
+    );
+
+    let explore_false: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some(repository_id.clone()),
+                operation: ExploreOperation::Probe,
+                query: Some("hello".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: None,
+                context_lines: Some(1),
+                max_matches: Some(5),
+                resume_from: None,
+                presentation_mode: None,
+                include_context_efficiency: Some(false),
+            }))
+            .await
+            .expect("explicit-false context-efficiency explore should succeed"),
+    );
+    assert!(
+        explore_false.metadata.context_efficiency.is_none(),
+        "explicit false explore should omit context-efficiency metadata"
+    );
+
+    let explore: ExploreResponse = structured_tool_result(
+        server
+            .explore(Parameters(ExploreParams {
+                path: "src/lib.rs".to_owned(),
+                repository_id: Some(repository_id),
+                operation: ExploreOperation::Probe,
+                query: Some("hello".to_owned()),
+                pattern_type: Some(SearchPatternType::Literal),
+                anchor: None,
+                context_lines: Some(1),
+                max_matches: Some(5),
+                resume_from: None,
+                presentation_mode: None,
+                include_context_efficiency: Some(true),
+            }))
+            .await
+            .expect("context-efficiency explore should succeed"),
+    );
+    let explore_context = explore
+        .metadata
+        .context_efficiency
+        .expect("explore should include context-efficiency metadata");
+    let returned_window_bytes = explore
+        .matches
+        .iter()
+        .map(|matched| u64::try_from(matched.window.bytes).unwrap())
+        .sum::<u64>();
+    assert_eq!(explore_context.returned_unique_paths, Some(1));
+    assert_eq!(
+        explore_context.returned_source_bytes_estimate,
+        Some(returned_window_bytes)
+    );
+}
+
+#[tokio::test]
 async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
     let workspace_root = temp_workspace_root("read-file-line-range-max-bytes");
     let src_root = workspace_root.join("src");
@@ -177,6 +344,7 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
             line_start: Some(2),
             line_end: Some(2),
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadFileResponse>)
@@ -207,6 +375,7 @@ async fn core_read_file_line_range_rejects_file_exceeding_max_file_bytes_before_
             line_start: Some(2),
             line_end: Some(2),
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -248,6 +417,7 @@ async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
             line_start: Some(2),
             line_end: Some(2),
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadFileResponse>)
@@ -269,6 +439,7 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
             line_start: Some(3),
             line_end: Some(2),
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -364,6 +535,7 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
             before: None,
             after: None,
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .map(structured_tool_result::<ReadMatchResponse>)
@@ -409,6 +581,7 @@ async fn core_read_match_defaults_to_text_first_output() {
             before: None,
             after: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("default read_match should succeed");
@@ -1376,6 +1549,7 @@ async fn core_read_file_enforces_effective_max_bytes_clamp() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -1435,6 +1609,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
         max_matches: Some(2),
         resume_from: None,
         presentation_mode: None,
+        include_context_efficiency: None,
     };
 
     let first: ExploreResponse = structured_tool_result(
@@ -1480,6 +1655,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 max_matches: Some(2),
                 resume_from: first.resume_from.clone(),
                 presentation_mode: None,
+                include_context_efficiency: None,
             }))
             .await
             .expect("explore probe resume should succeed"),
@@ -1503,6 +1679,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 max_matches: None,
                 resume_from: None,
                 presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: None,
             }))
             .await
             .expect("explore zoom should succeed"),
@@ -1529,6 +1706,7 @@ async fn extended_explore_probe_zoom_and_refine_are_deterministic() {
                 max_matches: Some(5),
                 resume_from: None,
                 presentation_mode: None,
+                include_context_efficiency: None,
             }))
             .await
             .expect("explore refine should succeed"),
@@ -1572,6 +1750,7 @@ async fn extended_explore_zoom_defaults_to_text_first_output() {
             max_matches: None,
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("default explore zoom should succeed");
@@ -1637,6 +1816,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             max_matches: None,
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("probe without query should fail");
@@ -1656,6 +1836,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             max_matches: None,
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("zoom with query should fail");
@@ -1680,6 +1861,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             max_matches: Some(1),
             resume_from: Some(ExploreCursor { line: 2, column: 1 }),
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("refine with resume_from outside scan scope should fail");
@@ -1702,6 +1884,7 @@ async fn extended_explore_rejects_invalid_mode_payloads() {
             max_matches: Some(1),
             resume_from: None,
             presentation_mode: Some(ReadPresentationMode::Text),
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("probe text mode should fail");

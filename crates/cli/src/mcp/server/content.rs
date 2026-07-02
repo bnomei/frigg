@@ -2,6 +2,7 @@
 //! file-content window reuse.
 
 use super::*;
+use crate::mcp::types::ContextEfficiencyMetadata;
 use serde::Serialize;
 
 #[derive(Clone)]
@@ -154,12 +155,28 @@ impl FriggMcpServer {
                     let pre_read_bytes = pre_read_bytes.unwrap_or_else(|| snapshot.raw_bytes_len());
                     if !has_line_range {
                         let content = snapshot.read_file_content();
-                        return Ok(ReadFileResponse {
+                        let mut response = ReadFileResponse {
                             repository_id,
                             path: display_path,
                             bytes: pre_read_bytes,
                             content,
-                        });
+                            context_efficiency: None,
+                        };
+                        if crate::context_efficiency::need_context_efficiency(
+                            params_for_blocking.include_context_efficiency,
+                        ) {
+                            let context_efficiency = server
+                                .read_surface_context_efficiency_metadata(
+                                    &response.repository_id,
+                                    &response.path,
+                                    response.bytes,
+                                    None,
+                                )?;
+                            if params_for_blocking.include_context_efficiency == Some(true) {
+                                response.context_efficiency = Some(context_efficiency);
+                            }
+                        }
+                        return Ok(response);
                     }
 
                     let line_start = params_for_blocking.line_start.unwrap_or(1);
@@ -197,12 +214,27 @@ impl FriggMcpServer {
                         ));
                     }
 
-                    Ok(ReadFileResponse {
+                    let mut response = ReadFileResponse {
                         repository_id,
                         path: display_path,
                         bytes: sliced_bytes,
                         content: sliced_content,
-                    })
+                        context_efficiency: None,
+                    };
+                    if crate::context_efficiency::need_context_efficiency(
+                        params_for_blocking.include_context_efficiency,
+                    ) {
+                        let context_efficiency = server.read_surface_context_efficiency_metadata(
+                            &response.repository_id,
+                            &response.path,
+                            response.bytes,
+                            None,
+                        )?;
+                        if params_for_blocking.include_context_efficiency == Some(true) {
+                            response.context_efficiency = Some(context_efficiency);
+                        }
+                    }
+                    Ok(response)
                 })();
                 let repository_ids = resolved_repository_id
                     .clone()
@@ -282,6 +314,7 @@ impl FriggMcpServer {
             line_start: Some(line_start),
             line_end: Some(line_end),
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: params.include_context_efficiency,
         };
         let read = self
             .read_file_impl_with_provenance(
@@ -298,6 +331,7 @@ impl FriggMcpServer {
             line_end,
             bytes: read.bytes,
             content: read.content,
+            context_efficiency: read.context_efficiency,
         })
     }
 
@@ -540,6 +574,7 @@ impl FriggMcpServer {
                         line_start: None,
                         line_end: None,
                         presentation_mode: Some(ReadPresentationMode::Json),
+                        include_context_efficiency: None,
                     };
                     let (repository_id, path, display_path) =
                         server.resolve_file_path(&read_params)?;
@@ -662,6 +697,29 @@ impl FriggMcpServer {
                     total_matches = scan.total_matches;
                     truncated = scan.truncated;
 
+                    let context_efficiency = if crate::context_efficiency::need_context_efficiency(
+                        params_for_blocking.include_context_efficiency,
+                    ) {
+                        let returned_source_bytes_estimate = if let Some(window) = window.as_ref() {
+                            window.bytes
+                        } else {
+                            matches
+                                .iter()
+                                .map(|matched| matched.window.bytes)
+                                .fold(0usize, usize::saturating_add)
+                        };
+                        let context_efficiency = server.read_surface_context_efficiency_metadata(
+                            &repository_id,
+                            &display_path,
+                            returned_source_bytes_estimate,
+                            Some(scan.total_matches),
+                        )?;
+                        (params_for_blocking.include_context_efficiency == Some(true))
+                            .then_some(context_efficiency)
+                    } else {
+                        None
+                    };
+
                     Ok(ExploreResponse {
                         repository_id,
                         path: display_path,
@@ -679,6 +737,7 @@ impl FriggMcpServer {
                             lossy_utf8: scan.lossy_utf8,
                             effective_context_lines: context_lines,
                             effective_max_matches: max_matches,
+                            context_efficiency,
                         },
                     })
                 })();
@@ -782,6 +841,7 @@ impl FriggMcpServer {
             ReadPresentationMode::Text => {
                 let (line_start, line_end) =
                     Self::read_file_effective_line_window(params, &response.content);
+                let context_efficiency = response.context_efficiency;
                 Ok(Self::text_read_surface_result(
                     &response.repository_id,
                     &response.path,
@@ -789,6 +849,7 @@ impl FriggMcpServer {
                     line_end,
                     response.bytes,
                     response.content,
+                    context_efficiency,
                 ))
             }
         }
@@ -804,6 +865,7 @@ impl FriggMcpServer {
             ReadPresentationMode::Text => {
                 let (line_start, line_end) =
                     Self::effective_line_window(response.line_start, &response.content);
+                let context_efficiency = response.context_efficiency;
                 Ok(Self::text_read_surface_result(
                     &response.repository_id,
                     &response.path,
@@ -811,6 +873,7 @@ impl FriggMcpServer {
                     line_end,
                     response.bytes,
                     response.content,
+                    context_efficiency,
                 ))
             }
         }
@@ -840,9 +903,62 @@ impl FriggMcpServer {
                     window.end_line,
                     window.bytes,
                     window.content,
+                    response.metadata.context_efficiency,
                 ))
             }
         }
+    }
+
+    fn read_surface_context_efficiency_metadata(
+        &self,
+        repository_id: &str,
+        path: &str,
+        returned_source_bytes_estimate: usize,
+        returned_match_count: Option<usize>,
+    ) -> Result<ContextEfficiencyMetadata, ErrorData> {
+        let summary = self
+            .attached_workspaces_for_repository(Some(repository_id))?
+            .into_iter()
+            .find(|workspace| workspace.repository_id == repository_id)
+            .map(|workspace| {
+                Storage::new(&workspace.db_path)
+                    .load_latest_context_efficiency_manifest_summary_for_repository(repository_id)
+                    .map_err(Self::map_frigg_error)
+            })
+            .transpose()?
+            .flatten();
+
+        let indexed_readable_files = summary
+            .as_ref()
+            .map(|summary| summary.indexed_readable_files)
+            .unwrap_or(0);
+        let indexed_readable_bytes = summary
+            .as_ref()
+            .map(|summary| summary.indexed_readable_bytes)
+            .unwrap_or(0);
+        let indexed_min_mtime_ns = summary.as_ref().and_then(|summary| summary.min_mtime_ns);
+        let indexed_max_mtime_ns = summary.as_ref().and_then(|summary| summary.max_mtime_ns);
+        let returned_unique_file_bytes = summary
+            .as_ref()
+            .map(|summary| summary.returned_unique_file_bytes([path]));
+        let returned_source_bytes_estimate =
+            u64::try_from(returned_source_bytes_estimate).unwrap_or(u64::MAX);
+        let denominator = returned_source_bytes_estimate.max(1) as f64;
+
+        Ok(ContextEfficiencyMetadata {
+            indexed_readable_files,
+            indexed_readable_bytes,
+            indexed_min_mtime_ns,
+            indexed_max_mtime_ns,
+            candidate_input_count: None,
+            candidate_output_count: None,
+            returned_match_count,
+            returned_unique_paths: Some(1),
+            returned_unique_file_bytes,
+            returned_source_bytes_estimate: Some(returned_source_bytes_estimate),
+            narrowing_ratio_estimate: Some(indexed_readable_bytes as f64 / denominator),
+            stage_attribution: None,
+        })
     }
 
     fn structured_tool_result<T: Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
@@ -873,17 +989,24 @@ impl FriggMcpServer {
         line_end: usize,
         bytes: usize,
         content: String,
+        context_efficiency: Option<ContextEfficiencyMetadata>,
     ) -> CallToolResult {
         let mut result = CallToolResult::success(vec![Content::text(
             Self::format_text_read_surface(repository_id, path, line_start, line_end, &content),
         )]);
-        result.structured_content = Some(json!({
+        let mut structured_content = json!({
             "repository_id": repository_id,
             "path": path,
             "line_start": line_start,
             "line_end": line_end,
             "bytes": bytes,
-        }));
+        });
+        if let Some(context_efficiency) = context_efficiency
+            && let Some(object) = structured_content.as_object_mut()
+        {
+            object.insert("context_efficiency".to_owned(), json!(context_efficiency));
+        }
+        result.structured_content = Some(structured_content);
         result
     }
 

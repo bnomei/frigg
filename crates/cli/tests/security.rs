@@ -298,6 +298,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await;
     if let Err(error) = &read_result {
@@ -391,6 +392,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
             max_matches: Some(5),
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await;
     if let Err(error) = &explore_result {
@@ -459,6 +461,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
             max_matches: Some(5),
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("explore should reject paths outside workspace roots");
@@ -501,6 +504,7 @@ async fn security_extended_explore_rejects_abusive_regex_patterns() {
             max_matches: Some(5),
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect_err("explore should reject abusive regex patterns");
@@ -547,6 +551,7 @@ async fn security_read_file_rejects_relative_path_traversal_outside_workspace() 
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -593,6 +598,7 @@ async fn security_read_file_rejects_symlink_escape_outside_workspace() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -634,6 +640,7 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -775,6 +782,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
             line_start: None,
             line_end: None,
             presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
         }))
         .await
         .expect("absolute path under second root should resolve")
@@ -821,6 +829,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -835,6 +844,7 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
@@ -880,6 +890,7 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {

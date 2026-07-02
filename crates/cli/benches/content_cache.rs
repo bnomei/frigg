@@ -39,6 +39,7 @@ fn bench_content_cache(c: &mut Criterion) {
                             line_start: Some(1),
                             line_end: Some(8),
                             presentation_mode: Some(ReadPresentationMode::Json),
+                            include_context_efficiency: None,
                         })))
                         .expect("cold read_file benchmark should succeed");
                     let response: ReadFileResponse = structured_tool_result(response);
@@ -61,6 +62,7 @@ fn bench_content_cache(c: &mut Criterion) {
                     line_start: Some(1),
                     line_end: Some(8),
                     presentation_mode: Some(ReadPresentationMode::Json),
+                    include_context_efficiency: None,
                 })))
                 .expect("hot read_file benchmark should succeed");
             let response: ReadFileResponse = structured_tool_result(response);
@@ -83,6 +85,7 @@ fn bench_content_cache(c: &mut Criterion) {
                     max_matches: Some(8),
                     resume_from: None,
                     presentation_mode: Some(ReadPresentationMode::Json),
+                    include_context_efficiency: None,
                 })))
                 .expect("hot explore benchmark should succeed");
             let response: ExploreResponse = structured_tool_result(response);

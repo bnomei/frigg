@@ -4,10 +4,10 @@ use crate::settings::RuntimeProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::ReadPresentationMode;
 use super::repository::{
     RepositorySummary, WorkspacePreciseIngestSummary, WorkspaceResolveMode, WorkspaceStorageSummary,
 };
+use super::{ContextEfficiencyMetadata, ReadPresentationMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -365,6 +365,8 @@ pub struct ReadFileParams {
     pub line_start: Option<usize>,
     pub line_end: Option<usize>,
     pub presentation_mode: Option<ReadPresentationMode>,
+    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    pub include_context_efficiency: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -373,6 +375,8 @@ pub struct ReadFileResponse {
     pub path: String,
     pub bytes: usize,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
 /// Parameters for `read_match` using a prior search or navigation `result_handle`.
@@ -383,6 +387,8 @@ pub struct ReadMatchParams {
     pub before: Option<usize>,
     pub after: Option<usize>,
     pub presentation_mode: Option<ReadPresentationMode>,
+    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    pub include_context_efficiency: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -396,6 +402,8 @@ pub struct ReadMatchResponse {
     pub line_end: usize,
     pub bytes: usize,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -453,4 +461,65 @@ pub struct RuntimeStatusSummary {
     pub recent_tasks: Vec<RuntimeTaskSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_provenance: Vec<RecentProvenanceSummary>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn read_file_params_accept_context_efficiency_opt_in() {
+        let params: ReadFileParams = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "include_context_efficiency": true
+        }))
+        .expect("read_file params should accept include_context_efficiency");
+
+        assert_eq!(params.include_context_efficiency, Some(true));
+    }
+
+    #[test]
+    fn read_match_params_accept_context_efficiency_opt_in() {
+        let params: ReadMatchParams = serde_json::from_value(json!({
+            "result_handle": "result-1",
+            "match_id": "match-0001",
+            "include_context_efficiency": true
+        }))
+        .expect("read_match params should accept include_context_efficiency");
+
+        assert_eq!(params.include_context_efficiency, Some(true));
+    }
+
+    #[test]
+    fn read_file_response_omits_context_efficiency_by_default() {
+        let value = serde_json::to_value(ReadFileResponse {
+            repository_id: "repo-1".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            bytes: 12,
+            content: "hello world\n".to_owned(),
+            context_efficiency: None,
+        })
+        .expect("read_file response should serialize");
+
+        assert!(value.get("context_efficiency").is_none());
+    }
+
+    #[test]
+    fn read_match_response_omits_context_efficiency_by_default() {
+        let value = serde_json::to_value(ReadMatchResponse {
+            repository_id: "repo-1".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            line: 1,
+            column: None,
+            line_start: 1,
+            line_end: 1,
+            bytes: 12,
+            content: "hello world\n".to_owned(),
+            context_efficiency: None,
+        })
+        .expect("read_match response should serialize");
+
+        assert!(value.get("context_efficiency").is_none());
+    }
 }

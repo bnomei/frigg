@@ -283,6 +283,7 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
         line_start: None,
         line_end: None,
         presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+        include_context_efficiency: None,
     };
     let first_read = server
         .read_file_impl(read_params.clone())
@@ -322,6 +323,7 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
             max_matches: Some(4),
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         })
         .await
         .expect("explore should reuse the shared file content cache");
@@ -1409,6 +1411,7 @@ async fn read_match_records_read_match_provenance_not_read_file() {
             before: None,
             after: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         })
         .await
         .expect("read_match should succeed");

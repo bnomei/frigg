@@ -65,11 +65,13 @@ pub struct ExploreMatch {
     pub anchor: ExploreAnchor,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreMetadata {
     pub lossy_utf8: bool,
     pub effective_context_lines: usize,
     pub effective_max_matches: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_efficiency: Option<ContextEfficiencyMetadata>,
 }
 
 /// Parameters for the extended `explore` tool.
@@ -96,9 +98,11 @@ pub struct ExploreParams {
     pub resume_from: Option<ExploreCursor>,
     /// Read-surface presentation mode. Defaults to `text` for `zoom` and `json` for `probe`/`refine`.
     pub presentation_mode: Option<ReadPresentationMode>,
+    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    pub include_context_efficiency: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreResponse {
     pub repository_id: String,
     pub path: String,
@@ -624,5 +628,31 @@ mod tests {
             value["stage_attribution"]["candidate_output_count"],
             json!(3)
         );
+    }
+
+    #[test]
+    fn explore_params_accept_context_efficiency_opt_in() {
+        let params: ExploreParams = serde_json::from_value(json!({
+            "path": "src/lib.rs",
+            "operation": "probe",
+            "query": "needle",
+            "include_context_efficiency": true
+        }))
+        .expect("explore params should accept include_context_efficiency");
+
+        assert_eq!(params.include_context_efficiency, Some(true));
+    }
+
+    #[test]
+    fn explore_metadata_omits_context_efficiency_by_default() {
+        let value = serde_json::to_value(ExploreMetadata {
+            lossy_utf8: false,
+            effective_context_lines: 3,
+            effective_max_matches: 8,
+            context_efficiency: None,
+        })
+        .expect("explore metadata should serialize");
+
+        assert!(value.get("context_efficiency").is_none());
     }
 }

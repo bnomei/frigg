@@ -518,6 +518,7 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
             line_start: None,
             line_end: None,
             presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
         })
         .await;
     assert!(
@@ -537,6 +538,7 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
             line_start: None,
             line_end: None,
             presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
         })
         .await;
     assert!(
@@ -556,6 +558,7 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
             line_start: None,
             line_end: None,
             presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
         })
         .await
         .expect("adopted repo A must remain readable");

@@ -180,6 +180,7 @@ async fn provenance_core_tool_invocations_are_persisted() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("read_file should succeed");
@@ -288,6 +289,7 @@ async fn provenance_persists_for_runtime_repository_id_alias() {
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("read_file should succeed via the runtime repository id alias");
@@ -612,6 +614,7 @@ async fn provenance_extended_explore_invocations_include_scope_metadata() {
             max_matches: Some(1),
             resume_from: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
         .expect("explore should succeed");

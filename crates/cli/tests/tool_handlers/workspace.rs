@@ -643,6 +643,7 @@ async fn workspace_read_file_without_attached_repositories_returns_remediation()
             line_start: None,
             line_end: None,
             presentation_mode: None,
+            include_context_efficiency: None,
         }))
         .await
     {
