@@ -6,9 +6,25 @@
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
-Frigg is a local-first MCP server and CLI for code understanding. It builds a local SQLite repository model under `.frigg/` and gives AI coding clients repository-aware search, bounded source reads, symbol lookup, definitions, references, call navigation, Tree-sitter structural search, optional semantic recall, and optional SCIP-backed precision.
+Frigg is the local code evidence layer for AI coding agents.
 
-Use Frigg when an agent needs source-backed evidence across a codebase instead of repeated broad scans and whole-file reads. Keep shell tools for non-code files, git and filesystem inspection, and small one-off checks where repository-aware follow-up is unnecessary.
+It gives Codex, Claude, Cursor, and other MCP clients fast, source-backed repository search, symbol navigation, structural search, and bounded reads without pushing the whole codebase through every prompt.
+
+Frigg is local-first OSS. It builds a repository model under `.frigg/`, serves it over MCP, and keeps the useful parts plain: a CLI, a local SQLite store, explicit client adoption, cacheable runtime state, and source-backed answers.
+
+## Why Frigg
+
+For individuals, Frigg keeps coding agents grounded in local source instead of broad scans, whole-file dumps, and model-memory guesses. It helps an agent find the right files, read only the source windows it needs, follow symbols, and answer with concrete repository evidence.
+
+For teams, Frigg standardizes how agents inspect a repository. `frigg adopt`, shared MCP config, CI-cacheable `.frigg/` state, local safety boundaries, and repeatable search/navigation tools give every agent session the same evidence layer and vocabulary across large or unfamiliar codebases.
+
+Frigg is the default for code discovery, navigation, exact code search, and bounded source reads. Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository. Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.
+
+## What Frigg is not
+
+Frigg is not an AI pair programmer, hosted code intelligence platform, IDE replacement, Copilot alternative, or generic semantic search product. MCP is the delivery channel, not the category; SQLite, Tree-sitter, semantic recall, and SCIP are implementation proof points, not the reason to adopt Frigg.
+
+The narrow promise is local code evidence for AI agents: repository-aware search, navigation, and bounded reads that make agent work easier to verify.
 
 ## What Frigg provides
 
