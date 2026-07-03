@@ -9,7 +9,10 @@ use crate::storage::StorageSession;
 use tracing::warn;
 
 use super::super::manifest::{file_digest_to_manifest_entry, normalize_repository_relative_path};
-use super::plan::{IndexPlan, ManifestSnapshotPlan, SemanticRefreshMode};
+use super::plan::{
+    IndexPlan, IndexProgressEvent, IndexProgressPhase, IndexProgressStatus, ManifestSnapshotPlan,
+    SemanticRefreshMode,
+};
 use super::semantic::execute_semantic_refresh_plan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +46,63 @@ pub(super) fn execute_index_plan(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
+    on_progress: &mut impl FnMut(IndexProgressEvent),
 ) -> FriggResult<()> {
+    emit_index_execution_progress(
+        on_progress,
+        plan,
+        IndexProgressPhase::PersistManifestSnapshot,
+        IndexProgressStatus::Starting,
+    );
     let manifest_written = execute_manifest_snapshot_phase(storage_session, workspace_root, plan)?;
+    emit_index_execution_progress(
+        on_progress,
+        plan,
+        IndexProgressPhase::PersistManifestSnapshot,
+        if manifest_written {
+            IndexProgressStatus::Ok
+        } else {
+            IndexProgressStatus::Skipped
+        },
+    );
+
+    emit_index_execution_progress(
+        on_progress,
+        plan,
+        IndexProgressPhase::RefreshRetrievalProjections,
+        IndexProgressStatus::Starting,
+    );
     let projections_written =
         execute_retrieval_projection_phase(repository_id, workspace_root, plan, storage_session)?;
+    emit_index_execution_progress(
+        on_progress,
+        plan,
+        IndexProgressPhase::RefreshRetrievalProjections,
+        if projections_written {
+            IndexProgressStatus::Ok
+        } else {
+            IndexProgressStatus::Skipped
+        },
+    );
+
+    if matches!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::Disabled | SemanticRefreshMode::ReuseExisting
+    ) {
+        emit_index_execution_progress(
+            on_progress,
+            plan,
+            IndexProgressPhase::SemanticRefresh,
+            IndexProgressStatus::Skipped,
+        );
+    } else {
+        emit_index_execution_progress(
+            on_progress,
+            plan,
+            IndexProgressPhase::SemanticRefresh,
+            IndexProgressStatus::Starting,
+        );
+    }
     let semantics_written = execute_semantic_refresh_phase(
         storage_session,
         repository_id,
@@ -56,17 +112,88 @@ pub(super) fn execute_index_plan(
         credentials,
         executor,
     )?;
-    let pruned_snapshots = execute_retention_phase(storage_session, repository_id, plan)?;
-    if (manifest_written || projections_written || semantics_written || pruned_snapshots > 0)
-        && let Err(err) = storage_session.checkpoint_wal_truncate()
-    {
-        warn!(
-            db_path = %db_path.display(),
-            error = %err,
-            "sqlite wal checkpoint after index run failed"
+    if semantics_written {
+        emit_index_execution_progress(
+            on_progress,
+            plan,
+            IndexProgressPhase::SemanticRefresh,
+            IndexProgressStatus::Ok,
         );
     }
+
+    emit_index_execution_progress(
+        on_progress,
+        plan,
+        IndexProgressPhase::PruneManifestSnapshots,
+        IndexProgressStatus::Starting,
+    );
+    let pruned_snapshots = execute_retention_phase(storage_session, repository_id, plan)?;
+    let retention_status = if pruned_snapshots == 0 {
+        IndexProgressStatus::Skipped
+    } else {
+        IndexProgressStatus::Ok
+    };
+    on_progress(
+        index_execution_progress_event(
+            plan,
+            IndexProgressPhase::PruneManifestSnapshots,
+            retention_status,
+        )
+        .with_pruned_snapshots(pruned_snapshots),
+    );
+    if manifest_written || projections_written || semantics_written || pruned_snapshots > 0 {
+        emit_index_execution_progress(
+            on_progress,
+            plan,
+            IndexProgressPhase::CheckpointWal,
+            IndexProgressStatus::Starting,
+        );
+        match storage_session.checkpoint_wal_truncate() {
+            Ok(()) => emit_index_execution_progress(
+                on_progress,
+                plan,
+                IndexProgressPhase::CheckpointWal,
+                IndexProgressStatus::Ok,
+            ),
+            Err(err) => {
+                warn!(
+                    db_path = %db_path.display(),
+                    error = %err,
+                    "sqlite wal checkpoint after index run failed"
+                );
+                emit_index_execution_progress(
+                    on_progress,
+                    plan,
+                    IndexProgressPhase::CheckpointWal,
+                    IndexProgressStatus::Warning,
+                );
+            }
+        }
+    }
     Ok(())
+}
+
+fn emit_index_execution_progress(
+    on_progress: &mut impl FnMut(IndexProgressEvent),
+    plan: &IndexPlan,
+    phase: IndexProgressPhase,
+    status: IndexProgressStatus,
+) {
+    on_progress(index_execution_progress_event(plan, phase, status));
+}
+
+fn index_execution_progress_event(
+    plan: &IndexPlan,
+    phase: IndexProgressPhase,
+    status: IndexProgressStatus,
+) -> IndexProgressEvent {
+    IndexProgressEvent::new(&plan.repository_id, plan.mode, phase, status)
+        .with_snapshot(plan.snapshot_plan.snapshot_id())
+        .with_previous_snapshot(plan.previous_snapshot_id.as_deref())
+        .with_file_counts(plan.files_scanned, plan.files_changed, plan.files_deleted)
+        .with_diagnostics(plan.diagnostics.total_count())
+        .with_records(plan.semantic_refresh.records_manifest.len())
+        .with_path_counts(plan.changed_paths.len(), plan.deleted_paths.len())
 }
 
 fn execute_manifest_snapshot_phase(

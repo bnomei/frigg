@@ -126,6 +126,144 @@ impl SemanticRefreshMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Coarse domain phases emitted while a repository index is actively doing work.
+pub enum IndexProgressPhase {
+    InitializeStorage,
+    LoadManifest,
+    BuildManifest,
+    BuildPlan,
+    PersistManifestSnapshot,
+    RefreshRetrievalProjections,
+    SemanticRefresh,
+    PruneManifestSnapshots,
+    CheckpointWal,
+}
+
+impl IndexProgressPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InitializeStorage => "initialize_storage",
+            Self::LoadManifest => "load_manifest",
+            Self::BuildManifest => "build_manifest",
+            Self::BuildPlan => "build_plan",
+            Self::PersistManifestSnapshot => "persist_manifest_snapshot",
+            Self::RefreshRetrievalProjections => "refresh_retrieval_projections",
+            Self::SemanticRefresh => "semantic_refresh",
+            Self::PruneManifestSnapshots => "prune_manifest_snapshots",
+            Self::CheckpointWal => "checkpoint_wal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Status for an [`IndexProgressEvent`] phase transition.
+pub enum IndexProgressStatus {
+    Starting,
+    Ok,
+    Skipped,
+    Warning,
+}
+
+impl IndexProgressStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Ok => "ok",
+            Self::Skipped => "skipped",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// UI-agnostic progress snapshot for index work; renderers decide how to display it.
+pub struct IndexProgressEvent {
+    pub repository_id: String,
+    pub mode: IndexMode,
+    pub phase: IndexProgressPhase,
+    pub status: IndexProgressStatus,
+    pub snapshot_id: Option<String>,
+    pub previous_snapshot_id: Option<String>,
+    pub files_scanned: Option<usize>,
+    pub files_changed: Option<usize>,
+    pub files_deleted: Option<usize>,
+    pub diagnostics: Option<usize>,
+    pub records: Option<usize>,
+    pub changed_paths: Option<usize>,
+    pub deleted_paths: Option<usize>,
+    pub pruned_snapshots: Option<usize>,
+}
+
+impl IndexProgressEvent {
+    pub fn new(
+        repository_id: impl Into<String>,
+        mode: IndexMode,
+        phase: IndexProgressPhase,
+        status: IndexProgressStatus,
+    ) -> Self {
+        Self {
+            repository_id: repository_id.into(),
+            mode,
+            phase,
+            status,
+            snapshot_id: None,
+            previous_snapshot_id: None,
+            files_scanned: None,
+            files_changed: None,
+            files_deleted: None,
+            diagnostics: None,
+            records: None,
+            changed_paths: None,
+            deleted_paths: None,
+            pruned_snapshots: None,
+        }
+    }
+
+    pub fn with_snapshot(mut self, snapshot_id: impl Into<String>) -> Self {
+        self.snapshot_id = Some(snapshot_id.into());
+        self
+    }
+
+    pub fn with_previous_snapshot(mut self, previous_snapshot_id: Option<&str>) -> Self {
+        self.previous_snapshot_id = previous_snapshot_id.map(ToOwned::to_owned);
+        self
+    }
+
+    pub fn with_file_counts(
+        mut self,
+        files_scanned: usize,
+        files_changed: usize,
+        files_deleted: usize,
+    ) -> Self {
+        self.files_scanned = Some(files_scanned);
+        self.files_changed = Some(files_changed);
+        self.files_deleted = Some(files_deleted);
+        self
+    }
+
+    pub fn with_diagnostics(mut self, diagnostics: usize) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
+    }
+
+    pub fn with_records(mut self, records: usize) -> Self {
+        self.records = Some(records);
+        self
+    }
+
+    pub fn with_path_counts(mut self, changed_paths: usize, deleted_paths: usize) -> Self {
+        self.changed_paths = Some(changed_paths);
+        self.deleted_paths = Some(deleted_paths);
+        self
+    }
+
+    pub fn with_pruned_snapshots(mut self, pruned_snapshots: usize) -> Self {
+        self.pruned_snapshots = Some(pruned_snapshots);
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Concrete semantic work derived from the index plan, including the manifest view and path
 /// delta that embedding refresh should consume.

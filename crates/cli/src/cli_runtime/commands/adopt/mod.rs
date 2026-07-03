@@ -36,6 +36,23 @@ pub(crate) fn run_adopt_command_with_output(
     force: bool,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
+    output.progress_event(
+        OutputLevel::Info,
+        "adopt",
+        "start",
+        &[
+            field("status", "starting"),
+            field("repos", config.repositories().len()),
+            field("requested_targets", requested_targets.len()),
+            field("all", all),
+            field("dry_run", dry_run),
+            field("check", check),
+            field("uninstall", uninstall),
+            field("force", force),
+        ],
+        None,
+    )?;
+
     let plan = build_adopt_plan(config, &requested_targets, all, uninstall, force)?;
     let pending_changes = plan.pending_changes();
     let status = if plan.is_empty() {

@@ -23,8 +23,8 @@ pub(crate) use config_resolution::{
     resolve_command_config, resolve_startup_config, resolve_watch_runtime_config,
 };
 pub(crate) use output::{
-    CliOutput, OutputField, OutputLevel, emit_index_plan_events, error_was_reported, field,
-    format_output_event_line, reported_error, reported_io_error,
+    CliOutput, OutputField, OutputLevel, emit_index_plan_events, emit_index_progress_event,
+    error_was_reported, field, format_output_event_line, reported_error, reported_io_error,
 };
 pub(crate) use startup_gates::{
     run_semantic_runtime_startup_gate_with_output,

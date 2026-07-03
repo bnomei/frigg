@@ -146,6 +146,17 @@ pub(crate) fn run_storage_init_command_with_output(
     let precise_server = FriggMcpServer::new(config.clone());
     let mut total_precise = CliPreciseGenerationCounters::default();
 
+    output.progress_event(
+        OutputLevel::Info,
+        command_name,
+        "start",
+        &[
+            field("status", "starting"),
+            field("repos", repositories.len()),
+        ],
+        None,
+    )?;
+
     for repo in &repositories {
         let root = match config.root_by_repository_id(&repo.repository_id.0) {
             Some(root) => root,
@@ -272,6 +283,23 @@ pub(crate) fn run_storage_maintenance_command_with_output(
     };
     let mut total_repaired = 0usize;
     let mut total_manifest_snapshots_deleted = 0usize;
+    let mut start_fields = vec![
+        field("status", "starting"),
+        field("repos", repositories.len()),
+    ];
+    if let StorageMaintenanceCommand::Prune {
+        keep_manifest_snapshots,
+    } = command
+    {
+        start_fields.push(field("keep_manifest_snapshots", keep_manifest_snapshots));
+    }
+    output.progress_event(
+        OutputLevel::Info,
+        command_name,
+        "start",
+        &start_fields,
+        None,
+    )?;
 
     for repo in &repositories {
         let root = match config.root_by_repository_id(&repo.repository_id.0) {

@@ -14,8 +14,8 @@ use tracing::{info, warn};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::indexer::{
-    IndexMode, IndexPlan, IndexSummary,
-    index_repository_with_runtime_config_and_dirty_paths_and_plan_callback,
+    IndexMode, IndexPlan, IndexProgressEvent, IndexSummary,
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
 };
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
@@ -98,6 +98,11 @@ pub enum WatchEvent {
         repository_id: String,
         refresh_class: &'static str,
         plan: IndexPlan,
+    },
+    IndexProgress {
+        repository_id: String,
+        refresh_class: &'static str,
+        progress: IndexProgressEvent,
     },
     RefreshSucceeded {
         repository_id: String,
@@ -702,8 +707,10 @@ async fn run_supervisor(
                         let mut lexical_only_runtime = semantic_runtime.clone();
                         lexical_only_runtime.enabled = false;
                         let plan_reporter = reporter.clone();
+                        let progress_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
-                        index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+                        let progress_repository_id = repository.repository_id.clone();
+                        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
@@ -722,17 +729,29 @@ async fn run_supervisor(
                                 );
                                 Ok(())
                             },
+                            move |progress| {
+                                report_watch_event(
+                                    &progress_reporter,
+                                    WatchEvent::IndexProgress {
+                                        repository_id: progress_repository_id.clone(),
+                                        refresh_class: class.as_str(),
+                                        progress,
+                                    },
+                                );
+                            },
                         )
                     }
                     WatchRefreshClass::SemanticFollowup => {
                         let plan_reporter = reporter.clone();
+                        let progress_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
+                        let progress_repository_id = repository.repository_id.clone();
                         let index_mode = if recent_paths.is_empty() {
                             IndexMode::Full
                         } else {
                             IndexMode::ChangedOnly
                         };
-                        index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+                        index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
@@ -750,6 +769,16 @@ async fn run_supervisor(
                                     },
                                 );
                                 Ok(())
+                            },
+                            move |progress| {
+                                report_watch_event(
+                                    &progress_reporter,
+                                    WatchEvent::IndexProgress {
+                                        repository_id: progress_repository_id.clone(),
+                                        refresh_class: class.as_str(),
+                                        progress,
+                                    },
+                                );
                             },
                         )
                     }

@@ -205,6 +205,19 @@ pub(crate) fn run_strict_startup_vector_readiness_gate_with_output(
             )));
         }
 
+        output.progress_event(
+            OutputLevel::Ok,
+            "startup",
+            "storage",
+            &[
+                field("status", "ok"),
+                field("repo", &repo.repository_id.0),
+                field("db", db_path.display()),
+                field("backend", status.backend.as_str()),
+                field("extension_version", &status.extension_version),
+            ],
+            Some(&root.display().to_string()),
+        )?;
         info!(
             repository_id = %repo.repository_id.0,
             root = %root.display(),
@@ -278,6 +291,13 @@ fn run_semantic_runtime_startup_gate_with_credentials_and_output(
     local_model_preparer: LocalModelStartupPreparer,
 ) -> io::Result<()> {
     if !config.semantic_runtime.enabled {
+        output.progress_event(
+            OutputLevel::Skip,
+            "startup",
+            "semantic",
+            &[field("status", "disabled")],
+            None,
+        )?;
         return Ok(());
     }
 
@@ -321,6 +341,18 @@ fn run_semantic_runtime_startup_gate_with_credentials_and_output(
     if provider == SemanticRuntimeProvider::Local {
         local_model_preparer(config, model, output, prepare_output)?;
     }
+    output.progress_event(
+        OutputLevel::Ok,
+        "startup",
+        "semantic",
+        &[
+            field("status", "ok"),
+            field("provider", provider.as_str()),
+            field("model", model),
+            field("strict", config.semantic_runtime.strict_mode),
+        ],
+        None,
+    )?;
     info!(
         semantic_provider = %provider.as_str(),
         semantic_model = %model,
@@ -366,6 +398,18 @@ fn ensure_local_semantic_model_prepared(
                 cache_key = %artifact.cache_key,
                 "startup local semantic model already prepared"
             );
+            output.progress_event(
+                OutputLevel::Ok,
+                "startup",
+                "semantic_model",
+                &[
+                    field("status", "ready"),
+                    field("provider", "local"),
+                    field("model", &artifact.semantic_model),
+                    field("cache_key", &artifact.cache_key),
+                ],
+                Some(&artifact.cache_root.display().to_string()),
+            )?;
             Ok(())
         }
         Ok(LocalModelArtifactStatus::Missing(artifact)) => {

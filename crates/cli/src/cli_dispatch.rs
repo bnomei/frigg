@@ -15,10 +15,10 @@ mod hook_command;
 
 use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
-    CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events, field,
-    resolve_command_config, resolve_startup_config, resolve_watch_runtime_config,
-    run_adopt_command_with_output, run_context_summary_command, run_hash_command,
-    run_index_command_with_output, run_semantic_runtime_startup_gate_with_output,
+    CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events,
+    emit_index_progress_event, field, resolve_command_config, resolve_startup_config,
+    resolve_watch_runtime_config, run_adopt_command_with_output, run_context_summary_command,
+    run_hash_command, run_index_command_with_output, run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output,
     run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
@@ -83,6 +83,17 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
             }
             Command::Index { changed } => {
                 let config = resolve_command_config(&cli, command.clone())?;
+                cli_output.progress_event(
+                    OutputLevel::Info,
+                    "index",
+                    "start",
+                    &[
+                        field("status", "starting"),
+                        field("mode", if changed { "changed" } else { "full" }),
+                        field("repos", config.repositories().len()),
+                    ],
+                    None,
+                )?;
                 run_semantic_runtime_startup_gate_with_output(&config, &cli_output)?;
                 run_index_command_with_output(&config, changed, &cli_output)?
             }
@@ -123,6 +134,16 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
 
     let config = resolve_startup_config(&cli, transport_kind)?;
     startup_trace(startup_trace_enabled, "async_main: startup config resolved");
+    cli_output.progress_event(
+        OutputLevel::Info,
+        "serve",
+        "start",
+        &[
+            field("status", "starting"),
+            field("transport", transport_kind.as_str()),
+        ],
+        None,
+    )?;
     run_strict_startup_vector_readiness_gate_with_output(&config, &cli_output)?;
     startup_trace(startup_trace_enabled, "async_main: vector readiness passed");
     if transport_kind == RuntimeTransportKind::Stdio {
@@ -171,7 +192,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
 }
 
 fn watch_event_reporter(output: CliOutput) -> Option<WatchEventReporter> {
-    if !output.is_verbose() {
+    if !output.wants_progress_events() {
         return None;
     }
     Some(Arc::new(move |event| {
@@ -343,6 +364,15 @@ fn emit_watch_event(output: CliOutput, event: WatchEvent) -> std::io::Result<()>
             let extra_fields: [OutputField; 2] =
                 [field("source", "watch"), field("class", refresh_class)];
             emit_index_plan_events(output, &repository_id, &plan, &extra_fields)
+        }
+        WatchEvent::IndexProgress {
+            repository_id: _,
+            refresh_class,
+            progress,
+        } => {
+            let extra_fields: [OutputField; 2] =
+                [field("source", "watch"), field("class", refresh_class)];
+            emit_index_progress_event(output, progress, &extra_fields)
         }
         WatchEvent::RefreshSucceeded {
             repository_id,

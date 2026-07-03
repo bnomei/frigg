@@ -36,10 +36,12 @@ pub(crate) use index::build_index_plan_for_tests;
 #[cfg(test)]
 use index::index_repository_with_semantic_executor;
 pub use index::{
-    IndexDiagnostics, IndexMode, IndexPlan, IndexSummary, ManifestSnapshotPlan, ManifestStore,
-    SemanticRefreshMode, SemanticRefreshPlan, index_repository,
-    index_repository_with_runtime_config, index_repository_with_runtime_config_and_dirty_paths,
+    IndexDiagnostics, IndexMode, IndexPlan, IndexProgressEvent, IndexProgressPhase,
+    IndexProgressStatus, IndexSummary, ManifestSnapshotPlan, ManifestStore, SemanticRefreshMode,
+    SemanticRefreshPlan, index_repository, index_repository_with_runtime_config,
+    index_repository_with_runtime_config_and_dirty_paths,
     index_repository_with_runtime_config_and_dirty_paths_and_plan_callback,
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
     index_repository_with_runtime_config_and_plan_callback,
 };
 #[cfg(test)]

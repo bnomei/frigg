@@ -20,7 +20,10 @@ use super::super::{
     SemanticRefreshPlan,
 };
 use super::execution::execute_index_plan;
-use super::plan::{IndexMode, IndexPlan, IndexSummary, build_index_plan};
+use super::plan::{
+    IndexMode, IndexPlan, IndexProgressEvent, IndexProgressPhase, IndexProgressStatus,
+    IndexSummary, build_index_plan,
+};
 use super::store::ManifestStore;
 
 /// Runs the standard repository refresh path using semantic runtime settings resolved from the
@@ -120,6 +123,32 @@ pub fn index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
     dirty_path_hints: &[PathBuf],
     on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
 ) -> FriggResult<IndexSummary> {
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+        repository_id,
+        workspace_root,
+        db_path,
+        mode,
+        semantic_runtime,
+        credentials,
+        dirty_path_hints,
+        on_plan,
+        |_| {},
+    )
+}
+
+/// Runs repository index with dirty-path hints and exposes plan plus fire-and-forget progress.
+#[allow(clippy::too_many_arguments)]
+pub fn index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+    repository_id: &str,
+    workspace_root: &Path,
+    db_path: &Path,
+    mode: IndexMode,
+    semantic_runtime: &SemanticRuntimeConfig,
+    credentials: &SemanticRuntimeCredentials,
+    dirty_path_hints: &[PathBuf],
+    on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+    on_progress: impl FnMut(IndexProgressEvent),
+) -> FriggResult<IndexSummary> {
     let executor = RuntimeSemanticEmbeddingExecutor::new(credentials.clone());
     index_repository_with_semantic_executor_and_dirty_paths(
         repository_id,
@@ -131,6 +160,7 @@ pub fn index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
         dirty_path_hints,
         &executor,
         on_plan,
+        on_progress,
     )
 }
 
@@ -154,6 +184,7 @@ pub(crate) fn index_repository_with_semantic_executor(
         &[],
         executor,
         |_| Ok(()),
+        |_| {},
     )
 }
 
@@ -168,13 +199,33 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     dirty_path_hints: &[PathBuf],
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     on_plan: impl FnOnce(&IndexPlan) -> FriggResult<()>,
+    mut on_progress: impl FnMut(IndexProgressEvent),
 ) -> FriggResult<IndexSummary> {
     let started_at = Instant::now();
     let db_preexisted = db_path.exists();
+    on_progress(IndexProgressEvent::new(
+        repository_id,
+        mode,
+        IndexProgressPhase::InitializeStorage,
+        IndexProgressStatus::Starting,
+    ));
     let manifest_store = ManifestStore::new(db_path);
     manifest_store.initialize_for_index(semantic_runtime.enabled)?;
     let storage = Storage::new(db_path);
     let mut storage_session = storage.open_session()?;
+    on_progress(IndexProgressEvent::new(
+        repository_id,
+        mode,
+        IndexProgressPhase::InitializeStorage,
+        IndexProgressStatus::Ok,
+    ));
+
+    on_progress(IndexProgressEvent::new(
+        repository_id,
+        mode,
+        IndexProgressPhase::LoadManifest,
+        IndexProgressStatus::Starting,
+    ));
     let previous_manifest = if mode == IndexMode::Full && !db_preexisted {
         None
     } else {
@@ -197,8 +248,24 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         .as_ref()
         .map(|manifest| manifest.entries.as_slice())
         .unwrap_or(&[]);
+    on_progress(
+        IndexProgressEvent::new(
+            repository_id,
+            mode,
+            IndexProgressPhase::LoadManifest,
+            IndexProgressStatus::Ok,
+        )
+        .with_previous_snapshot(previous_snapshot_id.as_deref())
+        .with_file_counts(previous_entries.len(), 0, 0),
+    );
 
     let manifest_builder = ManifestBuilder::default();
+    on_progress(IndexProgressEvent::new(
+        repository_id,
+        mode,
+        IndexProgressPhase::BuildManifest,
+        IndexProgressStatus::Starting,
+    ));
     let manifest_output = match mode {
         IndexMode::Full => manifest_builder.build_with_diagnostics(workspace_root)?,
         IndexMode::ChangedOnly if previous_manifest.is_some() => manifest_builder
@@ -213,6 +280,22 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     let diagnostics = IndexDiagnostics {
         entries: manifest_output.diagnostics,
     };
+    on_progress(
+        IndexProgressEvent::new(
+            repository_id,
+            mode,
+            IndexProgressPhase::BuildManifest,
+            IndexProgressStatus::Ok,
+        )
+        .with_file_counts(current_manifest.len(), 0, 0)
+        .with_diagnostics(diagnostics.total_count()),
+    );
+    on_progress(IndexProgressEvent::new(
+        repository_id,
+        mode,
+        IndexProgressPhase::BuildPlan,
+        IndexProgressStatus::Starting,
+    ));
     let manifest_diff = if mode == IndexMode::Full && previous_entries.is_empty() {
         ManifestDiff::default()
     } else {
@@ -234,6 +317,20 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         dirty_path_hints,
         semantic_storage,
     )?;
+    on_progress(
+        IndexProgressEvent::new(
+            repository_id,
+            mode,
+            IndexProgressPhase::BuildPlan,
+            IndexProgressStatus::Ok,
+        )
+        .with_snapshot(plan.snapshot_plan.snapshot_id())
+        .with_previous_snapshot(previous_snapshot_id.as_deref())
+        .with_file_counts(plan.files_scanned, plan.files_changed, plan.files_deleted)
+        .with_diagnostics(plan.diagnostics.total_count())
+        .with_records(plan.semantic_refresh.records_manifest.len())
+        .with_path_counts(plan.changed_paths.len(), plan.deleted_paths.len()),
+    );
 
     on_plan(&plan)?;
 
@@ -246,6 +343,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         semantic_runtime,
         credentials,
         executor,
+        &mut on_progress,
     )?;
 
     Ok(IndexSummary {

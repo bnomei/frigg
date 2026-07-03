@@ -7,7 +7,8 @@ use std::error::Error;
 
 use frigg::domain::FriggError;
 use frigg::indexer::{
-    IndexMode, ManifestDiagnosticKind, index_repository_with_runtime_config_and_plan_callback,
+    IndexMode, ManifestDiagnosticKind,
+    index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
 };
 use frigg::mcp::FriggMcpServer;
 use frigg::settings::{FriggConfig, SemanticRuntimeCredentials};
@@ -19,8 +20,8 @@ use super::super::storage_auto_heal::{
 use super::{CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation};
 use crate::cli_runtime::storage_paths::ensure_storage_db_path_for_write;
 use crate::cli_runtime::{
-    CliOutput, OutputLevel, emit_index_plan_events, field, format_output_event_line,
-    report_storage_failure, reported_error,
+    CliOutput, OutputLevel, emit_index_plan_events, emit_index_progress_event, field,
+    format_output_event_line, report_storage_failure, reported_error,
 };
 
 #[cfg(test)]
@@ -122,41 +123,46 @@ pub(crate) fn run_index_command_with_output(
             }
         }
 
-        let summary = match index_repository_with_runtime_config_and_plan_callback(
-            &repo.repository_id.0,
-            root,
-            &db_path,
-            mode,
-            &config.semantic_runtime,
-            &SemanticRuntimeCredentials::from_process_env(),
-            |plan| {
-                emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
-                    .map_err(FriggError::from)
-            },
-        ) {
-            Ok(summary) => summary,
-            Err(err) => {
-                output.error_event(
-                    "index",
-                    "failed",
-                    &[
-                        field("status", "failed"),
-                        field("mode", mode_name),
-                        field("repos", repositories.len()),
-                        field("repo", &repo.repository_id.0),
-                        field("db", db_path.display()),
-                        field("error", &err),
-                    ],
-                    Some(&root.display().to_string()),
-                )?;
-                return Err(reported_error(format!(
-                    "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
-                    repo.repository_id.0,
-                    root.display(),
-                    db_path.display()
-                )));
-            }
-        };
+        let summary =
+            match index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
+                &repo.repository_id.0,
+                root,
+                &db_path,
+                mode,
+                &config.semantic_runtime,
+                &SemanticRuntimeCredentials::from_process_env(),
+                &[],
+                |plan| {
+                    emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
+                        .map_err(FriggError::from)
+                },
+                |event| {
+                    let _ = emit_index_progress_event(*output, event, &[]);
+                },
+            ) {
+                Ok(summary) => summary,
+                Err(err) => {
+                    output.error_event(
+                        "index",
+                        "failed",
+                        &[
+                            field("status", "failed"),
+                            field("mode", mode_name),
+                            field("repos", repositories.len()),
+                            field("repo", &repo.repository_id.0),
+                            field("db", db_path.display()),
+                            field("error", &err),
+                        ],
+                        Some(&root.display().to_string()),
+                    )?;
+                    return Err(reported_error(format!(
+                        "index failed mode={mode_name} repository_id={} root={} db={}: {err}",
+                        repo.repository_id.0,
+                        root.display(),
+                        db_path.display()
+                    )));
+                }
+            };
 
         let storage_sanity = if config.semantic_runtime.enabled {
             verify_storage_with_auto_repair(&storage).map(|_| ())
