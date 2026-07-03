@@ -52,50 +52,7 @@ impl FriggMcpServer {
                         execution_context_for_blocking.repository_hint.clone(),
                         RepositoryResponseCacheFreshnessMode::ManifestOnly,
                     )?;
-                    let scoped_workspaces = scoped_execution_context.scoped_workspaces;
-                    let scoped_repository_ids_for_cache = scoped_workspaces
-                        .iter()
-                        .map(|workspace| workspace.repository_id.clone())
-                        .collect::<Vec<_>>();
                     let cache_freshness = scoped_execution_context.cache_freshness;
-                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                        SearchSymbolResponseCacheKey {
-                            scoped_repository_ids: scoped_repository_ids_for_cache,
-                            freshness_scopes: freshness_scopes.clone(),
-                            query: query.clone(),
-                            path_class: path_class_filter.map(|value| value.as_str().to_owned()),
-                            path_regex: params_for_blocking.path_regex.clone(),
-                            limit,
-                        }
-                    });
-                    if cache_key.is_none() {
-                        server.record_runtime_cache_event(
-                            RuntimeCacheFamily::SearchSymbolResponse,
-                            RuntimeCacheEvent::Bypass,
-                            1,
-                        );
-                    }
-                    if let Some(cache_key) = cache_key.as_ref()
-                        && let Some(cached) = server.cached_search_symbol_response(cache_key)
-                    {
-                        scoped_repository_ids = cached.scoped_repository_ids;
-                        diagnostics_count = cached.diagnostics_count;
-                        manifest_walk_diagnostics_count = cached.manifest_walk_diagnostics_count;
-                        manifest_read_diagnostics_count = cached.manifest_read_diagnostics_count;
-                        symbol_extraction_diagnostics_count =
-                            cached.symbol_extraction_diagnostics_count;
-                        effective_limit = Some(cached.effective_limit);
-                        let mut response = cached.response;
-                        Self::attach_metadata_object_freshness_basis(
-                            &mut response.metadata,
-                            &mut response.note,
-                            &cache_freshness.basis,
-                        );
-                        return Ok(Json(server.present_search_symbol_response(
-                            response,
-                            params_for_blocking.response_mode,
-                        )));
-                    }
 
                     let corpora = server.collect_repository_symbol_corpora(
                         params_for_blocking.repository_id.as_deref(),
@@ -304,18 +261,6 @@ impl FriggMcpServer {
                         metadata,
                         note,
                     };
-                    if let Some(cache_key) = cache_key {
-                        server.cache_search_symbol_response(
-                            cache_key,
-                            &response,
-                            &scoped_repository_ids,
-                            diagnostics_count,
-                            manifest_walk_diagnostics_count,
-                            manifest_read_diagnostics_count,
-                            symbol_extraction_diagnostics_count,
-                            limit,
-                        );
-                    }
                     Ok(Json(server.present_search_symbol_response(
                         response,
                         params_for_blocking.response_mode,

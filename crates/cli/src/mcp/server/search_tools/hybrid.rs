@@ -97,11 +97,6 @@ impl FriggMcpServer {
                     let query_started_at = std::time::Instant::now();
                     let context_efficiency_log_enabled =
                         crate::context_efficiency::context_efficiency_log_enabled();
-                    let need_context_efficiency =
-                        crate::context_efficiency::need_context_efficiency_with_log_state(
-                            params_for_blocking.include_context_efficiency,
-                            context_efficiency_log_enabled,
-                        );
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
@@ -145,48 +140,6 @@ impl FriggMcpServer {
                         weights
                     };
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = (!need_context_efficiency)
-                        .then(|| {
-                            cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                                SearchHybridResponseCacheKey {
-                                    scoped_repository_ids: scoped_repository_ids.clone(),
-                                    freshness_scopes: freshness_scopes.clone(),
-                                    query: query.clone(),
-                                    language: params_for_blocking.language.clone(),
-                                    limit,
-                                    semantic: params_for_blocking.semantic,
-                                    lexical_weight_bits: weights.lexical.to_bits(),
-                                    graph_weight_bits: weights.graph.to_bits(),
-                                    semantic_weight_bits: weights.semantic.to_bits(),
-                                }
-                            })
-                        })
-                        .flatten();
-                    if cache_key.is_none() {
-                        server.record_runtime_cache_event(
-                            RuntimeCacheFamily::SearchHybridResponse,
-                            RuntimeCacheEvent::Bypass,
-                            1,
-                        );
-                    }
-                    if let Some(cache_key) = cache_key.as_ref()
-                        && let Some(cached) = server.cached_search_hybrid_response(cache_key)
-                    {
-                        response_source_refs = cached.source_refs.clone();
-                        response_source_refs
-                            .as_object_mut()
-                            .expect("search_hybrid source refs should be an object")
-                            .insert("freshness_basis".to_owned(), cache_freshness.basis.clone());
-                        let mut response = cached.response;
-                        if let Some(metadata) = response.metadata.as_mut() {
-                            metadata.freshness_basis =
-                                Self::response_freshness_basis_metadata(&cache_freshness.basis);
-                        }
-                        return Ok(Json(server.present_search_hybrid_response(
-                            response,
-                            params_for_blocking.response_mode,
-                        )));
-                    }
 
                     let searcher = server.runtime_text_searcher_with_repository_ids(
                         scoped_config,
@@ -410,13 +363,6 @@ impl FriggMcpServer {
                             match_anchors.clone().unwrap_or_else(|| json!([])),
                         );
                     response_source_refs = response_source_refs_value;
-                    if let Some(cache_key) = cache_key {
-                        server.cache_search_hybrid_response(
-                            cache_key,
-                            &response,
-                            &response_source_refs,
-                        );
-                    }
 
                     Ok(Json(server.present_search_hybrid_response(
                         response,

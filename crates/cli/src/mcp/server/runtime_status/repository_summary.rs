@@ -1,7 +1,6 @@
-//! `RepositorySummary` assembly with short-TTL caching for list and workspace tools.
+//! `RepositorySummary` assembly for list and workspace tools.
 
 use super::*;
-use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;
 
 impl FriggMcpServer {
     pub(in crate::mcp::server) fn workspace_storage_summary(
@@ -85,66 +84,10 @@ impl FriggMcpServer {
         }
     }
 
-    pub(in crate::mcp::server) fn cached_repository_summary(
-        &self,
-        repository_id: &str,
-    ) -> Option<RepositorySummary> {
-        let cache = self
-            .cache_state
-            .repository_summary_cache
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get(repository_id)?;
-        (entry.generated_at.elapsed() <= Self::REPOSITORY_SUMMARY_CACHE_TTL)
-            .then(|| entry.summary.clone())
-    }
-
-    pub(in crate::mcp::server) fn cache_repository_summary(
-        &self,
-        repository_id: &str,
-        summary: &RepositorySummary,
-    ) {
-        let mut cache = self
-            .cache_state
-            .repository_summary_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.insert(
-            repository_id.to_owned(),
-            CachedRepositorySummary {
-                summary: summary.clone(),
-                generated_at: Instant::now(),
-            },
-        );
-        self.trim_runtime_cache_to_budget(
-            RuntimeCacheFamily::RepositorySummary,
-            &mut cache,
-            |_, entry| serialized_value_estimated_bytes(&entry.summary),
-        );
-    }
-
-    pub(in crate::mcp::server) fn invalidate_repository_summary_cache(&self, repository_id: &str) {
-        self.cache_state
-            .repository_summary_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(repository_id);
-    }
-
     pub(in crate::mcp::server) fn repository_summary(
         &self,
         workspace: &AttachedWorkspace,
     ) -> RepositorySummary {
-        let dirty_root = self.workspace_has_dirty_root(workspace);
-        if !dirty_root
-            && let Some(summary) = self.cached_repository_summary(&workspace.repository_id)
-        {
-            return summary;
-        }
-        if dirty_root {
-            self.invalidate_repository_summary_cache(&workspace.repository_id);
-        }
-
         let storage = Self::workspace_storage_summary(workspace);
         let health = self.workspace_index_health_summary(workspace, &storage);
         let session_adopted = self
@@ -168,7 +111,7 @@ impl FriggMcpServer {
             .as_ref()
             .map(|runtime| runtime.lease_status(&workspace.runtime_repository_id))
             .unwrap_or_default();
-        let summary = RepositorySummary {
+        RepositorySummary {
             repository_id: workspace.repository_id.clone(),
             display_name: workspace.display_name.clone(),
             root_path: workspace.root.display().to_string(),
@@ -182,10 +125,6 @@ impl FriggMcpServer {
             },
             storage: Some(storage),
             health: Some(health),
-        };
-        if !dirty_root {
-            self.cache_repository_summary(&workspace.repository_id, &summary);
         }
-        summary
     }
 }

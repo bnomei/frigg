@@ -1,14 +1,11 @@
 //! Runtime cache contracts and shared cache value types for the MCP server.
 //!
-//! The hot-path caches here are process-wide but explicitly budgeted. File content snapshots are
-//! stored once per canonical file/freshness key with a compact normalized text buffer plus line
-//! ranges so repeated reads and explore windows can share the same underlying content.
+//! The hot-path caches here are process-wide but explicitly budgeted.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
 use std::ops::Range;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,9 +18,8 @@ use crate::mcp::explorer::{
     LossyLineSliceError, normalize_lossy_line_bytes, position_is_before_cursor,
 };
 use crate::mcp::types::{
-    ExploreAnchor, ExploreCursor, ExploreLineWindow, FindDeclarationsResponse,
-    GoToDefinitionResponse, RepositorySummary, SearchHybridResponse, SearchSymbolResponse,
-    SearchTextResponse, WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
+    ExploreAnchor, ExploreCursor, ExploreLineWindow, WorkspacePreciseGenerationSummary,
+    WorkspacePreciseGeneratorState,
 };
 
 /// Named runtime cache family governed by budget, freshness, and reuse policy.
@@ -32,39 +28,25 @@ pub(crate) enum RuntimeCacheFamily {
     ValidatedManifestCandidate,
     ProjectionFamily,
     ProjectedGraphContext,
-    SearchTextResponse,
-    SearchHybridResponse,
-    SearchSymbolResponse,
-    GoToDefinitionResponse,
-    FindDeclarationsResponse,
     HeuristicReference,
-    RepositorySummary,
     CompiledSafeRegex,
     SearcherProjectionStore,
     SearcherHybridGraphFileAnalysis,
     SearcherHybridGraphArtifact,
     SearchCandidateUniverse,
-    FileContentWindow,
 }
 
 impl RuntimeCacheFamily {
-    pub(crate) const ALL: [Self; 16] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::ValidatedManifestCandidate,
         Self::ProjectionFamily,
         Self::ProjectedGraphContext,
-        Self::SearchTextResponse,
-        Self::SearchHybridResponse,
-        Self::SearchSymbolResponse,
-        Self::GoToDefinitionResponse,
-        Self::FindDeclarationsResponse,
         Self::HeuristicReference,
-        Self::RepositorySummary,
         Self::CompiledSafeRegex,
         Self::SearcherProjectionStore,
         Self::SearcherHybridGraphFileAnalysis,
         Self::SearcherHybridGraphArtifact,
         Self::SearchCandidateUniverse,
-        Self::FileContentWindow,
     ];
 
     pub(crate) const fn as_str(self) -> &'static str {
@@ -72,19 +54,12 @@ impl RuntimeCacheFamily {
             Self::ValidatedManifestCandidate => "validated_manifest_candidate",
             Self::ProjectionFamily => "projection_family",
             Self::ProjectedGraphContext => "projected_graph_context",
-            Self::SearchTextResponse => "search_text_response",
-            Self::SearchHybridResponse => "search_hybrid_response",
-            Self::SearchSymbolResponse => "search_symbol_response",
-            Self::GoToDefinitionResponse => "go_to_definition_response",
-            Self::FindDeclarationsResponse => "find_declarations_response",
             Self::HeuristicReference => "heuristic_reference",
-            Self::RepositorySummary => "repository_summary",
             Self::CompiledSafeRegex => "compiled_safe_regex",
             Self::SearcherProjectionStore => "searcher_projection_store",
             Self::SearcherHybridGraphFileAnalysis => "searcher_hybrid_graph_file_analysis",
             Self::SearcherHybridGraphArtifact => "searcher_hybrid_graph_artifact",
             Self::SearchCandidateUniverse => "search_candidate_universe",
-            Self::FileContentWindow => "file_content_window",
         }
     }
 }
@@ -100,7 +75,6 @@ pub(crate) enum RuntimeCacheResidency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheReuseClass {
     SnapshotScopedReusable,
-    QueryResultMicroCache,
     ProcessMetadata,
     RequestLocalOnly,
     DeferredUntilReadOnly,
@@ -110,7 +84,6 @@ pub(crate) enum RuntimeCacheReuseClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheFreshnessContract {
     RepositorySnapshot,
-    RepositoryFreshnessScopes,
     RepositoryId,
     ExactInput,
     RequestLocal,
@@ -182,7 +155,6 @@ impl RuntimeCacheTelemetry {
         match event {
             RuntimeCacheEvent::Hit => self.hits += count,
             RuntimeCacheEvent::Miss => self.misses += count,
-            RuntimeCacheEvent::Bypass => self.bypasses += count,
             RuntimeCacheEvent::Insert => self.inserts += count,
             RuntimeCacheEvent::Eviction => self.evictions += count,
             RuntimeCacheEvent::Invalidation => self.invalidations += count,
@@ -195,7 +167,6 @@ impl RuntimeCacheTelemetry {
 pub(crate) enum RuntimeCacheEvent {
     Hit,
     Miss,
-    Bypass,
     Insert,
     Eviction,
     Invalidation,
@@ -254,53 +225,11 @@ const fn runtime_cache_family_policy(family: RuntimeCacheFamily) -> RuntimeCache
             budget: RuntimeCacheBudget::entry_and_byte_bound(64, 16 * 1024 * 1024),
             dirty_root_bypass: true,
         },
-        Family::SearchTextResponse => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::QueryResultMicroCache,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(32, 4 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
-        Family::SearchHybridResponse => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::QueryResultMicroCache,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(32, 8 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
-        Family::SearchSymbolResponse => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::QueryResultMicroCache,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(32, 4 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
-        Family::GoToDefinitionResponse => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::QueryResultMicroCache,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(32, 4 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
-        Family::FindDeclarationsResponse => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::QueryResultMicroCache,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(32, 4 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
         Family::HeuristicReference => RuntimeCacheFamilyPolicy {
             residency: Residency::ProcessWide,
             reuse_class: Reuse::ProcessMetadata,
             freshness_contract: Freshness::RepositoryId,
             budget: RuntimeCacheBudget::entry_and_byte_bound(128, 32 * 1024 * 1024),
-            dirty_root_bypass: true,
-        },
-        Family::RepositorySummary => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::ProcessMetadata,
-            freshness_contract: Freshness::RepositoryId,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(256, 1024 * 1024),
             dirty_root_bypass: true,
         },
         Family::CompiledSafeRegex => RuntimeCacheFamilyPolicy {
@@ -319,13 +248,6 @@ const fn runtime_cache_family_policy(family: RuntimeCacheFamily) -> RuntimeCache
             freshness_contract: Freshness::RequestLocal,
             budget: RuntimeCacheBudget::new(None, None),
             dirty_root_bypass: false,
-        },
-        Family::FileContentWindow => RuntimeCacheFamilyPolicy {
-            residency: Residency::ProcessWide,
-            reuse_class: Reuse::SnapshotScopedReusable,
-            freshness_contract: Freshness::RepositoryFreshnessScopes,
-            budget: RuntimeCacheBudget::entry_and_byte_bound(64, 32 * 1024 * 1024),
-            dirty_root_bypass: true,
         },
     }
 }
@@ -346,7 +268,7 @@ impl RepositoryResponseCacheFreshnessMode {
     }
 }
 
-/// Repository snapshot and semantic inputs that scope one response-cache entry.
+/// Repository snapshot and semantic inputs that scope one response freshness payload.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RepositoryFreshnessCacheScope {
     pub(crate) repository_id: String,
@@ -356,7 +278,7 @@ pub(crate) struct RepositoryFreshnessCacheScope {
     pub(crate) semantic_model: Option<String>,
 }
 
-/// Serialized freshness basis attached to cacheable search and navigation responses.
+/// Serialized freshness basis attached to search and navigation responses.
 #[derive(Debug, Clone)]
 pub(crate) struct RepositoryResponseCacheFreshness {
     pub(crate) scopes: Option<Vec<RepositoryFreshnessCacheScope>>,
@@ -368,13 +290,6 @@ pub(crate) struct RepositoryResponseCacheFreshness {
 pub(crate) struct WorkspaceSemanticRefreshPlan {
     pub(crate) latest_snapshot_id: String,
     pub(crate) reason: &'static str,
-}
-
-/// Process-wide cached `RepositorySummary` for discovery and status tools.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedRepositorySummary {
-    pub(crate) summary: RepositorySummary,
-    pub(crate) generated_at: Instant,
 }
 
 /// Cached precise-generation summary for one workspace generator probe.
@@ -392,11 +307,11 @@ pub(crate) struct RepositoryResponseFreshnessCacheKey {
     pub(crate) mode: &'static str,
 }
 
-/// Cached response-freshness payload with generation timestamp.
+/// Cached response-freshness payload invalidated by repository events.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedRepositoryResponseFreshness {
     pub(crate) freshness: RepositoryResponseCacheFreshness,
-    pub(crate) generated_at: Instant,
+    pub(crate) epoch: u64,
 }
 
 /// Cache key for one precise-generator availability probe.
@@ -414,126 +329,6 @@ pub(crate) struct CachedPreciseGeneratorProbe {
     pub(crate) version: Option<String>,
     pub(crate) reason: Option<String>,
     pub(crate) generated_at: Instant,
-}
-
-/// Cache key for a `search_text` response micro-cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SearchTextResponseCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) query: String,
-    pub(crate) pattern_type: &'static str,
-    pub(crate) path_regex: Option<String>,
-    pub(crate) limit: usize,
-}
-
-/// Cached `search_text` response plus provenance refs for invalidation.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedSearchTextResponse {
-    pub(crate) response: SearchTextResponse,
-    pub(crate) source_refs: Value,
-}
-
-/// Cache key for a `search_hybrid` response micro-cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SearchHybridResponseCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) query: String,
-    pub(crate) language: Option<String>,
-    pub(crate) limit: usize,
-    pub(crate) semantic: Option<bool>,
-    pub(crate) lexical_weight_bits: u32,
-    pub(crate) graph_weight_bits: u32,
-    pub(crate) semantic_weight_bits: u32,
-}
-
-/// Cached `search_hybrid` response plus provenance refs for invalidation.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedSearchHybridResponse {
-    pub(crate) response: SearchHybridResponse,
-    pub(crate) source_refs: Value,
-}
-
-/// Cache key for a `search_symbol` response micro-cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SearchSymbolResponseCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) query: String,
-    pub(crate) path_class: Option<String>,
-    pub(crate) path_regex: Option<String>,
-    pub(crate) limit: usize,
-}
-
-/// Cached `search_symbol` response plus diagnostic context for reuse checks.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedSearchSymbolResponse {
-    pub(crate) response: SearchSymbolResponse,
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) diagnostics_count: usize,
-    pub(crate) manifest_walk_diagnostics_count: usize,
-    pub(crate) manifest_read_diagnostics_count: usize,
-    pub(crate) symbol_extraction_diagnostics_count: usize,
-    pub(crate) effective_limit: usize,
-}
-
-/// Cache key for a `go_to_definition` response micro-cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct GoToDefinitionResponseCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) repository_id: Option<String>,
-    pub(crate) symbol: Option<String>,
-    pub(crate) path: Option<String>,
-    pub(crate) line: Option<usize>,
-    pub(crate) column: Option<usize>,
-    pub(crate) include_follow_up_structural: bool,
-    pub(crate) limit: usize,
-}
-
-/// Cached `go_to_definition` response plus resolution metadata for reuse checks.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedGoToDefinitionResponse {
-    pub(crate) response: GoToDefinitionResponse,
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) selected_symbol_id: Option<String>,
-    pub(crate) selected_precise_symbol: Option<String>,
-    pub(crate) resolution_precision: Option<String>,
-    pub(crate) resolution_source: Option<String>,
-    pub(crate) effective_limit: usize,
-    pub(crate) precise_artifacts_ingested: usize,
-    pub(crate) precise_artifacts_failed: usize,
-    pub(crate) match_count: usize,
-}
-
-/// Cache key for a `find_declarations` response micro-cache entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct FindDeclarationsResponseCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) repository_id: Option<String>,
-    pub(crate) symbol: Option<String>,
-    pub(crate) path: Option<String>,
-    pub(crate) line: Option<usize>,
-    pub(crate) column: Option<usize>,
-    pub(crate) include_follow_up_structural: bool,
-    pub(crate) limit: usize,
-}
-
-/// Cached `find_declarations` response plus resolution metadata for reuse checks.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedFindDeclarationsResponse {
-    pub(crate) response: FindDeclarationsResponse,
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) selected_symbol_id: Option<String>,
-    pub(crate) selected_precise_symbol: Option<String>,
-    pub(crate) resolution_precision: Option<String>,
-    pub(crate) resolution_source: Option<String>,
-    pub(crate) effective_limit: usize,
-    pub(crate) precise_artifacts_ingested: usize,
-    pub(crate) precise_artifacts_failed: usize,
-    pub(crate) match_count: usize,
 }
 
 /// Cache key for heuristic reference evidence built without precise coverage.
@@ -579,16 +374,8 @@ pub(crate) struct SessionResultHandleCache {
     pub(crate) next_id: u64,
 }
 
-/// Cache key for one shared file-content snapshot scoped by repository freshness.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct FileContentWindowCacheKey {
-    pub(crate) scoped_repository_ids: Vec<String>,
-    pub(crate) freshness_scopes: Vec<RepositoryFreshnessCacheScope>,
-    pub(crate) canonical_path: PathBuf,
-}
-
 #[derive(Debug, Clone)]
-/// Cached file snapshot used by both `read_file` and `explore`.
+/// File snapshot used by both `read_file` and `explore`.
 ///
 /// Raw bytes are preserved for exact full-file reads, while a single normalized text buffer plus
 /// per-line ranges supports bounded line windows without allocating one `String` per line.
@@ -598,22 +385,6 @@ pub(crate) struct FileContentSnapshot {
     line_ranges: Arc<Vec<Range<usize>>>,
     line_lossy_utf8: Arc<Vec<bool>>,
     total_lines: usize,
-    estimated_bytes: usize,
-}
-
-/// Cached file-content window entry stored in the runtime cache.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedFileContentWindow {
-    pub(crate) snapshot: Arc<FileContentSnapshot>,
-    pub(crate) estimated_bytes: usize,
-}
-
-#[derive(Debug, Clone, Default)]
-/// Byte-bounded LRU-style cache for file content windows keyed by repository freshness scopes.
-pub(crate) struct FileContentWindowCache {
-    entries: BTreeMap<FileContentWindowCacheKey, CachedFileContentWindow>,
-    insertion_order: VecDeque<FileContentWindowCacheKey>,
-    total_bytes: usize,
 }
 
 impl FileContentSnapshot {
@@ -647,32 +418,17 @@ impl FileContentSnapshot {
         }
 
         let total_lines = line_ranges.len();
-        let estimated_bytes = bytes
-            .len()
-            .saturating_add(normalized_content.len())
-            .saturating_add(
-                line_ranges
-                    .len()
-                    .saturating_mul(std::mem::size_of::<Range<usize>>()),
-            )
-            .saturating_add(line_lossy_utf8.len());
-
         Self {
             raw_bytes: Arc::<[u8]>::from(bytes),
             normalized_content: Arc::<str>::from(normalized_content),
             line_ranges: Arc::new(line_ranges),
             line_lossy_utf8: Arc::new(line_lossy_utf8),
             total_lines,
-            estimated_bytes,
         }
     }
 
     pub(crate) fn raw_bytes_len(&self) -> usize {
         self.raw_bytes.len()
-    }
-
-    pub(crate) fn estimated_bytes(&self) -> usize {
-        self.estimated_bytes
     }
 
     pub(crate) fn read_file_content(&self) -> String {
@@ -846,132 +602,13 @@ impl FileContentSnapshot {
     }
 }
 
-impl FileContentWindowCache {
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub(crate) fn get(
-        &self,
-        cache_key: &FileContentWindowCacheKey,
-    ) -> Option<Arc<FileContentSnapshot>> {
-        self.entries
-            .get(cache_key)
-            .map(|entry| Arc::clone(&entry.snapshot))
-    }
-
-    pub(crate) fn insert(
-        &mut self,
-        cache_key: FileContentWindowCacheKey,
-        snapshot: Arc<FileContentSnapshot>,
-        budget: RuntimeCacheBudget,
-    ) -> (bool, usize) {
-        if budget
-            .max_bytes
-            .is_some_and(|limit| snapshot.estimated_bytes() > limit)
-        {
-            return (false, 0);
-        }
-
-        let estimated_bytes = snapshot.estimated_bytes();
-        let previous = self.entries.remove(&cache_key);
-        if previous.is_some() {
-            self.insertion_order
-                .retain(|candidate| candidate != &cache_key);
-        }
-        self.total_bytes = self
-            .total_bytes
-            .saturating_sub(
-                previous
-                    .as_ref()
-                    .map(|entry| entry.estimated_bytes)
-                    .unwrap_or(0),
-            )
-            .saturating_add(estimated_bytes);
-        self.entries.insert(
-            cache_key.clone(),
-            CachedFileContentWindow {
-                snapshot,
-                estimated_bytes,
-            },
-        );
-        self.insertion_order.push_back(cache_key);
-        let evictions = self.trim_to_budget(budget);
-        (true, evictions)
-    }
-
-    pub(crate) fn retain_repository(&mut self, repository_id: &str) -> usize {
-        let before = self.entries.len();
-        self.entries.retain(|key, _| {
-            !response_cache_scopes_include_repository(
-                repository_id,
-                &key.scoped_repository_ids,
-                &key.freshness_scopes,
-            )
-        });
-        self.insertion_order
-            .retain(|key| self.entries.contains_key(key));
-        self.total_bytes = self
-            .entries
-            .values()
-            .map(|entry| entry.estimated_bytes)
-            .sum();
-        before.saturating_sub(self.entries.len())
-    }
-
-    pub(crate) fn trim_to_budget(&mut self, budget: RuntimeCacheBudget) -> usize {
-        let mut evictions = 0usize;
-        loop {
-            let over_entries = budget
-                .max_entries
-                .is_some_and(|limit| self.entries.len() > limit);
-            let over_bytes = budget
-                .max_bytes
-                .is_some_and(|limit| self.total_bytes > limit);
-            if !(over_entries || over_bytes) {
-                break;
-            }
-            let Some(key) = self.insertion_order.pop_front() else {
-                break;
-            };
-            if let Some(entry) = self.entries.remove(&key) {
-                self.total_bytes = self.total_bytes.saturating_sub(entry.estimated_bytes);
-                evictions = evictions.saturating_add(1);
-            }
-        }
-        evictions
-    }
-}
-
-pub(crate) fn response_cache_scopes_include_repository(
-    repository_id: &str,
-    scoped_repository_ids: &[String],
-    freshness_scopes: &[RepositoryFreshnessCacheScope],
-) -> bool {
-    scoped_repository_ids
-        .iter()
-        .any(|candidate| candidate == repository_id)
-        || freshness_scopes
-            .iter()
-            .any(|scope| scope.repository_id == repository_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         ExploreCursor, ExploreMatcher, ExploreScopeRequest, FileContentSnapshot,
-        FileContentWindowCache, FileContentWindowCacheKey, RepositoryFreshnessCacheScope,
-        RuntimeCacheBudget, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
-        RuntimeCacheRegistry, RuntimeCacheResidency, RuntimeCacheReuseClass,
+        RuntimeCacheFamily, RuntimeCacheFreshnessContract, RuntimeCacheRegistry,
+        RuntimeCacheResidency, RuntimeCacheReuseClass,
     };
-    use std::path::PathBuf;
-    use std::sync::Arc;
 
     #[test]
     fn runtime_cache_registry_defines_budgets_for_cross_request_families() {
@@ -993,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_cache_registry_distinguishes_snapshot_query_and_request_local_families() {
+    fn runtime_cache_registry_distinguishes_snapshot_metadata_and_request_local_families() {
         let registry = RuntimeCacheRegistry::default();
 
         let manifest = registry
@@ -1009,20 +646,6 @@ mod tests {
             RuntimeCacheFreshnessContract::RepositorySnapshot
         );
         assert!(manifest.dirty_root_bypass);
-
-        let query_result = registry
-            .policy(RuntimeCacheFamily::SearchHybridResponse)
-            .expect("hybrid response cache policy should exist");
-        assert_eq!(query_result.residency, RuntimeCacheResidency::ProcessWide);
-        assert_eq!(
-            query_result.reuse_class,
-            RuntimeCacheReuseClass::QueryResultMicroCache
-        );
-        assert_eq!(
-            query_result.freshness_contract,
-            RuntimeCacheFreshnessContract::RepositoryFreshnessScopes
-        );
-        assert!(query_result.dirty_root_bypass);
 
         let request_local = registry
             .policy(RuntimeCacheFamily::SearcherProjectionStore)
@@ -1079,36 +702,5 @@ mod tests {
         assert_eq!(scan.scope_content.as_deref(), Some("second\nthird"));
         assert_eq!(scan.total_matches, 1);
         assert_eq!(scan.matches.len(), 1);
-    }
-
-    #[test]
-    fn file_content_window_cache_trims_and_invalidates_by_repository() {
-        let mut cache = FileContentWindowCache::default();
-        let key = FileContentWindowCacheKey {
-            scoped_repository_ids: vec!["repo-001".to_owned()],
-            freshness_scopes: vec![RepositoryFreshnessCacheScope {
-                repository_id: "repo-001".to_owned(),
-                snapshot_id: "snapshot-001".to_owned(),
-                semantic_state: None,
-                semantic_provider: None,
-                semantic_model: None,
-            }],
-            canonical_path: PathBuf::from("/tmp/repo-001/file.rs"),
-        };
-        let snapshot = Arc::new(FileContentSnapshot::from_bytes(
-            b"pub fn cached() {}\n".to_vec(),
-        ));
-        assert!(
-            cache
-                .insert(
-                    key.clone(),
-                    Arc::clone(&snapshot),
-                    RuntimeCacheBudget::entry_and_byte_bound(4, 1024),
-                )
-                .0
-        );
-        assert!(cache.get(&key).is_some());
-        assert_eq!(cache.retain_repository("repo-001"), 1);
-        assert!(cache.get(&key).is_none());
     }
 }

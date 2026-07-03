@@ -1520,9 +1520,7 @@ impl FriggMcpServer {
             });
         }
 
-        self.invalidate_repository_summary_cache(&workspace.repository_id);
-        self.invalidate_repository_search_response_caches(&workspace.repository_id);
-        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_caches(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
         if any_success && let Err(err) = self.prewarm_precise_graph_for_workspace(&workspace) {
             warn!(
@@ -1692,9 +1690,7 @@ impl FriggMcpServer {
                         summary,
                     );
                 }
-                server.invalidate_repository_summary_cache(&workspace.repository_id);
-                server.invalidate_repository_search_response_caches(&workspace.repository_id);
-                server.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+                server.invalidate_repository_navigation_caches(&workspace.repository_id);
                 server.invalidate_repository_precise_graph_caches(&workspace.repository_id);
                 server.maybe_spawn_workspace_runtime_prewarm(&workspace);
                 let detail = Some(format!(

@@ -214,49 +214,7 @@ impl FriggMcpServer {
                         execution_context_for_blocking.repository_hint.clone(),
                         RepositoryResponseCacheFreshnessMode::ManifestOnly,
                     )?;
-                    let scoped_repository_ids_for_cache =
-                        scoped_execution_context.scoped_repository_ids.clone();
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                        GoToDefinitionResponseCacheKey {
-                            scoped_repository_ids: scoped_repository_ids_for_cache.clone(),
-                            freshness_scopes: freshness_scopes.clone(),
-                            repository_id: params_for_blocking.repository_id.clone(),
-                            symbol: params_for_blocking.symbol.clone(),
-                            path: params_for_blocking.path.clone(),
-                            line: params_for_blocking.line,
-                            column: params_for_blocking.column,
-                            include_follow_up_structural,
-                            limit,
-                        }
-                    });
-                    if cache_key.is_none() {
-                        server.record_runtime_cache_event(
-                            RuntimeCacheFamily::GoToDefinitionResponse,
-                            RuntimeCacheEvent::Bypass,
-                            1,
-                        );
-                    }
-                    if let Some(cache_key) = cache_key.as_ref()
-                        && let Some(cached) = server.cached_go_to_definition_response(cache_key)
-                    {
-                        scoped_repository_ids = cached.scoped_repository_ids;
-                        selected_symbol_id = cached.selected_symbol_id;
-                        selected_precise_symbol = cached.selected_precise_symbol;
-                        resolution_precision = cached.resolution_precision;
-                        resolution_source = cached.resolution_source;
-                        effective_limit = Some(cached.effective_limit);
-                        precise_artifacts_ingested = cached.precise_artifacts_ingested;
-                        precise_artifacts_failed = cached.precise_artifacts_failed;
-                        match_count = cached.match_count;
-                        let mut response = cached.response;
-                        Self::attach_metadata_object_freshness_basis(
-                            &mut response.metadata,
-                            &mut response.note,
-                            &cache_freshness.basis,
-                        );
-                        return Ok(Json(response));
-                    }
 
                     let response = if params_for_blocking.symbol.is_none() {
                         if let (Some(path), Some(line)) = (
@@ -1222,21 +1180,6 @@ impl FriggMcpServer {
                         }
                     };
 
-                    if let Some(cache_key) = cache_key {
-                        server.cache_go_to_definition_response(
-                            cache_key,
-                            &response.0,
-                            &scoped_repository_ids,
-                            selected_symbol_id.as_deref(),
-                            selected_precise_symbol.as_deref(),
-                            resolution_precision.as_deref(),
-                            resolution_source.as_deref(),
-                            limit,
-                            precise_artifacts_ingested,
-                            precise_artifacts_failed,
-                            match_count,
-                        );
-                    }
                     Ok(response)
                 })();
                 let precision_mode = FriggMcpServer::provenance_precision_mode_from_label(
@@ -1343,49 +1286,7 @@ impl FriggMcpServer {
                         execution_context_for_blocking.repository_hint.clone(),
                         RepositoryResponseCacheFreshnessMode::ManifestOnly,
                     )?;
-                    let scoped_repository_ids_for_cache =
-                        scoped_execution_context.scoped_repository_ids.clone();
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                        FindDeclarationsResponseCacheKey {
-                            scoped_repository_ids: scoped_repository_ids_for_cache.clone(),
-                            freshness_scopes: freshness_scopes.clone(),
-                            repository_id: params_for_blocking.repository_id.clone(),
-                            symbol: params_for_blocking.symbol.clone(),
-                            path: params_for_blocking.path.clone(),
-                            line: params_for_blocking.line,
-                            column: params_for_blocking.column,
-                            include_follow_up_structural,
-                            limit,
-                        }
-                    });
-                    if cache_key.is_none() {
-                        server.record_runtime_cache_event(
-                            RuntimeCacheFamily::FindDeclarationsResponse,
-                            RuntimeCacheEvent::Bypass,
-                            1,
-                        );
-                    }
-                    if let Some(cache_key) = cache_key.as_ref()
-                        && let Some(cached) = server.cached_find_declarations_response(cache_key)
-                    {
-                        scoped_repository_ids = cached.scoped_repository_ids;
-                        selected_symbol_id = cached.selected_symbol_id;
-                        selected_precise_symbol = cached.selected_precise_symbol;
-                        resolution_precision = cached.resolution_precision;
-                        resolution_source = cached.resolution_source;
-                        effective_limit = Some(cached.effective_limit);
-                        precise_artifacts_ingested = cached.precise_artifacts_ingested;
-                        precise_artifacts_failed = cached.precise_artifacts_failed;
-                        match_count = cached.match_count;
-                        let mut response = cached.response;
-                        Self::attach_metadata_object_freshness_basis(
-                            &mut response.metadata,
-                            &mut response.note,
-                            &cache_freshness.basis,
-                        );
-                        return Ok(Json(response));
-                    }
 
                     let corpora = server.collect_repository_symbol_corpora(
                         params_for_blocking.repository_id.as_deref(),
@@ -1439,21 +1340,6 @@ impl FriggMcpServer {
                                 metadata,
                                 note,
                             };
-                            if let Some(cache_key) = cache_key.clone() {
-                                server.cache_find_declarations_response(
-                                    cache_key,
-                                    &response,
-                                    &scoped_repository_ids,
-                                    selected_symbol_id.as_deref(),
-                                    selected_precise_symbol.as_deref(),
-                                    resolution_precision.as_deref(),
-                                    resolution_source.as_deref(),
-                                    limit,
-                                    precise_artifacts_ingested,
-                                    precise_artifacts_failed,
-                                    match_count,
-                                );
-                            }
                             return Ok(Json(response));
                         }
                     };
@@ -1571,21 +1457,6 @@ impl FriggMcpServer {
                             metadata,
                             note,
                         };
-                        if let Some(cache_key) = cache_key.clone() {
-                            server.cache_find_declarations_response(
-                                cache_key,
-                                &response,
-                                &scoped_repository_ids,
-                                selected_symbol_id.as_deref(),
-                                selected_precise_symbol.as_deref(),
-                                resolution_precision.as_deref(),
-                                resolution_source.as_deref(),
-                                limit,
-                                precise_artifacts_ingested,
-                                precise_artifacts_failed,
-                                match_count,
-                            );
-                        }
                         return Ok(Json(response));
                     }
 
@@ -1651,21 +1522,6 @@ impl FriggMcpServer {
                         metadata,
                         note,
                     };
-                    if let Some(cache_key) = cache_key {
-                        server.cache_find_declarations_response(
-                            cache_key,
-                            &response,
-                            &scoped_repository_ids,
-                            selected_symbol_id.as_deref(),
-                            selected_precise_symbol.as_deref(),
-                            resolution_precision.as_deref(),
-                            resolution_source.as_deref(),
-                            limit,
-                            precise_artifacts_ingested,
-                            precise_artifacts_failed,
-                            match_count,
-                        );
-                    }
                     Ok(Json(response))
                 })();
 

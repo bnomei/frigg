@@ -1230,6 +1230,83 @@ async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initia
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_task() {
+    let workspace_root = temp_workspace_root("pre-finish-cache-invalidation");
+    fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+    fs::write(workspace_root.join("src.rs"), "fn alpha() {}\n")
+        .expect("source file should be writable");
+
+    let db_path = init_storage(&workspace_root);
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("config should load from workspace root");
+    config.watch = WatchConfig {
+        mode: WatchMode::On,
+        debounce_ms: 25,
+        retry_ms: 100,
+    };
+
+    let task_registry = test_runtime_task_registry();
+    let active_task_observations = Arc::new(RwLock::new(Vec::new()));
+    let recorded_observations = Arc::clone(&active_task_observations);
+    let callback_task_registry = Arc::clone(&task_registry);
+    let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
+        if repository_id == "repo-001" {
+            let active = callback_task_registry
+                .read()
+                .expect("watch runtime task registry poisoned")
+                .has_active_task_for_repository(
+                    crate::mcp::types::RuntimeTaskKind::ChangedIndex,
+                    repository_id,
+                );
+            recorded_observations
+                .write()
+                .expect("active task observation log poisoned")
+                .push(active);
+        }
+    });
+    let runtime = maybe_start_watch_runtime(
+        &config,
+        RuntimeTransportKind::Stdio,
+        Arc::clone(&task_registry),
+        test_validated_manifest_candidate_cache(),
+        Some(callback),
+    )
+    .expect("watch runtime should start")
+    .expect("watch runtime should be enabled");
+
+    let attached_workspace = crate::mcp::workspace_registry::AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pre-finish-cache-invalidation")
+            .to_owned(),
+        root: workspace_root.clone(),
+        db_path: db_path.clone(),
+    };
+    runtime
+        .acquire_lease(&attached_workspace)
+        .expect("watch lease should acquire");
+    wait_for_snapshot_id(&db_path, "repo-001", Duration::from_secs(10))
+        .await
+        .expect("initial sync should create a manifest snapshot");
+
+    assert!(
+        active_task_observations
+            .read()
+            .expect("active task observation log poisoned")
+            .iter()
+            .any(|active| *active),
+        "watch refresh completion must invalidate response freshness before clearing the active task"
+    );
+
+    drop(runtime);
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    cleanup_workspace(&workspace_root);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn watch_runtime_repairs_missing_retrieval_projection_family_and_invalidates_repository_cache()
  {
     let workspace_root = temp_workspace_root("startup-refreshes-missing-retrieval-projection");

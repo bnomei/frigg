@@ -138,6 +138,9 @@ fn report_watch_event(reporter: &Option<WatchEventReporter>, event: WatchEvent) 
 
 enum SupervisorCommand {
     Event(Event),
+    NotifyDropped {
+        error: String,
+    },
     LeaseAcquired {
         repository: WatchedRepository,
     },
@@ -344,6 +347,13 @@ impl WatchRuntime {
     pub(crate) fn inject_test_event(&self, event: Event) {
         let _ = self.command_tx.send(SupervisorCommand::Event(event));
     }
+
+    #[cfg(test)]
+    pub(crate) fn inject_test_notify_dropped(&self, error: impl Into<String>) {
+        let _ = self.command_tx.send(SupervisorCommand::NotifyDropped {
+            error: error.into(),
+        });
+    }
 }
 
 impl Drop for WatchRuntime {
@@ -400,19 +410,14 @@ pub fn maybe_start_watch_runtime_with_reporter(
     let lease_counts = Arc::new(RwLock::new(BTreeMap::new()));
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let callback_tx = command_tx.clone();
-    let notify_reporter = reporter.clone();
     let watcher = notify::recommended_watcher(move |result: notify::Result<Event>| match result {
         Ok(event) => {
             let _ = callback_tx.send(SupervisorCommand::Event(event));
         }
         Err(error) => {
-            warn!(error = %error, "built-in watch mode dropped notify event");
-            report_watch_event(
-                &notify_reporter,
-                WatchEvent::NotifyDropped {
-                    error: error.to_string(),
-                },
-            );
+            let _ = callback_tx.send(SupervisorCommand::NotifyDropped {
+                error: error.to_string(),
+            });
         }
     })
     .map_err(|err| FriggError::Internal(format!("failed to create filesystem watcher: {err}")))?;
@@ -486,6 +491,16 @@ async fn run_supervisor(
                         &validated_manifest_candidate_cache,
                         repository_cache_invalidation_callback.as_ref(),
                         event,
+                        now,
+                        debounce,
+                        &reporter,
+                    ),
+                    SupervisorCommand::NotifyDropped { error } => handle_notify_dropped(
+                        &repositories,
+                        &mut scheduler,
+                        &validated_manifest_candidate_cache,
+                        repository_cache_invalidation_callback.as_ref(),
+                        error,
                         now,
                         debounce,
                         &reporter,
@@ -634,6 +649,8 @@ async fn run_supervisor(
             let semantic_credentials = semantic_credentials.clone();
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
+            let repository_cache_invalidation_callback =
+                repository_cache_invalidation_callback.clone();
             let reporter = reporter.clone();
             // Side effect: blocking index runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
@@ -718,6 +735,9 @@ async fn run_supervisor(
                         .write()
                         .expect("validated manifest candidate cache poisoned")
                         .invalidate_root(&repository.root);
+                }
+                if let Some(callback) = repository_cache_invalidation_callback.as_ref() {
+                    callback(&repository.repository_id);
                 }
                 task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
@@ -837,14 +857,58 @@ fn handle_notify_event(
     }
 }
 
+fn handle_notify_dropped(
+    repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
+    scheduler: &mut WatchSchedulerState,
+    validated_manifest_candidate_cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
+    repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
+    error: String,
+    now: Instant,
+    debounce: Duration,
+    reporter: &Option<WatchEventReporter>,
+) {
+    warn!(error = %error, "built-in watch mode dropped notify event");
+    report_watch_event(
+        reporter,
+        WatchEvent::NotifyDropped {
+            error: error.clone(),
+        },
+    );
+
+    let repositories = repositories
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    for repository in repositories {
+        scheduler.record_path_change(
+            &repository.repository_id,
+            repository.root.clone(),
+            now,
+            debounce,
+        );
+        validated_manifest_candidate_cache
+            .write()
+            .expect("validated manifest candidate cache poisoned")
+            .mark_dirty_root(&repository.root);
+        if let Some(callback) = repository_cache_invalidation_callback {
+            callback(&repository.repository_id);
+        }
+        info!(
+            repository_id = %repository.repository_id,
+            root = %repository.root.display(),
+            "built-in watch mode conservatively invalidated repository after dropped notify event"
+        );
+    }
+}
+
 fn invalidate_caches_for_stale_completion(
     repository_id: &str,
-    result: &Result<crate::indexer::IndexSummary, String>,
+    _result: &Result<crate::indexer::IndexSummary, String>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
 ) -> bool {
-    if result.is_ok()
-        && let Some(callback) = repository_cache_invalidation_callback
-    {
+    if let Some(callback) = repository_cache_invalidation_callback {
         callback(repository_id);
         return true;
     }
@@ -873,13 +937,13 @@ fn handle_index_completed(
     let Some(repository) = repository else {
         return;
     };
+    if let Some(callback) = repository_cache_invalidation_callback {
+        callback(&repository.repository_id);
+    }
 
     match result {
         Ok(summary) => {
             scheduler.mark_succeeded(repository_id, class, now);
-            if let Some(callback) = repository_cache_invalidation_callback {
-                callback(&repository.repository_id);
-            }
             info!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -1168,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_failed_completion_does_not_invalidate_repository_caches() {
+    fn stale_failed_completion_invalidates_repository_caches() {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&invalidated);
@@ -1185,12 +1249,13 @@ mod tests {
             Some(&callback),
         );
 
-        assert!(!invoked, "stale failure must not invalidate caches");
         assert!(
-            invalidated
-                .lock()
-                .expect("invalidation record poisoned")
-                .is_empty()
+            invoked,
+            "stale failure must conservatively invalidate caches"
+        );
+        assert_eq!(
+            *invalidated.lock().expect("invalidation record poisoned"),
+            vec!["repo-001".to_owned()],
         );
     }
 

@@ -765,7 +765,7 @@ async fn navigation_go_to_definition_prefers_route_source_fallback_for_blade_att
 }
 
 #[tokio::test]
-async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+async fn navigation_go_to_definition_recomputes_stale_manifest_scoped_results_after_edit() {
     let workspace_root = temp_workspace_root("go-to-definition-stale-manifest-edit");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -806,7 +806,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("go_to_definition should bypass stale cache after edit")
+        .expect("go_to_definition should recompute after edit")
         .0;
     assert_eq!(second.matches.len(), 1);
     assert_eq!(second.matches[0].symbol, "beta_beta");
@@ -835,7 +835,7 @@ async fn navigation_go_to_definition_does_not_reuse_stale_manifest_scoped_cache_
         }))
         .await
     {
-        Ok(_) => panic!("go_to_definition should not reuse stale cached matches"),
+        Ok(_) => panic!("go_to_definition should not return stale matches"),
         Err(error) => error,
     };
     assert_eq!(error_code_tag(&stale), Some("resource_not_found"));
@@ -1432,7 +1432,7 @@ async fn navigation_find_declarations_falls_back_to_heuristic_without_precise_da
 }
 
 #[tokio::test]
-async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+async fn navigation_find_declarations_recomputes_stale_manifest_scoped_results_after_edit() {
     let workspace_root = temp_workspace_root("find-declarations-stale-manifest-edit");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -1473,7 +1473,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
             response_mode: Some(ResponseMode::Full),
         }))
         .await
-        .expect("find_declarations should bypass stale cache after edit")
+        .expect("find_declarations should recompute after edit")
         .0;
     assert_eq!(second.matches.len(), 1);
     assert_eq!(second.matches[0].symbol, "beta_beta");
@@ -1502,7 +1502,7 @@ async fn navigation_find_declarations_does_not_reuse_stale_manifest_scoped_cache
         }))
         .await
     {
-        Ok(_) => panic!("find_declarations should not reuse stale cached matches"),
+        Ok(_) => panic!("find_declarations should not return stale matches"),
         Err(error) => error,
     };
     assert_eq!(error_code_tag(&stale), Some("resource_not_found"));

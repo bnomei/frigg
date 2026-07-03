@@ -8,23 +8,18 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::FriggError;
-use crate::domain::model::TextMatch;
 use crate::indexer::{FileMetadataDigest, IndexMode};
-use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::server_cache::{
-    FileContentSnapshot, FileContentWindowCacheKey, FindDeclarationsResponseCacheKey,
-    GoToDefinitionResponseCacheKey, HeuristicReferenceCacheKey, RepositoryFreshnessCacheScope,
-    RuntimeCacheFamily, RuntimeCacheFreshnessContract, RuntimeCacheResidency,
-    RuntimeCacheReuseClass, SearchHybridResponseCacheKey, SearchSymbolResponseCacheKey,
-    SearchTextResponseCacheKey,
+    HeuristicReferenceCacheKey, RuntimeCacheFamily, RuntimeCacheFreshnessContract,
+    RuntimeCacheResidency, RuntimeCacheReuseClass,
 };
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
-    FindDeclarationsResponse, GoToDefinitionResponse, InspectSyntaxTreeParams, NavigationMode,
-    RuntimeTaskKind, RuntimeTaskStatus, SearchHybridResponse, SearchStructuralParams,
-    SearchSymbolResponse, SearchTextResponse, WorkspaceAttachParams, WorkspaceDetachParams,
-    WorkspaceIndexComponentState, WorkspacePreciseGeneratorState, WorkspaceResolveMode,
+    InspectSyntaxTreeParams, RuntimeTaskKind, RuntimeTaskStatus, SearchStructuralParams,
+    WorkspaceAttachParams, WorkspaceDetachParams, WorkspaceIndexComponentState,
+    WorkspacePreciseGeneratorState, WorkspaceResolveMode,
 };
+use crate::mcp::{RuntimeTaskGuard, RuntimeTaskRegistry};
 use crate::searcher::ValidatedManifestCandidateCache;
 use crate::settings::{
     FriggConfig, RuntimeProfile, RuntimeTransportKind, SemanticRuntimeConfig,
@@ -168,66 +163,20 @@ fn semantic_runtime_enabled_openai() -> SemanticRuntimeConfig {
     }
 }
 
-async fn wait_for_repository_answer_cache_eviction(
+async fn wait_for_heuristic_reference_cache_eviction(
     server: &FriggMcpServer,
-    repository_id: &str,
     timeout: Duration,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let summary_evicted = server.cached_repository_summary(repository_id).is_none();
-        let text_evicted = server
-            .cache_state
-            .search_text_response_cache
-            .read()
-            .expect("search text response cache should not be poisoned")
-            .is_empty();
-        let hybrid_evicted = server
-            .cache_state
-            .search_hybrid_response_cache
-            .read()
-            .expect("search hybrid response cache should not be poisoned")
-            .is_empty();
-        let symbol_evicted = server
-            .cache_state
-            .search_symbol_response_cache
-            .read()
-            .expect("search symbol response cache should not be poisoned")
-            .is_empty();
-        let definition_evicted = server
-            .cache_state
-            .go_to_definition_response_cache
-            .read()
-            .expect("go-to-definition response cache should not be poisoned")
-            .is_empty();
-        let declarations_evicted = server
-            .cache_state
-            .find_declarations_response_cache
-            .read()
-            .expect("find declarations response cache should not be poisoned")
-            .is_empty();
         let heuristic_evicted = server
             .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
             .is_empty();
-        let file_content_evicted = server
-            .cache_state
-            .file_content_window_cache
-            .read()
-            .expect("file content window cache should not be poisoned")
-            .is_empty();
 
-        if summary_evicted
-            && text_evicted
-            && hybrid_evicted
-            && symbol_evicted
-            && definition_evicted
-            && declarations_evicted
-            && heuristic_evicted
-            && file_content_evicted
-        {
+        if heuristic_evicted {
             return true;
         }
 

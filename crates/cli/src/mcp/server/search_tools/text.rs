@@ -1,4 +1,4 @@
-//! `search_text` implementation with repository scoping and response-cache reuse.
+//! `search_text` implementation with repository scoping and freshness metadata.
 
 use super::*;
 
@@ -84,63 +84,6 @@ impl FriggMcpServer {
                     let scoped_workspaces = scoped_execution_context.scoped_workspaces.clone();
                     scoped_repository_ids = scoped_execution_context.scoped_repository_ids.clone();
                     let cache_freshness = scoped_execution_context.cache_freshness.clone();
-                    let cache_key = (!need_context_efficiency)
-                        .then(|| {
-                            cache_freshness.scopes.as_ref().map(|freshness_scopes| {
-                                SearchTextResponseCacheKey {
-                                    scoped_repository_ids: scoped_repository_ids.clone(),
-                                    freshness_scopes: freshness_scopes.clone(),
-                                    query: query.clone(),
-                                    pattern_type: Self::search_pattern_type_cache_key(
-                                        &pattern_type,
-                                    ),
-                                    path_regex: params_for_blocking.path_regex.clone(),
-                                    limit,
-                                }
-                            })
-                        })
-                        .flatten();
-                    if cache_key.is_none() {
-                        server.record_runtime_cache_event(
-                            RuntimeCacheFamily::SearchTextResponse,
-                            RuntimeCacheEvent::Bypass,
-                            1,
-                        );
-                    }
-                    if let Some(cache_key) = cache_key.as_ref()
-                        && let Some(cached) = server.cached_search_text_response(cache_key)
-                    {
-                        response_source_refs = cached.source_refs.clone();
-                        response_source_refs
-                            .as_object_mut()
-                            .expect("search_text source refs should be an object")
-                            .insert("freshness_basis".to_owned(), cache_freshness.basis.clone());
-                        diagnostics_count = cached
-                            .source_refs
-                            .get("diagnostics_count")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize;
-                        walk_diagnostics_count = cached
-                            .source_refs
-                            .get("diagnostics")
-                            .and_then(|value| value.get("walk"))
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize;
-                        read_diagnostics_count = cached
-                            .source_refs
-                            .get("diagnostics")
-                            .and_then(|value| value.get("read"))
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0) as usize;
-                        let mut response = cached.response;
-                        Self::attach_search_text_freshness_basis(
-                            &mut response.metadata,
-                            &cache_freshness.basis,
-                        );
-                        return Ok(Json(
-                            server.present_search_text_response(response, &params_for_blocking)?,
-                        ));
-                    }
                     let (scoped_config, scoped_runtime_repository_ids, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
 
@@ -214,14 +157,6 @@ impl FriggMcpServer {
                             "total": diagnostics_count,
                         },
                     });
-                    if let Some(cache_key) = cache_key {
-                        server.cache_search_text_response(
-                            cache_key,
-                            &response,
-                            &response_source_refs,
-                        );
-                    }
-
                     let mut presented =
                         server.present_search_text_response(response, &params_for_blocking)?;
                     if need_context_efficiency {

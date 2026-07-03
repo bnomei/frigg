@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch, SymbolMatch};
@@ -80,18 +83,12 @@ use crate::mcp::guidance::{
     read_policy_resource,
 };
 use crate::mcp::server_cache::{
-    CachedFindDeclarationsResponse, CachedGoToDefinitionResponse, CachedHeuristicReferences,
-    CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness, CachedRepositorySummary,
-    CachedSearchHybridResponse, CachedSearchSymbolResponse, CachedSearchTextResponse,
-    CachedWorkspacePreciseGeneration, FileContentSnapshot, FileContentWindowCache,
-    FileContentWindowCacheKey, FindDeclarationsResponseCacheKey, GoToDefinitionResponseCacheKey,
-    HeuristicReferenceCacheKey, PreciseGeneratorProbeCacheKey, RepositoryFreshnessCacheScope,
-    RepositoryResponseCacheFreshness, RepositoryResponseCacheFreshnessMode,
-    RepositoryResponseFreshnessCacheKey, RuntimeCacheBudget, RuntimeCacheEvent, RuntimeCacheFamily,
-    RuntimeCacheRegistry, RuntimeCacheTelemetry, SearchHybridResponseCacheKey,
-    SearchSymbolResponseCacheKey, SearchTextResponseCacheKey, SessionResultHandleCache,
-    SessionResultHandleEntry, WorkspaceSemanticRefreshPlan,
-    response_cache_scopes_include_repository,
+    CachedHeuristicReferences, CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness,
+    CachedWorkspacePreciseGeneration, FileContentSnapshot, HeuristicReferenceCacheKey,
+    PreciseGeneratorProbeCacheKey, RepositoryFreshnessCacheScope, RepositoryResponseCacheFreshness,
+    RepositoryResponseCacheFreshnessMode, RepositoryResponseFreshnessCacheKey, RuntimeCacheBudget,
+    RuntimeCacheEvent, RuntimeCacheFamily, RuntimeCacheRegistry, RuntimeCacheTelemetry,
+    SessionResultHandleCache, SessionResultHandleEntry, WorkspaceSemanticRefreshPlan,
 };
 use crate::mcp::server_state::{
     CachedPreciseGraph, DeterministicSignatureHasher, DisambiguationRequiredSymbolTarget,
@@ -366,20 +363,9 @@ struct FriggMcpCacheState {
     repository_response_freshness_cache: Arc<
         RwLock<BTreeMap<RepositoryResponseFreshnessCacheKey, CachedRepositoryResponseFreshness>>,
     >,
+    repository_response_freshness_cache_epoch: Arc<AtomicU64>,
     precise_generator_probe_cache:
         Arc<RwLock<BTreeMap<PreciseGeneratorProbeCacheKey, CachedPreciseGeneratorProbe>>>,
-    repository_summary_cache: Arc<RwLock<BTreeMap<String, CachedRepositorySummary>>>,
-    file_content_window_cache: Arc<RwLock<FileContentWindowCache>>,
-    search_text_response_cache:
-        Arc<RwLock<BTreeMap<SearchTextResponseCacheKey, CachedSearchTextResponse>>>,
-    search_hybrid_response_cache:
-        Arc<RwLock<BTreeMap<SearchHybridResponseCacheKey, CachedSearchHybridResponse>>>,
-    search_symbol_response_cache:
-        Arc<RwLock<BTreeMap<SearchSymbolResponseCacheKey, CachedSearchSymbolResponse>>>,
-    go_to_definition_response_cache:
-        Arc<RwLock<BTreeMap<GoToDefinitionResponseCacheKey, CachedGoToDefinitionResponse>>>,
-    find_declarations_response_cache:
-        Arc<RwLock<BTreeMap<FindDeclarationsResponseCacheKey, CachedFindDeclarationsResponse>>>,
     heuristic_reference_cache:
         Arc<RwLock<BTreeMap<HeuristicReferenceCacheKey, CachedHeuristicReferences>>>,
     compiled_safe_regex_cache: Arc<RwLock<BTreeMap<String, regex::Regex>>>,
@@ -417,8 +403,6 @@ impl FriggMcpServer {
     const WORKSPACE_INDEX_RESPONSE_PATH_LIMIT: usize = 50;
     const SEARCH_STRUCTURAL_MAX_QUERY_CHARS: usize = 4_096;
     const PROVENANCE_MATCH_SAMPLE_LIMIT: usize = 4;
-    const REPOSITORY_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(1);
-    const REPOSITORY_RESPONSE_FRESHNESS_CACHE_TTL: Duration = Duration::from_secs(2);
     const REPOSITORY_RESPONSE_FRESHNESS_CACHE_MAX_ENTRIES: usize = 64;
     const PRECISE_GENERATOR_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
     const PRECISE_GENERATOR_PROBE_CACHE_MAX_ENTRIES: usize = 128;
@@ -500,14 +484,8 @@ impl FriggMcpServer {
                 precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_response_freshness_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                repository_response_freshness_cache_epoch: Arc::new(AtomicU64::new(0)),
                 precise_generator_probe_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                repository_summary_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                file_content_window_cache: Arc::new(RwLock::new(FileContentWindowCache::default())),
-                search_text_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                search_hybrid_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                search_symbol_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                go_to_definition_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
-                find_declarations_response_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 heuristic_reference_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 compiled_safe_regex_cache: Arc::new(RwLock::new(BTreeMap::new())),
             },
@@ -863,9 +841,7 @@ impl FriggMcpServer {
             ));
         };
         self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
-        self.invalidate_repository_summary_cache(&workspace.repository_id);
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
-        self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
@@ -999,13 +975,10 @@ impl FriggMcpServer {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate_root(&workspace.root);
         self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
-        self.invalidate_repository_summary_cache(&workspace.repository_id);
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
-        self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
-        self.invalidate_repository_search_response_caches(&workspace.repository_id);
-        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_caches(&workspace.repository_id);
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "activate watcher lease").await;
         self.adopt_workspace(&workspace, set_default)
@@ -1160,7 +1133,7 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "index refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();
-        let index_summary = Self::run_blocking_task("workspace_index", {
+        let index_result = Self::run_blocking_task("workspace_index", {
             let workspace = workspace.clone();
             move || -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
@@ -1177,8 +1150,9 @@ impl FriggMcpServer {
                 .map_err(|err| err.to_string())
             }
         })
-        .await?
-        .map_err(|err| {
+        .await;
+        self.invalidate_workspace_index_runtime_caches(&workspace, true);
+        let index_summary = index_result?.map_err(|err| {
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
@@ -1194,7 +1168,6 @@ impl FriggMcpServer {
         })?;
 
         Self::notify_progress(&meta, &client, 2.0, 4.0, "invalidate caches").await;
-        self.invalidate_workspace_index_runtime_caches(&workspace, true);
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "finalize").await;
         self.adopt_workspace(&workspace, set_default)

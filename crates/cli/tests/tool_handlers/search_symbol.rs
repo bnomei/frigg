@@ -789,7 +789,7 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
 }
 
 #[tokio::test]
-async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+async fn search_text_recomputes_stale_manifest_scoped_results_after_edit() {
     let workspace_root = temp_workspace_root("search-text-stale-manifest-edit");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -827,7 +827,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             ..Default::default()
         }))
         .await
-        .expect("search_text should bypass stale cache after edit")
+        .expect("search_text should recompute after edit")
         .0;
     assert_eq!(second.total_matches, 1);
     assert_eq!(second.matches[0].path, "src/lib.rs");
@@ -889,7 +889,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             ..Default::default()
         }))
         .await
-        .expect("search_text should not reuse stale cached matches")
+        .expect("search_text should not return stale matches")
         .0;
     assert_eq!(stale.total_matches, 0);
     assert!(stale.matches.is_empty());
@@ -898,7 +898,7 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
 }
 
 #[tokio::test]
-async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
+async fn search_hybrid_recomputes_stale_manifest_scoped_results_after_edit() {
     let workspace_root = temp_workspace_root("search-hybrid-stale-manifest-edit");
     let src_root = workspace_root.join("src");
     fs::create_dir_all(&src_root).expect("failed to create temporary fixture");
@@ -938,7 +938,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             include_context_efficiency: None,
         }))
         .await
-        .expect("search_hybrid should bypass stale cache after edit")
+        .expect("search_hybrid should recompute after edit")
         .0;
     assert_eq!(second.matches.len(), 1);
     assert_eq!(second.matches[0].path, "src/lib.rs");
@@ -968,7 +968,7 @@ async fn search_hybrid_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             include_context_efficiency: None,
         }))
         .await
-        .expect("search_hybrid should not reuse stale cached matches")
+        .expect("search_hybrid should not return stale matches")
         .0;
     assert!(stale.matches.is_empty());
 

@@ -709,9 +709,7 @@ impl FriggMcpServer {
 
         if any_success {
             self.invalidate_repository_precise_generation_cache(&workspace.repository_id);
-            self.invalidate_repository_summary_cache(&workspace.repository_id);
-            self.invalidate_repository_search_response_caches(&workspace.repository_id);
-            self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+            self.invalidate_repository_navigation_caches(&workspace.repository_id);
             self.prewarm_precise_graph_for_workspace(workspace)?;
             return Ok(());
         }

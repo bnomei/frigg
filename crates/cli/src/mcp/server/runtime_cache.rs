@@ -92,28 +92,6 @@ impl FriggMcpServer {
             .expect("runtime cache family policy should exist")
     }
 
-    pub(super) fn cached_file_content_window(
-        &self,
-        cache_key: &FileContentWindowCacheKey,
-    ) -> Option<Arc<FileContentSnapshot>> {
-        let cached = self
-            .cache_state
-            .file_content_window_cache
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(cache_key);
-        self.record_runtime_cache_event(
-            RuntimeCacheFamily::FileContentWindow,
-            if cached.is_some() {
-                RuntimeCacheEvent::Hit
-            } else {
-                RuntimeCacheEvent::Miss
-            },
-            1,
-        );
-        cached
-    }
-
     fn read_file_content_bytes_bounded(&self, canonical_path: &Path) -> Result<Vec<u8>, ErrorData> {
         let max_file_bytes = self.config.max_file_bytes;
         let metadata = fs::metadata(canonical_path).map_err(|err| {
@@ -146,75 +124,12 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         canonical_path: &Path,
     ) -> Result<Arc<FileContentSnapshot>, ErrorData> {
-        let freshness = self.repository_response_cache_freshness(
+        let _freshness = self.repository_response_cache_freshness(
             std::slice::from_ref(workspace),
             RepositoryResponseCacheFreshnessMode::ManifestOnly,
         )?;
-        let Some(scopes) = freshness.scopes else {
-            let bytes = self.read_file_content_bytes_bounded(canonical_path)?;
-            return Ok(Arc::new(FileContentSnapshot::from_bytes(bytes)));
-        };
-        let mut scoped_repository_ids = vec![workspace.repository_id.clone()];
-        scoped_repository_ids.sort();
-        let cache_key = FileContentWindowCacheKey {
-            scoped_repository_ids,
-            freshness_scopes: scopes,
-            canonical_path: canonical_path.to_path_buf(),
-        };
-        if let Some(cached) = self.cached_file_content_window(&cache_key) {
-            return Ok(cached);
-        }
-
         let bytes = self.read_file_content_bytes_bounded(canonical_path)?;
-        let snapshot = Arc::new(FileContentSnapshot::from_bytes(bytes));
-        self.cache_file_content_window(cache_key, Arc::clone(&snapshot));
-        Ok(snapshot)
-    }
-
-    pub(super) fn cache_file_content_window(
-        &self,
-        cache_key: FileContentWindowCacheKey,
-        snapshot: Arc<FileContentSnapshot>,
-    ) {
-        let mut cache = self
-            .cache_state
-            .file_content_window_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let budget = self.runtime_cache_budget(RuntimeCacheFamily::FileContentWindow);
-        let (inserted, evictions) = cache.insert(cache_key, snapshot, budget);
-        if inserted {
-            self.record_runtime_cache_event(
-                RuntimeCacheFamily::FileContentWindow,
-                RuntimeCacheEvent::Insert,
-                1,
-            );
-            self.record_runtime_cache_event(
-                RuntimeCacheFamily::FileContentWindow,
-                RuntimeCacheEvent::Eviction,
-                evictions,
-            );
-        } else {
-            self.record_runtime_cache_event(
-                RuntimeCacheFamily::FileContentWindow,
-                RuntimeCacheEvent::Bypass,
-                1,
-            );
-        }
-    }
-
-    pub(super) fn invalidate_repository_file_content_cache(&self, repository_id: &str) {
-        let mut cache = self
-            .cache_state
-            .file_content_window_cache
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let before = cache.retain_repository(repository_id);
-        self.record_runtime_cache_event(
-            RuntimeCacheFamily::FileContentWindow,
-            RuntimeCacheEvent::Invalidation,
-            before,
-        );
+        Ok(Arc::new(FileContentSnapshot::from_bytes(bytes)))
     }
 
     pub(super) fn runtime_cache_contract_summary(&self, families: &[RuntimeCacheFamily]) -> Value {
@@ -243,14 +158,12 @@ impl FriggMcpServer {
                         },
                         "reuse_class": match policy.reuse_class {
                             crate::mcp::server_cache::RuntimeCacheReuseClass::SnapshotScopedReusable => "snapshot_scoped_reusable",
-                            crate::mcp::server_cache::RuntimeCacheReuseClass::QueryResultMicroCache => "query_result_micro_cache",
                             crate::mcp::server_cache::RuntimeCacheReuseClass::ProcessMetadata => "process_metadata",
                             crate::mcp::server_cache::RuntimeCacheReuseClass::RequestLocalOnly => "request_local_only",
                             crate::mcp::server_cache::RuntimeCacheReuseClass::DeferredUntilReadOnly => "deferred_until_read_only",
                         },
                         "freshness_contract": match policy.freshness_contract {
                             crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositorySnapshot => "repository_snapshot",
-                            crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositoryFreshnessScopes => "repository_freshness_scopes",
                             crate::mcp::server_cache::RuntimeCacheFreshnessContract::RepositoryId => "repository_id",
                             crate::mcp::server_cache::RuntimeCacheFreshnessContract::ExactInput => "exact_input",
                             crate::mcp::server_cache::RuntimeCacheFreshnessContract::RequestLocal => "request_local",

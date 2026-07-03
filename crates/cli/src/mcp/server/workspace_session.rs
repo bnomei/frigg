@@ -35,9 +35,7 @@ impl FriggMcpServer {
                 .map(|workspace| workspace.repository_id.as_str())
                 .unwrap_or(repository_id);
             server.invalidate_repository_symbol_corpus_cache(repository_id);
-            server.invalidate_repository_summary_cache(repository_id);
             server.invalidate_repository_response_freshness_cache(repository_id);
-            server.invalidate_repository_file_content_cache(repository_id);
             server
                 .runtime_state
                 .searcher_projection_store_service
@@ -51,8 +49,7 @@ impl FriggMcpServer {
             server.invalidate_repository_precise_generator_probe_cache(repository_id);
             server.scip_invalidate_repository_precise_generation_cache(repository_id);
             server.invalidate_repository_precise_graph_caches(repository_id);
-            server.invalidate_repository_search_response_caches(repository_id);
-            server.invalidate_repository_navigation_response_caches(repository_id);
+            server.invalidate_repository_navigation_caches(repository_id);
         })
     }
 
@@ -293,16 +290,13 @@ impl FriggMcpServer {
                 .invalidate_repository(&workspace.runtime_repository_id);
         }
         self.invalidate_repository_symbol_corpus_cache(&workspace.repository_id);
-        self.invalidate_repository_summary_cache(&workspace.repository_id);
         self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
-        self.invalidate_repository_file_content_cache(&workspace.repository_id);
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         if invalidate_precise_generation {
             self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         }
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
-        self.invalidate_repository_search_response_caches(&workspace.repository_id);
-        self.invalidate_repository_navigation_response_caches(&workspace.repository_id);
+        self.invalidate_repository_navigation_caches(&workspace.repository_id);
     }
 
     pub(in crate::mcp::server) fn active_repository_index_tasks(
@@ -476,9 +470,7 @@ impl FriggMcpServer {
                 )
                 .map_err(|err| err.to_string())
             })();
-            if result.is_ok() {
-                server.invalidate_workspace_index_runtime_caches(&workspace, true);
-            }
+            server.invalidate_workspace_index_runtime_caches(&workspace, true);
             let (status, detail) = match &result {
                 Ok(_) => (RuntimeTaskStatus::Succeeded, None),
                 Err(err) => (RuntimeTaskStatus::Failed, Some(err.clone())),

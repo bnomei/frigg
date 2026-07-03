@@ -5,7 +5,7 @@
 use super::*;
 
 #[test]
-fn runtime_cache_registry_classifies_snapshot_query_and_request_local_families() {
+fn runtime_cache_registry_classifies_snapshot_metadata_and_request_local_families() {
     let server = FriggMcpServer::new(fixture_config());
 
     let manifest = server.runtime_cache_policy(RuntimeCacheFamily::ValidatedManifestCandidate);
@@ -21,18 +21,21 @@ fn runtime_cache_registry_classifies_snapshot_query_and_request_local_families()
     assert!(manifest.dirty_root_bypass);
     assert_eq!(manifest.budget.max_entries, Some(128));
 
-    let query_result = server.runtime_cache_policy(RuntimeCacheFamily::SearchHybridResponse);
-    assert_eq!(query_result.residency, RuntimeCacheResidency::ProcessWide);
+    let process_metadata = server.runtime_cache_policy(RuntimeCacheFamily::HeuristicReference);
     assert_eq!(
-        query_result.reuse_class,
-        RuntimeCacheReuseClass::QueryResultMicroCache
+        process_metadata.residency,
+        RuntimeCacheResidency::ProcessWide
     );
     assert_eq!(
-        query_result.freshness_contract,
-        RuntimeCacheFreshnessContract::RepositoryFreshnessScopes
+        process_metadata.reuse_class,
+        RuntimeCacheReuseClass::ProcessMetadata
     );
-    assert!(query_result.dirty_root_bypass);
-    assert_eq!(query_result.budget.max_bytes, Some(8 * 1024 * 1024));
+    assert_eq!(
+        process_metadata.freshness_contract,
+        RuntimeCacheFreshnessContract::RepositoryId
+    );
+    assert!(process_metadata.dirty_root_bypass);
+    assert_eq!(process_metadata.budget.max_entries, Some(128));
 
     let request_local = server.runtime_cache_policy(RuntimeCacheFamily::SearcherProjectionStore);
     assert_eq!(request_local.residency, RuntimeCacheResidency::RequestLocal);
@@ -46,123 +49,6 @@ fn runtime_cache_registry_classifies_snapshot_query_and_request_local_families()
     );
     assert_eq!(request_local.budget.max_entries, None);
     assert_eq!(request_local.budget.max_bytes, None);
-}
-
-#[test]
-fn response_caches_respect_registry_entry_limits_and_track_evictions() {
-    let server = FriggMcpServer::new(fixture_config());
-    let search_text_limit = server
-        .runtime_cache_policy(RuntimeCacheFamily::SearchTextResponse)
-        .budget
-        .max_entries
-        .expect("search text cache should have an entry budget");
-    let go_to_definition_limit = server
-        .runtime_cache_policy(RuntimeCacheFamily::GoToDefinitionResponse)
-        .budget
-        .max_entries
-        .expect("go-to-definition cache should have an entry budget");
-    let scope = RepositoryFreshnessCacheScope {
-        repository_id: "repo-001".to_owned(),
-        snapshot_id: "snapshot-001".to_owned(),
-        semantic_state: None,
-        semantic_provider: None,
-        semantic_model: None,
-    };
-    let empty_text_response = SearchTextResponse {
-        total_matches: 0,
-        matches: Vec::new(),
-        result_handle: None,
-        metadata: None,
-    };
-    let empty_navigation_response = GoToDefinitionResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        mode: NavigationMode::UnavailableNoPrecise,
-        target_selection: None,
-        metadata: None,
-        note: None,
-    };
-
-    for index in 0..=search_text_limit {
-        server.cache_search_text_response(
-            SearchTextResponseCacheKey {
-                scoped_repository_ids: vec!["repo-001".to_owned()],
-                freshness_scopes: vec![scope.clone()],
-                query: format!("needle-{index}"),
-                pattern_type: "literal",
-                path_regex: None,
-                limit: 10,
-            },
-            &empty_text_response,
-            &Value::Null,
-        );
-    }
-    assert_eq!(
-        server
-            .cache_state
-            .search_text_response_cache
-            .read()
-            .expect("search text cache should not be poisoned")
-            .len(),
-        search_text_limit
-    );
-    assert_eq!(
-        server.runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse),
-        crate::mcp::server_cache::RuntimeCacheTelemetry {
-            hits: 0,
-            misses: 0,
-            bypasses: 0,
-            inserts: search_text_limit + 1,
-            evictions: 1,
-            invalidations: 0,
-        }
-    );
-
-    for index in 0..=go_to_definition_limit {
-        server.cache_go_to_definition_response(
-            GoToDefinitionResponseCacheKey {
-                scoped_repository_ids: vec!["repo-001".to_owned()],
-                freshness_scopes: vec![scope.clone()],
-                repository_id: Some("repo-001".to_owned()),
-                symbol: Some(format!("User{index}")),
-                path: None,
-                line: None,
-                column: None,
-                include_follow_up_structural: false,
-                limit: 10,
-            },
-            &empty_navigation_response,
-            &["repo-001".to_owned()],
-            None,
-            None,
-            Some("heuristic"),
-            Some("fixture"),
-            10,
-            0,
-            0,
-            0,
-        );
-    }
-    assert_eq!(
-        server
-            .cache_state
-            .go_to_definition_response_cache
-            .read()
-            .expect("go-to-definition cache should not be poisoned")
-            .len(),
-        go_to_definition_limit
-    );
-    assert_eq!(
-        server.runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse),
-        crate::mcp::server_cache::RuntimeCacheTelemetry {
-            hits: 0,
-            misses: 0,
-            bypasses: 0,
-            inserts: go_to_definition_limit + 1,
-            evictions: 1,
-            invalidations: 0,
-        }
-    );
 }
 
 #[test]
@@ -246,8 +132,8 @@ fn runtime_text_searchers_share_projection_store_service_across_requests() {
 }
 
 #[tokio::test]
-async fn read_file_and_explore_share_the_file_content_window_cache() {
-    let workspace_root = temp_workspace_root("file-content-window-cache-share");
+async fn read_file_and_explore_read_current_file_content() {
+    let workspace_root = temp_workspace_root("file-content-direct-reads");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -289,26 +175,6 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
         .await
         .expect("first read_file call should succeed");
     assert!(first_read.content.contains("pub fn alpha"));
-    assert_eq!(
-        server
-            .cache_state
-            .file_content_window_cache
-            .read()
-            .expect("file content cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server.runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow),
-        crate::mcp::server_cache::RuntimeCacheTelemetry {
-            hits: 0,
-            misses: 1,
-            bypasses: 0,
-            inserts: 1,
-            evictions: 0,
-            invalidations: 0,
-        }
-    );
 
     let first_explore = server
         .explore_impl(crate::mcp::types::ExploreParams {
@@ -325,35 +191,14 @@ async fn read_file_and_explore_share_the_file_content_window_cache() {
             include_context_efficiency: None,
         })
         .await
-        .expect("explore should reuse the shared file content cache");
+        .expect("explore should read the source file");
     assert_eq!(first_explore.total_matches, 1);
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
-            .hits
-            >= 1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .file_content_window_cache
-            .read()
-            .expect("file content cache should not be poisoned")
-            .len(),
-        1
-    );
 
     let second_read = server
         .read_file_impl(read_params)
         .await
-        .expect("second read_file call should reuse the shared file content cache");
+        .expect("second read_file call should read the source file");
     assert_eq!(first_read.content, second_read.content);
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
-            .hits
-            >= 2
-    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -516,8 +361,8 @@ fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
 }
 
 #[test]
-fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
-    let workspace_root = temp_workspace_root("attach-invalidates-only-attached-answer-caches");
+fn workspace_attach_invalidates_only_attached_repository_navigation_caches() {
+    let workspace_root = temp_workspace_root("attach-invalidates-only-attached-navigation-caches");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Cached;\n")
@@ -536,261 +381,9 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
 
     let attached_repository_id = crate::domain::model::stable_repository_id_for_root(&root).0;
-    let scope = |repository_id: &str, snapshot_id: &str| RepositoryFreshnessCacheScope {
-        repository_id: repository_id.to_owned(),
-        snapshot_id: snapshot_id.to_owned(),
-        semantic_state: None,
-        semantic_provider: None,
-        semantic_model: None,
-    };
-    let attached_scope = scope(&attached_repository_id, "snapshot-001");
-    let repo_002_scope = scope("repo-002", "snapshot-002");
-
-    let empty_text_response = SearchTextResponse {
-        total_matches: 0,
-        matches: Vec::<TextMatch>::new(),
-        result_handle: None,
-        metadata: None,
-    };
-    let empty_hybrid_response = SearchHybridResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        semantic_requested: None,
-        semantic_enabled: None,
-        semantic_status: None,
-        semantic_reason: None,
-        semantic_hit_count: None,
-        semantic_match_count: None,
-        warning: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_symbol_response = SearchSymbolResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_navigation_response = GoToDefinitionResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        mode: NavigationMode::UnavailableNoPrecise,
-        target_selection: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_declarations_response = FindDeclarationsResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        mode: NavigationMode::UnavailableNoPrecise,
-        target_selection: None,
-        metadata: None,
-        note: None,
-    };
-    server.cache_file_content_window(
-        FileContentWindowCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            canonical_path: PathBuf::from("/tmp/attached/file.rs"),
-        },
-        Arc::new(FileContentSnapshot::from_bytes(
-            b"fn attached() {}\n".to_vec(),
-        )),
-    );
-    server.cache_file_content_window(
-        FileContentWindowCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            canonical_path: PathBuf::from("/tmp/repo-002/file.rs"),
-        },
-        Arc::new(FileContentSnapshot::from_bytes(
-            b"fn repo_002() {}\n".to_vec(),
-        )),
-    );
-
-    server.cache_search_text_response(
-        SearchTextResponseCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            query: "needle".to_owned(),
-            pattern_type: "literal",
-            path_regex: None,
-            limit: 10,
-        },
-        &empty_text_response,
-        &Value::Null,
-    );
-    server.cache_search_text_response(
-        SearchTextResponseCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            query: "needle".to_owned(),
-            pattern_type: "literal",
-            path_regex: None,
-            limit: 10,
-        },
-        &empty_text_response,
-        &Value::Null,
-    );
-    server.cache_search_hybrid_response(
-        SearchHybridResponseCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            query: "runtime".to_owned(),
-            language: None,
-            limit: 10,
-            semantic: None,
-            lexical_weight_bits: 0,
-            graph_weight_bits: 0,
-            semantic_weight_bits: 0,
-        },
-        &empty_hybrid_response,
-        &Value::Null,
-    );
-    server.cache_search_hybrid_response(
-        SearchHybridResponseCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            query: "runtime".to_owned(),
-            language: None,
-            limit: 10,
-            semantic: None,
-            lexical_weight_bits: 0,
-            graph_weight_bits: 0,
-            semantic_weight_bits: 0,
-        },
-        &empty_hybrid_response,
-        &Value::Null,
-    );
-    server.cache_search_symbol_response(
-        SearchSymbolResponseCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            query: "User".to_owned(),
-            path_class: None,
-            path_regex: None,
-            limit: 10,
-        },
-        &empty_symbol_response,
-        std::slice::from_ref(&attached_repository_id),
-        0,
-        0,
-        0,
-        0,
-        10,
-    );
-    server.cache_search_symbol_response(
-        SearchSymbolResponseCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            query: "User".to_owned(),
-            path_class: None,
-            path_regex: None,
-            limit: 10,
-        },
-        &empty_symbol_response,
-        &["repo-002".to_owned()],
-        0,
-        0,
-        0,
-        0,
-        10,
-    );
-    server.cache_go_to_definition_response(
-        GoToDefinitionResponseCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            repository_id: Some(attached_repository_id.clone()),
-            symbol: Some("User".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 10,
-        },
-        &empty_navigation_response,
-        std::slice::from_ref(&attached_repository_id),
-        None,
-        None,
-        None,
-        None,
-        10,
-        0,
-        0,
-        0,
-    );
-    server.cache_go_to_definition_response(
-        GoToDefinitionResponseCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            repository_id: Some("repo-002".to_owned()),
-            symbol: Some("User".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 10,
-        },
-        &empty_navigation_response,
-        &["repo-002".to_owned()],
-        None,
-        None,
-        None,
-        None,
-        10,
-        0,
-        0,
-        0,
-    );
-    server.cache_find_declarations_response(
-        FindDeclarationsResponseCacheKey {
-            scoped_repository_ids: vec![attached_repository_id.clone()],
-            freshness_scopes: vec![attached_scope.clone()],
-            repository_id: Some(attached_repository_id.clone()),
-            symbol: Some("User".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 10,
-        },
-        &empty_declarations_response,
-        std::slice::from_ref(&attached_repository_id),
-        None,
-        None,
-        None,
-        None,
-        10,
-        0,
-        0,
-        0,
-    );
-    server.cache_find_declarations_response(
-        FindDeclarationsResponseCacheKey {
-            scoped_repository_ids: vec!["repo-002".to_owned()],
-            freshness_scopes: vec![repo_002_scope.clone()],
-            repository_id: Some("repo-002".to_owned()),
-            symbol: Some("User".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 10,
-        },
-        &empty_declarations_response,
-        &["repo-002".to_owned()],
-        None,
-        None,
-        None,
-        None,
-        10,
-        0,
-        0,
-        0,
-    );
     server.cache_heuristic_references(
         HeuristicReferenceCacheKey {
-            repository_id: attached_repository_id,
+            repository_id: attached_repository_id.clone(),
             symbol_id: "symbol-001".to_owned(),
             corpus_signature: "corpus-001".to_owned(),
             scip_signature: "scip-001".to_owned(),
@@ -822,121 +415,11 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     assert_eq!(
         server
             .cache_state
-            .search_text_response_cache
-            .read()
-            .expect("search text cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .search_hybrid_response_cache
-            .read()
-            .expect("search hybrid cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .search_symbol_response_cache
-            .read()
-            .expect("search symbol cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .go_to_definition_response_cache
-            .read()
-            .expect("go_to_definition cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .find_declarations_response_cache
-            .read()
-            .expect("find_declarations cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
             .heuristic_reference_cache
             .read()
             .expect("heuristic reference cache should not be poisoned")
             .len(),
         1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .file_content_window_cache
-            .read()
-            .expect("file content cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::FileContentWindow)
-            .invalidations
-            >= 1
-    );
-    assert!(
-        server
-            .cache_state
-            .search_text_response_cache
-            .read()
-            .expect("search text cache should not be poisoned")
-            .keys()
-            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
-        "search text cache should retain only unaffected repository entries"
-    );
-    assert!(
-        server
-            .cache_state
-            .search_hybrid_response_cache
-            .read()
-            .expect("search hybrid cache should not be poisoned")
-            .keys()
-            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
-        "search hybrid cache should retain only unaffected repository entries"
-    );
-    assert!(
-        server
-            .cache_state
-            .search_symbol_response_cache
-            .read()
-            .expect("search symbol cache should not be poisoned")
-            .keys()
-            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
-        "search symbol cache should retain only unaffected repository entries"
-    );
-    assert!(
-        server
-            .cache_state
-            .go_to_definition_response_cache
-            .read()
-            .expect("go_to_definition cache should not be poisoned")
-            .keys()
-            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
-        "go_to_definition cache should retain only unaffected repository entries"
-    );
-    assert!(
-        server
-            .cache_state
-            .find_declarations_response_cache
-            .read()
-            .expect("find_declarations cache should not be poisoned")
-            .keys()
-            .all(|key| key.scoped_repository_ids == ["repo-002".to_owned()]),
-        "find_declarations cache should retain only unaffected repository entries"
     );
     assert!(
         server
@@ -950,36 +433,6 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
     );
     assert_eq!(
         server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse)
-            .invalidations,
-        1
-    );
-    assert_eq!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchHybridResponse)
-            .invalidations,
-        1
-    );
-    assert_eq!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchSymbolResponse)
-            .invalidations,
-        1
-    );
-    assert_eq!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse)
-            .invalidations,
-        1
-    );
-    assert_eq!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::FindDeclarationsResponse)
-            .invalidations,
-        1
-    );
-    assert_eq!(
-        server
             .runtime_cache_telemetry(RuntimeCacheFamily::HeuristicReference)
             .invalidations,
         1
@@ -989,8 +442,8 @@ fn workspace_attach_invalidates_only_attached_repository_answer_caches() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn watch_notify_invalidates_live_server_answer_caches() {
-    let workspace_root = temp_workspace_root("watch-invalidates-live-answer-caches");
+async fn watch_notify_invalidates_live_server_navigation_caches() {
+    let workspace_root = temp_workspace_root("watch-invalidates-live-navigation-caches");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -1057,152 +510,6 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     runtime
         .acquire_lease(&workspace)
         .expect("runtime should start watching an adopted workspace");
-    let summary = server.repository_summary(&workspace);
-    let lexical_snapshot_id = summary
-        .health
-        .as_ref()
-        .and_then(|health| health.lexical.snapshot_id.clone())
-        .expect("baseline repository summary should report a lexical snapshot id");
-    let scope = RepositoryFreshnessCacheScope {
-        repository_id: workspace.repository_id.clone(),
-        snapshot_id: lexical_snapshot_id,
-        semantic_state: None,
-        semantic_provider: None,
-        semantic_model: None,
-    };
-    let empty_text_response = SearchTextResponse {
-        total_matches: 0,
-        matches: Vec::<TextMatch>::new(),
-        result_handle: None,
-        metadata: None,
-    };
-    let empty_hybrid_response = SearchHybridResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        semantic_requested: None,
-        semantic_enabled: None,
-        semantic_status: None,
-        semantic_reason: None,
-        semantic_hit_count: None,
-        semantic_match_count: None,
-        warning: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_symbol_response = SearchSymbolResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_navigation_response = GoToDefinitionResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        mode: NavigationMode::UnavailableNoPrecise,
-        target_selection: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_declarations_response = FindDeclarationsResponse {
-        matches: Vec::new(),
-        result_handle: None,
-        mode: NavigationMode::UnavailableNoPrecise,
-        target_selection: None,
-        metadata: None,
-        note: None,
-    };
-    let empty_source_refs = serde_json::json!({});
-
-    server.cache_search_text_response(
-        SearchTextResponseCacheKey {
-            scoped_repository_ids: vec![workspace.repository_id.clone()],
-            freshness_scopes: vec![scope.clone()],
-            query: "watch-cache".to_owned(),
-            pattern_type: "literal",
-            path_regex: None,
-            limit: 5,
-        },
-        &empty_text_response,
-        &empty_source_refs,
-    );
-    server.cache_search_hybrid_response(
-        SearchHybridResponseCacheKey {
-            scoped_repository_ids: vec![workspace.repository_id.clone()],
-            freshness_scopes: vec![scope.clone()],
-            query: "watch-cache".to_owned(),
-            language: None,
-            limit: 5,
-            semantic: Some(false),
-            lexical_weight_bits: 0.0f32.to_bits(),
-            graph_weight_bits: 0.0f32.to_bits(),
-            semantic_weight_bits: 0.0f32.to_bits(),
-        },
-        &empty_hybrid_response,
-        &empty_source_refs,
-    );
-    server.cache_search_symbol_response(
-        SearchSymbolResponseCacheKey {
-            scoped_repository_ids: vec![workspace.repository_id.clone()],
-            freshness_scopes: vec![scope.clone()],
-            query: "WatchCache".to_owned(),
-            path_class: None,
-            path_regex: None,
-            limit: 5,
-        },
-        &empty_symbol_response,
-        std::slice::from_ref(&workspace.repository_id),
-        0,
-        0,
-        0,
-        0,
-        5,
-    );
-    server.cache_go_to_definition_response(
-        GoToDefinitionResponseCacheKey {
-            scoped_repository_ids: vec![workspace.repository_id.clone()],
-            freshness_scopes: vec![scope.clone()],
-            repository_id: Some(workspace.repository_id.clone()),
-            symbol: Some("WatchCache".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 5,
-        },
-        &empty_navigation_response,
-        std::slice::from_ref(&workspace.repository_id),
-        Some("WatchCache"),
-        None,
-        Some("heuristic"),
-        Some("fixture"),
-        5,
-        0,
-        0,
-        0,
-    );
-    server.cache_find_declarations_response(
-        FindDeclarationsResponseCacheKey {
-            scoped_repository_ids: vec![workspace.repository_id.clone()],
-            freshness_scopes: vec![scope.clone()],
-            repository_id: Some(workspace.repository_id.clone()),
-            symbol: Some("WatchCache".to_owned()),
-            path: None,
-            line: None,
-            column: None,
-            include_follow_up_structural: false,
-            limit: 5,
-        },
-        &empty_declarations_response,
-        std::slice::from_ref(&workspace.repository_id),
-        Some("WatchCache"),
-        None,
-        Some("heuristic"),
-        Some("fixture"),
-        5,
-        0,
-        0,
-        0,
-    );
     server.cache_heuristic_references(
         HeuristicReferenceCacheKey {
             repository_id: workspace.repository_id.clone(),
@@ -1217,56 +524,6 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
         0,
     );
 
-    assert!(
-        server
-            .cached_repository_summary(&workspace.repository_id)
-            .is_some()
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .search_text_response_cache
-            .read()
-            .expect("search text response cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .search_hybrid_response_cache
-            .read()
-            .expect("search hybrid response cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .search_symbol_response_cache
-            .read()
-            .expect("search symbol response cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .go_to_definition_response_cache
-            .read()
-            .expect("go-to-definition response cache should not be poisoned")
-            .len(),
-        1
-    );
-    assert_eq!(
-        server
-            .cache_state
-            .find_declarations_response_cache
-            .read()
-            .expect("find declarations response cache should not be poisoned")
-            .len(),
-        1
-    );
     assert_eq!(
         server
             .cache_state
@@ -1284,43 +541,8 @@ async fn watch_notify_invalidates_live_server_answer_caches() {
     .expect("creating a new source file should trigger notify backend");
 
     assert!(
-        wait_for_repository_answer_cache_eviction(
-            &server,
-            &workspace.repository_id,
-            Duration::from_secs(5),
-        )
-        .await,
-        "watch notify should evict live repository-scoped answer caches"
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchTextResponse)
-            .invalidations
-            >= 1
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchHybridResponse)
-            .invalidations
-            >= 1
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::SearchSymbolResponse)
-            .invalidations
-            >= 1
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::GoToDefinitionResponse)
-            .invalidations
-            >= 1
-    );
-    assert!(
-        server
-            .runtime_cache_telemetry(RuntimeCacheFamily::FindDeclarationsResponse)
-            .invalidations
-            >= 1
+        wait_for_heuristic_reference_cache_eviction(&server, Duration::from_secs(5)).await,
+        "watch notify should evict live repository-scoped navigation caches"
     );
     assert!(
         server

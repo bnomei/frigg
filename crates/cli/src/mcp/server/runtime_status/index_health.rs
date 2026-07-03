@@ -15,6 +15,9 @@ impl FriggMcpServer {
         repository_id: &str,
     ) {
         self.cache_state
+            .repository_response_freshness_cache_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        self.cache_state
             .repository_response_freshness_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -23,6 +26,12 @@ impl FriggMcpServer {
                     .iter()
                     .any(|candidate| candidate == repository_id)
             });
+    }
+
+    fn repository_response_freshness_cache_epoch(&self) -> u64 {
+        self.cache_state
+            .repository_response_freshness_cache_epoch
+            .load(Ordering::Acquire)
     }
 
     fn cached_repository_response_freshness(
@@ -39,9 +48,11 @@ impl FriggMcpServer {
             .repository_response_freshness_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get(&cache_key)?;
-        (entry.generated_at.elapsed() <= Self::REPOSITORY_RESPONSE_FRESHNESS_CACHE_TTL)
-            .then(|| entry.freshness.clone())
+        let current_epoch = self.repository_response_freshness_cache_epoch();
+        cache
+            .get(&cache_key)
+            .filter(|entry| entry.epoch == current_epoch)
+            .map(|entry| entry.freshness.clone())
     }
 
     fn cache_repository_response_freshness(
@@ -49,6 +60,7 @@ impl FriggMcpServer {
         scoped_repository_ids: &[String],
         mode: RepositoryResponseCacheFreshnessMode,
         freshness: &RepositoryResponseCacheFreshness,
+        expected_epoch: u64,
     ) {
         let cache_key = RepositoryResponseFreshnessCacheKey {
             scoped_repository_ids: scoped_repository_ids.to_vec(),
@@ -59,11 +71,14 @@ impl FriggMcpServer {
             .repository_response_freshness_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.repository_response_freshness_cache_epoch() != expected_epoch {
+            return;
+        }
         cache.insert(
             cache_key,
             CachedRepositoryResponseFreshness {
                 freshness: freshness.clone(),
-                generated_at: Instant::now(),
+                epoch: expected_epoch,
             },
         );
         while cache.len() > Self::REPOSITORY_RESPONSE_FRESHNESS_CACHE_MAX_ENTRIES {
@@ -282,7 +297,16 @@ impl FriggMcpServer {
             .map(|workspace| workspace.repository_id.clone())
             .collect::<Vec<_>>();
         scoped_repository_ids.sort();
-        let cache_eligible = self.response_freshness_cache_eligible(workspaces);
+        let has_active_runtime_work = workspaces
+            .iter()
+            .any(|workspace| self.repository_has_active_runtime_work(&workspace.repository_id));
+        let has_dirty_root = workspaces
+            .iter()
+            .any(|workspace| self.workspace_has_dirty_root(workspace));
+        let cache_eligible = self.response_freshness_cache_eligible(workspaces)
+            && !has_active_runtime_work
+            && !has_dirty_root;
+        let cache_epoch = self.repository_response_freshness_cache_epoch();
         if cache_eligible
             && let Some(cached) =
                 self.cached_repository_response_freshness(&scoped_repository_ids, mode)
@@ -337,7 +361,8 @@ impl FriggMcpServer {
                             && task.repository_id == workspace.runtime_repository_id))
                 })
                 .collect::<Vec<_>>();
-            let cacheable_reason = if dirty_root {
+            let refresh_in_progress = !active_index_tasks.is_empty();
+            let live_walk_reason = if dirty_root {
                 Some("dirty_root")
             } else if !matches!(status.manifest, RepositoryManifestFreshness::Ready) {
                 Some(manifest)
@@ -346,7 +371,9 @@ impl FriggMcpServer {
             } else {
                 None
             };
-            let using_live_walk = cacheable_reason.is_some();
+            let cacheable_reason =
+                live_walk_reason.or_else(|| refresh_in_progress.then_some("refresh_in_progress"));
+            let using_live_walk = live_walk_reason.is_some();
 
             repositories.push(json!({
                 "repository_id": workspace.repository_id,
@@ -357,10 +384,12 @@ impl FriggMcpServer {
                 "cacheable_reason": cacheable_reason,
                 "candidate_source": if using_live_walk { "live_walk" } else { "manifest_snapshot" },
                 "using_live_walk": using_live_walk,
-                "refresh_in_progress": !active_index_tasks.is_empty(),
+                "refresh_in_progress": refresh_in_progress,
                 "active_index_tasks": active_index_tasks,
                 "recommended_client_behavior": if using_live_walk {
                     "continue_using_frigg_live_fallback"
+                } else if refresh_in_progress {
+                    "requery_after_refresh"
                 } else {
                     "use_cached_frigg_results"
                 },
@@ -368,6 +397,10 @@ impl FriggMcpServer {
                 "model": semantic_target.as_ref().map(|target| target.model.clone()),
             }));
 
+            if refresh_in_progress {
+                cacheable = false;
+                continue;
+            }
             if dirty_root || !matches!(status.manifest, RepositoryManifestFreshness::Ready) {
                 cacheable = false;
                 continue;
@@ -408,16 +441,16 @@ impl FriggMcpServer {
                 "repositories": repositories,
                 "runtime_cache_contract": self.runtime_cache_contract_summary(&[
                     crate::mcp::server_cache::RuntimeCacheFamily::ValidatedManifestCandidate,
-                    crate::mcp::server_cache::RuntimeCacheFamily::SearchTextResponse,
-                    crate::mcp::server_cache::RuntimeCacheFamily::SearchHybridResponse,
-                    crate::mcp::server_cache::RuntimeCacheFamily::SearchSymbolResponse,
-                    crate::mcp::server_cache::RuntimeCacheFamily::GoToDefinitionResponse,
-                    crate::mcp::server_cache::RuntimeCacheFamily::FindDeclarationsResponse,
                     ]),
             }),
         };
         if cache_eligible && freshness.scopes.is_some() {
-            self.cache_repository_response_freshness(&scoped_repository_ids, mode, &freshness);
+            self.cache_repository_response_freshness(
+                &scoped_repository_ids,
+                mode,
+                &freshness,
+                cache_epoch,
+            );
         }
         Ok(freshness)
     }
@@ -779,6 +812,7 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         plan: &WorkspaceSemanticRefreshPlan,
     ) -> Result<(), String> {
+        self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
         let started_at = Instant::now();
         tracing::info!(
             repository_id = %workspace.repository_id,
@@ -813,6 +847,7 @@ impl FriggMcpServer {
             &credentials,
         )
         .map(|_| {
+            self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
             tracing::info!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
@@ -823,6 +858,7 @@ impl FriggMcpServer {
             );
         })
         .map_err(|err| {
+            self.invalidate_repository_response_freshness_cache(&workspace.repository_id);
             let error = err.to_string();
             warn!(
                 repository_id = %workspace.repository_id,
@@ -1142,5 +1178,102 @@ impl FriggMcpServer {
             model: None,
             artifact_count: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn response_freshness_test_server() -> FriggMcpServer {
+        let root = std::env::current_dir().expect("test current directory should exist");
+        FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![root])
+                .expect("test workspace root should build a config"),
+        )
+    }
+
+    fn cacheable_response_freshness(repository_id: &str) -> RepositoryResponseCacheFreshness {
+        RepositoryResponseCacheFreshness {
+            scopes: Some(vec![RepositoryFreshnessCacheScope {
+                repository_id: repository_id.to_owned(),
+                snapshot_id: "snapshot-001".to_owned(),
+                semantic_state: None,
+                semantic_provider: None,
+                semantic_model: None,
+            }]),
+            basis: json!({
+                "mode": RepositoryResponseCacheFreshnessMode::ManifestOnly.as_str(),
+                "cacheable": true,
+            }),
+        }
+    }
+
+    #[test]
+    fn response_freshness_cache_skips_insert_after_invalidation_epoch_changes() {
+        let server = response_freshness_test_server();
+        let repository_id = "repo-001";
+        let scoped_repository_ids = vec![repository_id.to_owned()];
+        let freshness = cacheable_response_freshness(repository_id);
+
+        let current_epoch = server.repository_response_freshness_cache_epoch();
+        server.cache_repository_response_freshness(
+            &scoped_repository_ids,
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+            &freshness,
+            current_epoch,
+        );
+        assert_eq!(
+            server
+                .cache_state
+                .repository_response_freshness_cache
+                .read()
+                .expect("response freshness cache should not be poisoned")
+                .len(),
+            1
+        );
+
+        let stale_epoch = server.repository_response_freshness_cache_epoch();
+        server.invalidate_repository_response_freshness_cache(repository_id);
+        server.cache_repository_response_freshness(
+            &scoped_repository_ids,
+            RepositoryResponseCacheFreshnessMode::ManifestOnly,
+            &freshness,
+            stale_epoch,
+        );
+        assert!(
+            server
+                .cache_state
+                .repository_response_freshness_cache
+                .read()
+                .expect("response freshness cache should not be poisoned")
+                .is_empty(),
+            "stale in-flight freshness computations must not repopulate after invalidation"
+        );
+
+        server
+            .cache_state
+            .repository_response_freshness_cache
+            .write()
+            .expect("response freshness cache should not be poisoned")
+            .insert(
+                RepositoryResponseFreshnessCacheKey {
+                    scoped_repository_ids: scoped_repository_ids.clone(),
+                    mode: RepositoryResponseCacheFreshnessMode::ManifestOnly.as_str(),
+                },
+                CachedRepositoryResponseFreshness {
+                    freshness,
+                    epoch: stale_epoch,
+                },
+            );
+        assert!(
+            server
+                .cached_repository_response_freshness(
+                    &scoped_repository_ids,
+                    RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                )
+                .is_none(),
+            "stale entries still present during invalidation must not be returned"
+        );
     }
 }
