@@ -5,12 +5,12 @@ use std::path::Path;
 use crate::domain::{FriggError, FriggResult};
 use crate::searcher::{build_retrieval_projection_bundle, required_retrieval_projection_versions};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
-use crate::storage::Storage;
+use crate::storage::StorageSession;
+use tracing::warn;
 
-use super::super::manifest::normalize_repository_relative_path;
+use super::super::manifest::{file_digest_to_manifest_entry, normalize_repository_relative_path};
 use super::plan::{IndexPlan, ManifestSnapshotPlan, SemanticRefreshMode};
 use super::semantic::execute_semantic_refresh_plan;
-use super::store::ManifestStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IndexExecutionPhase {
@@ -35,7 +35,7 @@ impl IndexExecutionPhase {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_index_plan(
-    manifest_store: &ManifestStore,
+    storage_session: &mut StorageSession,
     repository_id: &str,
     workspace_root: &Path,
     db_path: &Path,
@@ -44,62 +44,69 @@ pub(super) fn execute_index_plan(
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
 ) -> FriggResult<()> {
-    let storage = Storage::new(db_path);
-    execute_manifest_snapshot_phase(manifest_store, workspace_root, plan)?;
-    execute_retrieval_projection_phase(
-        manifest_store,
-        repository_id,
-        workspace_root,
-        plan,
-        &storage,
-    )?;
-    execute_semantic_refresh_phase(
-        manifest_store,
+    let manifest_written = execute_manifest_snapshot_phase(storage_session, workspace_root, plan)?;
+    let projections_written =
+        execute_retrieval_projection_phase(repository_id, workspace_root, plan, storage_session)?;
+    let semantics_written = execute_semantic_refresh_phase(
+        storage_session,
         repository_id,
         workspace_root,
         plan,
         semantic_runtime,
         credentials,
         executor,
-        &storage,
     )?;
-    execute_retention_phase(&storage, repository_id, plan)?;
+    let pruned_snapshots = execute_retention_phase(storage_session, repository_id, plan)?;
+    if (manifest_written || projections_written || semantics_written || pruned_snapshots > 0)
+        && let Err(err) = storage_session.checkpoint_wal_truncate()
+    {
+        warn!(
+            db_path = %db_path.display(),
+            error = %err,
+            "sqlite wal checkpoint after index run failed"
+        );
+    }
     Ok(())
 }
 
 fn execute_manifest_snapshot_phase(
-    manifest_store: &ManifestStore,
+    storage_session: &mut StorageSession,
     workspace_root: &Path,
     plan: &IndexPlan,
-) -> FriggResult<()> {
+) -> FriggResult<bool> {
     match &plan.snapshot_plan {
-        ManifestSnapshotPlan::ReuseExisting { .. } => Ok(()),
+        ManifestSnapshotPlan::ReuseExisting { .. } => Ok(false),
         ManifestSnapshotPlan::PersistNew { snapshot_id, .. } => {
-            manifest_store
+            storage_session
                 .upsert_repository(&plan.repository_id, workspace_root, &plan.repository_id)
                 .map_err(|err| {
                     wrap_index_phase_error(IndexExecutionPhase::PersistManifestSnapshot, err)
                 })?;
-            manifest_store
-                .persist_snapshot_manifest(&plan.repository_id, snapshot_id, &plan.current_manifest)
+            let manifest_entries = plan
+                .current_manifest
+                .iter()
+                .map(file_digest_to_manifest_entry)
+                .collect::<Vec<_>>();
+            storage_session
+                .upsert_manifest(&plan.repository_id, snapshot_id, &manifest_entries)
                 .map_err(|err| {
                     wrap_index_phase_error(IndexExecutionPhase::PersistManifestSnapshot, err)
-                })
+                })?;
+            Ok(true)
         }
     }
 }
 
 fn execute_retrieval_projection_phase(
-    manifest_store: &ManifestStore,
     repository_id: &str,
     workspace_root: &Path,
     plan: &IndexPlan,
-    storage: &Storage,
-) -> FriggResult<()> {
+    storage_session: &mut StorageSession,
+) -> FriggResult<bool> {
     let snapshot_id = plan.snapshot_plan.snapshot_id();
     let should_refresh = match &plan.snapshot_plan {
         ManifestSnapshotPlan::PersistNew { .. } => true,
-        ManifestSnapshotPlan::ReuseExisting { .. } => !storage
+        ManifestSnapshotPlan::ReuseExisting { .. } => !storage_session
             .stale_or_missing_retrieval_projection_families_for_repository_snapshot(
                 repository_id,
                 snapshot_id,
@@ -111,7 +118,7 @@ fn execute_retrieval_projection_phase(
             .is_empty(),
     };
     if !should_refresh {
-        return Ok(());
+        return Ok(false);
     }
 
     let manifest_paths = plan
@@ -126,7 +133,7 @@ fn execute_retrieval_projection_phase(
                 wrap_index_phase_error(IndexExecutionPhase::RefreshRetrievalProjections, err)
             })
             .and_then(|bundle| {
-                storage
+                storage_session
                     .replace_retrieval_projection_bundle_for_repository_snapshot(
                         repository_id,
                         snapshot_id,
@@ -142,7 +149,7 @@ fn execute_retrieval_projection_phase(
 
     if let Err(err) = projection_bundle {
         if matches!(plan.snapshot_plan, ManifestSnapshotPlan::PersistNew { .. }) {
-            if let Err(rollback_err) = execute_snapshot_rollback_phase(manifest_store, snapshot_id)
+            if let Err(rollback_err) = execute_snapshot_rollback_phase(storage_session, snapshot_id)
             {
                 return Err(FriggError::Internal(format!(
                     "{err}; {}",
@@ -156,22 +163,21 @@ fn execute_retrieval_projection_phase(
         return Err(err);
     }
 
-    Ok(())
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn execute_semantic_refresh_phase(
-    manifest_store: &ManifestStore,
+    storage_session: &mut StorageSession,
     repository_id: &str,
     workspace_root: &Path,
     plan: &IndexPlan,
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn crate::indexer::semantic::SemanticRuntimeEmbeddingExecutor,
-    storage: &Storage,
-) -> FriggResult<()> {
+) -> FriggResult<bool> {
     if plan.semantic_refresh.mode == SemanticRefreshMode::Disabled {
-        return Ok(());
+        return Ok(false);
     }
 
     let semantic_result = execute_semantic_refresh_plan(
@@ -183,14 +189,14 @@ fn execute_semantic_refresh_phase(
         semantic_runtime,
         credentials,
         executor,
-        storage,
+        storage_session,
     );
 
     if let Err(err) = semantic_result {
         let semantic_error = wrap_index_phase_error(IndexExecutionPhase::SemanticRefresh, err);
         if plan.snapshot_plan.rollback_on_semantic_failure() {
             if let Err(rollback_err) =
-                execute_snapshot_rollback_phase(manifest_store, plan.snapshot_plan.snapshot_id())
+                execute_snapshot_rollback_phase(storage_session, plan.snapshot_plan.snapshot_id())
             {
                 return Err(FriggError::Internal(format!(
                     "{semantic_error}; {}",
@@ -204,25 +210,28 @@ fn execute_semantic_refresh_phase(
         return Err(semantic_error);
     }
 
-    Ok(())
+    Ok(!matches!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::Disabled | SemanticRefreshMode::ReuseExisting
+    ))
 }
 
 fn execute_snapshot_rollback_phase(
-    manifest_store: &ManifestStore,
+    storage_session: &mut StorageSession,
     snapshot_id: &str,
 ) -> FriggResult<()> {
-    manifest_store.delete_snapshot(snapshot_id)
+    storage_session.delete_snapshot(snapshot_id)
 }
 
 fn execute_retention_phase(
-    storage: &Storage,
+    storage_session: &mut StorageSession,
     repository_id: &str,
     plan: &IndexPlan,
-) -> FriggResult<()> {
-    storage
+) -> FriggResult<usize> {
+    let deleted = storage_session
         .prune_repository_snapshots(repository_id, plan.retained_manifest_snapshots)
         .map_err(|err| wrap_index_phase_error(IndexExecutionPhase::PruneManifestSnapshots, err))?;
-    Ok(())
+    Ok(deleted)
 }
 
 fn wrap_index_phase_error(phase: IndexExecutionPhase, err: FriggError) -> FriggError {

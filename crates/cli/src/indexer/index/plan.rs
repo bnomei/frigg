@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::settings::SemanticRuntimeConfig;
-use crate::storage::{DEFAULT_RETAINED_MANIFEST_SNAPSHOTS, Storage};
+use crate::storage::DEFAULT_RETAINED_MANIFEST_SNAPSHOTS;
+#[cfg(test)]
+use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -18,6 +20,7 @@ use super::super::manifest::{
     deterministic_snapshot_id, normalize_deleted_repository_relative_path,
     normalize_repository_relative_path,
 };
+use super::super::semantic::SemanticIndexStorage;
 use super::super::{FileDigest, ManifestBuildDiagnostic, ManifestDiagnosticKind, ManifestDiff};
 use super::semantic::build_semantic_refresh_plan;
 #[cfg(test)]
@@ -190,7 +193,7 @@ pub(super) fn build_index_plan(
     diagnostics: IndexDiagnostics,
     manifest_diff: ManifestDiff,
     dirty_path_hints: &[PathBuf],
-    storage: Option<&Storage>,
+    storage: Option<&dyn SemanticIndexStorage>,
 ) -> FriggResult<IndexPlan> {
     let files_scanned = current_manifest.len();
     let files_changed = match mode {
@@ -351,6 +354,9 @@ pub(crate) fn build_index_plan_for_tests(
         diff(previous_entries, &current_manifest)
     };
     let storage = semantic_runtime.enabled.then(|| Storage::new(db_path));
+    let semantic_storage = storage
+        .as_ref()
+        .map(|storage| storage as &dyn SemanticIndexStorage);
 
     build_index_plan(
         repository_id,
@@ -363,6 +369,6 @@ pub(crate) fn build_index_plan_for_tests(
         diagnostics,
         manifest_diff,
         dirty_path_hints,
-        storage.as_ref(),
+        semantic_storage,
     )
 }

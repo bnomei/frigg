@@ -2,13 +2,14 @@
 
 use crate::domain::{FriggError, FriggResult};
 
+use super::manifest_store::delete_snapshot_rows_in_transaction;
 use super::vector_store::{
     initialize_vector_store_on_connection, semantic_chunk_embedding_record_order,
     validate_semantic_chunk_embedding_record,
 };
 use super::{
     DEFAULT_VECTOR_DIMENSIONS, SNAPSHOT_KIND_MANIFEST, SemanticChunkEmbeddingRecord,
-    SemanticStorageHealth, Storage, VECTOR_TABLE_NAME,
+    SemanticStorageHealth, Storage, StorageSession, VECTOR_TABLE_NAME,
     load_semantic_head_snapshot_ids_for_repository, load_snapshot_ids_for_repository_and_kind,
 };
 
@@ -40,73 +41,15 @@ impl Storage {
         model: &str,
         records: &[SemanticChunkEmbeddingRecord],
     ) -> FriggResult<()> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-        let provider = provider.trim();
-        if provider.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "provider must not be empty".to_owned(),
-            ));
-        }
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "model must not be empty".to_owned(),
-            ));
-        }
-
-        for record in records {
-            validate_semantic_chunk_embedding_record(record, repository_id, snapshot_id)?;
-            validate_semantic_target(record, provider, model)?;
-        }
-
         let mut conn = self.open_current_schema_connection()?;
-        let _ = initialize_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start semantic embedding replace transaction for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
-            ))
-        })?;
-
-        clear_live_semantic_corpus_for_repository_model(&tx, repository_id, provider, model)?;
-
-        let mut ordered_records = records.to_vec();
-        ordered_records.sort_by(semantic_chunk_embedding_record_order);
-        let live_chunk_count = insert_semantic_embeddings_for_records(
-            &tx,
+        replace_semantic_embeddings_for_repository_on_connection(
+            &mut conn,
             repository_id,
             snapshot_id,
             provider,
             model,
-            &ordered_records,
-        )?;
-        upsert_semantic_head(
-            &tx,
-            repository_id,
-            provider,
-            model,
-            snapshot_id,
-            live_chunk_count,
-            Some("replace_full"),
-        )?;
-        sync_vector_partition_replace(&tx, repository_id, provider, model, &ordered_records)?;
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit semantic embedding replace for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
-            ))
-        })?;
-        Ok(())
+            records,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -122,112 +65,18 @@ impl Storage {
         deleted_paths: &[String],
         records: &[SemanticChunkEmbeddingRecord],
     ) -> FriggResult<()> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        let snapshot_id = snapshot_id.trim();
-        if snapshot_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "snapshot_id must not be empty".to_owned(),
-            ));
-        }
-        let provider = provider.trim();
-        if provider.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "provider must not be empty".to_owned(),
-            ));
-        }
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "model must not be empty".to_owned(),
-            ));
-        }
-        let previous_snapshot_id = previous_snapshot_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        for record in records {
-            validate_semantic_chunk_embedding_record(record, repository_id, snapshot_id)?;
-            validate_semantic_target(record, provider, model)?;
-        }
-
         let mut conn = self.open_current_schema_connection()?;
-        let _ = initialize_vector_store_on_connection(&conn, DEFAULT_VECTOR_DIMENSIONS)?;
-        let tx = conn.transaction().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to start semantic embedding advance transaction for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
-            ))
-        })?;
-
-        let head = load_semantic_head_for_repository_model_on_connection(
-            &tx,
+        advance_semantic_embeddings_for_repository_on_connection(
+            &mut conn,
             repository_id,
-            provider,
-            model,
-        )?;
-        let current_covered_snapshot_id = head
-            .as_ref()
-            .map(|record| record.covered_snapshot_id.as_str());
-        if current_covered_snapshot_id != previous_snapshot_id {
-            let found = current_covered_snapshot_id.unwrap_or("-");
-            let expected = previous_snapshot_id.unwrap_or("-");
-            return Err(FriggError::Internal(format!(
-                "semantic advance requires live corpus covered snapshot '{expected}' for repository '{repository_id}' provider '{provider}' model '{model}', found '{found}'; run a full semantic rebuild instead"
-            )));
-        }
-
-        let mut removed_paths = changed_paths
-            .iter()
-            .chain(deleted_paths.iter())
-            .map(|path| path.trim())
-            .filter(|path| !path.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        removed_paths.sort();
-        removed_paths.dedup();
-        let removed_chunk_ids = load_live_semantic_chunk_ids_for_paths(
-            &tx,
-            repository_id,
-            provider,
-            model,
-            &removed_paths,
-        )?;
-        delete_vector_rows_for_chunk_ids(&tx, repository_id, provider, model, &removed_chunk_ids)?;
-        delete_live_semantic_rows_for_paths(&tx, repository_id, provider, model, &removed_paths)?;
-
-        let mut ordered_records = records.to_vec();
-        ordered_records.sort_by(semantic_chunk_embedding_record_order);
-        insert_semantic_embeddings_for_records(
-            &tx,
-            repository_id,
+            previous_snapshot_id,
             snapshot_id,
             provider,
             model,
-            &ordered_records,
-        )?;
-        sync_vector_rows_insert(&tx, repository_id, provider, model, &ordered_records)?;
-        let live_chunk_count =
-            count_semantic_chunk_rows_for_repository_model(&tx, repository_id, provider, model)?;
-        upsert_semantic_head(
-            &tx,
-            repository_id,
-            provider,
-            model,
-            snapshot_id,
-            live_chunk_count,
-            Some("advance_delta"),
-        )?;
-
-        tx.commit().map_err(|err| {
-            FriggError::Internal(format!(
-                "failed to commit semantic embedding advance for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
-            ))
-        })?;
-        Ok(())
+            changed_paths,
+            deleted_paths,
+            records,
+        )
     }
 
     pub fn collect_semantic_storage_health_for_repository_model(
@@ -319,36 +168,305 @@ impl Storage {
         repository_id: &str,
         keep_latest: usize,
     ) -> FriggResult<usize> {
-        let repository_id = repository_id.trim();
-        if repository_id.is_empty() {
-            return Err(FriggError::InvalidInput(
-                "repository_id must not be empty".to_owned(),
-            ));
-        }
-        if keep_latest == 0 {
-            return Err(FriggError::InvalidInput(
-                "keep_latest must be greater than zero".to_owned(),
-            ));
-        }
-
-        let conn = self.open_current_schema_connection()?;
-        let protected_snapshot_ids =
-            load_semantic_head_snapshot_ids_for_repository(&conn, repository_id)?;
-        let snapshot_ids = load_snapshot_ids_for_repository_and_kind(
-            &conn,
-            repository_id,
-            SNAPSHOT_KIND_MANIFEST,
-        )?;
-
-        let mut deleted = 0usize;
-        for snapshot_id in snapshot_ids.into_iter().skip(keep_latest) {
-            if protected_snapshot_ids.contains(&snapshot_id) {
-                continue;
-            }
-            self.delete_snapshot(&snapshot_id)?;
-            deleted = deleted.saturating_add(1);
-        }
-
-        Ok(deleted)
+        let mut conn = self.open_current_schema_connection()?;
+        prune_repository_snapshots_on_connection(&mut conn, repository_id, keep_latest)
     }
+}
+
+impl StorageSession {
+    pub(crate) fn replace_semantic_embeddings_for_repository(
+        &mut self,
+        repository_id: &str,
+        snapshot_id: &str,
+        provider: &str,
+        model: &str,
+        records: &[SemanticChunkEmbeddingRecord],
+    ) -> FriggResult<()> {
+        replace_semantic_embeddings_for_repository_on_connection(
+            &mut self.conn,
+            repository_id,
+            snapshot_id,
+            provider,
+            model,
+            records,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn advance_semantic_embeddings_for_repository(
+        &mut self,
+        repository_id: &str,
+        previous_snapshot_id: Option<&str>,
+        snapshot_id: &str,
+        provider: &str,
+        model: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+        records: &[SemanticChunkEmbeddingRecord],
+    ) -> FriggResult<()> {
+        advance_semantic_embeddings_for_repository_on_connection(
+            &mut self.conn,
+            repository_id,
+            previous_snapshot_id,
+            snapshot_id,
+            provider,
+            model,
+            changed_paths,
+            deleted_paths,
+            records,
+        )
+    }
+
+    pub(crate) fn prune_repository_snapshots(
+        &mut self,
+        repository_id: &str,
+        keep_latest: usize,
+    ) -> FriggResult<usize> {
+        prune_repository_snapshots_on_connection(&mut self.conn, repository_id, keep_latest)
+    }
+}
+
+fn replace_semantic_embeddings_for_repository_on_connection(
+    conn: &mut rusqlite::Connection,
+    repository_id: &str,
+    snapshot_id: &str,
+    provider: &str,
+    model: &str,
+    records: &[SemanticChunkEmbeddingRecord],
+) -> FriggResult<()> {
+    let repository_id = repository_id.trim();
+    if repository_id.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "repository_id must not be empty".to_owned(),
+        ));
+    }
+    let snapshot_id = snapshot_id.trim();
+    if snapshot_id.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "snapshot_id must not be empty".to_owned(),
+        ));
+    }
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "provider must not be empty".to_owned(),
+        ));
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "model must not be empty".to_owned(),
+        ));
+    }
+
+    for record in records {
+        validate_semantic_chunk_embedding_record(record, repository_id, snapshot_id)?;
+        validate_semantic_target(record, provider, model)?;
+    }
+
+    let _ = initialize_vector_store_on_connection(conn, DEFAULT_VECTOR_DIMENSIONS)?;
+    let tx = conn.transaction().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to start semantic embedding replace transaction for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+        ))
+    })?;
+
+    clear_live_semantic_corpus_for_repository_model(&tx, repository_id, provider, model)?;
+
+    let mut ordered_records = records.to_vec();
+    ordered_records.sort_by(semantic_chunk_embedding_record_order);
+    let live_chunk_count = insert_semantic_embeddings_for_records(
+        &tx,
+        repository_id,
+        snapshot_id,
+        provider,
+        model,
+        &ordered_records,
+    )?;
+    upsert_semantic_head(
+        &tx,
+        repository_id,
+        provider,
+        model,
+        snapshot_id,
+        live_chunk_count,
+        Some("replace_full"),
+    )?;
+    sync_vector_partition_replace(&tx, repository_id, provider, model, &ordered_records)?;
+
+    tx.commit().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to commit semantic embedding replace for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_semantic_embeddings_for_repository_on_connection(
+    conn: &mut rusqlite::Connection,
+    repository_id: &str,
+    previous_snapshot_id: Option<&str>,
+    snapshot_id: &str,
+    provider: &str,
+    model: &str,
+    changed_paths: &[String],
+    deleted_paths: &[String],
+    records: &[SemanticChunkEmbeddingRecord],
+) -> FriggResult<()> {
+    let repository_id = repository_id.trim();
+    if repository_id.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "repository_id must not be empty".to_owned(),
+        ));
+    }
+    let snapshot_id = snapshot_id.trim();
+    if snapshot_id.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "snapshot_id must not be empty".to_owned(),
+        ));
+    }
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "provider must not be empty".to_owned(),
+        ));
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "model must not be empty".to_owned(),
+        ));
+    }
+    let previous_snapshot_id = previous_snapshot_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    for record in records {
+        validate_semantic_chunk_embedding_record(record, repository_id, snapshot_id)?;
+        validate_semantic_target(record, provider, model)?;
+    }
+
+    let _ = initialize_vector_store_on_connection(conn, DEFAULT_VECTOR_DIMENSIONS)?;
+    let tx = conn.transaction().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to start semantic embedding advance transaction for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+        ))
+    })?;
+
+    let head =
+        load_semantic_head_for_repository_model_on_connection(&tx, repository_id, provider, model)?;
+    let current_covered_snapshot_id = head
+        .as_ref()
+        .map(|record| record.covered_snapshot_id.as_str());
+    if current_covered_snapshot_id != previous_snapshot_id {
+        let found = current_covered_snapshot_id.unwrap_or("-");
+        let expected = previous_snapshot_id.unwrap_or("-");
+        return Err(FriggError::Internal(format!(
+            "semantic advance requires live corpus covered snapshot '{expected}' for repository '{repository_id}' provider '{provider}' model '{model}', found '{found}'; run a full semantic rebuild instead"
+        )));
+    }
+
+    let mut removed_paths = changed_paths
+        .iter()
+        .chain(deleted_paths.iter())
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    removed_paths.sort();
+    removed_paths.dedup();
+    let removed_chunk_ids = load_live_semantic_chunk_ids_for_paths(
+        &tx,
+        repository_id,
+        provider,
+        model,
+        &removed_paths,
+    )?;
+    delete_vector_rows_for_chunk_ids(&tx, repository_id, provider, model, &removed_chunk_ids)?;
+    delete_live_semantic_rows_for_paths(&tx, repository_id, provider, model, &removed_paths)?;
+
+    let mut ordered_records = records.to_vec();
+    ordered_records.sort_by(semantic_chunk_embedding_record_order);
+    insert_semantic_embeddings_for_records(
+        &tx,
+        repository_id,
+        snapshot_id,
+        provider,
+        model,
+        &ordered_records,
+    )?;
+    sync_vector_rows_insert(&tx, repository_id, provider, model, &ordered_records)?;
+    let live_chunk_count =
+        count_semantic_chunk_rows_for_repository_model(&tx, repository_id, provider, model)?;
+    upsert_semantic_head(
+        &tx,
+        repository_id,
+        provider,
+        model,
+        snapshot_id,
+        live_chunk_count,
+        Some("advance_delta"),
+    )?;
+
+    tx.commit().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to commit semantic embedding advance for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn prune_repository_snapshots_on_connection(
+    conn: &mut rusqlite::Connection,
+    repository_id: &str,
+    keep_latest: usize,
+) -> FriggResult<usize> {
+    let repository_id = repository_id.trim();
+    if repository_id.is_empty() {
+        return Err(FriggError::InvalidInput(
+            "repository_id must not be empty".to_owned(),
+        ));
+    }
+    if keep_latest == 0 {
+        return Err(FriggError::InvalidInput(
+            "keep_latest must be greater than zero".to_owned(),
+        ));
+    }
+
+    let protected_snapshot_ids =
+        load_semantic_head_snapshot_ids_for_repository(conn, repository_id)?;
+    let snapshot_ids =
+        load_snapshot_ids_for_repository_and_kind(conn, repository_id, SNAPSHOT_KIND_MANIFEST)?;
+
+    let tx = conn.transaction().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to start snapshot retention prune transaction for repository '{repository_id}': {err}"
+        ))
+    })?;
+
+    let mut deleted = 0usize;
+    for snapshot_id in snapshot_ids.into_iter().skip(keep_latest) {
+        if protected_snapshot_ids.contains(&snapshot_id) {
+            continue;
+        }
+        delete_snapshot_rows_in_transaction(&tx, &snapshot_id).map_err(|err| match err {
+            FriggError::InvalidInput(message) => FriggError::InvalidInput(format!(
+                "failed to prune snapshot '{snapshot_id}' for repository '{repository_id}': {message}"
+            )),
+            FriggError::Internal(message) => FriggError::Internal(format!(
+                "failed to prune snapshot '{snapshot_id}' for repository '{repository_id}': {message}"
+            )),
+            other => other,
+        })?;
+        deleted = deleted.saturating_add(1);
+    }
+
+    tx.commit().map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to commit snapshot retention prune transaction for repository '{repository_id}': {err}"
+        ))
+    })?;
+
+    Ok(deleted)
 }

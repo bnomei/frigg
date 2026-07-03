@@ -5,14 +5,14 @@ use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageSession};
 
 use super::super::manifest::{
     diff, manifest_entry_to_file_digest, normalize_deleted_repository_relative_path,
     normalize_repository_relative_path,
 };
 use super::super::semantic::{
-    RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor,
+    RuntimeSemanticEmbeddingExecutor, SemanticIndexStorage, SemanticRuntimeEmbeddingExecutor,
     build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
 };
 use super::super::{
@@ -173,10 +173,22 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     let db_preexisted = db_path.exists();
     let manifest_store = ManifestStore::new(db_path);
     manifest_store.initialize_for_index(semantic_runtime.enabled)?;
+    let storage = Storage::new(db_path);
+    let mut storage_session = storage.open_session()?;
     let previous_manifest = if mode == IndexMode::Full && !db_preexisted {
         None
     } else {
-        manifest_store.load_latest_manifest_for_repository(repository_id)?
+        storage_session
+            .load_latest_manifest_for_repository(repository_id)?
+            .map(|snapshot| super::super::RepositoryManifest {
+                repository_id: snapshot.repository_id,
+                snapshot_id: snapshot.snapshot_id,
+                entries: snapshot
+                    .entries
+                    .into_iter()
+                    .map(manifest_entry_to_file_digest)
+                    .collect(),
+            })
     };
     let previous_snapshot_id = previous_manifest
         .as_ref()
@@ -206,7 +218,9 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     } else {
         diff(previous_entries, &current_manifest)
     };
-    let storage = semantic_runtime.enabled.then(|| Storage::new(db_path));
+    let semantic_storage = semantic_runtime
+        .enabled
+        .then_some(&storage_session as &dyn SemanticIndexStorage);
     let plan = build_index_plan(
         repository_id,
         workspace_root,
@@ -218,13 +232,13 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         diagnostics,
         manifest_diff,
         dirty_path_hints,
-        storage.as_ref(),
+        semantic_storage,
     )?;
 
     on_plan(&plan)?;
 
     execute_index_plan(
-        &manifest_store,
+        &mut storage_session,
         repository_id,
         workspace_root,
         db_path,
@@ -267,7 +281,7 @@ pub(crate) fn build_semantic_refresh_plan(
     changed_paths: &[String],
     deleted_paths: &[String],
     dirty_path_hints: &[PathBuf],
-    storage: Option<&Storage>,
+    storage: Option<&dyn SemanticIndexStorage>,
 ) -> FriggResult<SemanticRefreshPlan> {
     if !semantic_runtime.enabled {
         return Ok(SemanticRefreshPlan {
@@ -409,7 +423,7 @@ pub(crate) fn build_semantic_refresh_plan(
 
 fn semantic_delta_from_head_manifest(
     workspace_root: &Path,
-    storage: &Storage,
+    storage: &dyn SemanticIndexStorage,
     semantic_head_snapshot_id: &str,
     current_manifest: &[FileDigest],
 ) -> FriggResult<Option<(ManifestDiff, Vec<String>, Vec<String>)>> {
@@ -462,7 +476,7 @@ pub(crate) fn execute_semantic_refresh_plan(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
-    storage: &Storage,
+    storage: &mut StorageSession,
 ) -> FriggResult<()> {
     let provider = semantic_refresh
         .provider
@@ -476,7 +490,7 @@ pub(crate) fn execute_semantic_refresh_plan(
     match semantic_refresh.mode {
         SemanticRefreshMode::Disabled | SemanticRefreshMode::ReuseExisting => Ok(()),
         SemanticRefreshMode::FullRebuild | SemanticRefreshMode::FullRebuildFromChangedOnly => {
-            build_semantic_embedding_records(
+            let semantic_build = build_semantic_embedding_records(
                 repository_id,
                 workspace_root,
                 snapshot_id,
@@ -484,29 +498,27 @@ pub(crate) fn execute_semantic_refresh_plan(
                 semantic_runtime,
                 credentials,
                 executor,
-                Some(storage),
+                Some(&*storage as &dyn SemanticIndexStorage),
+            )?;
+            storage.replace_semantic_embeddings_for_repository(
+                repository_id,
+                snapshot_id,
+                provider,
+                model,
+                &semantic_build.records,
             )
-            .and_then(|semantic_build| {
-                storage.replace_semantic_embeddings_for_repository(
-                    repository_id,
-                    snapshot_id,
-                    provider,
-                    model,
-                    &semantic_build.records,
-                )
-            })
         }
-        SemanticRefreshMode::IncrementalAdvance => build_semantic_embedding_records(
-            repository_id,
-            workspace_root,
-            snapshot_id,
-            &semantic_refresh.records_manifest,
-            semantic_runtime,
-            credentials,
-            executor,
-            Some(storage),
-        )
-        .and_then(|semantic_build| {
+        SemanticRefreshMode::IncrementalAdvance => {
+            let semantic_build = build_semantic_embedding_records(
+                repository_id,
+                workspace_root,
+                snapshot_id,
+                &semantic_refresh.records_manifest,
+                semantic_runtime,
+                credentials,
+                executor,
+                Some(&*storage as &dyn SemanticIndexStorage),
+            )?;
             let retained_changed_paths = semantic_refresh
                 .changed_paths
                 .iter()
@@ -523,6 +535,6 @@ pub(crate) fn execute_semantic_refresh_plan(
                 &semantic_refresh.deleted_paths,
                 &semantic_build.records,
             )
-        }),
+        }
     }
 }

@@ -1,5 +1,7 @@
 //! Storage initialization, verification, and vector-store lifecycle entry points.
 
+use std::time::Duration;
+
 use super::*;
 
 fn vector_store_error_is_repairable(message: &str) -> bool {
@@ -51,6 +53,14 @@ impl Storage {
         let conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)?;
         Ok(conn)
+    }
+
+    pub(crate) fn open_session(&self) -> FriggResult<StorageSession> {
+        let conn = self.open_current_schema_connection()?;
+        Ok(StorageSession {
+            db_path: self.db_path.clone(),
+            conn,
+        })
     }
 
     pub(crate) fn require_current_schema_on_connection(
@@ -114,6 +124,7 @@ impl Storage {
         conn.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
             "#,
         )
         .map_err(|err| {
@@ -338,4 +349,63 @@ impl Storage {
         let conn = open_existing_connection(&self.db_path)?;
         verify_vector_store_on_connection(&conn, expected_dimensions)
     }
+}
+
+impl StorageSession {
+    pub(crate) fn checkpoint_wal_truncate(&self) -> FriggResult<()> {
+        checkpoint_wal_truncate_on_connection(&self.conn, &self.db_path)
+    }
+}
+
+fn checkpoint_wal_truncate_on_connection(conn: &Connection, db_path: &Path) -> FriggResult<()> {
+    let previous_busy_timeout_ms: i64 = conn
+        .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        .map_err(|err| {
+            FriggError::Internal(format!(
+                "failed to read sqlite busy timeout before WAL checkpoint for '{}': {err}",
+                db_path.display()
+            ))
+        })?;
+    let previous_busy_timeout_ms = u64::try_from(previous_busy_timeout_ms).map_err(|err| {
+        FriggError::Internal(format!(
+            "invalid sqlite busy timeout before WAL checkpoint for '{}': {err}",
+            db_path.display()
+        ))
+    })?;
+
+    conn.busy_timeout(Duration::from_millis(0)).map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to disable sqlite busy timeout for WAL checkpoint on '{}': {err}",
+            db_path.display()
+        ))
+    })?;
+    let checkpoint_result = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    });
+    let restore_result = conn.busy_timeout(Duration::from_millis(previous_busy_timeout_ms));
+
+    restore_result.map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to restore sqlite busy timeout after WAL checkpoint for '{}': {err}",
+            db_path.display()
+        ))
+    })?;
+
+    let (busy, _log_pages, _checkpointed_pages) = checkpoint_result.map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to checkpoint sqlite WAL for '{}': {err}",
+            db_path.display()
+        ))
+    })?;
+    if busy > 0 {
+        return Err(FriggError::Internal(format!(
+            "sqlite WAL checkpoint for '{}' skipped because {busy} connection(s) were busy",
+            db_path.display()
+        )));
+    }
+    Ok(())
 }

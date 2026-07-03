@@ -212,10 +212,17 @@ fn open_connection_with_flags(path: &Path, flags: OpenFlags) -> FriggResult<Conn
         .map_err(|err| {
             FriggError::Internal(format!("failed to configure sqlite busy timeout: {err}"))
         })?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|err| {
-            FriggError::Internal(format!("failed to enable sqlite foreign keys: {err}"))
-        })?;
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = ON;
+        PRAGMA synchronous = NORMAL;
+        "#,
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to configure sqlite connection pragmas: {err}"
+        ))
+    })?;
     ensure_sqlite_vec_registration_readiness(&conn)?;
     Ok(conn)
 }

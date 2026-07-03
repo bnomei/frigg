@@ -43,6 +43,68 @@ fn storage_connections_install_busy_timeout() -> FriggResult<()> {
 }
 
 #[test]
+fn storage_connections_use_wal_normal_synchronous() -> FriggResult<()> {
+    let db_path = temp_db_path("connection-synchronous-normal");
+    let storage = Storage::new(&db_path);
+
+    storage.initialize()?;
+
+    let conn = open_connection(&db_path)?;
+    let synchronous: i64 = conn
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to read sqlite synchronous pragma: {err}"))
+        })?;
+    assert_eq!(synchronous, 1, "NORMAL synchronous mode should be active");
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn wal_checkpoint_truncate_does_not_wait_on_active_reader() -> FriggResult<()> {
+    let db_path = temp_db_path("wal-checkpoint-active-reader");
+    let storage = Storage::new(&db_path);
+
+    storage.initialize()?;
+    storage.upsert_repository(
+        "repo-before-reader",
+        Path::new("/tmp/repo-before"),
+        "Before",
+    )?;
+
+    let mut reader_conn = open_connection(&db_path)?;
+    let reader_tx = reader_conn.transaction().map_err(|err| {
+        FriggError::Internal(format!("failed to start reader transaction: {err}"))
+    })?;
+    let _count: i64 = reader_tx
+        .query_row("SELECT COUNT(*) FROM repository", [], |row| row.get(0))
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to pin reader transaction snapshot: {err}"))
+        })?;
+
+    storage.upsert_repository("repo-after-reader", Path::new("/tmp/repo-after"), "After")?;
+
+    let session = storage.open_session()?;
+    let started_at = std::time::Instant::now();
+    let err = session
+        .checkpoint_wal_truncate()
+        .expect_err("active reader should make truncate checkpoint skip");
+    assert!(
+        started_at.elapsed() < std::time::Duration::from_millis(500),
+        "nonblocking checkpoint should not wait on the normal busy timeout"
+    );
+    assert!(
+        err.to_string().contains("busy"),
+        "unexpected checkpoint error: {err}"
+    );
+
+    drop(reader_tx);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn sqlite_busy_timeout_override_parses_positive_milliseconds() -> FriggResult<()> {
     assert_eq!(
         sqlite_busy_timeout_ms_from_raw(None)?,

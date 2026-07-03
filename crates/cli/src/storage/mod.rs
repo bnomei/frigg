@@ -63,6 +63,13 @@ pub struct Storage {
     db_path: PathBuf,
 }
 
+/// SQLite connection reused across one index pass to avoid per-phase open/schema probes.
+#[derive(Debug)]
+pub(crate) struct StorageSession {
+    db_path: PathBuf,
+    conn: Connection,
+}
+
 /// Default embedding width expected by semantic vector storage.
 pub const DEFAULT_VECTOR_DIMENSIONS: usize = 1_536;
 /// sqlite-vec table holding live semantic embedding vectors.

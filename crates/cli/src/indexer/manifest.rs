@@ -6,6 +6,7 @@ use crate::workspace_ignores::{
     build_root_ignore_matcher, hard_excluded_runtime_path, should_ignore_runtime_path,
 };
 use ignore::WalkState;
+use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 
 impl ManifestBuilder {
@@ -19,23 +20,11 @@ impl ManifestBuilder {
         }
 
         let (paths, _diagnostics) = collect_manifest_walk_paths(root, self.follow_symlinks);
-        let mut out = Vec::new();
-
-        for path in paths {
-            let mtime_ns = path
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(system_time_to_unix_nanos);
-            let (size_bytes, digest) = stream_file_blake3_digest(&path).map_err(FriggError::Io)?;
-
-            out.push(FileDigest {
-                path,
-                size_bytes,
-                mtime_ns,
-                hash_blake3_hex: digest,
-            });
-        }
+        let mut out = paths
+            .into_par_iter()
+            .map(hash_manifest_path)
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(FriggError::Io)?;
         out.sort_by(file_digest_order);
         out.dedup_by(|left, right| left.path == right.path);
 
@@ -53,30 +42,15 @@ impl ManifestBuilder {
 
         let (paths, mut diagnostics) = collect_manifest_walk_paths(root, self.follow_symlinks);
         let mut entries = Vec::new();
-
-        for path in paths {
-            let mtime_ns = path
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(system_time_to_unix_nanos);
-            let (size_bytes, digest) = match stream_file_blake3_digest(&path) {
-                Ok(result) => result,
-                Err(err) => {
-                    diagnostics.push(ManifestBuildDiagnostic {
-                        path: Some(path),
-                        kind: ManifestDiagnosticKind::Read,
-                        message: err.to_string(),
-                    });
-                    continue;
-                }
-            };
-            entries.push(FileDigest {
-                path,
-                size_bytes,
-                mtime_ns,
-                hash_blake3_hex: digest,
-            });
+        for result in paths
+            .into_par_iter()
+            .map(hash_manifest_path_with_diagnostic)
+            .collect::<Vec<_>>()
+        {
+            match result {
+                Ok(entry) => entries.push(entry),
+                Err(diagnostic) => diagnostics.push(diagnostic),
+            }
         }
         entries.sort_by(file_digest_order);
         entries.dedup_by(|left, right| left.path == right.path);
@@ -156,6 +130,7 @@ impl ManifestBuilder {
             .collect::<BTreeSet<_>>();
         let mut entries = Vec::with_capacity(metadata_output.entries.len());
         let mut diagnostics = metadata_output.diagnostics;
+        let mut hash_jobs = Vec::new();
 
         for metadata in metadata_output.entries {
             let is_hinted = dirty_hint_matches_manifest_path(&hinted_paths, &metadata.path);
@@ -166,26 +141,27 @@ impl ManifestBuilder {
                 }
             }
 
-            let (size_bytes, digest) = match stream_file_blake3_digest(&metadata.path) {
-                Ok(result) => result,
-                Err(err) => {
+            hash_jobs.push(metadata);
+        }
+
+        let hashed_entries = hash_jobs
+            .into_par_iter()
+            .map(hash_manifest_metadata)
+            .collect::<Vec<_>>();
+        for result in hashed_entries {
+            match result {
+                Ok(entry) => entries.push(entry),
+                Err((metadata, message)) => {
                     diagnostics.push(ManifestBuildDiagnostic {
                         path: Some(metadata.path.clone()),
                         kind: ManifestDiagnosticKind::Read,
-                        message: err.to_string(),
+                        message,
                     });
                     if let Some(previous) = previous_by_path.get(&metadata.path) {
                         entries.push(previous.clone());
                     }
-                    continue;
                 }
-            };
-            entries.push(FileDigest {
-                path: metadata.path,
-                size_bytes,
-                mtime_ns: metadata.mtime_ns,
-                hash_blake3_hex: digest,
-            });
+            }
         }
 
         entries.sort_by(file_digest_order);
@@ -197,6 +173,45 @@ impl ManifestBuilder {
             diagnostics,
         })
     }
+}
+
+fn hash_manifest_path(path: PathBuf) -> std::io::Result<FileDigest> {
+    let mtime_ns = path
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(system_time_to_unix_nanos);
+    let (size_bytes, digest) = stream_file_blake3_digest(&path)?;
+
+    Ok(FileDigest {
+        path,
+        size_bytes,
+        mtime_ns,
+        hash_blake3_hex: digest,
+    })
+}
+
+fn hash_manifest_path_with_diagnostic(
+    path: PathBuf,
+) -> Result<FileDigest, ManifestBuildDiagnostic> {
+    hash_manifest_path(path.clone()).map_err(|err| ManifestBuildDiagnostic {
+        path: Some(path),
+        kind: ManifestDiagnosticKind::Read,
+        message: err.to_string(),
+    })
+}
+
+fn hash_manifest_metadata(
+    metadata: FileMetadataDigest,
+) -> Result<FileDigest, (FileMetadataDigest, String)> {
+    let (size_bytes, digest) = stream_file_blake3_digest(&metadata.path)
+        .map_err(|err| (metadata.clone(), err.to_string()))?;
+    Ok(FileDigest {
+        path: metadata.path,
+        size_bytes,
+        mtime_ns: metadata.mtime_ns,
+        hash_blake3_hex: digest,
+    })
 }
 
 fn collect_manifest_walk_paths(

@@ -18,7 +18,10 @@ use crate::embeddings::{
 };
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, Storage};
+use crate::storage::{
+    DEFAULT_VECTOR_DIMENSIONS, ManifestEntry, SemanticChunkEmbeddingRecord, SemanticHeadRecord,
+    Storage, StorageSession,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkCandidate {
@@ -53,6 +56,92 @@ pub(super) trait SemanticRuntimeEmbeddingExecutor: Sync {
         input: Vec<String>,
         trace_id: Option<String>,
     ) -> Pin<Box<dyn Future<Output = FriggResult<Vec<Vec<f32>>>> + Send + 'a>>;
+}
+
+pub(super) trait SemanticIndexStorage {
+    fn load_semantic_head_for_repository_model(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+    ) -> FriggResult<Option<SemanticHeadRecord>>;
+
+    fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>>;
+
+    fn load_semantic_embeddings_for_repository_model_chunk_ids(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+        chunk_ids: &[String],
+    ) -> FriggResult<std::collections::BTreeMap<String, SemanticChunkEmbeddingRecord>>;
+}
+
+impl SemanticIndexStorage for Storage {
+    fn load_semantic_head_for_repository_model(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+    ) -> FriggResult<Option<SemanticHeadRecord>> {
+        Storage::load_semantic_head_for_repository_model(self, repository_id, provider, model)
+    }
+
+    fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>> {
+        Storage::load_manifest_for_snapshot(self, snapshot_id)
+    }
+
+    fn load_semantic_embeddings_for_repository_model_chunk_ids(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+        chunk_ids: &[String],
+    ) -> FriggResult<std::collections::BTreeMap<String, SemanticChunkEmbeddingRecord>> {
+        Storage::load_semantic_embeddings_for_repository_model_chunk_ids(
+            self,
+            repository_id,
+            provider,
+            model,
+            chunk_ids,
+        )
+    }
+}
+
+impl SemanticIndexStorage for StorageSession {
+    fn load_semantic_head_for_repository_model(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+    ) -> FriggResult<Option<SemanticHeadRecord>> {
+        StorageSession::load_semantic_head_for_repository_model(
+            self,
+            repository_id,
+            provider,
+            model,
+        )
+    }
+
+    fn load_manifest_for_snapshot(&self, snapshot_id: &str) -> FriggResult<Vec<ManifestEntry>> {
+        StorageSession::load_manifest_for_snapshot(self, snapshot_id)
+    }
+
+    fn load_semantic_embeddings_for_repository_model_chunk_ids(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+        chunk_ids: &[String],
+    ) -> FriggResult<std::collections::BTreeMap<String, SemanticChunkEmbeddingRecord>> {
+        StorageSession::load_semantic_embeddings_for_repository_model_chunk_ids(
+            self,
+            repository_id,
+            provider,
+            model,
+            chunk_ids,
+        )
+    }
 }
 
 fn build_semantic_embedding_runtime() -> FriggResult<tokio::runtime::Runtime> {
@@ -186,7 +275,7 @@ pub(super) fn build_semantic_embedding_records(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
-    storage: Option<&Storage>,
+    storage: Option<&dyn SemanticIndexStorage>,
 ) -> FriggResult<SemanticEmbeddingBuild> {
     semantic_runtime
         .validate_startup(credentials)
@@ -251,7 +340,7 @@ fn reuse_existing_semantic_embedding_records(
     provider: SemanticRuntimeProvider,
     model: &str,
     chunks: &[SemanticChunkCandidate],
-    storage: Option<&Storage>,
+    storage: Option<&dyn SemanticIndexStorage>,
 ) -> FriggResult<(
     Vec<SemanticChunkEmbeddingRecord>,
     Vec<SemanticChunkCandidate>,
