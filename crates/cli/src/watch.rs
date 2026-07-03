@@ -30,4 +30,6 @@ use repository::{
     should_ignore_watch_path, startup_refresh_status,
 };
 #[cfg(test)]
-use scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
+use scheduler::{
+    MAX_DEBOUNCE_DELAY_MULTIPLIER, ScheduledRefresh, WatchRefreshClass, WatchSchedulerState,
+};

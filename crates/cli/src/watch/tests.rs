@@ -248,6 +248,88 @@ fn scheduler_debounces_roots_and_serializes_execution() {
 }
 
 #[test]
+fn scheduler_caps_continuous_manifest_fast_debounce_latency() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(100);
+    let max_delay = debounce
+        .checked_mul(MAX_DEBOUNCE_DELAY_MULTIPLIER)
+        .expect("test debounce multiplier should not overflow");
+
+    for (index, offset_ms) in [0, 90, 180, 270, 360, 450].into_iter().enumerate() {
+        scheduler.record_path_change(
+            0,
+            PathBuf::from(format!("change-{index}.rs")),
+            now + Duration::from_millis(offset_ms),
+            debounce,
+        );
+    }
+
+    assert_eq!(
+        scheduler.next_ready_refresh(now + max_delay - Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(
+        scheduler.next_ready_refresh(now + max_delay),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+}
+
+#[test]
+fn scheduler_resets_manifest_fast_debounce_cap_after_refresh_starts() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(100);
+    let max_delay = debounce
+        .checked_mul(MAX_DEBOUNCE_DELAY_MULTIPLIER)
+        .expect("test debounce multiplier should not overflow");
+
+    for (index, offset_ms) in [0, 90, 180, 270, 360, 450].into_iter().enumerate() {
+        scheduler.record_path_change(
+            0,
+            PathBuf::from(format!("first-batch-{index}.rs")),
+            now + Duration::from_millis(offset_ms),
+            debounce,
+        );
+    }
+    assert_eq!(
+        scheduler.next_ready_refresh(now + max_delay),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+    let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(started_paths.len(), 6);
+    scheduler.mark_succeeded(0, WatchRefreshClass::ManifestFast, now + max_delay);
+
+    let second_batch_at = now + max_delay + Duration::from_millis(50);
+    scheduler.record_path_change(
+        0,
+        PathBuf::from("second-batch.rs"),
+        second_batch_at,
+        debounce,
+    );
+    assert_eq!(
+        scheduler.next_ready_refresh(second_batch_at + debounce - Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(
+        scheduler.next_ready_refresh(second_batch_at + debounce),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+}
+
+#[test]
 fn scheduler_coalesces_rerun_when_event_arrives_in_flight() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();

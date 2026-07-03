@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 const MAX_RECENT_PATH_SAMPLES: usize = 4;
+pub(super) const MAX_DEBOUNCE_DELAY_MULTIPLIER: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WatchRefreshClass {
@@ -63,6 +64,7 @@ impl From<String> for RepositorySelector {
 #[derive(Debug, Clone, Default)]
 struct RefreshQueueState {
     pending: bool,
+    first_pending_at: Option<Instant>,
     debounce_deadline: Option<Instant>,
     retry_deadline: Option<Instant>,
     rerun_requested: bool,
@@ -71,12 +73,14 @@ struct RefreshQueueState {
 impl RefreshQueueState {
     fn enqueue(&mut self, now: Instant) {
         self.pending = true;
+        self.first_pending_at = Some(now);
         self.debounce_deadline = Some(now);
         self.retry_deadline = None;
     }
 
     fn mark_started(&mut self) {
         self.pending = false;
+        self.first_pending_at = None;
         self.debounce_deadline = None;
         self.retry_deadline = None;
     }
@@ -86,17 +90,22 @@ impl RefreshQueueState {
         if self.rerun_requested {
             self.pending = true;
             self.rerun_requested = false;
+            if self.first_pending_at.is_none() {
+                self.first_pending_at = Some(now);
+            }
             if self.debounce_deadline.is_none() {
                 self.debounce_deadline = Some(now);
             }
         } else {
             self.pending = false;
+            self.first_pending_at = None;
             self.debounce_deadline = None;
         }
     }
 
     fn mark_failed(&mut self, now: Instant, retry: Duration) {
         self.pending = true;
+        self.first_pending_at = Some(now);
         self.rerun_requested = false;
         self.debounce_deadline = None;
         self.retry_deadline = Some(now + retry);
@@ -104,6 +113,7 @@ impl RefreshQueueState {
 
     fn mark_blocked(&mut self) {
         self.pending = false;
+        self.first_pending_at = None;
         self.rerun_requested = false;
         self.debounce_deadline = None;
         self.retry_deadline = None;
@@ -145,12 +155,17 @@ impl RepositoryWatchState {
         self.push_sample(path.clone());
         self.dirty_path_hints.insert(path);
         self.manifest_fast.pending = true;
+        let first_pending_at = *self.manifest_fast.first_pending_at.get_or_insert(now);
         if self.manifest_fast.retry_deadline.is_some()
             && self.active_class != Some(WatchRefreshClass::ManifestFast)
         {
             return;
         }
-        self.manifest_fast.debounce_deadline = Some(now + debounce);
+        let max_delay = debounce
+            .checked_mul(MAX_DEBOUNCE_DELAY_MULTIPLIER)
+            .unwrap_or(Duration::MAX);
+        self.manifest_fast.debounce_deadline =
+            Some(std::cmp::min(now + debounce, first_pending_at + max_delay));
         if self.active_class == Some(WatchRefreshClass::ManifestFast) {
             self.manifest_fast.rerun_requested = true;
         }
