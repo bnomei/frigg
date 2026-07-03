@@ -19,7 +19,7 @@ fn bench_native_lexical_search(c: &mut Criterion) {
             let output = searcher
                 .search_literal_with_filters_diagnostics(query.clone(), SearchFilters::default())
                 .expect("native lexical search benchmark should succeed");
-            criterion::black_box(output.matches.len());
+            std::hint::black_box(output.matches.len());
         });
     });
 }

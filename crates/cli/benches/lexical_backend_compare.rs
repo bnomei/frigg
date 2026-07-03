@@ -24,8 +24,8 @@ fn bench_lexical_backend_compare(c: &mut Criterion) {
                     SearchFilters::default(),
                 )
                 .expect("native literal benchmark should succeed");
-            criterion::black_box(output.matches.len());
-            criterion::black_box(output.lexical_backend.map(|backend| backend.as_str()));
+            std::hint::black_box(output.matches.len());
+            std::hint::black_box(output.lexical_backend.map(|backend| backend.as_str()));
         });
     });
 
@@ -42,8 +42,8 @@ fn bench_lexical_backend_compare(c: &mut Criterion) {
                     SearchFilters::default(),
                 )
                 .expect("native regex benchmark should succeed");
-            criterion::black_box(output.matches.len());
-            criterion::black_box(output.lexical_backend.map(|backend| backend.as_str()));
+            std::hint::black_box(output.matches.len());
+            std::hint::black_box(output.lexical_backend.map(|backend| backend.as_str()));
         });
     });
 
@@ -58,8 +58,8 @@ fn bench_lexical_backend_compare(c: &mut Criterion) {
                         SearchFilters::default(),
                     )
                     .expect("ripgrep literal benchmark should succeed");
-                criterion::black_box(output.matches.len());
-                criterion::black_box(output.lexical_backend.map(|backend| backend.as_str()));
+                std::hint::black_box(output.matches.len());
+                std::hint::black_box(output.lexical_backend.map(|backend| backend.as_str()));
             });
         });
         group.bench_function(BenchmarkId::new("ripgrep", "regex"), |b| {
@@ -70,8 +70,8 @@ fn bench_lexical_backend_compare(c: &mut Criterion) {
                         SearchFilters::default(),
                     )
                     .expect("ripgrep regex benchmark should succeed");
-                criterion::black_box(output.matches.len());
-                criterion::black_box(output.lexical_backend.map(|backend| backend.as_str()));
+                std::hint::black_box(output.matches.len());
+                std::hint::black_box(output.lexical_backend.map(|backend| backend.as_str()));
             });
         });
     }

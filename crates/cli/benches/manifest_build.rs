@@ -13,7 +13,7 @@ fn bench_manifest_build(c: &mut Criterion) {
             let output = ManifestBuilder::default()
                 .build_metadata_with_diagnostics(root)
                 .expect("manifest build benchmark should succeed");
-            criterion::black_box(output.entries.len());
+            std::hint::black_box(output.entries.len());
         });
     });
 }

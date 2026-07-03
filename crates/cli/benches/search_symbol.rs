@@ -31,7 +31,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                 )
                 .expect("warm search_symbol benchmark should succeed")
                 .0;
-            criterion::black_box(response.matches.len());
+            std::hint::black_box(response.matches.len());
         });
     });
 
@@ -85,7 +85,7 @@ fn bench_search_symbol(c: &mut Criterion) {
                 )
                 .expect("stale search_symbol benchmark should succeed")
                 .0;
-            criterion::black_box(response.matches.len());
+            std::hint::black_box(response.matches.len());
         });
     });
 

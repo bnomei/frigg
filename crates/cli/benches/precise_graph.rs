@@ -20,8 +20,8 @@ fn bench_precise_graph(c: &mut Criterion) {
                 let summary =
                     benchmark_precise_graph_for_server(&session.server, &session.repository_id)
                         .expect("cold precise graph benchmark should succeed");
-                criterion::black_box(summary.precise_occurrence_count);
-                criterion::black_box(summary.artifacts_ingested);
+                std::hint::black_box(summary.precise_occurrence_count);
+                std::hint::black_box(summary.artifacts_ingested);
             },
             BatchSize::SmallInput,
         );
@@ -34,15 +34,15 @@ fn bench_precise_graph(c: &mut Criterion) {
     let warm_summary =
         benchmark_precise_graph_for_server(&hot_session.server, &hot_session.repository_id)
             .expect("precise graph warmup should succeed");
-    criterion::black_box(warm_summary.precise_symbol_count);
+    std::hint::black_box(warm_summary.precise_symbol_count);
 
     group.bench_function(BenchmarkId::from_parameter("warm_cached_reuse"), |b| {
         b.iter(|| {
             let summary =
                 benchmark_precise_graph_for_server(&hot_session.server, &hot_session.repository_id)
                     .expect("warm precise graph benchmark should succeed");
-            criterion::black_box(summary.reused_cache);
-            criterion::black_box(summary.precise_occurrence_count);
+            std::hint::black_box(summary.reused_cache);
+            std::hint::black_box(summary.precise_occurrence_count);
         });
     });
 

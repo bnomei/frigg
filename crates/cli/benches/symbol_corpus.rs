@@ -15,7 +15,7 @@ fn bench_symbol_corpus(c: &mut Criterion) {
                 Some(&session.repository_id),
             )
             .expect("symbol corpus benchmark should succeed");
-            criterion::black_box(summary.symbol_count);
+            std::hint::black_box(summary.symbol_count);
         });
     });
 }

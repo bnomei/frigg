@@ -12,7 +12,7 @@ fn bench_symbol_extraction(c: &mut Criterion) {
     c.bench_function("symbol_extraction", |b| {
         b.iter(|| {
             let output = extract_symbols_for_paths(&source_paths);
-            criterion::black_box(output.symbols.len());
+            std::hint::black_box(output.symbols.len());
         });
     });
 }

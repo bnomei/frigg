@@ -26,35 +26,33 @@ version = "0.5.0"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"
-anyhow = "1.0.102"
 async-trait = "0.1.89"
-axum = "0.8.8"
-blake3 = "1.8.3"
-chrono = { version = "0.4.44", features = ["clock", "serde"] }
+axum = { version = "0.8.8", default-features = false, features = ["http1", "json", "tokio"] }
+blake3 = { version = "1.8.3", default-features = false }
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
 fastembed = { version = "5.17.2", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "rustls-tls"] }
 ignore = "0.4.25"
-indicatif = "0.18.0"
+indicatif = { version = "0.18.0", default-features = false, features = ["unicode-width"] }
 memchr = "2.7.6"
 notify = "8.2.0"
-petgraph = "0.8.3"
+petgraph = { version = "0.8.3", default-features = false, features = ["std"] }
 protobuf = "=3.7.2"
 rayon = "1.11.0"
 regex = "1.12.3"
-reqwest = { version = "0.13.2", features = ["json"] }
-rmcp = { version = "1.2.0", features = ["transport-io", "transport-streamable-http-server"] }
-rusqlite = { version = "0.40.0", features = ["bundled"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "1.2.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
+rusqlite = { version = "0.40.0", default-features = false, features = ["bundled"] }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 scip = "0.7.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 smallvec = "1.15.1"
-tantivy = "0.26.0"
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["fs", "io-std", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 tree-sitter = "0.26.6"
 tree-sitter-go = "0.25.0"
 tree-sitter-java = "0.23.5"
@@ -63,8 +61,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-php = "0.24.2"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
-url = "2.5.8"
-uuid = { version = "1.21.0", features = ["serde", "v7"] }
+uuid = { version = "1.21.0", features = ["v7"] }
 walkdir = "2.5.0"
 
 [workspace.lints.rust]

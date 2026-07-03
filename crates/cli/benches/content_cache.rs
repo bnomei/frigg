@@ -43,7 +43,7 @@ fn bench_content_cache(c: &mut Criterion) {
                         })))
                         .expect("cold read_file benchmark should succeed");
                     let response: ReadFileResponse = structured_tool_result(response);
-                    criterion::black_box(response.bytes);
+                    std::hint::black_box(response.bytes);
                 },
                 BatchSize::SmallInput,
             );
@@ -66,7 +66,7 @@ fn bench_content_cache(c: &mut Criterion) {
                 })))
                 .expect("hot read_file benchmark should succeed");
             let response: ReadFileResponse = structured_tool_result(response);
-            criterion::black_box(response.bytes);
+            std::hint::black_box(response.bytes);
         });
     });
 
@@ -89,7 +89,7 @@ fn bench_content_cache(c: &mut Criterion) {
                 })))
                 .expect("hot explore benchmark should succeed");
             let response: ExploreResponse = structured_tool_result(response);
-            criterion::black_box(response.total_matches);
+            std::hint::black_box(response.total_matches);
         });
     });
 

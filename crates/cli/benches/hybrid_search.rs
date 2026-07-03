@@ -26,8 +26,8 @@ fn bench_hybrid_search(c: &mut Criterion) {
                 let output = searcher
                     .search_hybrid_with_filters(query.clone(), SearchFilters::default())
                     .expect("hybrid search benchmark should succeed");
-                criterion::black_box(output.matches.len());
-                criterion::black_box(output.note.lexical_only_mode);
+                std::hint::black_box(output.matches.len());
+                std::hint::black_box(output.note.lexical_only_mode);
             });
         });
     }

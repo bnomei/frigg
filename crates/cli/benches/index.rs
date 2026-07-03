@@ -32,7 +32,7 @@ fn bench_index(c: &mut Criterion) {
                     &support::semantic_runtime_credentials(),
                 )
                 .expect("full index benchmark should succeed");
-                criterion::black_box(summary.files_scanned);
+                std::hint::black_box(summary.files_scanned);
             },
             BatchSize::SmallInput,
         );
@@ -76,8 +76,8 @@ fn bench_index(c: &mut Criterion) {
                 std::slice::from_ref(&hot_path),
             )
             .expect("changed-only index benchmark should succeed");
-            criterion::black_box(summary.files_changed);
-            criterion::black_box(summary.duration_ms);
+            std::hint::black_box(summary.files_changed);
+            std::hint::black_box(summary.duration_ms);
         });
     });
 
