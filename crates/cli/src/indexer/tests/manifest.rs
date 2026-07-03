@@ -82,6 +82,63 @@ fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<(
 }
 
 #[test]
+fn changed_only_directory_hint_rehashes_child_with_matching_metadata() -> FriggResult<()> {
+    let root = temp_workspace_root("manifest-changed-only-directory-hint");
+    prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
+
+    let builder = ManifestBuilder::default();
+    let original = builder.build(&root)?;
+    let original_entry = original
+        .iter()
+        .find(|entry| entry.path == root.join("src/lib.rs"))
+        .cloned()
+        .expect("original manifest should contain src/lib.rs");
+
+    fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").map_err(FriggError::Io)?;
+    let current = builder.build(&root)?;
+    let current_entry = current
+        .iter()
+        .find(|entry| entry.path == root.join("src/lib.rs"))
+        .cloned()
+        .expect("current manifest should contain src/lib.rs");
+    let stale_metadata_entry = FileDigest {
+        hash_blake3_hex: original_entry.hash_blake3_hex.clone(),
+        ..current_entry.clone()
+    };
+
+    let unchanged_without_hint = builder.build_changed_only_with_hints_and_diagnostics(
+        &root,
+        &[stale_metadata_entry],
+        &[],
+    )?;
+    assert_eq!(
+        unchanged_without_hint
+            .entries
+            .first()
+            .map(|entry| entry.hash_blake3_hex.as_str()),
+        Some(original_entry.hash_blake3_hex.as_str()),
+        "matching metadata without a dirty hint should reuse the previous digest"
+    );
+
+    let changed_with_directory_hint = builder.build_changed_only_with_hints_and_diagnostics(
+        &root,
+        &[unchanged_without_hint.entries[0].clone()],
+        &[PathBuf::from("src")],
+    )?;
+    assert_eq!(
+        changed_with_directory_hint
+            .entries
+            .first()
+            .map(|entry| entry.hash_blake3_hex.as_str()),
+        Some(current_entry.hash_blake3_hex.as_str()),
+        "a dirty directory hint should force child files to be rehashed"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn navigation_symbol_target_rank_is_stable_and_precedence_ordered() {
     let symbol = SymbolDefinition {
         stable_id: "sym-user-001".to_owned(),

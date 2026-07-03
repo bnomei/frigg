@@ -1,5 +1,7 @@
 //! Regression tests for semantic chunking, embedding persistence across index, and runtime executor integration.
 
+use crate::indexer::index_repository_with_runtime_config_and_dirty_paths_and_plan_callback;
+
 use super::support::*;
 
 #[test]
@@ -1324,6 +1326,91 @@ fn index_plan_changed_only_marks_full_rebuild_when_semantic_head_is_stale() -> F
     );
     assert_eq!(plan.semantic_refresh.records_manifest.len(), 1);
     assert!(plan.semantic_refresh.changed_paths.is_empty());
+    assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn index_plan_changed_only_with_dirty_hint_advances_after_manifest_fast_pass() -> FriggResult<()> {
+    let db_path = temp_db_path("index-plan-semantic-followup-db");
+    let workspace_root = temp_workspace_root("index-plan-semantic-followup-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_followup_v1() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let executor = FixtureSemanticEmbeddingExecutor;
+    let semantic_summary = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        "pub fn semantic_followup_v2() {}\n",
+    )
+    .map_err(FriggError::Io)?;
+    let dirty_hint = PathBuf::from("src/main.rs");
+
+    let manifest_fast_summary =
+        index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
+            "repo-001",
+            &workspace_root,
+            &db_path,
+            IndexMode::ChangedOnly,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &[dirty_hint.clone()],
+            |_| Ok(()),
+        )?;
+    assert_ne!(
+        manifest_fast_summary.snapshot_id,
+        semantic_summary.snapshot_id
+    );
+
+    let plan = build_index_plan_for_tests(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::ChangedOnly,
+        &semantic_runtime,
+        &[dirty_hint],
+    )?;
+
+    assert_eq!(
+        plan.previous_snapshot_id.as_deref(),
+        Some(manifest_fast_summary.snapshot_id.as_str())
+    );
+    assert!(matches!(
+        &plan.snapshot_plan,
+        super::super::ManifestSnapshotPlan::ReuseExisting { snapshot_id }
+            if snapshot_id == &manifest_fast_summary.snapshot_id
+    ));
+    assert_eq!(
+        plan.semantic_refresh.mode,
+        SemanticRefreshMode::IncrementalAdvance
+    );
+    assert_eq!(
+        plan.semantic_refresh.advance_from_snapshot_id.as_deref(),
+        Some(semantic_summary.snapshot_id.as_str())
+    );
+    assert_eq!(
+        plan.semantic_refresh.changed_paths,
+        vec![PathBuf::from("src/main.rs")]
+    );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
 
     cleanup_workspace(&workspace_root);

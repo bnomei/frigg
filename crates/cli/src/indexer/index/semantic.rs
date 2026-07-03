@@ -7,7 +7,10 @@ use crate::domain::{FriggError, FriggResult};
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::Storage;
 
-use super::super::manifest::diff;
+use super::super::manifest::{
+    diff, manifest_entry_to_file_digest, normalize_deleted_repository_relative_path,
+    normalize_repository_relative_path,
+};
 use super::super::semantic::{
     RuntimeSemanticEmbeddingExecutor, SemanticRuntimeEmbeddingExecutor,
     build_semantic_embedding_records, resolve_semantic_runtime_config_from_env,
@@ -214,6 +217,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         current_manifest,
         diagnostics,
         manifest_diff,
+        dirty_path_hints,
         storage.as_ref(),
     )?;
 
@@ -254,6 +258,7 @@ pub(crate) fn build_semantic_refresh_plan(
     repository_id: &str,
     mode: IndexMode,
     semantic_runtime: &SemanticRuntimeConfig,
+    workspace_root: &Path,
     previous_snapshot_id: Option<&str>,
     had_previous_manifest: bool,
     snapshot_id: &str,
@@ -261,6 +266,7 @@ pub(crate) fn build_semantic_refresh_plan(
     manifest_diff: &super::super::ManifestDiff,
     changed_paths: &[String],
     deleted_paths: &[String],
+    dirty_path_hints: &[PathBuf],
     storage: Option<&Storage>,
 ) -> FriggResult<SemanticRefreshPlan> {
     if !semantic_runtime.enabled {
@@ -271,6 +277,7 @@ pub(crate) fn build_semantic_refresh_plan(
             records_manifest: Vec::new(),
             changed_paths: Vec::new(),
             deleted_paths: Vec::new(),
+            advance_from_snapshot_id: None,
         });
     }
 
@@ -293,49 +300,101 @@ pub(crate) fn build_semantic_refresh_plan(
             .map(|head| head.covered_snapshot_id),
         None => None,
     };
-    let requires_full_semantic_refresh = semantic_head_snapshot_id.as_deref() != Some(snapshot_id)
-        && semantic_head_snapshot_id.as_deref() != previous_snapshot_id;
-    let has_unresolved_deleted_paths = manifest_diff.deleted.len() != deleted_paths.len();
+    let mut semantic_manifest_diff = manifest_diff.clone();
+    let mut semantic_changed_paths = changed_paths.to_vec();
+    let mut semantic_deleted_paths = deleted_paths.to_vec();
+    let mut advance_from_snapshot_id = previous_snapshot_id.map(ToOwned::to_owned);
+    let mut requires_full_semantic_refresh = false;
 
-    let (mode, records_manifest, changed_paths, deleted_paths) = match mode {
-        IndexMode::Full => (
-            SemanticRefreshMode::FullRebuild,
-            current_manifest.to_vec(),
-            Vec::new(),
-            Vec::new(),
-        ),
-        IndexMode::ChangedOnly
-            if requires_full_semantic_refresh || has_unresolved_deleted_paths =>
-        {
-            (
-                SemanticRefreshMode::FullRebuildFromChangedOnly,
+    if mode == IndexMode::ChangedOnly {
+        match semantic_head_snapshot_id.as_deref() {
+            Some(head_snapshot_id) if head_snapshot_id == snapshot_id => {
+                advance_from_snapshot_id = Some(head_snapshot_id.to_owned());
+            }
+            Some(head_snapshot_id) if Some(head_snapshot_id) == previous_snapshot_id => {
+                advance_from_snapshot_id = Some(head_snapshot_id.to_owned());
+            }
+            None if previous_snapshot_id.is_none() => {
+                advance_from_snapshot_id = None;
+            }
+            Some(head_snapshot_id) if !dirty_path_hints.is_empty() => match storage {
+                Some(storage) => {
+                    match semantic_delta_from_head_manifest(
+                        workspace_root,
+                        storage,
+                        head_snapshot_id,
+                        current_manifest,
+                    )? {
+                        Some((head_manifest_diff, head_changed_paths, head_deleted_paths)) => {
+                            semantic_manifest_diff = head_manifest_diff;
+                            semantic_changed_paths = head_changed_paths;
+                            semantic_deleted_paths = head_deleted_paths;
+                            advance_from_snapshot_id = Some(head_snapshot_id.to_owned());
+                        }
+                        None => {
+                            requires_full_semantic_refresh = true;
+                        }
+                    }
+                }
+                None => {
+                    requires_full_semantic_refresh = true;
+                }
+            },
+            _ => {
+                requires_full_semantic_refresh = true;
+            }
+        }
+    }
+
+    let has_unresolved_deleted_paths =
+        semantic_manifest_diff.deleted.len() != semantic_deleted_paths.len();
+
+    let (mode, records_manifest, changed_paths, deleted_paths, advance_from_snapshot_id) =
+        match mode {
+            IndexMode::Full => (
+                SemanticRefreshMode::FullRebuild,
                 current_manifest.to_vec(),
                 Vec::new(),
                 Vec::new(),
-            )
-        }
-        IndexMode::ChangedOnly
-            if !changed_paths.is_empty() || !deleted_paths.is_empty() || !had_previous_manifest =>
-        {
-            (
-                SemanticRefreshMode::IncrementalAdvance,
-                manifest_diff
-                    .added
-                    .iter()
-                    .chain(manifest_diff.modified.iter())
-                    .cloned()
-                    .collect(),
-                changed_paths.to_vec(),
-                deleted_paths.to_vec(),
-            )
-        }
-        IndexMode::ChangedOnly => (
-            SemanticRefreshMode::ReuseExisting,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ),
-    };
+                None,
+            ),
+            IndexMode::ChangedOnly
+                if requires_full_semantic_refresh || has_unresolved_deleted_paths =>
+            {
+                (
+                    SemanticRefreshMode::FullRebuildFromChangedOnly,
+                    current_manifest.to_vec(),
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                )
+            }
+            IndexMode::ChangedOnly
+                if !semantic_changed_paths.is_empty()
+                    || !semantic_deleted_paths.is_empty()
+                    || !had_previous_manifest =>
+            {
+                (
+                    SemanticRefreshMode::IncrementalAdvance,
+                    semantic_manifest_diff
+                        .added
+                        .iter()
+                        .chain(semantic_manifest_diff.modified.iter())
+                        .cloned()
+                        .collect(),
+                    semantic_changed_paths,
+                    semantic_deleted_paths,
+                    advance_from_snapshot_id,
+                )
+            }
+            IndexMode::ChangedOnly => (
+                SemanticRefreshMode::ReuseExisting,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+        };
 
     Ok(SemanticRefreshPlan {
         mode,
@@ -344,7 +403,53 @@ pub(crate) fn build_semantic_refresh_plan(
         records_manifest,
         changed_paths,
         deleted_paths,
+        advance_from_snapshot_id,
     })
+}
+
+fn semantic_delta_from_head_manifest(
+    workspace_root: &Path,
+    storage: &Storage,
+    semantic_head_snapshot_id: &str,
+    current_manifest: &[FileDigest],
+) -> FriggResult<Option<(ManifestDiff, Vec<String>, Vec<String>)>> {
+    let head_manifest = storage
+        .load_manifest_for_snapshot(semantic_head_snapshot_id)?
+        .into_iter()
+        .map(manifest_entry_to_file_digest)
+        .collect::<Vec<_>>();
+    let manifest_diff = diff(&head_manifest, current_manifest);
+    let changed_paths = manifest_diff
+        .added
+        .iter()
+        .chain(manifest_diff.modified.iter())
+        .map(|digest| normalize_repository_relative_path(workspace_root, &digest.path))
+        .collect::<FriggResult<Vec<_>>>()?;
+    let deleted_paths = manifest_diff
+        .deleted
+        .iter()
+        .filter_map(|digest| {
+            normalize_deleted_repository_relative_path(workspace_root, &digest.path).transpose()
+        })
+        .collect::<FriggResult<Vec<_>>>()?;
+
+    if manifest_diff.deleted.len() != deleted_paths.len() {
+        return Ok(None);
+    }
+
+    Ok(Some((
+        manifest_diff,
+        dedup_semantic_paths(changed_paths),
+        dedup_semantic_paths(deleted_paths),
+    )))
+}
+
+fn dedup_semantic_paths(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]

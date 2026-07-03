@@ -177,7 +177,7 @@ fn execute_semantic_refresh_phase(
     let semantic_result = execute_semantic_refresh_plan(
         repository_id,
         workspace_root,
-        plan.previous_snapshot_id.as_deref(),
+        plan.semantic_refresh.advance_from_snapshot_id.as_deref(),
         plan.snapshot_plan.snapshot_id(),
         &plan.semantic_refresh,
         semantic_runtime,

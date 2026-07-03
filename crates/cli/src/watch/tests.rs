@@ -388,6 +388,83 @@ fn scheduler_passes_only_current_batch_recent_paths_to_started_refresh() {
 }
 
 #[test]
+fn scheduler_passes_manifest_recent_paths_to_semantic_followup() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+    let debounce = Duration::from_millis(750);
+
+    for path in [
+        "path-001.rs",
+        "path-002.rs",
+        "path-003.rs",
+        "path-004.rs",
+        "path-005.rs",
+    ] {
+        scheduler.record_path_change(0, PathBuf::from(path), now, debounce);
+    }
+    let manifest_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        manifest_paths,
+        vec![
+            PathBuf::from("path-001.rs"),
+            PathBuf::from("path-002.rs"),
+            PathBuf::from("path-003.rs"),
+            PathBuf::from("path-004.rs"),
+            PathBuf::from("path-005.rs"),
+        ]
+    );
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        now + Duration::from_millis(100),
+    );
+
+    scheduler.enqueue_semantic_followup(0, now + Duration::from_millis(100));
+    let semantic_paths = scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+    assert_eq!(
+        semantic_paths,
+        vec![
+            PathBuf::from("path-001.rs"),
+            PathBuf::from("path-002.rs"),
+            PathBuf::from("path-003.rs"),
+            PathBuf::from("path-004.rs"),
+            PathBuf::from("path-005.rs"),
+        ]
+    );
+
+    scheduler.mark_failed(
+        0,
+        WatchRefreshClass::SemanticFollowup,
+        now + Duration::from_millis(200),
+        retry,
+    );
+    let retry_paths = scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+    assert_eq!(
+        retry_paths,
+        vec![
+            PathBuf::from("path-001.rs"),
+            PathBuf::from("path-002.rs"),
+            PathBuf::from("path-003.rs"),
+            PathBuf::from("path-004.rs"),
+            PathBuf::from("path-005.rs"),
+        ]
+    );
+
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::SemanticFollowup,
+        now + Duration::from_millis(300),
+    );
+    scheduler.enqueue_semantic_followup(0, now + Duration::from_millis(300));
+    assert!(
+        scheduler
+            .mark_started(0, WatchRefreshClass::SemanticFollowup)
+            .is_empty()
+    );
+}
+
+#[test]
 fn scheduler_allows_manifest_fast_while_other_root_runs_semantic_followup() {
     let mut scheduler = WatchSchedulerState::new(2);
     let now = Instant::now();

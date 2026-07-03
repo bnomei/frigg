@@ -3,9 +3,7 @@
 //! Plans record which repository paths changed, which manifest snapshot to advance from,
 //! and whether semantic embedding work stays incremental or must run as a full refresh.
 
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::domain::{FriggError, FriggResult};
 use crate::settings::SemanticRuntimeConfig;
@@ -135,6 +133,7 @@ pub struct SemanticRefreshPlan {
     pub records_manifest: Vec<FileDigest>,
     pub changed_paths: Vec<String>,
     pub deleted_paths: Vec<String>,
+    pub advance_from_snapshot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +189,7 @@ pub(super) fn build_index_plan(
     current_manifest: Vec<FileDigest>,
     diagnostics: IndexDiagnostics,
     manifest_diff: ManifestDiff,
+    dirty_path_hints: &[PathBuf],
     storage: Option<&Storage>,
 ) -> FriggResult<IndexPlan> {
     let files_scanned = current_manifest.len();
@@ -212,6 +212,7 @@ pub(super) fn build_index_plan(
         repository_id,
         mode,
         semantic_runtime,
+        workspace_root,
         previous_snapshot_id.as_deref(),
         had_previous_manifest,
         snapshot_plan.snapshot_id(),
@@ -219,6 +220,7 @@ pub(super) fn build_index_plan(
         &manifest_diff,
         &changed_paths,
         &deleted_paths,
+        dirty_path_hints,
         storage,
     )?;
 
@@ -360,6 +362,7 @@ pub(crate) fn build_index_plan_for_tests(
         current_manifest,
         diagnostics,
         manifest_diff,
+        dirty_path_hints,
         storage.as_ref(),
     )
 }

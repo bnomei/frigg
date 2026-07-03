@@ -129,6 +129,8 @@ pub(super) struct RepositoryWatchState {
     manifest_fast: RefreshQueueState,
     semantic_followup: RefreshQueueState,
     recent_paths: VecDeque<PathBuf>,
+    dirty_path_hints: BTreeSet<PathBuf>,
+    semantic_followup_paths: BTreeSet<PathBuf>,
 }
 
 impl RepositoryWatchState {
@@ -140,7 +142,8 @@ impl RepositoryWatchState {
     }
 
     fn record_event(&mut self, path: PathBuf, now: Instant, debounce: Duration) {
-        self.push_sample(path);
+        self.push_sample(path.clone());
+        self.dirty_path_hints.insert(path);
         self.manifest_fast.pending = true;
         if self.manifest_fast.retry_deadline.is_some()
             && self.active_class != Some(WatchRefreshClass::ManifestFast)
@@ -155,6 +158,7 @@ impl RepositoryWatchState {
             && self.semantic_followup.retry_deadline.is_none()
         {
             self.semantic_followup = RefreshQueueState::default();
+            self.semantic_followup_paths.clear();
         }
     }
 
@@ -179,11 +183,17 @@ impl RepositoryWatchState {
         match class {
             WatchRefreshClass::ManifestFast => {
                 self.manifest_fast.mark_started();
-                self.recent_paths.drain(..).collect()
+                let started_paths = self.dirty_path_hints.iter().cloned().collect::<Vec<_>>();
+                self.dirty_path_hints.clear();
+                self.recent_paths.clear();
+                if !started_paths.is_empty() {
+                    self.semantic_followup_paths = started_paths.iter().cloned().collect();
+                }
+                started_paths
             }
             WatchRefreshClass::SemanticFollowup => {
                 self.semantic_followup.mark_started();
-                Vec::new()
+                self.semantic_followup_paths.iter().cloned().collect()
             }
         }
     }
@@ -192,7 +202,12 @@ impl RepositoryWatchState {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
             WatchRefreshClass::ManifestFast => self.manifest_fast.mark_succeeded(now),
-            WatchRefreshClass::SemanticFollowup => self.semantic_followup.mark_succeeded(now),
+            WatchRefreshClass::SemanticFollowup => {
+                self.semantic_followup.mark_succeeded(now);
+                if !self.semantic_followup.pending {
+                    self.semantic_followup_paths.clear();
+                }
+            }
         }
     }
 
@@ -208,7 +223,10 @@ impl RepositoryWatchState {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
             WatchRefreshClass::ManifestFast => self.manifest_fast.mark_blocked(),
-            WatchRefreshClass::SemanticFollowup => self.semantic_followup.mark_blocked(),
+            WatchRefreshClass::SemanticFollowup => {
+                self.semantic_followup.mark_blocked();
+                self.semantic_followup_paths.clear();
+            }
         }
     }
 
@@ -257,6 +275,8 @@ impl WatchSchedulerState {
                 manifest_fast: RefreshQueueState::default(),
                 semantic_followup: RefreshQueueState::default(),
                 recent_paths: VecDeque::new(),
+                dirty_path_hints: BTreeSet::new(),
+                semantic_followup_paths: BTreeSet::new(),
             });
     }
 

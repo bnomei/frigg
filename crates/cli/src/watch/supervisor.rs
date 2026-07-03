@@ -16,7 +16,6 @@ use crate::domain::{FriggError, FriggResult};
 use crate::indexer::{
     IndexMode, IndexPlan, IndexSummary,
     index_repository_with_runtime_config_and_dirty_paths_and_plan_callback,
-    index_repository_with_runtime_config_and_plan_callback,
 };
 use crate::manifest_validation::ValidatedManifestCandidateCache;
 use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
@@ -668,13 +667,19 @@ async fn run_supervisor(
                     WatchRefreshClass::SemanticFollowup => {
                         let plan_reporter = reporter.clone();
                         let plan_repository_id = repository.repository_id.clone();
-                        index_repository_with_runtime_config_and_plan_callback(
+                        let index_mode = if recent_paths.is_empty() {
+                            IndexMode::Full
+                        } else {
+                            IndexMode::ChangedOnly
+                        };
+                        index_repository_with_runtime_config_and_dirty_paths_and_plan_callback(
                             &repository.repository_id,
                             &repository.root,
                             &repository.db_path,
-                            IndexMode::Full,
+                            index_mode,
                             &semantic_runtime,
                             &semantic_credentials,
+                            &recent_paths,
                             move |plan| {
                                 report_watch_event(
                                     &plan_reporter,

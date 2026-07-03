@@ -158,7 +158,7 @@ impl ManifestBuilder {
         let mut diagnostics = metadata_output.diagnostics;
 
         for metadata in metadata_output.entries {
-            let is_hinted = hinted_paths.contains(&metadata.path);
+            let is_hinted = dirty_hint_matches_manifest_path(&hinted_paths, &metadata.path);
             if let Some(previous) = previous_by_path.get(&metadata.path) {
                 if !is_hinted && metadata_matches_previous_digest(&metadata, previous) {
                     entries.push(previous.clone());
@@ -492,6 +492,15 @@ fn normalize_dirty_hint_path(root: &Path, path: &Path) -> Option<PathBuf> {
         root.join(path)
     };
     (!hard_excluded_runtime_path(root, &normalized)).then_some(normalized)
+}
+
+fn dirty_hint_matches_manifest_path(
+    hinted_paths: &BTreeSet<PathBuf>,
+    manifest_path: &Path,
+) -> bool {
+    hinted_paths
+        .iter()
+        .any(|hint| manifest_path == hint || (hint.is_dir() && manifest_path.starts_with(hint)))
 }
 
 fn manifest_by_path(entries: &[FileDigest]) -> BTreeMap<PathBuf, FileDigest> {
