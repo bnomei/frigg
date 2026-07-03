@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use rayon::prelude::*;
+
 use crate::storage::{
     PathAnchorSketchProjection, PathRelationProjection, PathSurfaceTermProjection,
     SubtreeCoverageProjection,
@@ -294,72 +296,18 @@ pub(crate) fn build_path_anchor_sketch_projection_records(
         .iter()
         .map(|projection| (projection.path.as_str(), projection))
         .collect::<BTreeMap<_, _>>();
-    let mut rows = Vec::new();
-
-    for projection in path_witness {
-        let Some(surface_terms) = surface_terms_by_path.get(projection.path.as_str()) else {
-            continue;
-        };
-        let file_path = workspace_root.join(&projection.path);
-        let Ok(contents) = fs::read_to_string(&file_path) else {
-            continue;
-        };
-        let contents =
-            super::super::content_scrub::scrub_search_content(&projection.path, &contents);
-        let ranked = contents
-            .lines()
-            .enumerate()
-            .filter_map(|(index, line)| {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    return None;
-                }
-                let lower = trimmed.to_ascii_lowercase();
-                let matched_terms = surface_terms
-                    .exact_terms
-                    .iter()
-                    .filter(|term| lower.contains(term.as_str()))
-                    .take(8)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let mut score = matched_terms.len() * 6;
-                if !projection.file_stem.is_empty() && lower.contains(&projection.file_stem) {
-                    score += 10;
-                }
-                if score == 0 && index > 0 {
-                    return None;
-                }
-                Some((
-                    score.max(1),
-                    index + 1,
-                    trim_excerpt(trimmed),
-                    matched_terms,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let mut ranked = ranked;
-        ranked.sort_by(|left, right| {
-            right
-                .0
-                .cmp(&left.0)
-                .then(left.1.cmp(&right.1))
-                .then(left.2.cmp(&right.2))
-        });
-        ranked.truncate(MAX_ANCHOR_SKETCHES_PER_PATH);
-        for (anchor_rank, (score_hint, line, excerpt, matched_terms)) in
-            ranked.into_iter().enumerate()
-        {
-            rows.push(PathAnchorSketchProjection {
-                path: projection.path.clone(),
-                anchor_rank,
-                line,
-                anchor_kind: "line_excerpt".to_owned(),
-                excerpt,
-                terms: matched_terms,
-                score_hint,
-            });
-        }
-    }
+    let mut rows = path_witness
+        .par_iter()
+        .filter_map(|projection| {
+            let surface_terms = surface_terms_by_path.get(projection.path.as_str())?;
+            build_path_anchor_sketch_projection_records_for_path(
+                workspace_root,
+                projection,
+                surface_terms,
+            )
+        })
+        .flatten()
+        .collect::<Vec<_>>();
 
     rows.sort_by(|left, right| {
         left.path
@@ -367,6 +315,78 @@ pub(crate) fn build_path_anchor_sketch_projection_records(
             .then(left.anchor_rank.cmp(&right.anchor_rank))
     });
     rows
+}
+
+fn build_path_anchor_sketch_projection_records_for_path(
+    workspace_root: &Path,
+    projection: &StoredPathWitnessProjection,
+    surface_terms: &PathSurfaceTermProjection,
+) -> Option<Vec<PathAnchorSketchProjection>> {
+    let file_path = workspace_root.join(&projection.path);
+    let Ok(contents) = fs::read_to_string(&file_path) else {
+        return None;
+    };
+    let contents = super::super::content_scrub::scrub_search_content(&projection.path, &contents);
+    let ranked = contents
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            let matched_terms = surface_terms
+                .exact_terms
+                .iter()
+                .filter(|term| lower.contains(term.as_str()))
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut score = matched_terms.len() * 6;
+            if !projection.file_stem.is_empty() && lower.contains(&projection.file_stem) {
+                score += 10;
+            }
+            if score == 0 && index > 0 {
+                return None;
+            }
+            Some((
+                score.max(1),
+                index + 1,
+                trim_excerpt(trimmed),
+                matched_terms,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut ranked = ranked;
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    ranked.truncate(MAX_ANCHOR_SKETCHES_PER_PATH);
+
+    Some(
+        ranked
+            .into_iter()
+            .enumerate()
+            .map(
+                |(anchor_rank, (score_hint, line, excerpt, matched_terms))| {
+                    PathAnchorSketchProjection {
+                        path: projection.path.clone(),
+                        anchor_rank,
+                        line,
+                        anchor_kind: "line_excerpt".to_owned(),
+                        excerpt,
+                        terms: matched_terms,
+                        score_hint,
+                    }
+                },
+            )
+            .collect(),
+    )
 }
 
 fn relation_kind_for_entrypoint_pair(

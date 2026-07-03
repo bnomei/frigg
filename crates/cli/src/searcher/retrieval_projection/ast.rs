@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 use crate::graph::RelationKind;
 use crate::indexer::{
     SymbolDefinition, SymbolKind, extract_php_source_evidence_from_source,
-    extract_symbols_for_paths,
+    extract_symbols_from_source,
 };
 use crate::languages::{
     BladeSourceEvidence, PhpSourceEvidence, SymbolLanguage,
@@ -33,14 +33,18 @@ use super::RETRIEVAL_PROJECTION_INPUT_MODE_AST;
 
 enum AstSourceEvidence {
     Php {
-        relative_path: String,
         evidence: PhpSourceEvidence,
         canonical_names_by_stable_id: BTreeMap<String, String>,
     },
     Blade {
-        relative_path: String,
         evidence: BladeSourceEvidence,
     },
+}
+
+struct AstProjectionSource {
+    relative_path: String,
+    symbols: Vec<SymbolDefinition>,
+    evidence: Option<AstSourceEvidence>,
 }
 
 struct PreparedAstProjectionContext<'a> {
@@ -62,23 +66,27 @@ fn prepare_ast_projection_context<'a>(
     absolute_manifest_paths: &[PathBuf],
     path_witness: &'a [StoredPathWitnessProjection],
 ) -> Option<PreparedAstProjectionContext<'a>> {
-    let extracted = extract_symbols_for_paths(absolute_manifest_paths);
-    if extracted.symbols.is_empty() {
-        return None;
-    }
-
     let witness_by_path = path_witness
         .iter()
         .map(|projection| (projection.path.clone(), projection))
         .collect::<BTreeMap<_, _>>();
-    let relative_symbols = extracted
-        .symbols
-        .into_iter()
-        .filter_map(|symbol| {
-            let relative_path = normalize_repository_relative_path(workspace_root, &symbol.path);
-            witness_by_path
-                .contains_key(&relative_path)
-                .then_some((relative_path, symbol))
+
+    let mut ast_sources = absolute_manifest_paths
+        .par_iter()
+        .filter_map(|absolute_path| {
+            prepare_ast_projection_source(workspace_root, absolute_path, &witness_by_path)
+        })
+        .collect::<Vec<_>>();
+    ast_sources.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+    let relative_symbols = ast_sources
+        .iter()
+        .flat_map(|source| {
+            source
+                .symbols
+                .iter()
+                .cloned()
+                .map(|symbol| (source.relative_path.clone(), symbol))
         })
         .collect::<Vec<_>>();
     if relative_symbols.is_empty() {
@@ -88,14 +96,9 @@ fn prepare_ast_projection_context<'a>(
     let mut symbols = Vec::with_capacity(relative_symbols.len());
     let mut symbol_index_by_stable_id = BTreeMap::<String, usize>::new();
     let mut relative_path_by_stable_id = BTreeMap::<String, String>::new();
-    let mut file_symbols_by_path = BTreeMap::<String, Vec<SymbolDefinition>>::new();
     for (index, (relative_path, symbol)) in relative_symbols.iter().enumerate() {
         symbol_index_by_stable_id.insert(symbol.stable_id.clone(), index);
         relative_path_by_stable_id.insert(symbol.stable_id.clone(), relative_path.clone());
-        file_symbols_by_path
-            .entry(relative_path.clone())
-            .or_default()
-            .push(symbol.clone());
         symbols.push(symbol.clone());
     }
 
@@ -105,76 +108,16 @@ fn prepare_ast_projection_context<'a>(
     let mut php_evidence = Vec::new();
     let mut blade_evidence = Vec::new();
 
-    let mut ast_source_evidence = absolute_manifest_paths
-        .par_iter()
-        .filter_map(|absolute_path| {
-            let relative_path = normalize_repository_relative_path(workspace_root, absolute_path);
-            if !witness_by_path.contains_key(&relative_path) {
-                return None;
-            }
-
-            match SymbolLanguage::from_path(absolute_path) {
-                Some(SymbolLanguage::Php) => {
-                    let Ok(source) = fs::read_to_string(absolute_path) else {
-                        return None;
-                    };
-                    let file_symbols = file_symbols_by_path
-                        .get(&relative_path)
-                        .cloned()
-                        .unwrap_or_default();
-                    let Ok(evidence) = extract_php_source_evidence_from_source(
-                        absolute_path,
-                        &source,
-                        &file_symbols,
-                    ) else {
-                        return None;
-                    };
-                    Some(AstSourceEvidence::Php {
-                        relative_path,
-                        canonical_names_by_stable_id: evidence.canonical_names_by_stable_id.clone(),
-                        evidence,
-                    })
-                }
-                Some(SymbolLanguage::Blade) => {
-                    let Ok(source) = fs::read_to_string(absolute_path) else {
-                        return None;
-                    };
-                    let file_symbols = file_symbols_by_path
-                        .get(&relative_path)
-                        .cloned()
-                        .unwrap_or_default();
-                    Some(AstSourceEvidence::Blade {
-                        relative_path,
-                        evidence: extract_blade_source_evidence_from_source(&source, &file_symbols),
-                    })
-                }
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>();
-    ast_source_evidence.sort_by(|left, right| {
-        let left_path = match left {
-            AstSourceEvidence::Php { relative_path, .. }
-            | AstSourceEvidence::Blade { relative_path, .. } => relative_path,
-        };
-        let right_path = match right {
-            AstSourceEvidence::Php { relative_path, .. }
-            | AstSourceEvidence::Blade { relative_path, .. } => relative_path,
-        };
-        left_path.cmp(right_path)
-    });
-
-    for evidence in ast_source_evidence {
+    for evidence in ast_sources.into_iter().filter_map(|source| source.evidence) {
         match evidence {
             AstSourceEvidence::Php {
                 evidence,
                 canonical_names_by_stable_id,
-                ..
             } => {
                 php_canonical_names_by_stable_id.extend(canonical_names_by_stable_id);
                 php_evidence.push(evidence);
             }
-            AstSourceEvidence::Blade { evidence, .. } => blade_evidence.push(evidence),
+            AstSourceEvidence::Blade { evidence } => blade_evidence.push(evidence),
         }
     }
 
@@ -206,6 +149,43 @@ fn prepare_ast_projection_context<'a>(
         symbol_indices_by_lower_canonical_name,
         php_evidence,
         blade_evidence,
+    })
+}
+
+fn prepare_ast_projection_source(
+    workspace_root: &Path,
+    absolute_path: &Path,
+    witness_by_path: &BTreeMap<String, &StoredPathWitnessProjection>,
+) -> Option<AstProjectionSource> {
+    let relative_path = normalize_repository_relative_path(workspace_root, absolute_path);
+    if !witness_by_path.contains_key(&relative_path) {
+        return None;
+    }
+
+    let language = SymbolLanguage::from_path(absolute_path)?;
+    let Ok(source) = fs::read_to_string(absolute_path) else {
+        return None;
+    };
+    let symbols = extract_symbols_from_source(language, absolute_path, &source).unwrap_or_default();
+    let evidence = match language {
+        SymbolLanguage::Php => {
+            extract_php_source_evidence_from_source(absolute_path, &source, &symbols)
+                .ok()
+                .map(|evidence| AstSourceEvidence::Php {
+                    canonical_names_by_stable_id: evidence.canonical_names_by_stable_id.clone(),
+                    evidence,
+                })
+        }
+        SymbolLanguage::Blade => Some(AstSourceEvidence::Blade {
+            evidence: extract_blade_source_evidence_from_source(&source, &symbols),
+        }),
+        _ => None,
+    };
+
+    Some(AstProjectionSource {
+        relative_path,
+        symbols,
+        evidence,
     })
 }
 
