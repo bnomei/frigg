@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify::{Event, EventKind};
 
+use super::scheduler::MAX_RETRY_BACKOFF_EXPONENT;
 use super::*;
 use crate::indexer::{IndexMode, ManifestStore, index_repository_with_runtime_config};
 use crate::manifest_validation::ValidatedManifestCandidateCache;
@@ -375,7 +376,10 @@ fn scheduler_failure_schedules_retry_without_parallel_restart() {
     scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, now);
     let started_paths = scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
     assert!(started_paths.is_empty());
-    scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry);
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry),
+        Some(retry)
+    );
     scheduler.record_path_change(
         0,
         PathBuf::from("retry.rs"),
@@ -398,6 +402,104 @@ fn scheduler_failure_schedules_retry_without_parallel_restart() {
 }
 
 #[test]
+fn scheduler_retry_backoff_grows_and_resets_after_success() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, now);
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry),
+        Some(retry)
+    );
+
+    let first_retry_at = now + retry;
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, first_retry_at, retry),
+        Some(retry * 2)
+    );
+    assert_eq!(
+        scheduler.next_ready_refresh(first_retry_at + retry * 2 - Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(
+        scheduler.next_ready_refresh(first_retry_at + retry * 2),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    scheduler.mark_succeeded(
+        0,
+        WatchRefreshClass::ManifestFast,
+        first_retry_at + retry * 2 + Duration::from_millis(100),
+    );
+    scheduler.enqueue_initial_sync(
+        0,
+        WatchRefreshClass::ManifestFast,
+        first_retry_at + retry * 2 + Duration::from_millis(100),
+    );
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.mark_failed(
+            0,
+            WatchRefreshClass::ManifestFast,
+            first_retry_at + retry * 2 + Duration::from_millis(100),
+            retry
+        ),
+        Some(retry),
+        "successful refresh should reset the retry backoff streak"
+    );
+}
+
+#[test]
+fn scheduler_retry_backoff_caps_and_blocked_reset_restores_base_delay() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let mut failure_at = Instant::now();
+    let retry = Duration::from_millis(100);
+    let cap_multiplier = 1_u32 << MAX_RETRY_BACKOFF_EXPONENT;
+    let cap_delay = retry * cap_multiplier;
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, failure_at);
+    for attempt in 1..=(MAX_RETRY_BACKOFF_EXPONENT + 3) {
+        scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+        let expected_delay =
+            retry * (1_u32 << attempt.saturating_sub(1).min(MAX_RETRY_BACKOFF_EXPONENT));
+        assert_eq!(
+            scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, failure_at, retry),
+            Some(expected_delay),
+            "attempt {attempt} should apply capped exponential backoff"
+        );
+        failure_at += expected_delay;
+    }
+
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, failure_at, retry),
+        Some(cap_delay),
+        "backoff should stay capped once the max exponent is reached"
+    );
+    scheduler.mark_blocked(0, WatchRefreshClass::ManifestFast);
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, failure_at + cap_delay);
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.mark_failed(
+            0,
+            WatchRefreshClass::ManifestFast,
+            failure_at + cap_delay,
+            retry,
+        ),
+        Some(retry),
+        "blocking a refresh should reset the retry streak"
+    );
+}
+
+#[test]
 fn scheduler_path_change_preserves_failed_semantic_followup_retry() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
@@ -405,7 +507,10 @@ fn scheduler_path_change_preserves_failed_semantic_followup_retry() {
 
     scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
     scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
-    scheduler.mark_failed(0, WatchRefreshClass::SemanticFollowup, now, retry);
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::SemanticFollowup, now, retry),
+        Some(retry)
+    );
     assert!(scheduler.repository_pending(0, WatchRefreshClass::SemanticFollowup));
 
     scheduler.record_path_change(
@@ -515,11 +620,14 @@ fn scheduler_passes_manifest_recent_paths_to_semantic_followup() {
         ]
     );
 
-    scheduler.mark_failed(
-        0,
-        WatchRefreshClass::SemanticFollowup,
-        now + Duration::from_millis(200),
-        retry,
+    assert_eq!(
+        scheduler.mark_failed(
+            0,
+            WatchRefreshClass::SemanticFollowup,
+            now + Duration::from_millis(200),
+            retry,
+        ),
+        Some(retry)
     );
     let retry_paths = scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
     assert_eq!(

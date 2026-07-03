@@ -31,10 +31,11 @@ impl Storage {
     }
 
     fn incompatible_schema_error(&self, found_version: i64) -> FriggError {
-        FriggError::Internal(format!(
-            "storage schema is incompatible (found {found_version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg index` to rebuild it",
-            self.db_path.display()
-        ))
+        FriggError::StorageSchemaIncompatible {
+            found_version,
+            expected_version: CURRENT_SCHEMA_VERSION,
+            db_path: self.db_path.clone(),
+        }
     }
 
     fn uninitialized_schema_error(&self) -> FriggError {

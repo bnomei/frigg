@@ -154,6 +154,43 @@ fn internal_error_maps_to_internal_error_class() {
 }
 
 #[test]
+fn storage_schema_incompatible_maps_to_nonretryable_storage_error() {
+    let error = FriggMcpServer::map_frigg_error(FriggError::StorageSchemaIncompatible {
+        found_version: 10,
+        expected_version: 11,
+        db_path: "/tmp/frigg.db".into(),
+    });
+
+    assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("error_code")),
+        Some(&serde_json::Value::String(
+            "storage_schema_incompatible".to_owned()
+        ))
+    );
+    assert_eq!(
+        error.data.as_ref().and_then(|value| value.get("retryable")),
+        Some(&serde_json::Value::Bool(false))
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("storage_status"))
+            .and_then(|value| value.as_str()),
+        Some("schema_incompatible")
+    );
+    assert!(
+        error.message.contains("storage schema is incompatible"),
+        "unexpected schema mismatch message: {}",
+        error.message
+    );
+}
+
+#[test]
 fn search_hybrid_warning_surfaces_semantic_ok_empty_channel() {
     let warning = FriggMcpServer::search_hybrid_warning(
         "capture_screen",

@@ -9,6 +9,7 @@ use tokio::time::Instant;
 
 const MAX_RECENT_PATH_SAMPLES: usize = 4;
 pub(super) const MAX_DEBOUNCE_DELAY_MULTIPLIER: u32 = 5;
+pub(super) const MAX_RETRY_BACKOFF_EXPONENT: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WatchRefreshClass {
@@ -67,6 +68,7 @@ struct RefreshQueueState {
     first_pending_at: Option<Instant>,
     debounce_deadline: Option<Instant>,
     retry_deadline: Option<Instant>,
+    retry_attempts: u32,
     rerun_requested: bool,
 }
 
@@ -76,6 +78,7 @@ impl RefreshQueueState {
         self.first_pending_at = Some(now);
         self.debounce_deadline = Some(now);
         self.retry_deadline = None;
+        self.retry_attempts = 0;
     }
 
     fn mark_started(&mut self) {
@@ -87,6 +90,7 @@ impl RefreshQueueState {
 
     fn mark_succeeded(&mut self, now: Instant) {
         self.retry_deadline = None;
+        self.retry_attempts = 0;
         if self.rerun_requested {
             self.pending = true;
             self.rerun_requested = false;
@@ -103,12 +107,15 @@ impl RefreshQueueState {
         }
     }
 
-    fn mark_failed(&mut self, now: Instant, retry: Duration) {
+    fn mark_failed(&mut self, now: Instant, retry: Duration) -> Duration {
+        self.retry_attempts = self.retry_attempts.saturating_add(1);
+        let retry_delay = retry_backoff_delay(retry, self.retry_attempts);
         self.pending = true;
         self.first_pending_at = Some(now);
         self.rerun_requested = false;
         self.debounce_deadline = None;
-        self.retry_deadline = Some(now + retry);
+        self.retry_deadline = Some(now + retry_delay);
+        retry_delay
     }
 
     fn mark_blocked(&mut self) {
@@ -117,6 +124,7 @@ impl RefreshQueueState {
         self.rerun_requested = false;
         self.debounce_deadline = None;
         self.retry_deadline = None;
+        self.retry_attempts = 0;
     }
 
     fn ready_at(&self) -> Option<Instant> {
@@ -131,6 +139,13 @@ impl RefreshQueueState {
             (None, None) => Some(Instant::now()),
         }
     }
+}
+
+fn retry_backoff_delay(base: Duration, attempts_after_failure: u32) -> Duration {
+    let exponent = attempts_after_failure
+        .saturating_sub(1)
+        .min(MAX_RETRY_BACKOFF_EXPONENT);
+    base.checked_mul(1_u32 << exponent).unwrap_or(Duration::MAX)
 }
 
 #[derive(Debug, Clone)]
@@ -226,7 +241,7 @@ impl RepositoryWatchState {
         }
     }
 
-    fn mark_failed(&mut self, class: WatchRefreshClass, now: Instant, retry: Duration) {
+    fn mark_failed(&mut self, class: WatchRefreshClass, now: Instant, retry: Duration) -> Duration {
         self.active_class = self.active_class.filter(|active| *active != class);
         match class {
             WatchRefreshClass::ManifestFast => self.manifest_fast.mark_failed(now, retry),
@@ -423,14 +438,14 @@ impl WatchSchedulerState {
         class: WatchRefreshClass,
         now: Instant,
         retry: Duration,
-    ) {
+    ) -> Option<Duration> {
         let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
-            return;
+            return None;
         };
         self.in_flight_set_mut(class).remove(&repository_id);
-        if let Some(state) = self.repositories.get_mut(&repository_id) {
-            state.mark_failed(class, now, retry);
-        }
+        self.repositories
+            .get_mut(&repository_id)
+            .map(|state| state.mark_failed(class, now, retry))
     }
 
     pub(super) fn mark_blocked(

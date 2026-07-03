@@ -1,5 +1,7 @@
 //! Shared error vocabulary for CLI, storage, indexing, and MCP boundaries.
 
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 /// Result alias used across Frigg crates.
@@ -22,6 +24,16 @@ pub enum FriggError {
 
     #[error("semantic_status=strict_failure: {reason}")]
     StrictSemanticFailure { reason: String },
+
+    #[error(
+        "internal error: storage schema is incompatible (found {found_version}, expected {expected_version}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg index` to rebuild it",
+        db_path.display()
+    )]
+    StorageSchemaIncompatible {
+        found_version: i64,
+        expected_version: i64,
+        db_path: PathBuf,
+    },
 
     #[error("internal error: {0}")]
     Internal(String),
@@ -57,6 +69,15 @@ mod tests {
             }
             .to_string(),
             "semantic_status=strict_failure: provider outage"
+        );
+        assert_eq!(
+            FriggError::StorageSchemaIncompatible {
+                found_version: 10,
+                expected_version: 11,
+                db_path: "/tmp/frigg.db".into(),
+            }
+            .to_string(),
+            "internal error: storage schema is incompatible (found 10, expected 11); automatic schema migrations are disabled for Frigg's regenerable local index; delete '/tmp/frigg.db' and run `frigg index` to rebuild it"
         );
     }
 

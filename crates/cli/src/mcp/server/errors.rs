@@ -196,6 +196,26 @@ impl FriggMcpServer {
                     "semantic_reason": Self::bounded_text(&reason),
                 })),
             },
+            FriggError::StorageSchemaIncompatible {
+                found_version,
+                expected_version,
+                db_path,
+            } => FriggErrorTranslation {
+                transport_code: FriggErrorTransportCode::Internal,
+                message: format!(
+                    "storage schema is incompatible (found {found_version}, expected {expected_version}); automatic schema migrations are disabled for Frigg's regenerable local index; delete '{}' and run `frigg index` to rebuild it",
+                    db_path.display()
+                ),
+                error_code: "storage_schema_incompatible",
+                retryable: false,
+                detail: Some(json!({
+                    "error_class": "storage",
+                    "storage_status": "schema_incompatible",
+                    "found_version": found_version,
+                    "expected_version": expected_version,
+                    "db_path": Self::bounded_text(&db_path.display().to_string()),
+                })),
+            },
             FriggError::Internal(message) => FriggErrorTranslation {
                 transport_code: FriggErrorTransportCode::Internal,
                 message,

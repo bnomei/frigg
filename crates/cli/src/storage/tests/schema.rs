@@ -195,6 +195,10 @@ fn initialize_rejects_incompatible_existing_schema() -> FriggResult<()> {
     let err = storage
         .initialize()
         .expect_err("initialize should reject incompatible storage");
+    assert!(
+        matches!(&err, FriggError::StorageSchemaIncompatible { .. }),
+        "incompatible schema should use a typed error variant, got: {err}"
+    );
     let message = err.to_string();
     assert!(
         message.contains("storage schema is incompatible"),
@@ -234,6 +238,10 @@ fn read_paths_reject_incompatible_existing_schema() -> FriggResult<()> {
     let err = storage
         .load_latest_manifest_for_repository("repo-1")
         .expect_err("manifest reads should reject incompatible storage");
+    assert!(
+        matches!(&err, FriggError::StorageSchemaIncompatible { .. }),
+        "incompatible schema reads should use a typed error variant, got: {err}"
+    );
     let message = err.to_string();
     assert!(
         message.contains("storage schema is incompatible"),

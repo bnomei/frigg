@@ -243,6 +243,7 @@ fn wrap_index_phase_error(phase: IndexExecutionPhase, err: FriggError) -> FriggE
         FriggError::NotFound(message) => FriggError::NotFound(prefix(message)),
         FriggError::AccessDenied(message) => FriggError::AccessDenied(prefix(message)),
         FriggError::Internal(message) => FriggError::Internal(prefix(message)),
+        schema_error @ FriggError::StorageSchemaIncompatible { .. } => schema_error,
         FriggError::StrictSemanticFailure { reason } => FriggError::StrictSemanticFailure {
             reason: prefix(reason),
         },

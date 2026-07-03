@@ -151,8 +151,38 @@ enum SupervisorCommand {
         repository_id: String,
         epoch: u64,
         class: WatchRefreshClass,
-        result: Result<crate::indexer::IndexSummary, String>,
+        result: Result<crate::indexer::IndexSummary, WatchRefreshFailure>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchRefreshFailureKind {
+    Retryable,
+    StorageSchemaIncompatible,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchRefreshFailure {
+    message: String,
+    kind: WatchRefreshFailureKind,
+}
+
+impl WatchRefreshFailure {
+    fn from_error(error: FriggError) -> Self {
+        let kind = if matches!(&error, FriggError::StorageSchemaIncompatible { .. }) {
+            WatchRefreshFailureKind::StorageSchemaIncompatible
+        } else {
+            WatchRefreshFailureKind::Retryable
+        };
+        Self {
+            message: error.to_string(),
+            kind,
+        }
+    }
+
+    fn blocks_retry(&self) -> bool {
+        self.kind == WatchRefreshFailureKind::StorageSchemaIncompatible
+    }
 }
 
 #[derive(Debug, Default)]
@@ -600,7 +630,9 @@ async fn run_supervisor(
                 &stable_repository_id,
             );
             if refresh_task_active {
-                scheduler.mark_failed(&repository_id, class, now, retry);
+                let retry_delay = scheduler
+                    .mark_failed(&repository_id, class, now, retry)
+                    .unwrap_or(retry);
                 report_watch_event(
                     &reporter,
                     WatchEvent::RefreshDeferred {
@@ -608,7 +640,7 @@ async fn run_supervisor(
                         root: repository.root.clone(),
                         refresh_class: class.as_str(),
                         reason: "active_task",
-                        retry_ms: retry.as_millis(),
+                        retry_ms: retry_delay.as_millis(),
                     },
                 );
                 continue;
@@ -711,7 +743,7 @@ async fn run_supervisor(
                         )
                     }
                 }
-                .map_err(|err| err.to_string());
+                .map_err(WatchRefreshFailure::from_error);
                 let detail = match &result {
                     Ok(summary) => Some(format!(
                         "refresh_class={} snapshot={} files_changed={} files_deleted={} changed_paths={} deleted_paths={} duration_ms={}",
@@ -723,7 +755,11 @@ async fn run_supervisor(
                         summary.deleted_paths.len(),
                         summary.duration_ms
                     )),
-                    Err(err) => Some(format!("refresh_class={} error={}", class.as_str(), err)),
+                    Err(err) => Some(format!(
+                        "refresh_class={} error={}",
+                        class.as_str(),
+                        err.message
+                    )),
                 };
                 let status = if result.is_ok() {
                     RuntimeTaskStatus::Succeeded
@@ -905,7 +941,7 @@ fn handle_notify_dropped(
 
 fn invalidate_caches_for_stale_completion(
     repository_id: &str,
-    _result: &Result<crate::indexer::IndexSummary, String>,
+    _result: &Result<crate::indexer::IndexSummary, WatchRefreshFailure>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
 ) -> bool {
     if let Some(callback) = repository_cache_invalidation_callback {
@@ -921,7 +957,7 @@ fn handle_index_completed(
     scheduler: &mut WatchSchedulerState,
     repository_id: &str,
     class: WatchRefreshClass,
-    result: Result<crate::indexer::IndexSummary, String>,
+    result: Result<crate::indexer::IndexSummary, WatchRefreshFailure>,
     repository_cache_invalidation_callback: Option<&RepositoryCacheInvalidationCallback>,
     now: Instant,
     retry: Duration,
@@ -975,15 +1011,15 @@ fn handle_index_completed(
                 );
             }
         }
-        Err(error) => {
-            if is_non_retryable_watch_refresh_error(&error) {
+        Err(failure) => {
+            if failure.blocks_retry() {
                 scheduler.mark_blocked(repository_id, class);
                 if reporter.is_none() {
                     warn!(
                         repository_id = %repository.repository_id,
                         root = %repository.root.display(),
                         refresh_class = %class.as_str(),
-                        error = %error,
+                        error = %failure.message,
                         "built-in watch mode refresh blocked; manual repair required"
                     );
                 }
@@ -994,18 +1030,20 @@ fn handle_index_completed(
                         root: repository.root,
                         refresh_class: class.as_str(),
                         reason: "storage_schema_incompatible",
-                        error,
+                        error: failure.message,
                     },
                 );
             } else {
-                scheduler.mark_failed(repository_id, class, now, retry);
+                let retry_delay = scheduler
+                    .mark_failed(repository_id, class, now, retry)
+                    .unwrap_or(retry);
                 if reporter.is_none() {
                     warn!(
                         repository_id = %repository.repository_id,
                         root = %repository.root.display(),
                         refresh_class = %class.as_str(),
-                        retry_ms = retry.as_millis(),
-                        error = %error,
+                        retry_ms = retry_delay.as_millis(),
+                        error = %failure.message,
                         "built-in watch mode refresh failed; retry scheduled"
                     );
                 }
@@ -1015,18 +1053,13 @@ fn handle_index_completed(
                         repository_id: repository.repository_id,
                         root: repository.root,
                         refresh_class: class.as_str(),
-                        retry_ms: retry.as_millis(),
-                        error,
+                        retry_ms: retry_delay.as_millis(),
+                        error: failure.message,
                     },
                 );
             }
         }
     }
-}
-
-fn is_non_retryable_watch_refresh_error(error: &str) -> bool {
-    error.contains("storage schema is incompatible")
-        && error.contains("automatic schema migrations are disabled")
 }
 
 fn queue_startup_refresh_if_needed(
@@ -1161,7 +1194,7 @@ fn queue_semantic_followup_if_needed(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use tokio::time::Instant;
 
@@ -1206,6 +1239,34 @@ mod tests {
         }
     }
 
+    fn temp_supervisor_db_path(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "frigg-watch-supervisor-{test_name}-{}-{unique}.sqlite3",
+            std::process::id()
+        ))
+    }
+
+    fn seed_incompatible_schema_version(db_path: &std::path::Path) {
+        let conn =
+            rusqlite::Connection::open(db_path).expect("test incompatible sqlite db should open");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              version INTEGER NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version (id, version, updated_at)
+            VALUES (1, 10, CURRENT_TIMESTAMP);
+            "#,
+        )
+        .expect("test incompatible schema version should seed");
+    }
+
     #[test]
     fn stale_successful_completion_invalidates_repository_caches() {
         let invalidated: Arc<std::sync::Mutex<Vec<String>>> =
@@ -1245,7 +1306,10 @@ mod tests {
 
         let invoked = invalidate_caches_for_stale_completion(
             "repo-001",
-            &Err("boom".to_owned()),
+            &Err(WatchRefreshFailure {
+                message: "boom".to_owned(),
+                kind: WatchRefreshFailureKind::Retryable,
+            }),
             Some(&callback),
         );
 
@@ -1300,7 +1364,10 @@ mod tests {
             "stable-repo-001",
         ));
 
-        scheduler.mark_failed(&ready.repository_id, ready.class, now, retry);
+        assert_eq!(
+            scheduler.mark_failed(&ready.repository_id, ready.class, now, retry),
+            Some(retry)
+        );
         assert!(scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast));
         assert!(
             scheduler.next_ready_refresh(now).is_none(),
@@ -1418,12 +1485,100 @@ mod tests {
 
     #[test]
     fn incompatible_storage_schema_errors_do_not_retry_forever() {
-        let error = "internal error: storage schema is incompatible (found 10, expected 11); automatic schema migrations are disabled for Frigg's regenerable local index";
+        let failure = WatchRefreshFailure::from_error(FriggError::StorageSchemaIncompatible {
+            found_version: 10,
+            expected_version: 11,
+            db_path: "/tmp/frigg.db".into(),
+        });
 
-        assert!(is_non_retryable_watch_refresh_error(error));
-        assert!(!is_non_retryable_watch_refresh_error(
-            "transient filesystem read failed"
-        ));
+        assert_eq!(
+            failure.kind,
+            WatchRefreshFailureKind::StorageSchemaIncompatible
+        );
+        assert!(failure.blocks_retry());
+        assert!(failure.message.contains("storage schema is incompatible"));
+
+        let transient =
+            WatchRefreshFailure::from_error(FriggError::Internal("transient read failed".into()));
+        assert_eq!(transient.kind, WatchRefreshFailureKind::Retryable);
+        assert!(!transient.blocks_retry());
+    }
+
+    #[test]
+    fn incompatible_storage_schema_completion_blocks_watch_refresh() {
+        use super::super::repository::watched_repository_for_root;
+
+        let db_path = temp_supervisor_db_path("incompatible-completion");
+        seed_incompatible_schema_version(&db_path);
+        let storage_error = crate::storage::Storage::new(&db_path)
+            .require_current_schema()
+            .expect_err("incompatible schema should reject current-schema requirement");
+        let failure = WatchRefreshFailure::from_error(storage_error);
+
+        let root = std::env::temp_dir().join("frigg-watch-supervisor-incompatible-root");
+        let repository =
+            watched_repository_for_root("repo-001".to_owned(), root.clone(), db_path.clone())
+                .expect("watched repository should build for test root");
+        let repositories = Arc::new(RwLock::new(BTreeMap::from([(
+            repository.repository_id.clone(),
+            repository,
+        )])));
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        let now = Instant::now();
+        let retry = Duration::from_millis(250);
+        scheduler.enqueue_initial_sync("repo-001", WatchRefreshClass::ManifestFast, now);
+        scheduler.mark_started("repo-001", WatchRefreshClass::ManifestFast);
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_events = Arc::clone(&events);
+        let reporter: WatchEventReporter = Arc::new(move |event| {
+            recorded_events
+                .lock()
+                .expect("watch event log poisoned")
+                .push(event);
+        });
+        handle_index_completed(
+            &repositories,
+            &mut scheduler,
+            "repo-001",
+            WatchRefreshClass::ManifestFast,
+            Err(failure),
+            None,
+            now,
+            retry,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &Some(reporter),
+        );
+
+        assert!(!scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast));
+        assert_eq!(scheduler.next_ready_refresh(now + retry), None);
+        let events = events.lock().expect("watch event log poisoned");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WatchEvent::RefreshBlocked {
+                    repository_id,
+                    refresh_class,
+                    reason,
+                    error,
+                    ..
+                } if repository_id == "repo-001"
+                    && *refresh_class == WatchRefreshClass::ManifestFast.as_str()
+                    && *reason == "storage_schema_incompatible"
+                    && error.contains("storage schema is incompatible")
+            )),
+            "typed storage schema errors should emit RefreshBlocked"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, WatchEvent::RefreshFailed { .. })),
+            "typed storage schema errors must not schedule RefreshFailed retry events"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
