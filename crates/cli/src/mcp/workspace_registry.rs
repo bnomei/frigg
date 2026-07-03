@@ -3,7 +3,7 @@
 //! Tracks stable `repository_id` values, SQLite storage paths, and per-session adoption
 //! refcounts so watch leases and cache invalidation can outlive individual MCP sessions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::domain::model::stable_repository_id_for_root;
@@ -24,7 +24,9 @@ pub(crate) struct AttachedWorkspace {
 pub(crate) struct WorkspaceRegistry {
     workspaces: Vec<AttachedWorkspace>,
     by_canonical_root: BTreeMap<PathBuf, usize>,
+    startup_repository_ids: BTreeSet<String>,
     active_session_counts: BTreeMap<String, usize>,
+    pending_workspace_counts: BTreeMap<String, usize>,
 }
 
 impl WorkspaceRegistry {
@@ -38,12 +40,15 @@ impl WorkspaceRegistry {
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(&root_path));
             let repository_id = stable_repository_id_for_root(&root).0;
-            registry.insert_with_repository_id(
+            let workspace = registry.insert_with_repository_id(
                 root,
                 repository_id,
                 runtime_repository_id,
                 display_name,
             );
+            registry
+                .startup_repository_ids
+                .insert(workspace.repository_id.clone());
         }
         registry
     }
@@ -96,15 +101,45 @@ impl WorkspaceRegistry {
         workspace
     }
 
-    pub(crate) fn get_or_insert(&mut self, canonical_root: PathBuf) -> AttachedWorkspace {
+    pub(crate) fn get_or_insert(&mut self, canonical_root: PathBuf) -> (AttachedWorkspace, bool) {
         let display_name = display_name_for_root(&canonical_root);
         let repository_id = stable_repository_id_for_root(&canonical_root).0;
-        self.insert_with_repository_id(
+        let already_known = self.by_canonical_root.contains_key(&canonical_root);
+        let workspace = self.insert_with_repository_id(
             canonical_root,
             repository_id.clone(),
             repository_id,
             display_name,
-        )
+        );
+        (workspace, !already_known)
+    }
+
+    pub(crate) fn mark_workspace_pending(&mut self, repository_id: &str) -> usize {
+        let count = self
+            .pending_workspace_counts
+            .entry(repository_id.to_owned())
+            .or_insert(0);
+        *count = count.saturating_add(1);
+        *count
+    }
+
+    pub(crate) fn mark_workspace_pending_released(&mut self, repository_id: &str) -> usize {
+        let Some(count) = self.pending_workspace_counts.get_mut(repository_id) else {
+            return 0;
+        };
+        *count = count.saturating_sub(1);
+        let remaining = *count;
+        if remaining == 0 {
+            self.pending_workspace_counts.remove(repository_id);
+        }
+        remaining
+    }
+
+    pub(crate) fn pending_workspace_count(&self, repository_id: &str) -> usize {
+        self.pending_workspace_counts
+            .get(repository_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Increment active-session refcount so watch leases can be shared across MCP sessions.
@@ -128,6 +163,39 @@ impl WorkspaceRegistry {
             self.active_session_counts.remove(repository_id);
         }
         remaining
+    }
+
+    pub(crate) fn prune_inactive_ephemeral_workspace(
+        &mut self,
+        repository_id: &str,
+    ) -> Option<AttachedWorkspace> {
+        let index = self.workspaces.iter().position(|workspace| {
+            workspace.repository_id == repository_id
+                || workspace.runtime_repository_id == repository_id
+        })?;
+        let canonical_repository_id = self.workspaces[index].repository_id.clone();
+        if self.active_session_count(&canonical_repository_id) > 0
+            || self.pending_workspace_count(&canonical_repository_id) > 0
+            || self
+                .startup_repository_ids
+                .contains(&canonical_repository_id)
+        {
+            return None;
+        }
+
+        let workspace = self.workspaces.remove(index);
+        self.by_canonical_root.retain(|_, stored_index| {
+            if *stored_index == index {
+                false
+            } else {
+                if *stored_index > index {
+                    *stored_index -= 1;
+                }
+                true
+            }
+        });
+        self.active_session_counts.remove(&workspace.repository_id);
+        Some(workspace)
     }
 
     pub(crate) fn active_session_count(&self, repository_id: &str) -> usize {

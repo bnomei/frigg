@@ -12,6 +12,7 @@ impl FriggMcpSessionState {
                 workspace_registry,
                 watch_runtime,
                 adopted_repository_ids: RwLock::new(BTreeSet::new()),
+                workspace_attach_states: RwLock::new(BTreeMap::new()),
                 session_default_repository_id: RwLock::new(None),
                 result_handles: RwLock::new(SessionResultHandleCache::default()),
             }),
@@ -21,17 +22,18 @@ impl FriggMcpSessionState {
 
 impl FriggMcpSessionStateInner {
     fn release_repository_id(&self, repository_id: &str) {
-        self.workspace_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .mark_session_released(repository_id);
-        let runtime_repository_id = self
-            .workspace_registry
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .workspace_by_repository_id(repository_id)
-            .map(|workspace| workspace.runtime_repository_id)
-            .unwrap_or_else(|| repository_id.to_owned());
+        let (remaining_sessions, runtime_repository_id) = {
+            let mut registry = self
+                .workspace_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let runtime_repository_id = registry
+                .workspace_by_repository_id(repository_id)
+                .map(|workspace| workspace.runtime_repository_id)
+                .unwrap_or_else(|| repository_id.to_owned());
+            let remaining_sessions = registry.mark_session_released(repository_id);
+            (remaining_sessions, runtime_repository_id)
+        };
         if let Some(watch_runtime) = self
             .watch_runtime
             .read()
@@ -41,6 +43,232 @@ impl FriggMcpSessionStateInner {
         {
             watch_runtime.release_lease(&runtime_repository_id);
         }
+        if remaining_sessions == 0 {
+            self.workspace_registry
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .prune_inactive_ephemeral_workspace(repository_id);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct WorkspaceAdoption {
+    pub(super) newly_adopted: bool,
+}
+
+pub(super) struct WorkspaceResolutionGuard {
+    workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+    repository_id: String,
+    active: bool,
+}
+
+impl WorkspaceResolutionGuard {
+    pub(super) fn new(
+        workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
+        repository_id: String,
+    ) -> Self {
+        Self {
+            workspace_registry,
+            repository_id,
+            active: true,
+        }
+    }
+
+    fn release(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let mut registry = self
+            .workspace_registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        registry.mark_workspace_pending_released(&self.repository_id);
+        registry.prune_inactive_ephemeral_workspace(&self.repository_id);
+    }
+}
+
+impl Drop for WorkspaceResolutionGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+pub(super) struct WorkspaceAttachRollbackGuard {
+    session_state: FriggMcpSessionState,
+    repository_id: String,
+    previous_default_repository_id: Option<String>,
+    set_default: bool,
+    created_adoption: bool,
+    active: bool,
+}
+
+impl WorkspaceAttachRollbackGuard {
+    fn new(
+        session_state: FriggMcpSessionState,
+        repository_id: String,
+        previous_default_repository_id: Option<String>,
+        set_default: bool,
+    ) -> Self {
+        {
+            let mut states = session_state
+                .inner
+                .workspace_attach_states
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = states.entry(repository_id.clone()).or_default();
+            state.in_flight = state.in_flight.saturating_add(1);
+        }
+
+        Self {
+            session_state,
+            repository_id,
+            previous_default_repository_id,
+            set_default,
+            created_adoption: false,
+            active: true,
+        }
+    }
+
+    pub(super) fn mark_created_adoption(&mut self) {
+        self.created_adoption = true;
+    }
+
+    pub(super) fn disarm(mut self) {
+        self.finish(true);
+    }
+
+    fn finish(&mut self, completed: bool) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+
+        let (rollback_previous_default_repository_id, restore_previous_default_repository_id) = {
+            let mut states = self
+                .session_state
+                .inner
+                .workspace_attach_states
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = states.entry(self.repository_id.clone()).or_default();
+            state.in_flight = state.in_flight.saturating_sub(1);
+
+            if completed {
+                state.completed = true;
+                state.rollback_requested = false;
+                state.rollback_previous_default_repository_id = None;
+                if self.set_default {
+                    state.default_confirmed = true;
+                    state.default_restore_requested = false;
+                    state.default_restore_previous_default_repository_id = None;
+                }
+            } else if self.created_adoption {
+                if !state.completed {
+                    state.rollback_requested = true;
+                    state.rollback_previous_default_repository_id =
+                        self.previous_default_repository_id.clone();
+                }
+                if self.set_default && !state.default_confirmed {
+                    state.default_restore_requested = true;
+                    state.default_restore_previous_default_repository_id =
+                        self.previous_default_repository_id.clone();
+                }
+            }
+
+            let should_rollback =
+                !state.completed && state.rollback_requested && state.in_flight == 0;
+            let rollback_previous_default_repository_id =
+                should_rollback.then(|| state.rollback_previous_default_repository_id.clone());
+            let should_restore_default = state.completed
+                && state.default_restore_requested
+                && !state.default_confirmed
+                && state.in_flight == 0;
+            let restore_previous_default_repository_id = should_restore_default
+                .then(|| state.default_restore_previous_default_repository_id.clone());
+            if state.in_flight == 0
+                && (state.completed || should_rollback || !state.rollback_requested)
+            {
+                states.remove(&self.repository_id);
+            }
+            (
+                rollback_previous_default_repository_id,
+                restore_previous_default_repository_id,
+            )
+        };
+
+        if let Some(previous_default_repository_id) = rollback_previous_default_repository_id {
+            self.rollback_adoption(previous_default_repository_id);
+        } else if let Some(previous_default_repository_id) = restore_previous_default_repository_id
+        {
+            self.restore_previous_default(previous_default_repository_id);
+        }
+    }
+
+    fn rollback_adoption(&self, previous_default_repository_id: Option<String>) {
+        let previous_default_repository_id = {
+            let mut adopted = self
+                .session_state
+                .inner
+                .adopted_repository_ids
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !adopted.remove(&self.repository_id) {
+                return;
+            }
+            previous_default_repository_id
+                .as_ref()
+                .filter(|repository_id| adopted.contains(repository_id.as_str()))
+                .cloned()
+        };
+
+        {
+            let mut current = self
+                .session_state
+                .inner
+                .session_default_repository_id
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if current.as_deref() == Some(self.repository_id.as_str()) {
+                *current = previous_default_repository_id;
+            }
+        }
+
+        self.session_state
+            .inner
+            .release_repository_id(&self.repository_id);
+    }
+
+    fn restore_previous_default(&self, previous_default_repository_id: Option<String>) {
+        let previous_default_repository_id = {
+            let adopted = self
+                .session_state
+                .inner
+                .adopted_repository_ids
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            previous_default_repository_id
+                .as_ref()
+                .filter(|repository_id| adopted.contains(repository_id.as_str()))
+                .cloned()
+        };
+
+        let mut current = self
+            .session_state
+            .inner
+            .session_default_repository_id
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if current.as_deref() == Some(self.repository_id.as_str()) {
+            *current = previous_default_repository_id;
+        }
+    }
+}
+
+impl Drop for WorkspaceAttachRollbackGuard {
+    fn drop(&mut self) {
+        self.finish(false);
     }
 }
 
@@ -112,7 +340,7 @@ impl FriggMcpServer {
         &self,
         workspace: &AttachedWorkspace,
         set_default: bool,
-    ) -> Result<bool, ErrorData> {
+    ) -> Result<WorkspaceAdoption, ErrorData> {
         let newly_adopted = {
             let mut adopted = self
                 .session_state
@@ -141,17 +369,18 @@ impl FriggMcpServer {
                     .acquire_lease(workspace)
                     .map_err(Self::map_frigg_error)
                 {
+                    {
+                        let mut adopted = self
+                            .session_state
+                            .inner
+                            .adopted_repository_ids
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        adopted.remove(&workspace.repository_id);
+                    }
                     self.session_state
                         .inner
-                        .adopted_repository_ids
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .remove(&workspace.repository_id);
-                    self.runtime_state
-                        .workspace_registry
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .mark_session_released(&workspace.repository_id);
+                        .release_repository_id(&workspace.repository_id);
                     return Err(err);
                 }
             }
@@ -161,7 +390,26 @@ impl FriggMcpServer {
             self.set_current_repository_id(Some(workspace.repository_id.clone()));
         }
 
-        Ok(newly_adopted)
+        Ok(WorkspaceAdoption { newly_adopted })
+    }
+
+    pub(super) fn workspace_attach_path_rollback_guard(
+        &self,
+        path: Option<&str>,
+        previous_default_repository_id: Option<String>,
+        workspace: &AttachedWorkspace,
+        set_default: bool,
+    ) -> Option<WorkspaceAttachRollbackGuard> {
+        if path.is_none() {
+            return None;
+        }
+
+        Some(WorkspaceAttachRollbackGuard::new(
+            self.session_state.clone(),
+            workspace.repository_id.clone(),
+            previous_default_repository_id,
+            set_default,
+        ))
     }
 
     pub(super) fn detach_workspace(
@@ -180,20 +428,27 @@ impl FriggMcpServer {
         if !removed {
             return Ok(None);
         }
+        self.session_state
+            .inner
+            .workspace_attach_states
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(repository_id);
 
         if self.current_repository_id().as_deref() == Some(repository_id) {
             self.set_current_repository_id(None);
         }
-        self.session_state
-            .inner
-            .release_repository_id(repository_id);
-
-        Ok(self
+        let detached_workspace = self
             .runtime_state
             .workspace_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .workspace_by_repository_id(repository_id))
+            .workspace_by_repository_id(repository_id);
+        self.session_state
+            .inner
+            .release_repository_id(repository_id);
+
+        Ok(detached_workspace)
     }
 
     pub(super) fn current_workspace(&self) -> Option<AttachedWorkspace> {

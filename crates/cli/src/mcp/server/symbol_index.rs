@@ -9,6 +9,7 @@ use crate::languages::analyze_rust_indexed_source;
 use rayon::prelude::*;
 
 const SYMBOL_CORPUS_CACHE_MAX_ENTRIES: usize = 16;
+const SYMBOL_CORPUS_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 impl FriggMcpServer {
     fn container_symbol_index_by_index(symbols: &[SymbolDefinition]) -> Vec<Option<usize>> {
@@ -60,10 +61,40 @@ impl FriggMcpServer {
     }
 
     fn trim_symbol_corpus_cache(
-        &self,
         cache: &mut BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>,
     ) {
-        while cache.len() > SYMBOL_CORPUS_CACHE_MAX_ENTRIES {
+        Self::trim_symbol_corpus_cache_to_limits(
+            cache,
+            SYMBOL_CORPUS_CACHE_MAX_ENTRIES,
+            SYMBOL_CORPUS_CACHE_MAX_BYTES,
+        );
+    }
+
+    fn symbol_corpus_cache_entry_bytes(
+        key: &SymbolCorpusCacheKey,
+        corpus: &RepositorySymbolCorpus,
+    ) -> usize {
+        key.repository_id.len() + key.manifest_token.len() + corpus.estimated_heap_bytes()
+    }
+
+    fn symbol_corpus_cache_total_bytes(
+        cache: &BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>,
+    ) -> usize {
+        cache
+            .iter()
+            .map(|(key, corpus)| Self::symbol_corpus_cache_entry_bytes(key, corpus))
+            .sum()
+    }
+
+    fn trim_symbol_corpus_cache_to_limits(
+        cache: &mut BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>,
+        max_entries: usize,
+        max_bytes: usize,
+    ) {
+        while cache.len() > max_entries {
+            let _ = cache.pop_first();
+        }
+        while !cache.is_empty() && Self::symbol_corpus_cache_total_bytes(cache) > max_bytes {
             let _ = cache.pop_first();
         }
     }
@@ -280,7 +311,7 @@ impl FriggMcpServer {
             key.repository_id != repository_id || key.manifest_token == manifest_token
         });
         cache.insert(cache_key, corpus.clone());
-        self.trim_symbol_corpus_cache(&mut cache);
+        Self::trim_symbol_corpus_cache(&mut cache);
 
         Ok(corpus)
     }
@@ -566,5 +597,119 @@ impl FriggMcpServer {
 
         corpora.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));
         Ok(corpora)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::{SourceSpan, SymbolKind};
+    use crate::languages::SymbolLanguage;
+
+    fn test_symbol_corpus(
+        repository_id: &str,
+        manifest_token: &str,
+        symbol_name_bytes: usize,
+    ) -> Arc<RepositorySymbolCorpus> {
+        Arc::new(RepositorySymbolCorpus {
+            repository_id: repository_id.to_owned(),
+            runtime_repository_id: repository_id.to_owned(),
+            root: PathBuf::from(format!("/tmp/{repository_id}")),
+            root_signature: manifest_token.to_owned(),
+            source_paths: vec![PathBuf::from(format!("src/{repository_id}.rs"))],
+            symbols: vec![SymbolDefinition {
+                stable_id: format!("{repository_id}::symbol"),
+                language: SymbolLanguage::Rust,
+                kind: SymbolKind::Function,
+                name: "x".repeat(symbol_name_bytes),
+                path: PathBuf::from(format!("src/{repository_id}.rs")),
+                line: 1,
+                span: SourceSpan {
+                    start_byte: 0,
+                    end_byte: 1,
+                    start_line: 1,
+                    start_column: 0,
+                    end_line: 1,
+                    end_column: 1,
+                },
+            }],
+            container_symbol_index_by_index: vec![None],
+            symbols_by_relative_path: BTreeMap::new(),
+            symbol_index_by_stable_id: BTreeMap::new(),
+            symbol_indices_by_name: BTreeMap::new(),
+            symbol_indices_by_lower_name: BTreeMap::new(),
+            canonical_symbol_name_by_stable_id: BTreeMap::new(),
+            symbol_indices_by_canonical_name: BTreeMap::new(),
+            symbol_indices_by_lower_canonical_name: BTreeMap::new(),
+            rust_symbol_context_by_index: Vec::new(),
+            rust_implementation_facts: Vec::new(),
+            php_evidence_by_relative_path: BTreeMap::new(),
+            blade_evidence_by_relative_path: BTreeMap::new(),
+            diagnostics: RepositoryDiagnosticsSummary::default(),
+        })
+    }
+
+    #[test]
+    fn trim_symbol_corpus_cache_respects_byte_budget() {
+        let mut cache = BTreeMap::new();
+        for index in 0..3 {
+            let repository_id = format!("repo-{index:03}");
+            let manifest_token = "snapshot-001".to_owned();
+            cache.insert(
+                SymbolCorpusCacheKey {
+                    repository_id: repository_id.clone(),
+                    manifest_token,
+                },
+                test_symbol_corpus(&repository_id, "snapshot-001", 4096),
+            );
+        }
+
+        let newest_key = SymbolCorpusCacheKey {
+            repository_id: "repo-002".to_owned(),
+            manifest_token: "snapshot-001".to_owned(),
+        };
+        let newest_bytes = FriggMcpServer::symbol_corpus_cache_entry_bytes(
+            &newest_key,
+            cache
+                .get(&newest_key)
+                .expect("newest corpus should be present before trim"),
+        );
+
+        FriggMcpServer::trim_symbol_corpus_cache_to_limits(&mut cache, 16, newest_bytes + 1);
+
+        assert_eq!(cache.len(), 1);
+        assert!(
+            cache.contains_key(&newest_key),
+            "byte-budget pruning should retain the newest sortable corpus key"
+        );
+        assert!(
+            FriggMcpServer::symbol_corpus_cache_total_bytes(&cache) <= newest_bytes + 1,
+            "trimmed cache should stay under the configured byte budget"
+        );
+    }
+
+    #[test]
+    fn trim_symbol_corpus_cache_drops_single_oversized_entry() {
+        let mut cache = BTreeMap::new();
+        let oversized_key = SymbolCorpusCacheKey {
+            repository_id: "repo-large".to_owned(),
+            manifest_token: "snapshot-001".to_owned(),
+        };
+        cache.insert(
+            oversized_key.clone(),
+            test_symbol_corpus("repo-large", "snapshot-001", 8192),
+        );
+        let oversized_bytes = FriggMcpServer::symbol_corpus_cache_total_bytes(&cache);
+
+        FriggMcpServer::trim_symbol_corpus_cache_to_limits(
+            &mut cache,
+            16,
+            oversized_bytes.saturating_sub(1),
+        );
+
+        assert!(
+            cache.is_empty(),
+            "a single oversized symbol corpus should not remain cached over the byte budget"
+        );
     }
 }

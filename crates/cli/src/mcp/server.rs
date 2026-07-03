@@ -351,8 +351,20 @@ struct FriggMcpSessionStateInner {
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     adopted_repository_ids: RwLock<BTreeSet<String>>,
+    workspace_attach_states: RwLock<BTreeMap<String, WorkspaceAttachSessionState>>,
     session_default_repository_id: RwLock<Option<String>>,
     result_handles: RwLock<SessionResultHandleCache>,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceAttachSessionState {
+    in_flight: usize,
+    completed: bool,
+    rollback_requested: bool,
+    rollback_previous_default_repository_id: Option<String>,
+    default_restore_requested: bool,
+    default_restore_previous_default_repository_id: Option<String>,
+    default_confirmed: bool,
 }
 
 #[derive(Clone)]
@@ -646,8 +658,9 @@ impl FriggMcpServer {
             wait_for_index,
             "workspace attach started"
         );
-        let mut response = match self.attach_workspace_target_internal(
-            params.path.as_deref(),
+        let attach_path = params.path.as_deref();
+        let attach_outcome = match self.attach_workspace_target_internal(
+            attach_path,
             params.repository_id.as_deref(),
             set_default,
             resolve_mode,
@@ -667,6 +680,8 @@ impl FriggMcpServer {
                 return Err(err);
             }
         };
+        let rollback_guard = attach_outcome.rollback_guard;
+        let mut response = attach_outcome.response;
         if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
             let repository_id = response.repository.repository_id.clone();
             if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
@@ -793,7 +808,7 @@ impl FriggMcpServer {
                 None,
             )),
         );
-        let result = Ok(Json(response));
+        let result = Ok(Json(response.clone()));
         let provenance_result = self
             .record_provenance_blocking(
                 "workspace_attach",
@@ -812,6 +827,9 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
+        if let Some(guard) = rollback_guard {
+            guard.disarm();
+        }
         self.finalize_with_provenance("workspace_attach", result, provenance_result)
     }
 
@@ -899,11 +917,12 @@ impl FriggMcpServer {
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
         let started_at = Instant::now();
-        let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
-            params.path.as_deref(),
-            params.repository_id.as_deref(),
-            resolve_mode,
-        )?;
+        let (workspace, resolved_from, resolution, _resolution_guard) = self
+            .resolve_workspace_target(
+                params.path.as_deref(),
+                params.repository_id.as_deref(),
+                resolve_mode,
+            )?;
         info!(
             repository_id = %workspace.repository_id,
             root = %workspace.root.display(),
@@ -940,7 +959,7 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
 
         Self::notify_progress(&meta, &client, 1.0, 4.0, "initialize storage").await;
-        let prepared_storage = Self::run_blocking_task("workspace_prepare", {
+        let prepared_storage_result = match Self::run_blocking_task("workspace_prepare", {
             let workspace = workspace.clone();
             move || -> Result<WorkspaceStorageSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
@@ -951,8 +970,15 @@ impl FriggMcpServer {
                 Ok(FriggMcpServer::workspace_storage_summary(&workspace))
             }
         })
-        .await?
-        .map_err(|err| {
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                task_guard.finish(RuntimeTaskStatus::Failed, Some(error.message.to_string()));
+                return Err(error);
+            }
+        };
+        let prepared_storage = prepared_storage_result.map_err(|err| {
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
@@ -1090,11 +1116,12 @@ impl FriggMcpServer {
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
         let started_at = Instant::now();
-        let (workspace, resolved_from, resolution) = self.resolve_workspace_target(
-            params.path.as_deref(),
-            params.repository_id.as_deref(),
-            resolve_mode,
-        )?;
+        let (workspace, resolved_from, resolution, _resolution_guard) = self
+            .resolve_workspace_target(
+                params.path.as_deref(),
+                params.repository_id.as_deref(),
+                resolve_mode,
+            )?;
         info!(
             repository_id = %workspace.repository_id,
             root = %workspace.root.display(),
@@ -1131,7 +1158,7 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "index refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();
-        let index_result = Self::run_blocking_task("workspace_index", {
+        let index_result = match Self::run_blocking_task("workspace_index", {
             let workspace = workspace.clone();
             move || -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
@@ -1148,9 +1175,16 @@ impl FriggMcpServer {
                 .map_err(|err| err.to_string())
             }
         })
-        .await;
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                task_guard.finish(RuntimeTaskStatus::Failed, Some(error.message.to_string()));
+                return Err(error);
+            }
+        };
         self.invalidate_workspace_index_runtime_caches(&workspace, true);
-        let index_summary = index_result?.map_err(|err| {
+        let index_summary = index_result.map_err(|err| {
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),

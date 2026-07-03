@@ -2,6 +2,7 @@
 //! navigation target resolution envelopes, and per-tool execution result bundles.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,6 +47,143 @@ pub(crate) struct RepositorySymbolCorpus {
     pub php_evidence_by_relative_path: BTreeMap<String, PhpSourceEvidence>,
     pub blade_evidence_by_relative_path: BTreeMap<String, BladeSourceEvidence>,
     pub diagnostics: RepositoryDiagnosticsSummary,
+}
+
+impl RepositorySymbolCorpus {
+    pub(crate) fn estimated_heap_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.repository_id.len()
+            + self.runtime_repository_id.len()
+            + path_bytes(&self.root)
+            + self.root_signature.len()
+            + path_vec_bytes(&self.source_paths)
+            + symbol_vec_bytes(&self.symbols)
+            + self.container_symbol_index_by_index.capacity() * size_of::<Option<usize>>()
+            + string_vec_map_bytes(&self.symbols_by_relative_path)
+            + string_usize_map_bytes(&self.symbol_index_by_stable_id)
+            + string_vec_map_bytes(&self.symbol_indices_by_name)
+            + string_vec_map_bytes(&self.symbol_indices_by_lower_name)
+            + string_string_map_bytes(&self.canonical_symbol_name_by_stable_id)
+            + string_vec_map_bytes(&self.symbol_indices_by_canonical_name)
+            + string_vec_map_bytes(&self.symbol_indices_by_lower_canonical_name)
+            + self.rust_symbol_context_by_index.capacity() * size_of::<Option<RustSymbolContext>>()
+            + rust_implementation_fact_vec_bytes(&self.rust_implementation_facts)
+            + php_evidence_map_bytes(&self.php_evidence_by_relative_path)
+            + blade_evidence_map_bytes(&self.blade_evidence_by_relative_path)
+    }
+}
+
+fn path_bytes(path: &Path) -> usize {
+    size_of::<PathBuf>() + path.as_os_str().to_string_lossy().len()
+}
+
+fn path_vec_bytes(paths: &[PathBuf]) -> usize {
+    paths.len() * size_of::<PathBuf>() + paths.iter().map(|path| path_bytes(path)).sum::<usize>()
+}
+
+fn symbol_vec_bytes(symbols: &[SymbolDefinition]) -> usize {
+    symbols.len() * size_of::<SymbolDefinition>()
+        + symbols
+            .iter()
+            .map(|symbol| symbol.stable_id.len() + symbol.name.len() + path_bytes(&symbol.path))
+            .sum::<usize>()
+}
+
+fn string_vec_map_bytes(map: &BTreeMap<String, Vec<usize>>) -> usize {
+    map.iter()
+        .map(|(key, values)| key.len() + values.capacity() * size_of::<usize>())
+        .sum()
+}
+
+fn string_usize_map_bytes(map: &BTreeMap<String, usize>) -> usize {
+    map.keys().map(|key| key.len() + size_of::<usize>()).sum()
+}
+
+fn string_string_map_bytes(map: &BTreeMap<String, String>) -> usize {
+    map.iter().map(|(key, value)| key.len() + value.len()).sum()
+}
+
+fn optional_string_bytes(value: &Option<String>) -> usize {
+    value.as_ref().map(|value| value.len()).unwrap_or_default()
+}
+
+fn string_vec_bytes(values: &[String]) -> usize {
+    values.len() * size_of::<String>() + values.iter().map(String::len).sum::<usize>()
+}
+
+fn rust_implementation_fact_vec_bytes(facts: &[RustImplementationFact]) -> usize {
+    facts.len() * size_of::<RustImplementationFact>()
+        + facts
+            .iter()
+            .map(|fact| optional_string_bytes(&fact.trait_name) + fact.self_type.len())
+            .sum::<usize>()
+}
+
+fn php_evidence_map_bytes(map: &BTreeMap<String, PhpSourceEvidence>) -> usize {
+    map.iter()
+        .map(|(path, evidence)| path.len() + php_evidence_bytes(evidence))
+        .sum()
+}
+
+fn php_evidence_bytes(evidence: &PhpSourceEvidence) -> usize {
+    string_string_map_bytes(&evidence.canonical_names_by_stable_id)
+        + evidence.type_evidence.capacity() * size_of::<crate::languages::PhpTypeEvidence>()
+        + evidence
+            .type_evidence
+            .iter()
+            .map(|item| {
+                optional_string_bytes(&item.owner_symbol_id) + item.target_canonical_name.len()
+            })
+            .sum::<usize>()
+        + evidence.target_evidence.capacity() * size_of::<crate::languages::PhpTargetEvidence>()
+        + evidence
+            .target_evidence
+            .iter()
+            .map(|item| {
+                optional_string_bytes(&item.owner_symbol_id)
+                    + item.target_canonical_name.len()
+                    + optional_string_bytes(&item.target_member_name)
+            })
+            .sum::<usize>()
+        + evidence.literal_evidence.capacity() * size_of::<crate::languages::PhpLiteralEvidence>()
+        + evidence
+            .literal_evidence
+            .iter()
+            .map(|item| {
+                optional_string_bytes(&item.owner_symbol_id)
+                    + string_vec_bytes(&item.array_keys)
+                    + string_vec_bytes(&item.named_arguments)
+            })
+            .sum::<usize>()
+}
+
+fn blade_evidence_map_bytes(map: &BTreeMap<String, BladeSourceEvidence>) -> usize {
+    map.iter()
+        .map(|(path, evidence)| path.len() + blade_evidence_bytes(evidence))
+        .sum()
+}
+
+fn blade_evidence_bytes(evidence: &BladeSourceEvidence) -> usize {
+    evidence.relations.capacity() * size_of::<crate::languages::BladeRelationEvidence>()
+        + evidence
+            .relations
+            .iter()
+            .map(|item| optional_string_bytes(&item.owner_symbol_id) + item.target_name.len())
+            .sum::<usize>()
+        + string_vec_bytes(&evidence.livewire_components)
+        + string_vec_bytes(&evidence.wire_directives)
+        + string_vec_bytes(&evidence.flux_components)
+        + evidence
+            .flux_hints
+            .iter()
+            .map(|(key, hint)| {
+                key.len()
+                    + string_vec_bytes(&hint.props)
+                    + string_vec_bytes(&hint.slots)
+                    + string_vec_bytes(&hint.variant_values)
+                    + string_vec_bytes(&hint.size_values)
+            })
+            .sum::<usize>()
 }
 
 /// Aggregate diagnostic counts collected while building one repository symbol corpus.

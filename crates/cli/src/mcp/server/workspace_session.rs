@@ -1,7 +1,13 @@
 //! Per-session workspace adoption, default-repository selection, watch lease refcounting, and
 //! session-local `result_handle` storage for `read_match`.
 
+use super::workspace::{WorkspaceAttachRollbackGuard, WorkspaceResolutionGuard};
 use super::*;
+
+pub(super) struct WorkspaceAttachTargetOutcome {
+    pub(super) response: WorkspaceAttachResponse,
+    pub(super) rollback_guard: Option<WorkspaceAttachRollbackGuard>,
+}
 
 impl FriggMcpServer {
     pub(super) fn clone_for_new_session(&self) -> Self {
@@ -72,6 +78,7 @@ impl FriggMcpServer {
             AttachedWorkspace,
             Option<String>,
             Option<WorkspaceResolveMode>,
+            Option<WorkspaceResolutionGuard>,
         ),
         ErrorData,
     > {
@@ -94,18 +101,25 @@ impl FriggMcpServer {
                         (resolved_from.clone(), WorkspaceResolveMode::Direct)
                     }
                 };
-                let workspace = {
+                let (workspace, resolution_guard) = {
                     let mut registry = self
                         .runtime_state
                         .workspace_registry
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    registry.get_or_insert(root)
+                    let (workspace, _) = registry.get_or_insert(root);
+                    registry.mark_workspace_pending(&workspace.repository_id);
+                    let resolution_guard = WorkspaceResolutionGuard::new(
+                        Arc::clone(&self.runtime_state.workspace_registry),
+                        workspace.repository_id.clone(),
+                    );
+                    (workspace, Some(resolution_guard))
                 };
                 Ok((
                     workspace,
                     Some(resolved_from.display().to_string()),
                     Some(resolution),
+                    resolution_guard,
                 ))
             }
             (None, Some(repository_id)) => {
@@ -121,7 +135,7 @@ impl FriggMcpServer {
                             Some(json!({ "repository_id": repository_id })),
                         )
                     })?;
-                Ok((workspace, None, None))
+                Ok((workspace, None, None, None))
             }
             (Some(_), Some(_)) => Err(Self::invalid_params(
                 "workspace target must provide either `path` or `repository_id`, not both",
@@ -812,11 +826,23 @@ impl FriggMcpServer {
         set_default: bool,
         resolve_mode: WorkspaceResolveMode,
         index_mode: WorkspaceAttachIndexMode,
-    ) -> Result<WorkspaceAttachResponse, ErrorData> {
-        let (workspace, resolved_from, resolution) =
+    ) -> Result<WorkspaceAttachTargetOutcome, ErrorData> {
+        let (workspace, resolved_from, resolution, _resolution_guard) =
             self.resolve_workspace_target(path, repository_id, resolve_mode)?;
+        let previous_default_repository_id = self.current_repository_id();
+        let mut rollback_guard = self.workspace_attach_path_rollback_guard(
+            path,
+            previous_default_repository_id,
+            &workspace,
+            set_default,
+        );
 
-        let newly_adopted = self.adopt_workspace(&workspace, set_default)?;
+        let adoption = self.adopt_workspace(&workspace, set_default)?;
+        if adoption.newly_adopted {
+            if let Some(guard) = rollback_guard.as_mut() {
+                guard.mark_created_adoption();
+            }
+        }
 
         self.invalidate_workspace_index_runtime_caches(&workspace, false);
 
@@ -849,28 +875,32 @@ impl FriggMcpServer {
             false,
         );
 
-        Ok(WorkspaceAttachResponse {
-            repository,
-            resolved_from: resolved_from.unwrap_or_else(|| workspace.root.display().to_string()),
-            resolution: resolution.unwrap_or(WorkspaceResolveMode::Direct),
-            session_default: self.current_repository_id().as_deref()
-                == Some(workspace.repository_id.as_str()),
-            storage,
-            action: if newly_adopted {
-                WorkspaceAttachAction::AttachedFresh
-            } else {
-                WorkspaceAttachAction::ReusedWorkspace
+        Ok(WorkspaceAttachTargetOutcome {
+            rollback_guard,
+            response: WorkspaceAttachResponse {
+                repository,
+                resolved_from: resolved_from
+                    .unwrap_or_else(|| workspace.root.display().to_string()),
+                resolution: resolution.unwrap_or(WorkspaceResolveMode::Direct),
+                session_default: self.current_repository_id().as_deref()
+                    == Some(workspace.repository_id.as_str()),
+                storage,
+                action: if adoption.newly_adopted {
+                    WorkspaceAttachAction::AttachedFresh
+                } else {
+                    WorkspaceAttachAction::ReusedWorkspace
+                },
+                precise,
+                precise_lifecycle,
+                index_lifecycle: self.workspace_index_lifecycle_summary(
+                    &workspace,
+                    index_mode,
+                    false,
+                    false,
+                    index_action,
+                    None,
+                ),
             },
-            precise,
-            precise_lifecycle,
-            index_lifecycle: self.workspace_index_lifecycle_summary(
-                &workspace,
-                index_mode,
-                false,
-                false,
-                index_action,
-                None,
-            ),
         })
     }
 
@@ -889,6 +919,12 @@ impl FriggMcpServer {
             resolve_mode,
             WorkspaceAttachIndexMode::Skip,
         )
+        .map(|outcome| {
+            if let Some(guard) = outcome.rollback_guard {
+                guard.disarm();
+            }
+            outcome.response
+        })
     }
 
     pub(super) fn repository_has_active_runtime_work(&self, repository_id: &str) -> bool {
