@@ -85,8 +85,14 @@ impl FriggMcpServer {
                         symbol_extraction_diagnostics_count =
                             cached.symbol_extraction_diagnostics_count;
                         effective_limit = Some(cached.effective_limit);
+                        let mut response = cached.response;
+                        Self::attach_metadata_object_freshness_basis(
+                            &mut response.metadata,
+                            &mut response.note,
+                            &cache_freshness.basis,
+                        );
                         return Ok(Json(server.present_search_symbol_response(
-                            cached.response,
+                            response,
                             params_for_blocking.response_mode,
                         )));
                     }

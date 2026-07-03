@@ -1,7 +1,70 @@
 //! Integration tests for navigation MCP handlers (go-to-definition, implementations, and call hierarchy).
 
 use super::*;
-use frigg::mcp::types::NavigationTargetSelectionStatus;
+use frigg::mcp::types::{MetadataObject, NavigationTargetSelectionStatus};
+
+fn assert_response_metadata_has_freshness(metadata: &Option<MetadataObject>, tool_name: &str) {
+    let metadata = metadata
+        .as_ref()
+        .unwrap_or_else(|| panic!("{tool_name} should emit typed metadata"));
+    let freshness = metadata
+        .get("freshness_basis")
+        .unwrap_or_else(|| panic!("{tool_name} metadata should include freshness_basis"));
+    assert!(
+        freshness
+            .get("cacheable")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "{tool_name} freshness_basis should include cacheable"
+    );
+    let repository = freshness
+        .get("repositories")
+        .and_then(|value| value.as_array())
+        .and_then(|repositories| repositories.first())
+        .unwrap_or_else(|| panic!("{tool_name} freshness_basis should include repository details"));
+    assert!(
+        repository
+            .get("dirty_root")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "{tool_name} freshness repository should include dirty_root"
+    );
+    assert!(
+        repository
+            .get("candidate_source")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "{tool_name} freshness repository should include candidate_source"
+    );
+    assert!(
+        repository
+            .get("using_live_walk")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "{tool_name} freshness repository should include using_live_walk"
+    );
+    assert!(
+        repository
+            .get("refresh_in_progress")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "{tool_name} freshness repository should include refresh_in_progress"
+    );
+    assert!(
+        repository
+            .get("active_index_tasks")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "{tool_name} freshness repository should include active_index_tasks"
+    );
+    assert!(
+        repository
+            .get("recommended_client_behavior")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "{tool_name} freshness repository should include recommended_client_behavior"
+    );
+}
 
 #[tokio::test]
 async fn navigation_go_to_definition_prefers_precise_matches() {
@@ -1555,6 +1618,7 @@ async fn navigation_find_implementations_falls_back_to_symbol_impl_heuristic() {
         first.fallback_reason.as_deref(),
         Some("precise_absent_rust_impl_index")
     );
+    assert_response_metadata_has_freshness(&response.metadata, "find_implementations");
 
     let note = response
         .note
@@ -1912,6 +1976,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
         implementations.matches[0].precision.as_deref(),
         Some("precise")
     );
+    assert_response_metadata_has_freshness(&implementations.metadata, "find_implementations");
 
     let incoming = server
         .incoming_calls(Parameters(IncomingCallsParams {
@@ -1932,6 +1997,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
     assert_eq!(incoming.matches[0].target_symbol, "Service");
     assert_eq!(incoming.matches[0].relation, "calls");
     assert_eq!(incoming.matches[0].precision.as_deref(), Some("precise"));
+    assert_response_metadata_has_freshness(&incoming.metadata, "incoming_calls");
 
     let outgoing = server
         .outgoing_calls(Parameters(OutgoingCallsParams {
@@ -1952,6 +2018,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
     assert_eq!(outgoing.matches[0].target_symbol, "serve");
     assert_eq!(outgoing.matches[0].relation, "calls");
     assert_eq!(outgoing.matches[0].precision.as_deref(), Some("precise"));
+    assert_response_metadata_has_freshness(&outgoing.metadata, "outgoing_calls");
 
     cleanup_workspace_root(&workspace_root);
 }

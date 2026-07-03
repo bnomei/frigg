@@ -6,11 +6,12 @@ use crate::context_efficiency::{
 };
 use crate::domain::{ChannelHealthStatus, SourceClass, model::TextMatch};
 use crate::mcp::types::{
-    ContextEfficiencyMetadata, ContextEfficiencyStageAttribution, SearchHybridChannelDiagnostic,
-    SearchHybridChannelMetadata, SearchHybridDiagnosticsSummary,
-    SearchHybridLanguageCapabilityMetadata, SearchHybridMetadata, SearchHybridNavigationHint,
-    SearchHybridSemanticAcceleratorMetadata, SearchHybridStageAttribution,
-    SearchHybridUtilitySummary, SearchLexicalBackendMetadata, SearchTextMetadata,
+    ContextEfficiencyMetadata, ContextEfficiencyStageAttribution, MetadataObject,
+    ResponseFreshnessBasisMetadata, SearchHybridChannelDiagnostic, SearchHybridChannelMetadata,
+    SearchHybridDiagnosticsSummary, SearchHybridLanguageCapabilityMetadata, SearchHybridMetadata,
+    SearchHybridNavigationHint, SearchHybridSemanticAcceleratorMetadata,
+    SearchHybridStageAttribution, SearchHybridUtilitySummary, SearchLexicalBackendMetadata,
+    SearchTextMetadata,
 };
 use crate::searcher::{
     SearchLexicalBackend, hybrid_match_definition_navigation_supported,
@@ -191,7 +192,50 @@ impl FriggMcpServer {
             lexical_backend: Some(Self::search_lexical_backend_metadata(backend)?),
             lexical_backend_note: note,
             context_efficiency: None,
+            freshness_basis: None,
         })
+    }
+
+    pub(super) fn response_freshness_basis_metadata(
+        freshness_basis: &Value,
+    ) -> ResponseFreshnessBasisMetadata {
+        serde_json::from_value(freshness_basis.clone())
+            .expect("response freshness basis should deserialize")
+    }
+
+    pub(super) fn attach_search_text_freshness_basis(
+        metadata: &mut Option<SearchTextMetadata>,
+        freshness_basis: &Value,
+    ) {
+        metadata
+            .get_or_insert_with(|| SearchTextMetadata {
+                lexical_backend: None,
+                lexical_backend_note: None,
+                context_efficiency: None,
+                freshness_basis: None,
+            })
+            .freshness_basis = Some(Self::response_freshness_basis_metadata(freshness_basis));
+    }
+
+    pub(super) fn attach_metadata_object_freshness_basis(
+        metadata: &mut Option<MetadataObject>,
+        note: &mut Option<String>,
+        freshness_basis: &Value,
+    ) {
+        let mut metadata_value = metadata
+            .take()
+            .map(Value::from)
+            .unwrap_or_else(|| json!({}));
+        metadata_value
+            .as_object_mut()
+            .expect("metadata payload should be an object")
+            .insert("freshness_basis".to_owned(), freshness_basis.clone());
+        *note = Some(
+            serde_json::to_string(&metadata_value).expect("metadata payload should serialize"),
+        );
+        *metadata = Some(
+            MetadataObject::try_from(metadata_value).expect("metadata payload should be an object"),
+        );
     }
 
     fn returned_unique_file_bytes_if_known(

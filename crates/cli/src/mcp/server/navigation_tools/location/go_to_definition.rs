@@ -249,7 +249,13 @@ impl FriggMcpServer {
                         precise_artifacts_ingested = cached.precise_artifacts_ingested;
                         precise_artifacts_failed = cached.precise_artifacts_failed;
                         match_count = cached.match_count;
-                        return Ok(Json(cached.response));
+                        let mut response = cached.response;
+                        Self::attach_metadata_object_freshness_basis(
+                            &mut response.metadata,
+                            &mut response.note,
+                            &cache_freshness.basis,
+                        );
+                        return Ok(Json(response));
                     }
 
                     let response = if params_for_blocking.symbol.is_none() {
@@ -390,6 +396,7 @@ impl FriggMcpServer {
                                     params_for_blocking.column,
                                     include_follow_up_structural,
                                     limit,
+                                    &cache_freshness.basis,
                                 )?
                             {
                                 scoped_repository_ids = vec![repository_id];
@@ -1371,7 +1378,13 @@ impl FriggMcpServer {
                         precise_artifacts_ingested = cached.precise_artifacts_ingested;
                         precise_artifacts_failed = cached.precise_artifacts_failed;
                         match_count = cached.match_count;
-                        return Ok(Json(cached.response));
+                        let mut response = cached.response;
+                        Self::attach_metadata_object_freshness_basis(
+                            &mut response.metadata,
+                            &mut response.note,
+                            &cache_freshness.basis,
+                        );
+                        return Ok(Json(response));
                     }
 
                     let corpora = server.collect_repository_symbol_corpora(

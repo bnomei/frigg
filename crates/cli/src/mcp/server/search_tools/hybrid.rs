@@ -173,8 +173,17 @@ impl FriggMcpServer {
                         && let Some(cached) = server.cached_search_hybrid_response(cache_key)
                     {
                         response_source_refs = cached.source_refs.clone();
+                        response_source_refs
+                            .as_object_mut()
+                            .expect("search_hybrid source refs should be an object")
+                            .insert("freshness_basis".to_owned(), cache_freshness.basis.clone());
+                        let mut response = cached.response;
+                        if let Some(metadata) = response.metadata.as_mut() {
+                            metadata.freshness_basis =
+                                Self::response_freshness_basis_metadata(&cache_freshness.basis);
+                        }
                         return Ok(Json(server.present_search_hybrid_response(
-                            cached.response,
+                            response,
                             params_for_blocking.response_mode,
                         )));
                     }
@@ -357,8 +366,9 @@ impl FriggMcpServer {
                             .include_context_efficiency
                             .filter(|include| *include)
                             .and(context_efficiency),
-                        freshness_basis: serde_json::from_value(cache_freshness.basis.clone())
-                            .expect("search_hybrid freshness basis should deserialize"),
+                        freshness_basis: Self::response_freshness_basis_metadata(
+                            &cache_freshness.basis,
+                        ),
                     });
 
                     let response = SearchHybridResponse {

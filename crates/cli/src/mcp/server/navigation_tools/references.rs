@@ -382,6 +382,17 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 let include_definition = params_for_blocking.include_definition.unwrap_or(true);
                 effective_limit = Some(limit);
+                let freshness_basis = server
+                    .scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?
+                    .cache_freshness
+                    .basis;
+                let attach_freshness = |metadata| {
+                    Self::metadata_with_freshness_basis(metadata, &freshness_basis)
+                };
 
                 let corpora = server
                     .collect_repository_symbol_corpora(params_for_blocking.repository_id.as_deref())?;
@@ -560,7 +571,8 @@ impl FriggMcpServer {
                                         },
                                     },
                                 });
-                                let (metadata, note) = Self::metadata_note_pair(metadata);
+                                let (metadata, note) =
+                                    Self::metadata_note_pair(attach_freshness(metadata));
 
                                 return Ok(Json(FindReferencesResponse {
                                     total_matches: matches.len(),
@@ -609,7 +621,8 @@ impl FriggMcpServer {
                             },
                             "resource_budgets": resource_budget_metadata_for_blocking.clone(),
                         });
-                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let (metadata, note) =
+                            Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(FindReferencesResponse {
                             total_matches: 0,
                             matches: Vec::new(),
@@ -881,7 +894,7 @@ impl FriggMcpServer {
                             None
                         },
                     });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
 
                     return Ok(Json(FindReferencesResponse {
                         total_matches: matches.len(),
@@ -1029,7 +1042,7 @@ impl FriggMcpServer {
                         },
                     },
                 });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
+                let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 resolution_precision = Some("heuristic".to_owned());
 
                 Ok(Json(FindReferencesResponse {

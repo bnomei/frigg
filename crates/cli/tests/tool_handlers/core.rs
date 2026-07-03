@@ -578,6 +578,73 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
 }
 
 #[tokio::test]
+async fn core_search_text_compact_opt_in_keeps_context_efficiency_and_freshness_metadata() {
+    let workspace_root = temp_workspace_root("search-text-compact-context-efficiency");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn compact_text_context_efficiency_marker() {}\n",
+    )
+    .expect("failed to seed source");
+
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "compact_text_context_efficiency_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            response_mode: None,
+            include_context_efficiency: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("compact search_text with context-efficiency should succeed")
+        .0;
+
+    let metadata = response
+        .metadata
+        .expect("compact search_text should keep opted-in metadata");
+    assert!(
+        metadata.context_efficiency.is_some(),
+        "compact search_text should include requested context-efficiency metadata"
+    );
+    let freshness = metadata
+        .freshness_basis
+        .expect("compact search_text metadata should include freshness_basis");
+    assert!(freshness.repositories.first().is_some());
+    let repository = &freshness.repositories[0];
+    assert!(!repository.candidate_source.is_empty());
+    assert!(
+        repository.active_index_tasks.is_empty(),
+        "freshness repository should expose empty active_index_tasks"
+    );
+    let freshness_value =
+        serde_json::to_value(&freshness).expect("freshness metadata should serialize");
+    assert!(
+        freshness_value["repositories"][0]
+            .get("active_index_tasks")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "typed freshness serialization should keep active_index_tasks when empty"
+    );
+    assert!(
+        !repository.recommended_client_behavior.is_empty(),
+        "freshness repository should include recommended_client_behavior"
+    );
+
+    cleanup_workspace_root(&workspace_root);
+}
+
+#[tokio::test]
 async fn core_read_match_defaults_to_text_first_output() {
     let server = server_for_fixture().await;
     let response = server

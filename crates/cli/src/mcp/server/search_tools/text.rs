@@ -111,6 +111,10 @@ impl FriggMcpServer {
                         && let Some(cached) = server.cached_search_text_response(cache_key)
                     {
                         response_source_refs = cached.source_refs.clone();
+                        response_source_refs
+                            .as_object_mut()
+                            .expect("search_text source refs should be an object")
+                            .insert("freshness_basis".to_owned(), cache_freshness.basis.clone());
                         diagnostics_count = cached
                             .source_refs
                             .get("diagnostics_count")
@@ -128,10 +132,14 @@ impl FriggMcpServer {
                             .and_then(|value| value.get("read"))
                             .and_then(Value::as_u64)
                             .unwrap_or(0) as usize;
-                        return Ok(Json(server.present_search_text_response(
-                            cached.response,
-                            &params_for_blocking,
-                        )?));
+                        let mut response = cached.response;
+                        Self::attach_search_text_freshness_basis(
+                            &mut response.metadata,
+                            &cache_freshness.basis,
+                        );
+                        return Ok(Json(
+                            server.present_search_text_response(response, &params_for_blocking)?,
+                        ));
                     }
                     let (scoped_config, scoped_runtime_repository_ids, repository_id_map) =
                         server.scoped_search_config(&scoped_workspaces);
@@ -169,10 +177,11 @@ impl FriggMcpServer {
                         .count_by_kind(SearchDiagnosticKind::Read);
                     let mut matches = search_output.matches;
                     let total_matches = search_output.total_matches;
-                    let metadata = Self::search_text_metadata(
+                    let mut metadata = Self::search_text_metadata(
                         search_output.lexical_backend,
                         search_output.lexical_backend_note.clone(),
                     );
+                    Self::attach_search_text_freshness_basis(&mut metadata, &cache_freshness.basis);
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
                             repository_id_map.get(&found.repository_id)
@@ -240,13 +249,14 @@ impl FriggMcpServer {
                             );
                         }
                         if params_for_blocking.include_context_efficiency == Some(true) {
+                            Self::attach_search_text_freshness_basis(
+                                &mut presented.metadata,
+                                &cache_freshness.basis,
+                            );
                             presented
                                 .metadata
-                                .get_or_insert_with(|| SearchTextMetadata {
-                                    lexical_backend: None,
-                                    lexical_backend_note: None,
-                                    context_efficiency: None,
-                                })
+                                .as_mut()
+                                .expect("search_text metadata should be present")
                                 .context_efficiency = context_efficiency;
                         }
                     }

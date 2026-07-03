@@ -43,6 +43,7 @@ impl FriggMcpServer {
         column: Option<usize>,
         include_follow_up_structural: bool,
         limit: usize,
+        freshness_basis: &Value,
     ) -> Result<Option<(Json<GoToDefinitionResponse>, String, String, String)>, ErrorData> {
         let scoped_roots = self.roots_for_repository(repository_id_hint)?;
         if repository_id_hint.is_none() && scoped_roots.len() != 1 {
@@ -125,6 +126,7 @@ impl FriggMcpServer {
                     precise_matches.len(),
                 )
             });
+            let metadata = Self::metadata_with_freshness_basis(metadata, freshness_basis);
             let (metadata, note) = Self::metadata_note_pair(metadata);
             return Ok(Some((
                 Json(GoToDefinitionResponse {

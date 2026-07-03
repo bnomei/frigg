@@ -129,6 +129,49 @@ async fn core_find_references_returns_heuristic_metadata_and_matches() {
     assert_eq!(note_json["heuristic"], true);
     assert_eq!(note_json["confidence"]["low"], response.matches.len());
     assert_eq!(note_json["resolution_source"], "symbol");
+    let freshness = note_json
+        .get("freshness_basis")
+        .expect("find_references metadata should include freshness_basis");
+    assert!(
+        freshness
+            .get("cacheable")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "find_references freshness_basis should include cacheable"
+    );
+    let repository = freshness
+        .get("repositories")
+        .and_then(|value| value.as_array())
+        .and_then(|repositories| repositories.first())
+        .expect("find_references freshness_basis should include repository details");
+    assert!(
+        repository
+            .get("dirty_root")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "find_references freshness repository should include dirty_root"
+    );
+    assert!(
+        repository
+            .get("refresh_in_progress")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "find_references freshness repository should include refresh_in_progress"
+    );
+    assert!(
+        repository
+            .get("active_index_tasks")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "find_references freshness repository should include active_index_tasks"
+    );
+    assert!(
+        repository
+            .get("recommended_client_behavior")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "find_references freshness repository should include recommended_client_behavior"
+    );
     assert_eq!(note_json["target_selection"]["ambiguous_query"], false);
     assert_eq!(note_json["target_selection"]["candidate_count"], 1);
     assert!(

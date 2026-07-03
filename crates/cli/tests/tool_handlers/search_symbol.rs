@@ -717,6 +717,59 @@ async fn search_symbol_rebuilds_stale_manifest_backed_corpus_after_edit() {
         .0;
     assert_eq!(second.matches.len(), 1);
     assert_eq!(second.matches[0].symbol, "beta_beta");
+    assert_eq!(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("freshness_basis"))
+            .and_then(|value| value.get("cacheable"))
+            .and_then(|value| value.as_bool()),
+        Some(false),
+        "stale manifest-backed symbol search should surface non-cacheable freshness metadata until a fresh snapshot exists"
+    );
+    let symbol_repository_freshness = second
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("freshness_basis"))
+        .and_then(|value| value.get("repositories"))
+        .and_then(|value| value.as_array())
+        .and_then(|repositories| repositories.first())
+        .expect("search_symbol freshness metadata should include repository details");
+    assert!(
+        symbol_repository_freshness
+            .get("dirty_root")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "search_symbol freshness metadata should include dirty_root"
+    );
+    assert!(
+        symbol_repository_freshness
+            .get("candidate_source")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "search_symbol freshness metadata should include candidate_source"
+    );
+    assert!(
+        symbol_repository_freshness
+            .get("refresh_in_progress")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "search_symbol freshness metadata should include refresh_in_progress"
+    );
+    assert!(
+        symbol_repository_freshness
+            .get("active_index_tasks")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "search_symbol freshness metadata should include active_index_tasks"
+    );
+    assert!(
+        symbol_repository_freshness
+            .get("recommended_client_behavior")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "search_symbol freshness metadata should include recommended_client_behavior"
+    );
 
     let stale = server
         .search_symbol(Parameters(SearchSymbolParams {
@@ -769,6 +822,8 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             pattern_type: Some(SearchPatternType::Literal),
             path_regex: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
             ..Default::default()
         }))
         .await
@@ -777,6 +832,50 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
     assert_eq!(second.total_matches, 1);
     assert_eq!(second.matches[0].path, "src/lib.rs");
     assert!(second.matches[0].excerpt.contains("beta_beta"));
+    assert_eq!(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.freshness_basis.as_ref())
+            .map(|freshness| freshness.cacheable),
+        Some(false),
+        "stale manifest-backed text search should surface non-cacheable freshness metadata until a fresh snapshot exists"
+    );
+    let text_repository_freshness = second
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.freshness_basis.as_ref())
+        .and_then(|freshness| freshness.repositories.first())
+        .expect("search_text freshness metadata should include repository details");
+    assert!(
+        !text_repository_freshness.candidate_source.is_empty(),
+        "search_text freshness metadata should include candidate_source"
+    );
+    assert!(
+        !text_repository_freshness
+            .recommended_client_behavior
+            .is_empty(),
+        "search_text freshness metadata should include recommended_client_behavior"
+    );
+    assert!(
+        text_repository_freshness.active_index_tasks.is_empty(),
+        "search_text freshness metadata should expose empty active_index_tasks"
+    );
+    let text_freshness_value = serde_json::to_value(
+        second
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.freshness_basis.as_ref())
+            .expect("search_text freshness metadata should be present"),
+    )
+    .expect("search_text freshness metadata should serialize");
+    assert!(
+        text_freshness_value["repositories"][0]
+            .get("active_index_tasks")
+            .and_then(|value| value.as_array())
+            .is_some(),
+        "typed search_text freshness serialization should keep active_index_tasks when empty"
+    );
 
     let stale = server
         .search_text(Parameters(SearchTextParams {
@@ -785,6 +884,8 @@ async fn search_text_does_not_reuse_stale_manifest_scoped_cache_after_edit() {
             pattern_type: Some(SearchPatternType::Literal),
             path_regex: None,
             limit: Some(10),
+            response_mode: Some(ResponseMode::Full),
+            include_context_efficiency: None,
             ..Default::default()
         }))
         .await

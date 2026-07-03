@@ -88,6 +88,11 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
             Some(13),
             false,
             10,
+            &serde_json::json!({
+                "mode": "manifest_only",
+                "cacheable": true,
+                "repositories": []
+            }),
         )
         .expect("cached precise fast path should not error")
         .expect("cached precise fast path should resolve a definition");
@@ -97,6 +102,11 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
     assert_eq!(response.0.0.matches.len(), 1);
     assert_eq!(response.0.0.matches[0].path, "src/lib.rs");
     assert_eq!(response.0.0.matches[0].line, 1);
+    let metadata = response.0.0.metadata.expect("metadata should be present");
+    assert_eq!(
+        metadata["freshness_basis"]["mode"],
+        serde_json::json!("manifest_only")
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }

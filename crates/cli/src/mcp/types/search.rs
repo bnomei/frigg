@@ -9,6 +9,7 @@ use crate::domain::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Literal or safe-regex matching mode for text and explore queries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -186,6 +187,8 @@ pub struct SearchTextMetadata {
     pub lexical_backend_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freshness_basis: Option<ResponseFreshnessBasisMetadata>,
 }
 
 /// Bounded context-efficiency metadata returned by read and search tools when requested.
@@ -431,6 +434,14 @@ pub struct ResponseFreshnessRepositoryMetadata {
     pub semantic: String,
     pub dirty_root: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cacheable_reason: Option<String>,
+    pub candidate_source: String,
+    pub using_live_walk: bool,
+    pub refresh_in_progress: bool,
+    #[serde(default)]
+    pub active_index_tasks: Vec<Value>,
+    pub recommended_client_behavior: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -443,6 +454,8 @@ pub struct ResponseFreshnessBasisMetadata {
     pub cacheable: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<ResponseFreshnessRepositoryMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_cache_contract: Option<Value>,
 }
 
 /// Semantic accelerator tier and health reported for hybrid search.
@@ -719,5 +732,65 @@ mod tests {
         .expect("explore metadata should serialize");
 
         assert!(value.get("context_efficiency").is_none());
+    }
+
+    #[test]
+    fn response_freshness_basis_round_trips_runtime_metadata() {
+        let value = json!({
+            "mode": "manifest_only",
+            "cacheable": false,
+            "repositories": [{
+                "repository_id": "repo-001",
+                "snapshot_id": "snapshot-abc",
+                "manifest": "ready",
+                "semantic": "ready",
+                "dirty_root": false,
+                "cacheable_reason": "refresh in progress",
+                "candidate_source": "manifest",
+                "using_live_walk": false,
+                "refresh_in_progress": true,
+                "active_index_tasks": [{
+                    "kind": "manifest",
+                    "status": "running"
+                }],
+                "recommended_client_behavior": "prefer_current_response",
+                "provider": "openai",
+                "model": "text-embedding-3-small"
+            }],
+            "runtime_cache_contract": {
+                "cacheable": false,
+                "invalidation_basis": "snapshot"
+            }
+        });
+
+        let metadata: ResponseFreshnessBasisMetadata =
+            serde_json::from_value(value.clone()).expect("freshness metadata should deserialize");
+        let serialized =
+            serde_json::to_value(metadata).expect("freshness metadata should serialize");
+
+        assert_eq!(serialized, value);
+    }
+
+    #[test]
+    fn response_freshness_repository_keeps_empty_active_index_tasks() {
+        let value = json!({
+            "repository_id": "repo-001",
+            "snapshot_id": "snapshot-abc",
+            "manifest": "ready",
+            "semantic": "ready",
+            "dirty_root": false,
+            "candidate_source": "manifest_snapshot",
+            "using_live_walk": false,
+            "refresh_in_progress": false,
+            "active_index_tasks": [],
+            "recommended_client_behavior": "use_cached_frigg_results"
+        });
+
+        let metadata: ResponseFreshnessRepositoryMetadata = serde_json::from_value(value.clone())
+            .expect("repository freshness metadata should deserialize");
+        let serialized =
+            serde_json::to_value(metadata).expect("repository freshness metadata should serialize");
+
+        assert_eq!(serialized, value);
     }
 }

@@ -157,10 +157,168 @@ fn search_text_metadata_omits_context_efficiency_by_default() {
         lexical_backend: Some(SearchLexicalBackendMetadata::Native),
         lexical_backend_note: None,
         context_efficiency: None,
+        freshness_basis: None,
     };
 
     let value = serde_json::to_value(metadata).expect("metadata should serialize");
     assert!(value.get("context_efficiency").is_none());
+    assert!(value.get("freshness_basis").is_none());
+}
+
+#[test]
+fn attach_search_text_freshness_basis_replaces_cached_rich_fields() {
+    let stale_basis = json!({
+        "mode": "manifest_only",
+        "cacheable": true,
+        "repositories": [{
+            "repository_id": "repo-001",
+            "snapshot_id": "snapshot-001",
+            "manifest": "ready",
+            "semantic": "ready",
+            "dirty_root": false,
+            "candidate_source": "manifest_snapshot",
+            "using_live_walk": false,
+            "refresh_in_progress": false,
+            "active_index_tasks": [],
+            "recommended_client_behavior": "use_cached_frigg_results"
+        }],
+        "runtime_cache_contract": {
+            "cacheable": true
+        }
+    });
+    let current_basis = json!({
+        "mode": "manifest_only",
+        "cacheable": false,
+        "repositories": [{
+            "repository_id": "repo-001",
+            "snapshot_id": "snapshot-001",
+            "manifest": "ready",
+            "semantic": "ready",
+            "dirty_root": true,
+            "cacheable_reason": "dirty_root",
+            "candidate_source": "live_walk",
+            "using_live_walk": true,
+            "refresh_in_progress": true,
+            "active_index_tasks": [{
+                "kind": "changed_index",
+                "status": "running"
+            }],
+            "recommended_client_behavior": "continue_using_frigg_live_fallback"
+        }],
+        "runtime_cache_contract": {
+            "cacheable": false
+        }
+    });
+    let mut metadata = Some(SearchTextMetadata {
+        lexical_backend: Some(SearchLexicalBackendMetadata::Native),
+        lexical_backend_note: None,
+        context_efficiency: None,
+        freshness_basis: Some(FriggMcpServer::response_freshness_basis_metadata(
+            &stale_basis,
+        )),
+    });
+
+    FriggMcpServer::attach_search_text_freshness_basis(&mut metadata, &current_basis);
+
+    let freshness = metadata
+        .and_then(|metadata| metadata.freshness_basis)
+        .expect("freshness basis should be replaced");
+    assert!(!freshness.cacheable);
+    let repository = freshness
+        .repositories
+        .first()
+        .expect("repository freshness should be present");
+    assert!(repository.dirty_root);
+    assert_eq!(repository.cacheable_reason.as_deref(), Some("dirty_root"));
+    assert_eq!(repository.candidate_source, "live_walk");
+    assert!(repository.using_live_walk);
+    assert!(repository.refresh_in_progress);
+    assert_eq!(
+        repository.active_index_tasks[0]["kind"],
+        json!("changed_index")
+    );
+    assert_eq!(
+        repository.recommended_client_behavior,
+        "continue_using_frigg_live_fallback"
+    );
+    assert_eq!(
+        freshness
+            .runtime_cache_contract
+            .as_ref()
+            .and_then(|value| value.get("cacheable"))
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+}
+
+#[test]
+fn attach_metadata_object_freshness_basis_replaces_cached_rich_fields() {
+    let stale_basis = json!({
+        "mode": "manifest_only",
+        "cacheable": true,
+        "repositories": [{
+            "repository_id": "repo-001",
+            "snapshot_id": "snapshot-001",
+            "manifest": "ready",
+            "semantic": "ready",
+            "dirty_root": false,
+            "candidate_source": "manifest_snapshot",
+            "using_live_walk": false,
+            "refresh_in_progress": false,
+            "active_index_tasks": [],
+            "recommended_client_behavior": "use_cached_frigg_results"
+        }]
+    });
+    let current_basis = json!({
+        "mode": "manifest_only",
+        "cacheable": false,
+        "repositories": [{
+            "repository_id": "repo-001",
+            "snapshot_id": "snapshot-001",
+            "manifest": "ready",
+            "semantic": "ready",
+            "dirty_root": true,
+            "cacheable_reason": "dirty_root",
+            "candidate_source": "live_walk",
+            "using_live_walk": true,
+            "refresh_in_progress": true,
+            "active_index_tasks": [{
+                "kind": "workspace_index",
+                "status": "running"
+            }],
+            "recommended_client_behavior": "continue_using_frigg_live_fallback"
+        }]
+    });
+    let mut metadata = Some(
+        crate::mcp::types::MetadataObject::try_from(json!({
+            "source": "cached",
+            "freshness_basis": stale_basis
+        }))
+        .expect("metadata should be an object"),
+    );
+    let mut note = Some("stale".to_owned());
+
+    FriggMcpServer::attach_metadata_object_freshness_basis(
+        &mut metadata,
+        &mut note,
+        &current_basis,
+    );
+
+    let metadata = metadata.expect("metadata should be present");
+    assert_eq!(metadata["source"], json!("cached"));
+    assert_eq!(metadata["freshness_basis"]["cacheable"], json!(false));
+    assert_eq!(
+        metadata["freshness_basis"]["repositories"][0]["cacheable_reason"],
+        json!("dirty_root")
+    );
+    assert_eq!(
+        metadata["freshness_basis"]["repositories"][0]["active_index_tasks"][0]["kind"],
+        json!("workspace_index")
+    );
+    assert_eq!(
+        note.expect("note should be refreshed"),
+        serde_json::to_string(&*metadata).expect("metadata should serialize")
+    );
 }
 
 #[test]
@@ -421,6 +579,7 @@ fn search_hybrid_metadata_omits_context_efficiency_by_default() {
             mode: "manifest".to_owned(),
             cacheable: false,
             repositories: vec![],
+            runtime_cache_contract: None,
         },
     };
 

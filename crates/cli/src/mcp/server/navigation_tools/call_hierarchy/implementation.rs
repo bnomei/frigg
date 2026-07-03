@@ -9,6 +9,7 @@ impl FriggMcpServer {
     ) -> Result<Json<FindImplementationsResponse>, ErrorData> {
         let execution_context = self
             .read_only_tool_execution_context("find_implementations", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
@@ -33,6 +34,17 @@ impl FriggMcpServer {
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
                 effective_limit = Some(limit);
+                let freshness_basis = server
+                    .scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?
+                    .cache_freshness
+                    .basis;
+                let attach_freshness = |metadata| {
+                    Self::metadata_with_freshness_basis(metadata, &freshness_basis)
+                };
 
                 let corpora = server.collect_repository_symbol_corpora(
                     params_for_blocking.repository_id.as_deref(),
@@ -71,7 +83,8 @@ impl FriggMcpServer {
                                     .expect("target selection summary should be present"),
                             ),
                         });
-                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let (metadata, note) =
+                            Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(FindImplementationsResponse {
                             matches: Vec::new(),
                             result_handle: None,
@@ -196,7 +209,7 @@ impl FriggMcpServer {
                         precise_matches.len(),
                     ),
                 });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
+                let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(FindImplementationsResponse {
                     matches: precise_matches,
                     result_handle: None,
@@ -220,6 +233,7 @@ impl FriggMcpServer {
     ) -> Result<Json<IncomingCallsResponse>, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("incoming_calls", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
@@ -240,6 +254,16 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
+                let freshness_basis = server
+                    .scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?
+                    .cache_freshness
+                    .basis;
+                let attach_freshness =
+                    |metadata| Self::metadata_with_freshness_basis(metadata, &freshness_basis);
                 let corpora = server.collect_repository_symbol_corpora(
                     params_for_blocking.repository_id.as_deref(),
                 )?;
@@ -284,7 +308,7 @@ impl FriggMcpServer {
                                     .expect("target selection summary should be present"),
                             ),
                         });
-                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(IncomingCallsResponse {
                             matches: Vec::new(),
                             result_handle: None,
@@ -391,7 +415,7 @@ impl FriggMcpServer {
                             precise_matches.len(),
                         ),
                     });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(IncomingCallsResponse {
                         matches: precise_matches,
                         result_handle: None,
@@ -436,7 +460,7 @@ impl FriggMcpServer {
                             0,
                         ),
                     });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(IncomingCallsResponse {
                         matches: Vec::new(),
                         result_handle: None,
@@ -538,7 +562,7 @@ impl FriggMcpServer {
                         0,
                     ),
                 });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
+                let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(IncomingCallsResponse {
                     matches,
                     result_handle: None,
@@ -563,6 +587,7 @@ impl FriggMcpServer {
     ) -> Result<Json<OutgoingCallsResponse>, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("outgoing_calls", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let resource_budgets = self.find_references_resource_budgets();
         let params_for_blocking = params.clone();
         let server = self.clone();
@@ -583,6 +608,16 @@ impl FriggMcpServer {
                     .min(server.config.max_search_results.max(1));
                 let include_follow_up_structural =
                     params_for_blocking.include_follow_up_structural == Some(true);
+                let freshness_basis = server
+                    .scoped_read_only_tool_execution_context(
+                        execution_context_for_blocking.tool_name,
+                        execution_context_for_blocking.repository_hint.clone(),
+                        RepositoryResponseCacheFreshnessMode::ManifestOnly,
+                    )?
+                    .cache_freshness
+                    .basis;
+                let attach_freshness =
+                    |metadata| Self::metadata_with_freshness_basis(metadata, &freshness_basis);
                 let corpora = server.collect_repository_symbol_corpora(
                     params_for_blocking.repository_id.as_deref(),
                 )?;
@@ -627,7 +662,7 @@ impl FriggMcpServer {
                                     .expect("target selection summary should be present"),
                             ),
                         });
-                        let (metadata, note) = Self::metadata_note_pair(metadata);
+                        let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                         return Ok(Json(OutgoingCallsResponse {
                             matches: Vec::new(),
                             result_handle: None,
@@ -726,7 +761,7 @@ impl FriggMcpServer {
                             precise_matches.len(),
                         ),
                     });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(OutgoingCallsResponse {
                         matches: precise_matches,
                         result_handle: None,
@@ -772,7 +807,7 @@ impl FriggMcpServer {
                             0,
                         ),
                     });
-                    let (metadata, note) = Self::metadata_note_pair(metadata);
+                    let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                     return Ok(Json(OutgoingCallsResponse {
                         matches: Vec::new(),
                         result_handle: None,
@@ -891,7 +926,7 @@ impl FriggMcpServer {
                         0,
                     ),
                 });
-                let (metadata, note) = Self::metadata_note_pair(metadata);
+                let (metadata, note) = Self::metadata_note_pair(attach_freshness(metadata));
                 Ok(Json(OutgoingCallsResponse {
                     matches,
                     result_handle: None,
