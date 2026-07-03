@@ -484,6 +484,7 @@ pub(crate) fn execute_semantic_refresh_plan(
                 semantic_runtime,
                 credentials,
                 executor,
+                Some(storage),
             )
             .and_then(|semantic_build| {
                 storage.replace_semantic_embeddings_for_repository(
@@ -503,6 +504,7 @@ pub(crate) fn execute_semantic_refresh_plan(
             semantic_runtime,
             credentials,
             executor,
+            Some(storage),
         )
         .and_then(|semantic_build| {
             let retained_changed_paths = semantic_refresh

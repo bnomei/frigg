@@ -180,6 +180,16 @@ pub(super) fn insert_semantic_embeddings_for_records(
                 content_text
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(repository_id, provider, model, chunk_id) DO UPDATE SET
+                snapshot_id = excluded.snapshot_id,
+                path = excluded.path,
+                language = excluded.language,
+                chunk_index = excluded.chunk_index,
+                start_line = excluded.start_line,
+                end_line = excluded.end_line,
+                content_hash_blake3 = excluded.content_hash_blake3,
+                content_text = excluded.content_text,
+                updated_at = CURRENT_TIMESTAMP
             "#,
         )
         .map_err(|err| {
@@ -201,6 +211,12 @@ pub(super) fn insert_semantic_embeddings_for_records(
                 dimensions
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(repository_id, provider, model, chunk_id) DO UPDATE SET
+                snapshot_id = excluded.snapshot_id,
+                trace_id = excluded.trace_id,
+                embedding_blob = excluded.embedding_blob,
+                dimensions = excluded.dimensions,
+                updated_at = CURRENT_TIMESTAMP
             "#,
         )
         .map_err(|err| {

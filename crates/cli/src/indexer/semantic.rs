@@ -18,7 +18,7 @@ use crate::embeddings::{
 };
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
-use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord};
+use crate::storage::{DEFAULT_VECTOR_DIMENSIONS, SemanticChunkEmbeddingRecord, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticChunkCandidate {
@@ -186,6 +186,7 @@ pub(super) fn build_semantic_embedding_records(
     semantic_runtime: &SemanticRuntimeConfig,
     credentials: &SemanticRuntimeCredentials,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    storage: Option<&Storage>,
 ) -> FriggResult<SemanticEmbeddingBuild> {
     semantic_runtime
         .validate_startup(credentials)
@@ -219,13 +220,129 @@ pub(super) fn build_semantic_embedding_records(
         });
     }
 
+    let (mut records, chunks_to_embed) = reuse_existing_semantic_embedding_records(
+        repository_id,
+        snapshot_id,
+        provider,
+        model,
+        &chunks,
+        storage,
+    )?;
     let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
-    let records =
-        execute_semantic_embedding_batches(provider, model, &chunks, &trace_id, executor)?;
+    if !chunks_to_embed.is_empty() {
+        records.extend(execute_semantic_embedding_batches(
+            provider,
+            model,
+            &chunks_to_embed,
+            &trace_id,
+            executor,
+        )?);
+    }
+    sort_semantic_embedding_records(&mut records);
     Ok(SemanticEmbeddingBuild {
         records,
         unreadable_paths,
     })
+}
+
+fn reuse_existing_semantic_embedding_records(
+    repository_id: &str,
+    snapshot_id: &str,
+    provider: SemanticRuntimeProvider,
+    model: &str,
+    chunks: &[SemanticChunkCandidate],
+    storage: Option<&Storage>,
+) -> FriggResult<(
+    Vec<SemanticChunkEmbeddingRecord>,
+    Vec<SemanticChunkCandidate>,
+)> {
+    let Some(storage) = storage else {
+        return Ok((Vec::new(), chunks.to_vec()));
+    };
+    let chunk_ids = chunks
+        .iter()
+        .map(SemanticChunkCandidate::chunk_id_string)
+        .collect::<Vec<_>>();
+    let existing_records = storage.load_semantic_embeddings_for_repository_model_chunk_ids(
+        repository_id,
+        provider.as_str(),
+        model,
+        &chunk_ids,
+    )?;
+    let mut reused_records = Vec::new();
+    let mut chunks_to_embed = Vec::new();
+    for chunk in chunks {
+        let chunk_id = chunk.chunk_id_string();
+        let Some(existing_record) = existing_records.get(&chunk_id) else {
+            chunks_to_embed.push(chunk.clone());
+            continue;
+        };
+        if reusable_semantic_embedding_record(
+            chunk,
+            existing_record,
+            repository_id,
+            provider,
+            model,
+        ) {
+            reused_records.push(rewrite_reused_semantic_embedding_record(
+                chunk,
+                existing_record,
+                snapshot_id,
+            ));
+        } else {
+            chunks_to_embed.push(chunk.clone());
+        }
+    }
+
+    Ok((reused_records, chunks_to_embed))
+}
+
+fn reusable_semantic_embedding_record(
+    chunk: &SemanticChunkCandidate,
+    record: &SemanticChunkEmbeddingRecord,
+    repository_id: &str,
+    provider: SemanticRuntimeProvider,
+    model: &str,
+) -> bool {
+    record.repository_id == repository_id
+        && record.provider == provider.as_str()
+        && record.model == model
+        && record.chunk_id == chunk.chunk_id_string()
+        && record.content_hash_blake3 == chunk.content_hash_blake3_string()
+        && !record.embedding.is_empty()
+        && record.embedding.iter().all(|value| value.is_finite())
+}
+
+fn rewrite_reused_semantic_embedding_record(
+    chunk: &SemanticChunkCandidate,
+    record: &SemanticChunkEmbeddingRecord,
+    snapshot_id: &str,
+) -> SemanticChunkEmbeddingRecord {
+    SemanticChunkEmbeddingRecord {
+        chunk_id: chunk.chunk_id_string(),
+        repository_id: chunk.repository_id.to_string(),
+        snapshot_id: snapshot_id.to_owned(),
+        path: chunk.path.to_string(),
+        language: chunk.language.to_string(),
+        chunk_index: chunk.chunk_index,
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        provider: record.provider.clone(),
+        model: record.model.clone(),
+        trace_id: record.trace_id.clone(),
+        content_hash_blake3: chunk.content_hash_blake3_string(),
+        content_text: chunk.content_text.clone(),
+        embedding: record.embedding.clone(),
+    }
+}
+
+fn sort_semantic_embedding_records(records: &mut [SemanticChunkEmbeddingRecord]) {
+    records.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.chunk_index.cmp(&right.chunk_index))
+            .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
+    });
 }
 
 fn execute_semantic_embedding_batches(
@@ -342,12 +459,7 @@ fn build_semantic_embedding_records_with_runtime(
         }
     }
 
-    output.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then(left.chunk_index.cmp(&right.chunk_index))
-            .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
-    });
+    sort_semantic_embedding_records(&mut output);
     Ok(output)
 }
 

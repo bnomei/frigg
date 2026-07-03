@@ -1,6 +1,6 @@
 //! Semantic read APIs for heads, embeddings, vector search, and chunk payloads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;
@@ -20,6 +20,8 @@ use crate::storage::{
     SemanticChunkVectorMatch, SemanticHeadRecord, Storage, VECTOR_TABLE_NAME, i64_to_u64,
     usize_to_i64,
 };
+
+const SEMANTIC_CHUNK_ID_LOOKUP_BATCH_SIZE: usize = 500;
 
 /// Reusable SQLite read context for semantic head, vector, and payload queries.
 pub(crate) struct SemanticReadContext {
@@ -185,6 +187,139 @@ impl Storage {
                 "failed to decode semantic embeddings for repository '{repository_id}' snapshot '{snapshot_id}': {err}"
             ))
         })
+    }
+
+    pub fn load_semantic_embeddings_for_repository_model_chunk_ids(
+        &self,
+        repository_id: &str,
+        provider: &str,
+        model: &str,
+        chunk_ids: &[String],
+    ) -> FriggResult<BTreeMap<String, SemanticChunkEmbeddingRecord>> {
+        let repository_id = require_trimmed_input(repository_id, "repository_id")?;
+        let provider = require_trimmed_input(provider, "provider")?;
+        let model = require_trimmed_input(model, "model")?;
+        let chunk_ids = chunk_ids
+            .iter()
+            .map(|chunk_id| chunk_id.trim())
+            .filter(|chunk_id| !chunk_id.is_empty())
+            .collect::<BTreeSet<_>>();
+        if chunk_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let conn = self.open_current_schema_connection()?;
+        let mut output = BTreeMap::new();
+        let chunk_ids = chunk_ids.into_iter().collect::<Vec<_>>();
+        for chunk_id_batch in chunk_ids.chunks(SEMANTIC_CHUNK_ID_LOOKUP_BATCH_SIZE) {
+            let placeholders = std::iter::repeat_n("?", chunk_id_batch.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                r#"
+                SELECT
+                    embedding.chunk_id,
+                    embedding.repository_id,
+                    embedding.snapshot_id,
+                    chunk.path,
+                    chunk.language,
+                    chunk.chunk_index,
+                    chunk.start_line,
+                    chunk.end_line,
+                    embedding.provider,
+                    embedding.model,
+                    embedding.trace_id,
+                    chunk.content_hash_blake3,
+                    chunk.content_text,
+                    embedding.embedding_blob,
+                    embedding.dimensions
+                FROM semantic_chunk_embedding AS embedding
+                INNER JOIN semantic_chunk AS chunk
+                  ON chunk.repository_id = embedding.repository_id
+                 AND chunk.provider = embedding.provider
+                 AND chunk.model = embedding.model
+                 AND chunk.chunk_id = embedding.chunk_id
+                WHERE embedding.repository_id = ?1
+                  AND embedding.provider = ?2
+                  AND embedding.model = ?3
+                  AND embedding.chunk_id IN ({placeholders})
+                ORDER BY chunk.path ASC, chunk.chunk_index ASC, embedding.chunk_id ASC
+                "#
+            );
+            let mut params = Vec::with_capacity(3 + chunk_id_batch.len());
+            params.push(SqlValue::Text(repository_id.to_owned()));
+            params.push(SqlValue::Text(provider.to_owned()));
+            params.push(SqlValue::Text(model.to_owned()));
+            params.extend(
+                chunk_id_batch
+                    .iter()
+                    .map(|chunk_id| SqlValue::Text((*chunk_id).to_owned())),
+            );
+
+            let mut statement = conn.prepare(&sql).map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to prepare semantic embedding chunk-id lookup for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+                ))
+            })?;
+            let rows = statement
+                .query_map(params_from_iter(params.iter()), |row| {
+                    let embedding_blob: Vec<u8> = row.get(13)?;
+                    let dimensions_raw: i64 = row.get(14)?;
+                    let embedding = decode_f32_vector(&embedding_blob).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            13,
+                            rusqlite::types::Type::Blob,
+                            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, err)),
+                        )
+                    })?;
+                    let dimensions = i64_to_u64(dimensions_raw, "dimensions")? as usize;
+                    if embedding.len() != dimensions {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            14,
+                            rusqlite::types::Type::Integer,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!(
+                                    "semantic embedding dimensions mismatch for chunk-id lookup: decoded={} stored={dimensions}",
+                                    embedding.len()
+                                ),
+                            )),
+                        ));
+                    }
+                    Ok(SemanticChunkEmbeddingRecord {
+                        chunk_id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        snapshot_id: row.get(2)?,
+                        path: row.get(3)?,
+                        language: row.get(4)?,
+                        chunk_index: i64_to_u64(row.get::<_, i64>(5)?, "chunk_index")? as usize,
+                        start_line: i64_to_u64(row.get::<_, i64>(6)?, "start_line")? as usize,
+                        end_line: i64_to_u64(row.get::<_, i64>(7)?, "end_line")? as usize,
+                        provider: row.get(8)?,
+                        model: row.get(9)?,
+                        trace_id: row.get(10)?,
+                        content_hash_blake3: row.get(11)?,
+                        content_text: row.get(12)?,
+                        embedding,
+                    })
+                })
+                .map_err(|err| {
+                    FriggError::Internal(format!(
+                        "failed to query semantic embedding chunk-id lookup for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+                    ))
+                })?;
+
+            for row in rows {
+                let record = row.map_err(|err| {
+                    FriggError::Internal(format!(
+                        "failed to decode semantic embedding chunk-id lookup row for repository '{repository_id}' provider '{provider}' model '{model}': {err}"
+                    ))
+                })?;
+                output.insert(record.chunk_id.clone(), record);
+            }
+        }
+
+        Ok(output)
     }
 
     pub fn load_semantic_embedding_projections_for_repository_snapshot(

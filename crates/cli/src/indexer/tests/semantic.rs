@@ -616,6 +616,138 @@ fn semantic_indexing_changed_only_updates_only_changed_paths() -> FriggResult<()
 }
 
 #[test]
+fn semantic_full_rebuild_reuses_existing_chunk_embeddings() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-full-reuses-existing-chunks");
+    let workspace_root = temp_workspace_root("semantic-full-reuses-existing-chunks");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn reusable_chunk() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let first_executor = CountingSemanticEmbeddingExecutor::default();
+    let first = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &first_executor,
+    )?;
+    assert_eq!(first_executor.observed_inputs().len(), 1);
+
+    let second_executor = CountingSemanticEmbeddingExecutor::default();
+    let second = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &second_executor,
+    )?;
+    assert_eq!(second.snapshot_id, first.snapshot_id);
+    assert!(
+        second_executor.observed_inputs().is_empty(),
+        "unchanged full rebuild should reuse existing chunk embeddings"
+    );
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?;
+    assert_eq!(semantic_rows.len(), 1);
+    assert_eq!(semantic_rows[0].content_text, "pub fn reusable_chunk() {}");
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn semantic_changed_only_reuses_unchanged_chunks_inside_changed_file() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-changed-only-reuses-file-chunks");
+    let workspace_root = temp_workspace_root("semantic-changed-only-reuses-file-chunks");
+    let stable_chunk = "a".repeat(SEMANTIC_CHUNK_MAX_CHARS);
+    let original_tail = "b".repeat(64);
+    let changed_tail = "c".repeat(65);
+    prepare_workspace(
+        &workspace_root,
+        &[(
+            "src/main.rs",
+            format!("{stable_chunk}{original_tail}").as_str(),
+        )],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let first_executor = CountingSemanticEmbeddingExecutor::default();
+    let first = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &first_executor,
+    )?;
+    assert_eq!(
+        first_executor.observed_inputs(),
+        vec![stable_chunk.clone(), original_tail]
+    );
+
+    fs::write(
+        workspace_root.join("src/main.rs"),
+        format!("{stable_chunk}{changed_tail}"),
+    )
+    .map_err(FriggError::Io)?;
+    let second_executor = CountingSemanticEmbeddingExecutor::default();
+    let second = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::ChangedOnly,
+        &semantic_runtime,
+        &credentials,
+        &second_executor,
+    )?;
+    assert_ne!(second.snapshot_id, first.snapshot_id);
+    assert_eq!(
+        second_executor.observed_inputs(),
+        vec![changed_tail.clone()],
+        "only the modified tail chunk should be embedded"
+    );
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?;
+    assert_eq!(semantic_rows.len(), 2);
+    assert!(
+        semantic_rows
+            .iter()
+            .any(|record| record.content_text == stable_chunk),
+        "unchanged first chunk should advance into the new snapshot"
+    );
+    assert!(
+        semantic_rows
+            .iter()
+            .any(|record| record.content_text == changed_tail),
+        "changed tail chunk should be embedded into the new snapshot"
+    );
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read() -> FriggResult<()>
 {
     let db_path = temp_db_path("semantic-changed-only-unreadable-retains");
