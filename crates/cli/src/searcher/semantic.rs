@@ -14,7 +14,7 @@ use crate::domain::{
 };
 use crate::embeddings::{
     EmbeddingPurpose, EmbeddingRequest, LocalArtifactPolicy,
-    SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
+    SemanticEmbeddingProviderFactoryConfig, cached_semantic_embedding_provider,
 };
 use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -72,7 +72,7 @@ impl SemanticRuntimeQueryEmbeddingExecutor for RuntimeSemanticQueryEmbeddingExec
                 trace_id: None,
             };
             let client =
-                build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+                cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
                     provider,
                     model: &request.model,
                     credentials: &self.credentials,

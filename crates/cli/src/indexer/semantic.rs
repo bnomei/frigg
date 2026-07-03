@@ -14,7 +14,7 @@ use tracing::warn;
 
 use super::*;
 use crate::embeddings::{
-    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
+    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, cached_semantic_embedding_provider,
 };
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -67,30 +67,13 @@ fn build_semantic_embedding_runtime() -> FriggResult<tokio::runtime::Runtime> {
 }
 
 fn execute_semantic_embedding_batch(
+    runtime: &tokio::runtime::Runtime,
     executor: &dyn SemanticRuntimeEmbeddingExecutor,
     provider: SemanticRuntimeProvider,
     model: &str,
     input: Vec<String>,
     trace_id: Option<String>,
 ) -> FriggResult<Vec<Vec<f32>>> {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let model = model.to_owned();
-        return std::thread::scope(|scope| {
-            let handle = scope.spawn(|| {
-                let runtime = build_semantic_embedding_runtime()?;
-                runtime.block_on(executor.embed_documents(provider, &model, input, trace_id))
-            });
-            match handle.join() {
-                Ok(result) => result,
-                Err(_) => Err(FriggError::Internal(
-                    "semantic embedding provider thread panicked under an active tokio runtime"
-                        .to_owned(),
-                )),
-            }
-        });
-    }
-
-    let runtime = build_semantic_embedding_runtime()?;
     runtime.block_on(executor.embed_documents(provider, model, input, trace_id))
 }
 
@@ -123,7 +106,7 @@ impl SemanticRuntimeEmbeddingExecutor for RuntimeSemanticEmbeddingExecutor {
                 trace_id,
             };
             let client =
-                build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+                cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
                     provider,
                     model: &request.model,
                     credentials: &self.credentials,
@@ -237,6 +220,53 @@ pub(super) fn build_semantic_embedding_records(
     }
 
     let trace_id = deterministic_semantic_trace_id(repository_id, snapshot_id, provider, model);
+    let records =
+        execute_semantic_embedding_batches(provider, model, &chunks, &trace_id, executor)?;
+    Ok(SemanticEmbeddingBuild {
+        records,
+        unreadable_paths,
+    })
+}
+
+fn execute_semantic_embedding_batches(
+    provider: SemanticRuntimeProvider,
+    model: &str,
+    chunks: &[SemanticChunkCandidate],
+    trace_id: &str,
+    executor: &dyn SemanticRuntimeEmbeddingExecutor,
+) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let runtime = build_semantic_embedding_runtime()?;
+                build_semantic_embedding_records_with_runtime(
+                    provider, model, chunks, trace_id, executor, &runtime,
+                )
+            });
+            match handle.join() {
+                Ok(result) => result,
+                Err(_) => Err(FriggError::Internal(
+                    "semantic embedding provider thread panicked under an active tokio runtime"
+                        .to_owned(),
+                )),
+            }
+        });
+    }
+
+    let runtime = build_semantic_embedding_runtime()?;
+    build_semantic_embedding_records_with_runtime(
+        provider, model, chunks, trace_id, executor, &runtime,
+    )
+}
+
+fn build_semantic_embedding_records_with_runtime(
+    provider: SemanticRuntimeProvider,
+    model: &str,
+    chunks: &[SemanticChunkCandidate],
+    trace_id: &str,
+    executor: &dyn SemanticRuntimeEmbeddingExecutor,
+    runtime: &tokio::runtime::Runtime,
+) -> FriggResult<Vec<SemanticChunkEmbeddingRecord>> {
     let mut output = Vec::with_capacity(chunks.len());
     let total_batches = chunks.len().div_ceil(SEMANTIC_EMBEDDING_BATCH_SIZE);
     for (batch_index, batch) in chunks.chunks(SEMANTIC_EMBEDDING_BATCH_SIZE).enumerate() {
@@ -245,11 +275,12 @@ pub(super) fn build_semantic_embedding_records(
             .map(|chunk| chunk.content_text.clone())
             .collect::<Vec<_>>();
         let vectors = execute_semantic_embedding_batch(
+            runtime,
             executor,
             provider,
             model,
             batch_input,
-            Some(trace_id.clone()),
+            Some(trace_id.to_owned()),
         )
         .map_err(|error| {
             let first_anchor = batch
@@ -303,7 +334,7 @@ pub(super) fn build_semantic_embedding_records(
                 end_line: chunk.end_line,
                 provider: provider.as_str().to_owned(),
                 model: model.to_owned(),
-                trace_id: Some(trace_id.clone()),
+                trace_id: Some(trace_id.to_owned()),
                 content_hash_blake3: chunk.content_hash_blake3_string(),
                 content_text: chunk.content_text.clone(),
                 embedding,
@@ -317,10 +348,7 @@ pub(super) fn build_semantic_embedding_records(
             .then(left.chunk_index.cmp(&right.chunk_index))
             .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
     });
-    Ok(SemanticEmbeddingBuild {
-        records: output,
-        unreadable_paths,
-    })
+    Ok(output)
 }
 
 pub(crate) struct SemanticEmbeddingBuild {

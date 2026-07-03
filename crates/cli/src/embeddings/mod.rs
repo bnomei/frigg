@@ -459,6 +459,7 @@ pub use local::LocalEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;
 pub use provider_factory::{
     LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, build_semantic_embedding_provider,
+    cached_semantic_embedding_provider,
 };
 
 #[cfg(test)]
