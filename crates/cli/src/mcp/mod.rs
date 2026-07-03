@@ -22,4 +22,4 @@ pub use server::{
     benchmark_build_symbol_corpora, benchmark_build_symbol_corpora_for_server,
     benchmark_precise_graph_for_server,
 };
-pub use server_state::RuntimeTaskRegistry;
+pub use server_state::{RuntimeTaskGuard, RuntimeTaskRegistry};

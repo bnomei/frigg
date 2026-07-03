@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::ChannelHealthStatus;
@@ -283,10 +283,78 @@ impl RuntimeTaskRegistry {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }
 
+    pub fn update_task_detail(&mut self, task_id: &str, detail: Option<String>) -> bool {
+        if let Some(task) = self.active.get_mut(task_id) {
+            task.detail = detail;
+            return true;
+        }
+        if let Some(task) = self.recent.iter_mut().find(|task| task.task_id == task_id) {
+            task.detail = detail;
+            return true;
+        }
+        false
+    }
+
     fn push_recent(&mut self, summary: RuntimeTaskSummary) {
         self.recent.push_back(summary);
         while self.recent.len() > RUNTIME_TASK_RECENT_LIMIT {
             self.recent.pop_front();
+        }
+    }
+}
+
+/// Finishes a runtime task on normal completion or marks it failed if unwinding skips the owner.
+pub struct RuntimeTaskGuard {
+    registry: Arc<RwLock<RuntimeTaskRegistry>>,
+    task_id: Option<String>,
+}
+
+impl RuntimeTaskGuard {
+    pub fn start(
+        registry: Arc<RwLock<RuntimeTaskRegistry>>,
+        kind: RuntimeTaskKind,
+        repository_id: impl Into<String>,
+        phase: impl Into<String>,
+        detail: Option<String>,
+    ) -> Self {
+        let task_id = registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_task(kind, repository_id, phase, detail);
+        Self {
+            registry,
+            task_id: Some(task_id),
+        }
+    }
+
+    pub fn task_id(&self) -> &str {
+        self.task_id
+            .as_deref()
+            .expect("runtime task guard should hold an active task id")
+    }
+
+    pub fn finish(&mut self, status: RuntimeTaskStatus, detail: Option<String>) {
+        self.finish_inner(status, detail);
+    }
+
+    fn finish_inner(&mut self, status: RuntimeTaskStatus, detail: Option<String>) {
+        let Some(task_id) = self.task_id.take() else {
+            return;
+        };
+        self.registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .finish_task(&task_id, status, detail);
+    }
+}
+
+impl Drop for RuntimeTaskGuard {
+    fn drop(&mut self) {
+        if self.task_id.is_some() {
+            self.finish_inner(
+                RuntimeTaskStatus::Failed,
+                Some("runtime task owner dropped before reporting completion".to_owned()),
+            );
         }
     }
 }
@@ -390,6 +458,111 @@ mod tests {
             RuntimeTaskKind::SemanticRefresh,
             &["myrepo-abc123def456", "repo-001"],
         ));
+    }
+
+    #[test]
+    fn runtime_task_guard_finishes_explicit_status_once() {
+        let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+        let mut guard = RuntimeTaskGuard::start(
+            Arc::clone(&registry),
+            RuntimeTaskKind::WorkspaceIndex,
+            "repo-001",
+            "workspace_index",
+            None,
+        );
+        let task_id = guard.task_id().to_owned();
+
+        guard.finish(RuntimeTaskStatus::Succeeded, Some("done".to_owned()));
+
+        let registry = registry.read().expect("registry lock should be available");
+        assert!(registry.active_tasks().is_empty());
+        let recent = registry.recent_tasks();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].task_id, task_id);
+        assert_eq!(recent[0].status, RuntimeTaskStatus::Succeeded);
+        assert_eq!(recent[0].detail.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn runtime_task_guard_drop_marks_task_failed() {
+        let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+        let task_id = {
+            let guard = RuntimeTaskGuard::start(
+                Arc::clone(&registry),
+                RuntimeTaskKind::SemanticRefresh,
+                "repo-001",
+                "semantic_attach_refresh",
+                None,
+            );
+            guard.task_id().to_owned()
+        };
+
+        let registry = registry.read().expect("registry lock should be available");
+        assert!(registry.active_tasks().is_empty());
+        let recent = registry.recent_tasks();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].task_id, task_id);
+        assert_eq!(recent[0].status, RuntimeTaskStatus::Failed);
+        assert_eq!(
+            recent[0].detail.as_deref(),
+            Some("runtime task owner dropped before reporting completion")
+        );
+    }
+
+    #[test]
+    fn runtime_task_guard_drop_marks_task_failed_during_unwind() {
+        let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+        let result = std::panic::catch_unwind({
+            let registry = Arc::clone(&registry);
+            move || {
+                let _guard = RuntimeTaskGuard::start(
+                    registry,
+                    RuntimeTaskKind::PreciseGenerate,
+                    "repo-001",
+                    "precise_generation",
+                    None,
+                );
+                panic!("simulate runtime task panic");
+            }
+        });
+
+        assert!(result.is_err());
+        let registry = registry.read().expect("registry lock should be available");
+        assert!(registry.active_tasks().is_empty());
+        let recent = registry.recent_tasks();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].status, RuntimeTaskStatus::Failed);
+        assert_eq!(
+            recent[0].detail.as_deref(),
+            Some("runtime task owner dropped before reporting completion")
+        );
+    }
+
+    #[test]
+    fn runtime_task_registry_updates_recent_task_detail() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let task_id = registry.start_task(
+            RuntimeTaskKind::PrecisePrewarm,
+            "repo-001",
+            "precise_attach_prewarm",
+            None,
+        );
+        registry.finish_task(
+            &task_id,
+            RuntimeTaskStatus::Failed,
+            Some("generic".to_owned()),
+        );
+
+        assert!(registry.update_task_detail(
+            &task_id,
+            Some("failed to spawn precise prewarm thread: unavailable".to_owned()),
+        ));
+
+        let recent = registry.recent_tasks();
+        assert_eq!(
+            recent[0].detail.as_deref(),
+            Some("failed to spawn precise prewarm thread: unavailable")
+        );
     }
 }
 

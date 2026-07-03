@@ -741,26 +741,22 @@ impl FriggMcpServer {
             let server = self.clone();
             let workspace = workspace.clone();
             let dirty_path_hints = dirty_path_hints.to_vec();
-            let task_id = self
-                .runtime_state
-                .runtime_task_registry
-                .write()
-                .expect("runtime task registry poisoned")
-                .start_task(
-                    crate::mcp::types::RuntimeTaskKind::PreciseGenerate,
-                    workspace.repository_id.clone(),
-                    "precise_generate",
-                    Some(format!(
-                        "precise generators: {}",
-                        precise_generation_targets
-                            .iter()
-                            .map(|generator| generator.tool_name())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )),
-                );
-            let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
-            let task_id_for_thread = task_id.clone();
+            let task_guard = RuntimeTaskGuard::start(
+                Arc::clone(&self.runtime_state.runtime_task_registry),
+                crate::mcp::types::RuntimeTaskKind::PreciseGenerate,
+                workspace.repository_id.clone(),
+                "precise_generate",
+                Some(format!(
+                    "precise generators: {}",
+                    precise_generation_targets
+                        .iter()
+                        .map(|generator| generator.tool_name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            );
+            let spawn_task_id = task_guard.task_id().to_owned();
+            let spawn_repository_id = workspace.repository_id.clone();
             let spawn_result = std::thread::Builder::new()
                 .name(format!(
                     "frigg-precise-generate-{}",
@@ -773,21 +769,23 @@ impl FriggMcpServer {
                         Ok(()) => (crate::mcp::types::RuntimeTaskStatus::Succeeded, None),
                         Err(err) => (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err)),
                     };
-                    task_registry
-                        .write()
-                        .expect("runtime task registry poisoned")
-                        .finish_task(&task_id_for_thread, status, detail);
+                    let mut task_guard = task_guard;
+                    task_guard.finish(status, detail);
                 });
             if let Err(err) = spawn_result {
                 self.runtime_state
                     .runtime_task_registry
                     .write()
                     .expect("runtime task registry poisoned")
-                    .finish_task(
-                        &task_id,
-                        crate::mcp::types::RuntimeTaskStatus::Failed,
+                    .update_task_detail(
+                        &spawn_task_id,
                         Some(format!("failed to spawn precise generation thread: {err}")),
                     );
+                warn!(
+                    repository_id = spawn_repository_id,
+                    error = %err,
+                    "failed to spawn precise generation thread"
+                );
             }
         }
     }

@@ -865,26 +865,22 @@ impl FriggMcpServer {
             let server = self.clone();
             let workspace = workspace.clone();
             let semantic_plan = semantic_plan.clone();
-            let task_id = self
-                .runtime_state
-                .runtime_task_registry
-                .write()
-                .expect("runtime task registry poisoned")
-                .start_task(
-                    crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                    workspace.repository_id.clone(),
-                    "semantic_attach_refresh",
-                    semantic_plan.as_ref().map(|plan| {
-                        format!(
-                            "attach root {} snapshot {} reason {}",
-                            workspace.root.display(),
-                            plan.latest_snapshot_id,
-                            plan.reason
-                        )
-                    }),
-                );
-            let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
-            let task_id_for_thread = task_id.clone();
+            let task_guard = RuntimeTaskGuard::start(
+                Arc::clone(&self.runtime_state.runtime_task_registry),
+                crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
+                workspace.repository_id.clone(),
+                "semantic_attach_refresh",
+                semantic_plan.as_ref().map(|plan| {
+                    format!(
+                        "attach root {} snapshot {} reason {}",
+                        workspace.root.display(),
+                        plan.latest_snapshot_id,
+                        plan.reason
+                    )
+                }),
+            );
+            let spawn_task_id = task_guard.task_id().to_owned();
+            let spawn_repository_id = workspace.repository_id.clone();
             let spawn_result = std::thread::Builder::new()
                 .name(format!(
                     "frigg-semantic-refresh-{}",
@@ -908,40 +904,38 @@ impl FriggMcpServer {
                             (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
                         }
                     };
-                    task_registry
-                        .write()
-                        .expect("runtime task registry poisoned")
-                        .finish_task(&task_id_for_thread, status, detail);
+                    let mut task_guard = task_guard;
+                    task_guard.finish(status, detail);
                 });
             if let Err(err) = spawn_result {
                 self.runtime_state
                     .runtime_task_registry
                     .write()
                     .expect("runtime task registry poisoned")
-                    .finish_task(
-                        &task_id,
-                        crate::mcp::types::RuntimeTaskStatus::Failed,
+                    .update_task_detail(
+                        &spawn_task_id,
                         Some(format!("failed to spawn semantic prewarm thread: {err}")),
                     );
+                warn!(
+                    repository_id = spawn_repository_id,
+                    error = %err,
+                    "failed to spawn semantic prewarm thread"
+                );
             }
         }
 
         if should_prewarm_precise {
             let server = self.clone();
             let workspace = workspace.clone();
-            let task_id = self
-                .runtime_state
-                .runtime_task_registry
-                .write()
-                .expect("runtime task registry poisoned")
-                .start_task(
-                    crate::mcp::types::RuntimeTaskKind::PrecisePrewarm,
-                    workspace.repository_id.clone(),
-                    "precise_attach_prewarm",
-                    Some(format!("attach root {}", workspace.root.display())),
-                );
-            let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
-            let task_id_for_thread = task_id.clone();
+            let task_guard = RuntimeTaskGuard::start(
+                Arc::clone(&self.runtime_state.runtime_task_registry),
+                crate::mcp::types::RuntimeTaskKind::PrecisePrewarm,
+                workspace.repository_id.clone(),
+                "precise_attach_prewarm",
+                Some(format!("attach root {}", workspace.root.display())),
+            );
+            let spawn_task_id = task_guard.task_id().to_owned();
+            let spawn_repository_id = workspace.repository_id.clone();
             let spawn_result = std::thread::Builder::new()
                 .name(format!("frigg-precise-prewarm-{}", workspace.repository_id))
                 .spawn(move || {
@@ -957,21 +951,23 @@ impl FriggMcpServer {
                             (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
                         }
                     };
-                    task_registry
-                        .write()
-                        .expect("runtime task registry poisoned")
-                        .finish_task(&task_id_for_thread, status, detail);
+                    let mut task_guard = task_guard;
+                    task_guard.finish(status, detail);
                 });
             if let Err(err) = spawn_result {
                 self.runtime_state
                     .runtime_task_registry
                     .write()
                     .expect("runtime task registry poisoned")
-                    .finish_task(
-                        &task_id,
-                        crate::mcp::types::RuntimeTaskStatus::Failed,
+                    .update_task_detail(
+                        &spawn_task_id,
                         Some(format!("failed to spawn precise prewarm thread: {err}")),
                     );
+                warn!(
+                    repository_id = spawn_repository_id,
+                    error = %err,
+                    "failed to spawn precise prewarm thread"
+                );
             }
         }
     }

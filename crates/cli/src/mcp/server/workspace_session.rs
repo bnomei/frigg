@@ -451,20 +451,15 @@ impl FriggMcpServer {
         &self,
         workspace: &AttachedWorkspace,
     ) -> tokio::task::JoinHandle<Result<crate::indexer::IndexSummary, String>> {
-        let task_id = self
-            .runtime_state
-            .runtime_task_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start_task(
-                RuntimeTaskKind::WorkspaceIndex,
-                workspace.repository_id.clone(),
-                "attach_index_ensure",
-                Some(format!("attach index ensure {}", workspace.root.display())),
-            );
+        let task_guard = RuntimeTaskGuard::start(
+            Arc::clone(&self.runtime_state.runtime_task_registry),
+            RuntimeTaskKind::WorkspaceIndex,
+            workspace.repository_id.clone(),
+            "attach_index_ensure",
+            Some(format!("attach index ensure {}", workspace.root.display())),
+        );
         let server = self.clone();
         let workspace = workspace.clone();
-        let task_registry = Arc::clone(&self.runtime_state.runtime_task_registry);
         let semantic_runtime = self.config.semantic_runtime.clone();
         tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<crate::indexer::IndexSummary, String> {
@@ -488,10 +483,8 @@ impl FriggMcpServer {
                 Ok(_) => (RuntimeTaskStatus::Succeeded, None),
                 Err(err) => (RuntimeTaskStatus::Failed, Some(err.clone())),
             };
-            task_registry
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .finish_task(&task_id, status, detail);
+            let mut task_guard = task_guard;
+            task_guard.finish(status, detail);
             result
         })
     }

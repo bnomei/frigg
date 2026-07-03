@@ -19,9 +19,9 @@ use crate::indexer::{
     index_repository_with_runtime_config_and_plan_callback,
 };
 use crate::manifest_validation::ValidatedManifestCandidateCache;
-use crate::mcp::RuntimeTaskRegistry;
 use crate::mcp::types::{RuntimeTaskKind, RuntimeTaskStatus};
 use crate::mcp::workspace_registry::AttachedWorkspace;
+use crate::mcp::{RuntimeTaskGuard, RuntimeTaskRegistry};
 use crate::settings::{
     FriggConfig, RuntimeTransportKind, SemanticRuntimeConfig, SemanticRuntimeCredentials,
 };
@@ -619,23 +619,20 @@ async fn run_supervisor(
                     sampled_paths: recent_paths.len(),
                 },
             );
-            let task_id = task_registry
-                .write()
-                .expect("watch runtime task registry poisoned")
-                .start_task(
-                    watch_task_kind_for_class(class),
-                    repository.repository_id.clone(),
-                    watch_task_phase_for_class(class),
-                    Some(format!(
-                        "watch root {} class {}",
-                        repository.root.display(),
-                        class.as_str()
-                    )),
-                );
+            let mut task_guard = RuntimeTaskGuard::start(
+                Arc::clone(&task_registry),
+                watch_task_kind_for_class(class),
+                repository.repository_id.clone(),
+                watch_task_phase_for_class(class),
+                Some(format!(
+                    "watch root {} class {}",
+                    repository.root.display(),
+                    class.as_str()
+                )),
+            );
             let completion_tx = command_tx.clone();
             let semantic_runtime = semantic_runtime.clone();
             let semantic_credentials = semantic_credentials.clone();
-            let task_registry: Arc<RwLock<RuntimeTaskRegistry>> = Arc::clone(&task_registry);
             let validated_manifest_candidate_cache =
                 Arc::clone(&validated_manifest_candidate_cache);
             let reporter = reporter.clone();
@@ -717,10 +714,7 @@ async fn run_supervisor(
                         .expect("validated manifest candidate cache poisoned")
                         .invalidate_root(&repository.root);
                 }
-                task_registry
-                    .write()
-                    .expect("watch runtime task registry poisoned")
-                    .finish_task(&task_id, status, detail);
+                task_guard.finish(status, detail);
                 let _ = completion_tx.send(SupervisorCommand::IndexCompleted {
                     repository_id: repository.repository_id.clone(),
                     epoch: dispatch_epoch,

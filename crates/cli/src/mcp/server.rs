@@ -99,9 +99,9 @@ use crate::mcp::server_state::{
     NavigationTargetSelection, PreciseArtifactFailureSample, PreciseCoverageMode,
     PreciseGraphCacheKey, PreciseIngestStats, RankedSymbolMatch, ReadFileExecution,
     RepositoryDiagnosticsSummary, RepositorySymbolCorpus, ResolvedNavigationTarget,
-    ResolvedSymbolTarget, RuntimeTaskRegistry, ScipArtifactDigest, ScipArtifactDiscovery,
-    ScipArtifactFormat, ScipCandidateDirectoryDigest, SearchHybridExecution, SearchSymbolExecution,
-    SearchTextExecution, SymbolCandidate, SymbolCorpusCacheKey,
+    ResolvedSymbolTarget, RuntimeTaskGuard, RuntimeTaskRegistry, ScipArtifactDigest,
+    ScipArtifactDiscovery, ScipArtifactFormat, ScipCandidateDirectoryDigest, SearchHybridExecution,
+    SearchSymbolExecution, SearchTextExecution, SymbolCandidate, SymbolCorpusCacheKey,
 };
 use crate::mcp::tool_surface::{
     TOOL_SURFACE_PROFILE_ENV, ToolSurfaceParityDiff, ToolSurfaceProfile,
@@ -956,17 +956,13 @@ impl FriggMcpServer {
         }
 
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
-        let task_id = self
-            .runtime_state
-            .runtime_task_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start_task(
-                RuntimeTaskKind::WorkspacePrepare,
-                workspace.repository_id.clone(),
-                "workspace_prepare",
-                Some(format!("prepare {}", workspace.root.display())),
-            );
+        let mut task_guard = RuntimeTaskGuard::start(
+            Arc::clone(&self.runtime_state.runtime_task_registry),
+            RuntimeTaskKind::WorkspacePrepare,
+            workspace.repository_id.clone(),
+            "workspace_prepare",
+            Some(format!("prepare {}", workspace.root.display())),
+        );
 
         Self::notify_progress(&meta, &client, 1.0, 4.0, "initialize storage").await;
         let prepared_storage = Self::run_blocking_task("workspace_prepare", {
@@ -989,11 +985,7 @@ impl FriggMcpServer {
                 error = %err,
                 "workspace prepare failed during storage initialization"
             );
-            self.runtime_state
-                .runtime_task_registry
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .finish_task(&task_id, RuntimeTaskStatus::Failed, Some(err.clone()));
+            task_guard.finish(RuntimeTaskStatus::Failed, Some(err.clone()));
             Self::internal(
                 err,
                 Some(json!({ "repository_id": workspace.repository_id })),
@@ -1025,15 +1017,7 @@ impl FriggMcpServer {
                     error = %error.message,
                     "workspace prepare failed while adopting workspace"
                 );
-                self.runtime_state
-                    .runtime_task_registry
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .finish_task(
-                        &task_id,
-                        RuntimeTaskStatus::Failed,
-                        Some(error.message.to_string()),
-                    );
+                task_guard.finish(RuntimeTaskStatus::Failed, Some(error.message.to_string()));
             })?;
         self.maybe_spawn_workspace_runtime_prewarm(&workspace);
         let _ = self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
@@ -1058,11 +1042,7 @@ impl FriggMcpServer {
             duration_ms = started_at.elapsed().as_millis() as u64,
             "workspace prepare completed"
         );
-        self.runtime_state
-            .runtime_task_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        task_guard.finish(RuntimeTaskStatus::Succeeded, None);
         Self::notify_progress(&meta, &client, 4.0, 4.0, "finalize").await;
 
         let finalization = self.tool_execution_finalization(
@@ -1170,17 +1150,13 @@ impl FriggMcpServer {
             ));
         }
 
-        let task_id = self
-            .runtime_state
-            .runtime_task_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .start_task(
-                RuntimeTaskKind::WorkspaceIndex,
-                workspace.repository_id.clone(),
-                "workspace_index",
-                Some(format!("index {}", workspace.root.display())),
-            );
+        let mut task_guard = RuntimeTaskGuard::start(
+            Arc::clone(&self.runtime_state.runtime_task_registry),
+            RuntimeTaskKind::WorkspaceIndex,
+            workspace.repository_id.clone(),
+            "workspace_index",
+            Some(format!("index {}", workspace.root.display())),
+        );
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "index refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();
@@ -1210,11 +1186,7 @@ impl FriggMcpServer {
                 error = %err,
                 "workspace index failed during index refresh"
             );
-            self.runtime_state
-                .runtime_task_registry
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .finish_task(&task_id, RuntimeTaskStatus::Failed, Some(err.clone()));
+            task_guard.finish(RuntimeTaskStatus::Failed, Some(err.clone()));
             Self::internal(
                 err,
                 Some(json!({ "repository_id": workspace.repository_id })),
@@ -1234,15 +1206,7 @@ impl FriggMcpServer {
                     error = %error.message,
                     "workspace index failed while adopting workspace"
                 );
-                self.runtime_state
-                    .runtime_task_registry
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .finish_task(
-                        &task_id,
-                        RuntimeTaskStatus::Failed,
-                        Some(error.message.to_string()),
-                    );
+                task_guard.finish(RuntimeTaskStatus::Failed, Some(error.message.to_string()));
             })?;
         let precise_generation_action = self.maybe_spawn_workspace_precise_generation_for_paths(
             &workspace,
@@ -1325,11 +1289,7 @@ impl FriggMcpServer {
             duration_ms = started_at.elapsed().as_millis() as u64,
             "workspace index completed"
         );
-        self.runtime_state
-            .runtime_task_registry
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .finish_task(&task_id, RuntimeTaskStatus::Succeeded, None);
+        task_guard.finish(RuntimeTaskStatus::Succeeded, None);
         Self::notify_progress(&meta, &client, 4.0, 4.0, "done").await;
 
         let finalization = self.tool_execution_finalization(
