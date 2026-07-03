@@ -203,6 +203,7 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
 ) -> FriggResult<IndexSummary> {
     let started_at = Instant::now();
     let db_preexisted = db_path.exists();
+    let initialize_storage_started_at = Instant::now();
     on_progress(IndexProgressEvent::new(
         repository_id,
         mode,
@@ -213,13 +214,17 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
     manifest_store.initialize_for_index(semantic_runtime.enabled)?;
     let storage = Storage::new(db_path);
     let mut storage_session = storage.open_session()?;
-    on_progress(IndexProgressEvent::new(
-        repository_id,
-        mode,
-        IndexProgressPhase::InitializeStorage,
-        IndexProgressStatus::Ok,
-    ));
+    on_progress(
+        IndexProgressEvent::new(
+            repository_id,
+            mode,
+            IndexProgressPhase::InitializeStorage,
+            IndexProgressStatus::Ok,
+        )
+        .with_duration_ms(initialize_storage_started_at.elapsed().as_millis()),
+    );
 
+    let load_manifest_started_at = Instant::now();
     on_progress(IndexProgressEvent::new(
         repository_id,
         mode,
@@ -256,10 +261,12 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
             IndexProgressStatus::Ok,
         )
         .with_previous_snapshot(previous_snapshot_id.as_deref())
-        .with_file_counts(previous_entries.len(), 0, 0),
+        .with_file_counts(previous_entries.len(), 0, 0)
+        .with_duration_ms(load_manifest_started_at.elapsed().as_millis()),
     );
 
     let manifest_builder = ManifestBuilder::default();
+    let build_manifest_started_at = Instant::now();
     on_progress(IndexProgressEvent::new(
         repository_id,
         mode,
@@ -288,8 +295,10 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
             IndexProgressStatus::Ok,
         )
         .with_file_counts(current_manifest.len(), 0, 0)
-        .with_diagnostics(diagnostics.total_count()),
+        .with_diagnostics(diagnostics.total_count())
+        .with_duration_ms(build_manifest_started_at.elapsed().as_millis()),
     );
+    let build_plan_started_at = Instant::now();
     on_progress(IndexProgressEvent::new(
         repository_id,
         mode,
@@ -329,7 +338,8 @@ fn index_repository_with_semantic_executor_and_dirty_paths(
         .with_file_counts(plan.files_scanned, plan.files_changed, plan.files_deleted)
         .with_diagnostics(plan.diagnostics.total_count())
         .with_records(plan.semantic_refresh.records_manifest.len())
-        .with_path_counts(plan.changed_paths.len(), plan.deleted_paths.len()),
+        .with_path_counts(plan.changed_paths.len(), plan.deleted_paths.len())
+        .with_duration_ms(build_plan_started_at.elapsed().as_millis()),
     );
 
     on_plan(&plan)?;

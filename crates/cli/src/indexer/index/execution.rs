@@ -1,6 +1,7 @@
 //! Ordered index execution across manifest persistence, retrieval projections, and semantic refresh.
 
 use std::path::Path;
+use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
 use crate::searcher::{build_retrieval_projection_bundle, required_retrieval_projection_versions};
@@ -54,16 +55,19 @@ pub(super) fn execute_index_plan(
         IndexProgressPhase::PersistManifestSnapshot,
         IndexProgressStatus::Starting,
     );
+    let manifest_snapshot_started_at = Instant::now();
     let manifest_written = execute_manifest_snapshot_phase(storage_session, workspace_root, plan)?;
-    emit_index_execution_progress(
-        on_progress,
-        plan,
-        IndexProgressPhase::PersistManifestSnapshot,
-        if manifest_written {
-            IndexProgressStatus::Ok
-        } else {
-            IndexProgressStatus::Skipped
-        },
+    on_progress(
+        index_execution_progress_event(
+            plan,
+            IndexProgressPhase::PersistManifestSnapshot,
+            if manifest_written {
+                IndexProgressStatus::Ok
+            } else {
+                IndexProgressStatus::Skipped
+            },
+        )
+        .with_duration_ms(manifest_snapshot_started_at.elapsed().as_millis()),
     );
 
     emit_index_execution_progress(
@@ -72,28 +76,34 @@ pub(super) fn execute_index_plan(
         IndexProgressPhase::RefreshRetrievalProjections,
         IndexProgressStatus::Starting,
     );
+    let retrieval_projection_started_at = Instant::now();
     let projections_written =
         execute_retrieval_projection_phase(repository_id, workspace_root, plan, storage_session)?;
-    emit_index_execution_progress(
-        on_progress,
-        plan,
-        IndexProgressPhase::RefreshRetrievalProjections,
-        if projections_written {
-            IndexProgressStatus::Ok
-        } else {
-            IndexProgressStatus::Skipped
-        },
+    on_progress(
+        index_execution_progress_event(
+            plan,
+            IndexProgressPhase::RefreshRetrievalProjections,
+            if projections_written {
+                IndexProgressStatus::Ok
+            } else {
+                IndexProgressStatus::Skipped
+            },
+        )
+        .with_duration_ms(retrieval_projection_started_at.elapsed().as_millis()),
     );
 
+    let semantic_started_at = Instant::now();
     if matches!(
         plan.semantic_refresh.mode,
         SemanticRefreshMode::Disabled | SemanticRefreshMode::ReuseExisting
     ) {
-        emit_index_execution_progress(
-            on_progress,
-            plan,
-            IndexProgressPhase::SemanticRefresh,
-            IndexProgressStatus::Skipped,
+        on_progress(
+            index_execution_progress_event(
+                plan,
+                IndexProgressPhase::SemanticRefresh,
+                IndexProgressStatus::Skipped,
+            )
+            .with_duration_ms(semantic_started_at.elapsed().as_millis()),
         );
     } else {
         emit_index_execution_progress(
@@ -113,11 +123,13 @@ pub(super) fn execute_index_plan(
         executor,
     )?;
     if semantics_written {
-        emit_index_execution_progress(
-            on_progress,
-            plan,
-            IndexProgressPhase::SemanticRefresh,
-            IndexProgressStatus::Ok,
+        on_progress(
+            index_execution_progress_event(
+                plan,
+                IndexProgressPhase::SemanticRefresh,
+                IndexProgressStatus::Ok,
+            )
+            .with_duration_ms(semantic_started_at.elapsed().as_millis()),
         );
     }
 
@@ -127,6 +139,7 @@ pub(super) fn execute_index_plan(
         IndexProgressPhase::PruneManifestSnapshots,
         IndexProgressStatus::Starting,
     );
+    let retention_started_at = Instant::now();
     let pruned_snapshots = execute_retention_phase(storage_session, repository_id, plan)?;
     let retention_status = if pruned_snapshots == 0 {
         IndexProgressStatus::Skipped
@@ -139,7 +152,8 @@ pub(super) fn execute_index_plan(
             IndexProgressPhase::PruneManifestSnapshots,
             retention_status,
         )
-        .with_pruned_snapshots(pruned_snapshots),
+        .with_pruned_snapshots(pruned_snapshots)
+        .with_duration_ms(retention_started_at.elapsed().as_millis()),
     );
     if manifest_written || projections_written || semantics_written || pruned_snapshots > 0 {
         emit_index_execution_progress(
@@ -148,12 +162,15 @@ pub(super) fn execute_index_plan(
             IndexProgressPhase::CheckpointWal,
             IndexProgressStatus::Starting,
         );
+        let checkpoint_started_at = Instant::now();
         match storage_session.checkpoint_wal_truncate() {
-            Ok(()) => emit_index_execution_progress(
-                on_progress,
-                plan,
-                IndexProgressPhase::CheckpointWal,
-                IndexProgressStatus::Ok,
+            Ok(()) => on_progress(
+                index_execution_progress_event(
+                    plan,
+                    IndexProgressPhase::CheckpointWal,
+                    IndexProgressStatus::Ok,
+                )
+                .with_duration_ms(checkpoint_started_at.elapsed().as_millis()),
             ),
             Err(err) => {
                 warn!(
@@ -161,11 +178,13 @@ pub(super) fn execute_index_plan(
                     error = %err,
                     "sqlite wal checkpoint after index run failed"
                 );
-                emit_index_execution_progress(
-                    on_progress,
-                    plan,
-                    IndexProgressPhase::CheckpointWal,
-                    IndexProgressStatus::Warning,
+                on_progress(
+                    index_execution_progress_event(
+                        plan,
+                        IndexProgressPhase::CheckpointWal,
+                        IndexProgressStatus::Warning,
+                    )
+                    .with_duration_ms(checkpoint_started_at.elapsed().as_millis()),
                 );
             }
         }
@@ -187,13 +206,23 @@ fn index_execution_progress_event(
     phase: IndexProgressPhase,
     status: IndexProgressStatus,
 ) -> IndexProgressEvent {
+    let changed_paths = if phase == IndexProgressPhase::SemanticRefresh {
+        plan.semantic_refresh.changed_paths.len()
+    } else {
+        plan.changed_paths.len()
+    };
+    let deleted_paths = if phase == IndexProgressPhase::SemanticRefresh {
+        plan.semantic_refresh.deleted_paths.len()
+    } else {
+        plan.deleted_paths.len()
+    };
     IndexProgressEvent::new(&plan.repository_id, plan.mode, phase, status)
         .with_snapshot(plan.snapshot_plan.snapshot_id())
         .with_previous_snapshot(plan.previous_snapshot_id.as_deref())
         .with_file_counts(plan.files_scanned, plan.files_changed, plan.files_deleted)
         .with_diagnostics(plan.diagnostics.total_count())
         .with_records(plan.semantic_refresh.records_manifest.len())
-        .with_path_counts(plan.changed_paths.len(), plan.deleted_paths.len())
+        .with_path_counts(changed_paths, deleted_paths)
 }
 
 fn execute_manifest_snapshot_phase(

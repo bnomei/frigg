@@ -1,5 +1,6 @@
 //! Small CLI output policy layer for stable stdout results and stderr diagnostics.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -11,14 +12,14 @@ const MAX_VERBOSE_PATH_LINES: usize = 50;
 const HUMAN_DEFAULT_WIDTH: usize = 100;
 const HUMAN_MIN_WIDTH: usize = 48;
 const HUMAN_TEXT_COLUMN: usize = 4;
-const HUMAN_CARD_LABEL_WIDTH: usize = 20;
 const HUMAN_CARD_MAX_LABEL_WIDTH: usize = 28;
-const HUMAN_CARD_TITLE_PREFIX: &str = "╭─  ";
+const HUMAN_CARD_TITLE_PREFIX: &str = "╭─";
 const HUMAN_CARD_ROW_PREFIX: &str = "│   ";
 const HUMAN_CARD_FOOTER_PREFIX: &str = "╰─  ";
 const HUMAN_ACTIVITY_PREFIX: &str = "  ";
 const HUMAN_DETAIL_PREFIX: &str = "    ";
-const HUMAN_CONTINUATION_PREFIX: &str = "    └─ ";
+const HUMAN_DETAIL_RAIL_PREFIX: &str = "  │ ";
+const HUMAN_CONTINUATION_MARKER: &str = "└─ ";
 const HUMAN_INTRO_LOGO_LINES: &[&str] = &[
     "█████ ████  ███  ███   ███",
     "█     █   █  █  █     █",
@@ -35,6 +36,13 @@ const HUMAN_INTRO_COLOR_CODES: &[&str] = &[
 ];
 const HUMAN_INTRO_ENABLED: bool = false;
 static HUMAN_INTRO_EMITTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum HumanMarkerStyle {
+    Metadata,
+    Progress,
+    Checkpoint,
+}
 
 /// Quiet, normal, or verbose CLI output policy selected from global flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,15 +363,15 @@ fn format_human_start_card(
     color: bool,
     width: usize,
 ) -> String {
-    let mut rows = human_rows_from_fields(fields, &["status"]);
-    if let Some(path) = path {
-        rows.push(("path".to_owned(), path.to_owned()));
-    }
-    format_human_card(
+    let rows = human_rows_from_fields(fields, &["status"]);
+    let title = format!("{} starting", human_title_token(area));
+    format_human_component(
         OutputLevel::Info,
-        &format!("Frigg {}", human_title_token(area)),
+        fields,
+        &title,
         rows,
-        Some("starting"),
+        Vec::new(),
+        path,
         color,
         width,
     )
@@ -409,14 +417,8 @@ fn format_human_complete_card(
     if let Some(path) = path {
         rows.push(("path".to_owned(), path.to_owned()));
     }
-    format_human_card(
-        level,
-        &format!("{} complete", human_title_token(area)),
-        rows,
-        Some("done"),
-        color,
-        width,
-    )
+    let title = format!("{} complete", human_title_token(area));
+    format_human_card(level, &title, rows, Some(&title), color, width)
 }
 
 fn format_human_error_card(
@@ -485,7 +487,7 @@ fn format_human_startup_component(
     push_field_row(&mut rows, fields, "reason", "reason");
     push_field_row(&mut rows, fields, "db", "storage");
 
-    format_human_component(level, fields, title, rows, Vec::new(), path, color, width)
+    format_human_progress_component(level, fields, title, rows, Vec::new(), path, color, width)
 }
 
 fn format_human_index_plan_component(
@@ -530,6 +532,7 @@ fn format_human_index_plan_component(
         parts.join(" · ")
     });
     push_human_row(&mut rows, "semantic", semantic);
+    push_human_separator(&mut rows);
     push_human_row(&mut rows, "delta", human_delta(fields));
     push_field_row(&mut rows, fields, "source", "source");
     push_field_row(&mut rows, fields, "class", "class");
@@ -560,16 +563,18 @@ fn format_human_index_semantic_component(
         "mode",
         field_value(fields, "mode").map(human_mode_label),
     );
+    push_human_separator(&mut rows);
     push_human_row(&mut rows, "model", human_provider_model(fields));
     push_field_row(&mut rows, fields, "records", "records");
     push_human_row(&mut rows, "delta", human_delta(fields));
+    push_human_separator(&mut rows);
     push_field_row(&mut rows, fields, "source", "source");
     push_field_row(&mut rows, fields, "class", "class");
 
     format_human_component(
         level,
         fields,
-        "Semantic index",
+        "Semantic refresh",
         rows,
         Vec::new(),
         path,
@@ -585,8 +590,9 @@ fn format_human_index_phase_row(
     color: bool,
     width: usize,
 ) -> String {
-    let symbol = human_symbol(level, fields, color);
     let title = human_index_phase_title(fields);
+    let accent = human_title_accent_color(level, fields, &title);
+    let symbol = human_symbol_with_color(level, fields, HumanMarkerStyle::Progress, color, accent);
     let detail = human_index_phase_detail(fields);
     let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
     let title_budget = content_width.saturating_sub(2);
@@ -596,7 +602,10 @@ fn format_human_index_phase_row(
         .unwrap_or(0);
     let title_budget = title_budget.saturating_sub(detail_budget);
     let title = truncate_display(&title, title_budget);
-    let mut line = format!("{HUMAN_ACTIVITY_PREFIX}{symbol} {title}");
+    let mut line = format!(
+        "{HUMAN_ACTIVITY_PREFIX}{symbol} {}",
+        colorize(color, accent, &title)
+    );
     if let Some(detail) = detail {
         let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
         let remaining = width.saturating_sub(used_width + 2);
@@ -606,7 +615,12 @@ fn format_human_index_phase_row(
         }
     }
     if let Some(path) = path {
-        let detail = format_human_continuation(path, color, width);
+        let detail = format_human_continuation(
+            path,
+            human_uses_detail_rail(level, fields, HumanMarkerStyle::Progress),
+            color,
+            width,
+        );
         line.push('\n');
         line.push_str(&detail);
     }
@@ -617,34 +631,34 @@ fn human_index_phase_title(fields: &[OutputField]) -> String {
     let phase = field_value(fields, "phase").unwrap_or("work");
     let status = field_value(fields, "status").unwrap_or("starting");
     let title = match (phase, status) {
-        ("initialize_storage", "starting") => "Opening storage",
+        ("initialize_storage", "starting") => "Opening storage...",
         ("initialize_storage", "ok") => "Storage open",
         ("initialize_storage", "skipped") => "Storage already open",
-        ("load_manifest", "starting") => "Loading manifest",
+        ("load_manifest", "starting") => "Loading manifest...",
         ("load_manifest", "ok") => "Manifest loaded",
         ("load_manifest", "skipped") => "Manifest load skipped",
-        ("build_manifest", "starting") => "Walking files",
+        ("build_manifest", "starting") => "Walking files...",
         ("build_manifest", "ok") => "Files scanned",
         ("build_manifest", "skipped") => "File scan skipped",
-        ("build_plan", "starting") => "Planning index",
+        ("build_plan", "starting") => "Planning index...",
         ("build_plan", "ok") => "Index planned",
         ("build_plan", "skipped") => "Index plan skipped",
-        ("persist_manifest_snapshot", "starting") => "Writing manifest",
+        ("persist_manifest_snapshot", "starting") => "Writing manifest...",
         ("persist_manifest_snapshot", "ok") => "Manifest written",
         ("persist_manifest_snapshot", "skipped") => "Manifest unchanged",
-        ("refresh_retrieval_projections", "starting") => "Refreshing search projections",
+        ("refresh_retrieval_projections", "starting") => "Refreshing search projections...",
         ("refresh_retrieval_projections", "ok") => "Search projections updated",
         ("refresh_retrieval_projections", "skipped") => "Search projections current",
-        ("semantic_refresh", "starting") => "Embedding semantic chunks",
+        ("semantic_refresh", "starting") => "Embedding semantic chunks...",
         ("semantic_refresh", "ok") => "Semantic chunks stored",
         ("semantic_refresh", "skipped") => "Semantic refresh skipped",
-        ("prune_manifest_snapshots", "starting") => "Pruning snapshots",
-        ("prune_manifest_snapshots", "ok") => "Snapshots pruned",
-        ("prune_manifest_snapshots", "skipped") => "Snapshots retained",
-        ("checkpoint_wal", "starting") => "Flushing storage",
-        ("checkpoint_wal", "ok") => "Storage flushed",
-        ("checkpoint_wal", "skipped") => "Storage flush skipped",
-        ("checkpoint_wal", "warning") => "Storage flush warning",
+        ("prune_manifest_snapshots", "starting") => "Pruning old snapshots...",
+        ("prune_manifest_snapshots", "ok") => "Old snapshots pruned",
+        ("prune_manifest_snapshots", "skipped") => "Snapshot retention unchanged",
+        ("checkpoint_wal", "starting") => "Saving storage checkpoint...",
+        ("checkpoint_wal", "ok") => "Storage checkpoint saved",
+        ("checkpoint_wal", "skipped") => "Storage checkpoint skipped",
+        ("checkpoint_wal", "warning") => "Storage checkpoint warning",
         _ => return human_title_token(phase),
     };
     title.to_owned()
@@ -653,6 +667,7 @@ fn human_index_phase_title(fields: &[OutputField]) -> String {
 fn human_index_phase_detail(fields: &[OutputField]) -> Option<String> {
     let phase = field_value(fields, "phase").unwrap_or("work");
     let parts = match phase {
+        "initialize_storage" => vec![duration_detail(fields)],
         "load_manifest" => vec![
             field_value(fields, "previous")
                 .filter(|value| *value != "-")
@@ -660,28 +675,42 @@ fn human_index_phase_detail(fields: &[OutputField]) -> Option<String> {
             field_value(fields, "scanned")
                 .filter(|value| *value != "0")
                 .map(|files| format!("{files} previous files")),
+            duration_detail(fields),
         ],
         "build_manifest" => vec![
             field_value(fields, "scanned").map(|files| format!("{files} scanned")),
             field_value(fields, "diagnostics")
                 .filter(|value| *value != "0")
                 .map(|diagnostics| format!("{diagnostics} diagnostics")),
+            duration_detail(fields),
         ],
         "build_plan" => vec![
             human_delta(fields),
             semantic_records_detail(fields),
             snapshot_detail(fields),
+            duration_detail(fields),
         ],
-        "persist_manifest_snapshot" | "refresh_retrieval_projections" | "checkpoint_wal" => {
-            vec![snapshot_detail(fields)]
+        "persist_manifest_snapshot" | "refresh_retrieval_projections" => {
+            vec![snapshot_detail(fields), duration_detail(fields)]
         }
-        "semantic_refresh" => vec![semantic_records_detail(fields), human_delta(fields)],
+        "checkpoint_wal" => vec![storage_checkpoint_detail(fields), duration_detail(fields)],
+        "semantic_refresh" => vec![
+            semantic_records_detail(fields),
+            semantic_path_delta(fields),
+            duration_detail(fields),
+            semantic_duration_per_doc_detail(fields),
+        ],
         "prune_manifest_snapshots" => vec![
             field_value(fields, "pruned_snapshots")
                 .filter(|value| *value != "0")
                 .map(|pruned| format!("{pruned} removed")),
+            duration_detail(fields),
         ],
-        _ => vec![human_file_counts(fields), snapshot_detail(fields)],
+        _ => vec![
+            human_file_counts(fields),
+            snapshot_detail(fields),
+            duration_detail(fields),
+        ],
     };
     let parts = parts.into_iter().flatten().collect::<Vec<_>>();
     if parts.is_empty() {
@@ -697,10 +726,57 @@ fn semantic_records_detail(fields: &[OutputField]) -> Option<String> {
         .map(|records| format!("{records} records"))
 }
 
+fn semantic_path_delta(fields: &[OutputField]) -> Option<String> {
+    match (
+        field_value(fields, "changed_paths"),
+        field_value(fields, "deleted_paths"),
+    ) {
+        (Some(changed), Some(deleted)) => Some(format!("{changed} changed · {deleted} deleted")),
+        _ => human_delta(fields),
+    }
+}
+
+fn duration_detail(fields: &[OutputField]) -> Option<String> {
+    field_display(fields, "duration_ms")
+}
+
+fn semantic_duration_per_doc_detail(fields: &[OutputField]) -> Option<String> {
+    let duration_ms = field_value(fields, "duration_ms")?.parse::<u128>().ok()?;
+    let records = field_value(fields, "records")?.parse::<u128>().ok()?;
+    if records == 0 {
+        return None;
+    }
+    Some(format!(
+        "{}ms/doc",
+        format_per_doc_duration(duration_ms, records)
+    ))
+}
+
+fn format_per_doc_duration(duration_ms: u128, records: u128) -> String {
+    if duration_ms == 0 {
+        return "<1".to_owned();
+    }
+    let tenths = ((duration_ms * 10) + (records / 2)) / records;
+    if tenths == 0 {
+        return "<0.1".to_owned();
+    }
+    if tenths >= 1000 || tenths % 10 == 0 {
+        (tenths / 10).to_string()
+    } else {
+        format!("{}.{:01}", tenths / 10, tenths % 10)
+    }
+}
+
 fn snapshot_detail(fields: &[OutputField]) -> Option<String> {
     field_value(fields, "snapshot")
         .filter(|value| *value != "-")
-        .map(|snapshot| format!("snapshot {}", short_identifier(snapshot)))
+        .map(|snapshot| format!("manifest {}", short_identifier(snapshot)))
+}
+
+fn storage_checkpoint_detail(fields: &[OutputField]) -> Option<String> {
+    field_value(fields, "snapshot")
+        .filter(|value| *value != "-")
+        .map(|snapshot| format!("manifest checkpoint {}", short_identifier(snapshot)))
 }
 
 fn format_human_index_paths_component(
@@ -719,6 +795,7 @@ fn format_human_index_paths_component(
     let mut rows = Vec::new();
     push_field_row(&mut rows, fields, "repo", "repo");
     push_human_row(&mut rows, "delta", human_delta(fields));
+    push_human_separator(&mut rows);
     push_field_row(&mut rows, fields, "action", "action");
     push_field_row(&mut rows, fields, "shown", "shown");
     push_field_row(&mut rows, fields, "omitted", "omitted");
@@ -752,9 +829,11 @@ fn format_human_repository_component(
     let mut rows = Vec::new();
     push_field_row(&mut rows, fields, "repo", "repo");
     push_field_row(&mut rows, fields, "mode", "mode");
+    push_human_separator(&mut rows);
     push_human_row(&mut rows, "files", human_file_counts(fields));
     push_human_row(&mut rows, "diagnostics", human_diagnostics(fields));
     push_human_row(&mut rows, "precise", human_precise_counts(fields));
+    push_human_separator(&mut rows);
     push_field_row(&mut rows, fields, "repaired", "repaired");
     push_field_row(&mut rows, fields, "manifest_snapshots_deleted", "deleted");
     push_field_row(&mut rows, fields, "keep_manifest_snapshots", "keep");
@@ -835,24 +914,54 @@ fn format_human_precise_generator_component(
     color: bool,
     width: usize,
 ) -> String {
+    if field_is(fields, "status", "starting") {
+        return format_human_precise_generator_start_line(level, fields, color, width);
+    }
     let generator = field_value(fields, "generator")
         .or_else(|| field_value(fields, "tool"))
         .unwrap_or("generator");
     let mut rows = Vec::new();
     push_field_row(&mut rows, fields, "language", "language");
+    push_field_row(&mut rows, fields, "generator", "generator");
     push_field_row(&mut rows, fields, "tool", "tool");
+    push_precise_detail_rows(&mut rows, fields);
+    push_human_separator(&mut rows);
     push_human_row(&mut rows, "output", human_artifact_counts(fields));
     push_field_row(&mut rows, fields, "duration_ms", "duration");
     push_field_row(&mut rows, fields, "next", "next");
-    push_field_row(&mut rows, fields, "detail", "detail");
 
-    format_human_component(
+    format_human_component_with_marker(
         level,
         fields,
         &format!("Precise {generator}"),
         rows,
         Vec::new(),
         path,
+        HumanMarkerStyle::Checkpoint,
+        color,
+        width,
+    )
+}
+
+fn format_human_precise_generator_start_line(
+    level: OutputLevel,
+    fields: &[OutputField],
+    color: bool,
+    width: usize,
+) -> String {
+    let tool = field_value(fields, "tool")
+        .or_else(|| field_value(fields, "generator"))
+        .unwrap_or("generator");
+    let details = field_value(fields, "language")
+        .filter(|language| *language != tool)
+        .map(|language| format!("{language} generator"))
+        .unwrap_or_default();
+    format_human_activity_line(
+        level,
+        fields,
+        format!("Running {tool}..."),
+        details,
+        HumanMarkerStyle::Progress,
         color,
         width,
     )
@@ -881,7 +990,7 @@ fn format_human_watch_component(
     push_field_row(&mut rows, fields, "retry_ms", "retry");
     push_field_row(&mut rows, fields, "error", "error");
 
-    format_human_component(
+    format_human_progress_component(
         level,
         fields,
         &format!("Watch {}", human_title_token(status)),
@@ -905,13 +1014,17 @@ fn format_human_path_row(
     let action = field_value(fields, "action").unwrap_or("changed");
     let action_title = human_title_token(action);
     let title_prefix = if event == "semantic_path" {
-        format!("Semantic {action_title}")
+        format!("Semantic embedding {action_title}")
     } else {
         action_title
     };
     let title_suffix = path.unwrap_or_else(|| human_event_title_static(area, event));
     let detail_skip = &["status", "action", "repo"];
-    let details = compact_human_fields(fields, detail_skip, 3);
+    let details = if event == "semantic_path" {
+        "semantic embedding input".to_owned()
+    } else {
+        compact_human_fields(fields, detail_skip, 3)
+    };
     format_human_action_line(
         level,
         fields,
@@ -934,7 +1047,9 @@ fn format_human_action_line(
     color: bool,
     width: usize,
 ) -> String {
-    let symbol = human_symbol(level, fields, color);
+    let accent = human_title_accent_color(level, fields, title_prefix);
+    let symbol =
+        human_symbol_with_color(level, fields, HumanMarkerStyle::Checkpoint, color, accent);
     let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
     let title_budget = content_width.saturating_sub(2);
     let prefix_width = display_width(title_prefix);
@@ -943,7 +1058,7 @@ fn format_human_action_line(
     let title_width = prefix_width + 1 + display_width(&title_suffix);
     let mut line = format!(
         "{HUMAN_ACTIVITY_PREFIX}{symbol} {} {}",
-        colorize_action_title(color, action, title_prefix),
+        colorize_action_title(color, action, title_prefix, accent),
         title_suffix
     );
     let used_width = HUMAN_TEXT_COLUMN + title_width;
@@ -959,11 +1074,12 @@ fn format_human_action_line(
     line
 }
 
-fn colorize_action_title(color: bool, action: &str, title_prefix: &str) -> String {
+fn colorize_action_title(color: bool, action: &str, title_prefix: &str, accent: &str) -> String {
     let action_title = human_title_token(action);
     match title_prefix.strip_suffix(&action_title) {
         Some(label_prefix) => format!(
-            "{label_prefix}{}",
+            "{}{}",
+            colorize(color, accent, label_prefix),
             colorize(color, action_color(action), &action_title)
         ),
         None => colorize(color, action_color(action), title_prefix),
@@ -1003,12 +1119,18 @@ fn format_human_activity_row(
         fields,
         human_event_title(area, event),
         compact_human_fields(fields, &["status"], 7),
+        HumanMarkerStyle::Checkpoint,
         color,
         width,
     );
     if let Some(path) = path {
         line.push('\n');
-        line.push_str(&format_human_continuation(path, color, width));
+        line.push_str(&format_human_continuation(
+            path,
+            human_uses_detail_rail(level, fields, HumanMarkerStyle::Checkpoint),
+            color,
+            width,
+        ));
     }
     line
 }
@@ -1018,15 +1140,17 @@ fn format_human_activity_line(
     fields: &[OutputField],
     title: String,
     details: String,
+    marker_style: HumanMarkerStyle,
     color: bool,
     width: usize,
 ) -> String {
-    let symbol = human_symbol(level, fields, color);
+    let accent = human_title_accent_color(level, fields, &title);
+    let symbol = human_symbol_with_color(level, fields, marker_style, color, accent);
     let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
     let title = truncate_display(&title, content_width);
     let mut line = format!(
         "{HUMAN_ACTIVITY_PREFIX}{symbol} {}",
-        colorize(color, title_color(level), &title)
+        colorize(color, accent, &title)
     );
     let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
     let detail_budget = width.saturating_sub(used_width + 2);
@@ -1041,11 +1165,16 @@ fn format_human_activity_line(
     line
 }
 
-fn format_human_continuation(value: &str, color: bool, width: usize) -> String {
+fn format_human_continuation(value: &str, detail_rail: bool, color: bool, width: usize) -> String {
     let value = human_continuation_value(value);
-    let budget = width.saturating_sub(display_width(HUMAN_CONTINUATION_PREFIX));
+    let budget = width.saturating_sub(human_continuation_prefix_width(detail_rail));
     let value = truncate_display(&value, budget);
-    format!("{HUMAN_CONTINUATION_PREFIX}{}", colorize(color, "2", value))
+    format!(
+        "{}{}{}",
+        human_detail_prefix(detail_rail, color),
+        HUMAN_CONTINUATION_MARKER,
+        colorize(color, "2", value)
+    )
 }
 
 fn format_human_component(
@@ -1058,92 +1187,253 @@ fn format_human_component(
     color: bool,
     width: usize,
 ) -> String {
-    let mut output =
-        format_human_activity_line(level, fields, title.to_owned(), String::new(), color, width);
-    let label_width = human_component_label_width(&rows, width);
+    format_human_component_with_marker(
+        level,
+        fields,
+        title,
+        rows,
+        notes,
+        path,
+        HumanMarkerStyle::Metadata,
+        color,
+        width,
+    )
+}
+
+fn format_human_progress_component(
+    level: OutputLevel,
+    fields: &[OutputField],
+    title: &str,
+    rows: Vec<(String, String)>,
+    notes: Vec<String>,
+    path: Option<&str>,
+    color: bool,
+    width: usize,
+) -> String {
+    format_human_component_with_marker(
+        level,
+        fields,
+        title,
+        rows,
+        notes,
+        path,
+        HumanMarkerStyle::Progress,
+        color,
+        width,
+    )
+}
+
+fn format_human_component_with_marker(
+    level: OutputLevel,
+    fields: &[OutputField],
+    title: &str,
+    mut rows: Vec<(String, String)>,
+    notes: Vec<String>,
+    path: Option<&str>,
+    marker_style: HumanMarkerStyle,
+    color: bool,
+    width: usize,
+) -> String {
+    trim_human_separators(&mut rows);
+    if let Some(path) = path {
+        rows.push(human_path_row(path));
+    }
+
+    let has_rows = rows
+        .iter()
+        .any(|(label, value)| !human_row_is_separator(label, value));
+    let has_notes = notes.iter().any(|note| !note.trim().is_empty());
+    if !(has_rows || has_notes) {
+        return format_human_activity_line(
+            level,
+            fields,
+            title.to_owned(),
+            String::new(),
+            marker_style,
+            color,
+            width,
+        );
+    }
+
+    format_human_kv_block(
+        level,
+        fields,
+        title,
+        rows,
+        notes,
+        human_block_marker_style(marker_style),
+        color,
+        width,
+    )
+}
+
+fn human_block_marker_style(marker_style: HumanMarkerStyle) -> HumanMarkerStyle {
+    match marker_style {
+        HumanMarkerStyle::Progress => HumanMarkerStyle::Metadata,
+        marker_style => marker_style,
+    }
+}
+
+fn format_human_kv_block(
+    level: OutputLevel,
+    fields: &[OutputField],
+    title: &str,
+    rows: Vec<(String, String)>,
+    notes: Vec<String>,
+    marker_style: HumanMarkerStyle,
+    color: bool,
+    width: usize,
+) -> String {
+    let accent = human_title_accent_color(level, fields, title);
+    let marker = human_symbol(level, fields, marker_style);
+    format_human_kv_block_with_marker(title, rows, notes, marker, accent, color, width)
+}
+
+fn format_human_kv_block_with_marker(
+    title: &str,
+    rows: Vec<(String, String)>,
+    notes: Vec<String>,
+    marker: &str,
+    accent: &str,
+    color: bool,
+    width: usize,
+) -> String {
+    let rows = rows
+        .into_iter()
+        .filter(|(label, value)| !human_row_is_separator(label, value))
+        .collect::<Vec<_>>();
+    let notes = notes
+        .into_iter()
+        .filter(|note| !note.trim().is_empty())
+        .collect::<Vec<_>>();
+    let title = truncate_display(title, width.saturating_sub(HUMAN_TEXT_COLUMN));
+    let mut output = colorize(
+        color,
+        accent,
+        format!("{HUMAN_CARD_TITLE_PREFIX}{marker} {title}"),
+    );
+    let content_count = rows.len() + notes.len();
+    if content_count == 0 {
+        return output;
+    }
+
+    let label_width = human_card_label_width(&rows, width);
+    let mut rendered_rows = 0;
     for (label, value) in rows {
+        rendered_rows += 1;
+        let row_prefix = if rendered_rows == content_count {
+            HUMAN_CARD_FOOTER_PREFIX
+        } else {
+            HUMAN_CARD_ROW_PREFIX
+        };
         output.push('\n');
-        output.push_str(&format_human_detail_row(
+        output.push_str(&format_human_kv_row(
             &label,
             &value,
             label_width,
+            row_prefix,
+            accent,
             color,
             width,
         ));
     }
     for note in notes {
+        rendered_rows += 1;
+        let row_prefix = if rendered_rows == content_count {
+            HUMAN_CARD_FOOTER_PREFIX
+        } else {
+            HUMAN_CARD_ROW_PREFIX
+        };
         output.push('\n');
-        output.push_str(&format_human_note_row(&note, color, width));
-    }
-    if let Some(path) = path {
-        output.push('\n');
-        output.push_str(&format_human_continuation(path, color, width));
+        output.push_str(&format_human_kv_note(
+            &note, row_prefix, accent, color, width,
+        ));
     }
     output
 }
 
-fn format_human_detail_row(
+fn format_human_kv_row(
     label: &str,
     value: &str,
     label_width: usize,
+    row_prefix: &str,
+    accent: &str,
     color: bool,
     width: usize,
 ) -> String {
     let label = truncate_display(label, label_width);
-    let value_prefix_width = display_width(HUMAN_DETAIL_PREFIX) + label_width + 1;
+    let value_prefix_width = display_width(row_prefix) + label_width + 1;
     let value = truncate_display(value, width.saturating_sub(value_prefix_width));
     format!(
-        "{HUMAN_DETAIL_PREFIX}{} {}",
+        "{}{} {}",
+        colorize(color, accent, row_prefix),
         colorize(color, "2", format!("{label:<label_width$}")),
         value
     )
 }
 
-fn format_human_note_row(note: &str, color: bool, width: usize) -> String {
-    let budget = width.saturating_sub(display_width(HUMAN_DETAIL_PREFIX));
+fn format_human_kv_note(
+    note: &str,
+    row_prefix: &str,
+    accent: &str,
+    color: bool,
+    width: usize,
+) -> String {
+    let budget = width.saturating_sub(display_width(row_prefix));
     format!(
-        "{HUMAN_DETAIL_PREFIX}{}",
+        "{}{}",
+        colorize(color, accent, row_prefix),
         colorize(color, "2", truncate_display(note, budget))
     )
+}
+
+fn human_detail_prefix(detail_rail: bool, color: bool) -> String {
+    if detail_rail {
+        return format!("  {} ", colorize(color, "2", "│"));
+    }
+    HUMAN_DETAIL_PREFIX.to_owned()
+}
+
+fn human_detail_prefix_width(detail_rail: bool) -> usize {
+    display_width(if detail_rail {
+        HUMAN_DETAIL_RAIL_PREFIX
+    } else {
+        HUMAN_DETAIL_PREFIX
+    })
+}
+
+fn human_continuation_prefix_width(detail_rail: bool) -> usize {
+    human_detail_prefix_width(detail_rail) + display_width(HUMAN_CONTINUATION_MARKER)
 }
 
 fn format_human_card(
     level: OutputLevel,
     title: &str,
-    rows: Vec<(String, String)>,
-    footer: Option<&str>,
+    mut rows: Vec<(String, String)>,
+    _footer: Option<&str>,
     color: bool,
     width: usize,
 ) -> String {
-    let mut output = String::new();
-    let title = truncate_display(title, width.saturating_sub(HUMAN_TEXT_COLUMN));
-    output.push_str(&colorize(
+    trim_human_separators(&mut rows);
+    let accent = human_title_accent_color(level, &[], title);
+    format_human_kv_block_with_marker(
+        title,
+        rows,
+        Vec::new(),
+        human_card_marker(level),
+        accent,
         color,
-        title_color(level),
-        format!("{HUMAN_CARD_TITLE_PREFIX}{title}"),
-    ));
-    output.push('\n');
-    let label_width = human_card_label_width(&rows, width);
-    for (label, value) in rows {
-        let label = truncate_display(&label, label_width);
-        let value_prefix_width = display_width(HUMAN_CARD_ROW_PREFIX) + label_width + 1;
-        let value = truncate_display(&value, width.saturating_sub(value_prefix_width));
-        output.push_str(&colorize(color, "2", HUMAN_CARD_ROW_PREFIX));
-        output.push_str(&colorize(color, "2", format!("{label:<label_width$}")));
-        output.push(' ');
-        output.push_str(&value);
-        output.push('\n');
+        width,
+    )
+}
+
+fn human_card_marker(level: OutputLevel) -> &'static str {
+    match level {
+        OutputLevel::Ok => "●",
+        OutputLevel::Info | OutputLevel::Skip => "○",
+        OutputLevel::Warn => "▲",
+        OutputLevel::Error => "×",
     }
-    let footer = footer
-        .map(|footer| {
-            format!(
-                "{HUMAN_CARD_FOOTER_PREFIX}{}",
-                truncate_display(footer, width.saturating_sub(HUMAN_TEXT_COLUMN))
-            )
-        })
-        .unwrap_or_else(|| "╰─".to_owned());
-    output.push_str(&colorize(color, title_color(level), footer));
-    output
 }
 
 fn push_field_row(
@@ -1161,6 +1451,43 @@ fn push_human_row(rows: &mut Vec<(String, String)>, label: &str, value: Option<S
     }
 }
 
+fn push_human_separator(rows: &mut Vec<(String, String)>) {
+    if rows
+        .last()
+        .is_some_and(|(label, value)| human_row_is_separator(label, value))
+    {
+        return;
+    }
+    rows.push((String::new(), String::new()));
+}
+
+fn human_row_is_separator(label: &str, value: &str) -> bool {
+    label.is_empty() && value.is_empty()
+}
+
+fn trim_human_separators(rows: &mut Vec<(String, String)>) {
+    while rows
+        .first()
+        .is_some_and(|(label, value)| human_row_is_separator(label, value))
+    {
+        rows.remove(0);
+    }
+    while rows
+        .last()
+        .is_some_and(|(label, value)| human_row_is_separator(label, value))
+    {
+        rows.pop();
+    }
+}
+
+fn human_path_row(value: &str) -> (String, String) {
+    match value.trim() {
+        "." | "./" => ("workspace".to_owned(), "current directory (.)".to_owned()),
+        trimmed if trimmed.is_empty() => ("path".to_owned(), "-".to_owned()),
+        _ => ("path".to_owned(), value.to_owned()),
+    }
+}
+
 fn human_continuation_value(value: &str) -> String {
     match value.trim() {
         "." | "./" => "workspace: current directory (.)".to_owned(),
@@ -1169,29 +1496,17 @@ fn human_continuation_value(value: &str) -> String {
     }
 }
 
-fn human_component_label_width(rows: &[(String, String)], width: usize) -> usize {
-    let longest = rows
-        .iter()
-        .map(|(label, _)| display_width(label))
-        .max()
-        .unwrap_or(10);
-    let max_for_value_column = width
-        .saturating_sub(display_width(HUMAN_DETAIL_PREFIX) + 1 + 8)
-        .max(1);
-    longest.min(16).min(max_for_value_column).max(1)
-}
-
 fn human_card_label_width(rows: &[(String, String)], width: usize) -> usize {
     let longest = rows
         .iter()
+        .filter(|(label, value)| !human_row_is_separator(label, value))
         .map(|(label, _)| display_width(label))
         .max()
-        .unwrap_or(HUMAN_CARD_LABEL_WIDTH);
+        .unwrap_or(1);
     let max_for_value_column = width
         .saturating_sub(display_width(HUMAN_CARD_ROW_PREFIX) + 1 + 8)
         .max(1);
     longest
-        .max(HUMAN_CARD_LABEL_WIDTH)
         .min(HUMAN_CARD_MAX_LABEL_WIDTH)
         .min(max_for_value_column)
         .max(1)
@@ -1214,9 +1529,11 @@ fn human_index_complete_rows(fields: &[OutputField]) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     push_field_row(&mut rows, fields, "mode", "mode");
     push_field_row(&mut rows, fields, "repos", "repos");
+    push_human_separator(&mut rows);
     push_human_row(&mut rows, "files", human_file_counts(fields));
     push_human_row(&mut rows, "diagnostics", human_diagnostics(fields));
     push_human_row(&mut rows, "precise", human_precise_counts(fields));
+    push_human_separator(&mut rows);
     push_field_row(&mut rows, fields, "duration_ms", "duration");
     rows
 }
@@ -1311,6 +1628,82 @@ fn human_artifact_counts(fields: &[OutputField]) -> Option<String> {
     Some(format!("{artifacts} artifacts · {bytes} bytes"))
 }
 
+fn push_precise_detail_rows(rows: &mut Vec<(String, String)>, fields: &[OutputField]) {
+    let Some(detail) = field_value(fields, "detail") else {
+        return;
+    };
+    let mut pushed = false;
+    for (key, value) in parse_detail_key_values(detail) {
+        if matches!(key.as_str(), "generator" | "tool") {
+            continue;
+        }
+        push_human_row(rows, &human_field_label(&key), Some(value));
+        pushed = true;
+    }
+    if !pushed {
+        push_field_row(rows, fields, "detail", "detail");
+    }
+}
+
+fn parse_detail_key_values(detail: &str) -> Vec<(String, String)> {
+    let spans = detail_key_spans(detail);
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    let first_non_whitespace = detail
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    if spans
+        .first()
+        .is_some_and(|(key_start, _, _)| *key_start != first_non_whitespace)
+    {
+        return Vec::new();
+    }
+
+    spans
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_key_start, value_start, key))| {
+            let next_key_start = spans
+                .get(index + 1)
+                .map(|(next_key_start, _, _)| *next_key_start)
+                .unwrap_or(detail.len());
+            let value_end = detail[..next_key_start].trim_end().len();
+            let value = detail[*value_start..value_end].trim();
+            (!value.is_empty()).then(|| (key.clone(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn detail_key_spans(detail: &str) -> Vec<(usize, usize, String)> {
+    let bytes = detail.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let key_start = index;
+        while index < bytes.len() && is_detail_key_byte(bytes[index]) {
+            index += 1;
+        }
+        if index > key_start && index < bytes.len() && bytes[index] == b'=' {
+            let key = detail[key_start..index].to_owned();
+            spans.push((key_start, index + 1, key));
+            index += 1;
+        } else {
+            index = key_start.saturating_add(1);
+        }
+    }
+    spans
+}
+
+fn is_detail_key_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+}
+
 fn human_mode_label(value: &str) -> String {
     value.replace('_', " ")
 }
@@ -1380,7 +1773,7 @@ fn field_is(fields: &[OutputField], key: &str, value: &str) -> bool {
 fn human_event_title(area: &str, event: &str) -> String {
     match (area, event) {
         ("index", "plan") => "Index plan".to_owned(),
-        ("index", "semantic") => "Semantic index".to_owned(),
+        ("index", "semantic") => "Semantic refresh".to_owned(),
         ("index", "fallback") => "Index fallback".to_owned(),
         ("index", "repo") => "Index repository".to_owned(),
         ("index", "diagnostic") => "Index diagnostic".to_owned(),
@@ -1422,23 +1815,90 @@ fn human_title_token(token: &str) -> String {
         .join(" ")
 }
 
-fn human_symbol(level: OutputLevel, fields: &[OutputField], color: bool) -> String {
+fn human_symbol_with_color(
+    level: OutputLevel,
+    fields: &[OutputField],
+    marker_style: HumanMarkerStyle,
+    color: bool,
+    color_code: &str,
+) -> String {
+    colorize(color, color_code, human_symbol(level, fields, marker_style))
+}
+
+fn human_uses_detail_rail(
+    level: OutputLevel,
+    fields: &[OutputField],
+    marker_style: HumanMarkerStyle,
+) -> bool {
+    human_symbol(level, fields, marker_style) == "│"
+}
+
+fn human_symbol(
+    level: OutputLevel,
+    fields: &[OutputField],
+    marker_style: HumanMarkerStyle,
+) -> &'static str {
     let status = field_value(fields, "status").unwrap_or_default();
-    let symbol = match (level, status) {
-        (OutputLevel::Error, _) | (_, "failed") | (_, "blocked") => "✕",
-        (OutputLevel::Warn, _) | (_, "retry") | (_, "stale") => "⚠",
-        (OutputLevel::Skip, _) | (_, "empty") | (_, "skipped") | (_, "fresh") => "−",
-        (_, "ok") | (_, "finished") | (_, "listening") => "✓",
-        (_, "starting") | (_, "started") | (_, "queued") | (_, "enabled") => "◇",
+    match (level, status) {
+        (OutputLevel::Error, _) | (_, "failed") | (_, "blocked") => "×",
+        (OutputLevel::Warn, _) | (_, "retry") | (_, "stale") => "▲",
+        (OutputLevel::Skip, _) | (_, "empty") | (_, "skipped") | (_, "fresh") => "○",
+        _ if marker_style == HumanMarkerStyle::Metadata => "○",
+        (_, "ok") | (_, "finished") | (_, "listening") => "●",
+        (_, "starting" | "started" | "queued" | "enabled")
+            if marker_style == HumanMarkerStyle::Progress =>
+        {
+            "│"
+        }
+        (_, "starting" | "started" | "queued" | "enabled") => "○",
         _ => match level {
-            OutputLevel::Ok => "✓",
-            OutputLevel::Info => "◇",
-            OutputLevel::Warn => "⚠",
-            OutputLevel::Error => "✕",
-            OutputLevel::Skip => "−",
+            OutputLevel::Ok => "●",
+            OutputLevel::Info => "●",
+            OutputLevel::Warn => "▲",
+            OutputLevel::Error => "×",
+            OutputLevel::Skip => "○",
         },
-    };
-    colorize(color, title_color(level), symbol)
+    }
+}
+
+fn human_title_accent_color(
+    level: OutputLevel,
+    fields: &[OutputField],
+    title: &str,
+) -> &'static str {
+    let status = field_value(fields, "status").unwrap_or_default();
+    if matches!(
+        level,
+        OutputLevel::Error | OutputLevel::Warn | OutputLevel::Skip
+    ) || matches!(
+        status,
+        "failed" | "blocked" | "retry" | "stale" | "empty" | "skipped" | "fresh"
+    ) {
+        return title_color(level);
+    }
+    if title.starts_with("Semantic") {
+        return "1;38;2;125;199;190";
+    }
+    if title.starts_with("Precise") {
+        return "1;38;2;151;185;100";
+    }
+    if title.starts_with("Storage") || title.contains("storage") {
+        return "1;38;2;196;181;133";
+    }
+    if title.starts_with("Watch") {
+        return "1;38;2;116;169;225";
+    }
+    if title.starts_with("Index")
+        || title.starts_with("Search")
+        || title.starts_with("Manifest")
+        || title.starts_with("Files")
+        || title.starts_with("Walking")
+        || title.starts_with("Planning")
+        || title.starts_with("Writing")
+    {
+        return "1;38;2;130;170;255";
+    }
+    title_color(level)
 }
 
 fn title_color(level: OutputLevel) -> &'static str {
@@ -1545,6 +2005,9 @@ pub(crate) fn emit_index_progress_event(
     if let Some(pruned_snapshots) = event.pruned_snapshots {
         fields.push(field("pruned_snapshots", pruned_snapshots));
     }
+    if let Some(duration_ms) = event.duration_ms {
+        fields.push(field("duration_ms", duration_ms));
+    }
 
     let level = match status {
         IndexProgressStatus::Starting => OutputLevel::Info,
@@ -1568,6 +2031,10 @@ pub(crate) fn emit_index_plan_events(
     plan: &IndexPlan,
     extra_fields: &[OutputField],
 ) -> io::Result<()> {
+    if !output.wants_progress_events() {
+        return Ok(());
+    }
+
     output.progress_event(
         OutputLevel::Info,
         "index",
@@ -1644,13 +2111,22 @@ pub(crate) fn emit_index_plan_events(
         return Ok(());
     }
 
+    let generic_changed_paths = visible_index_paths_without_semantic(
+        &plan.changed_paths,
+        &plan.semantic_refresh.changed_paths,
+    );
+    let generic_deleted_paths = visible_index_paths_without_semantic(
+        &plan.deleted_paths,
+        &plan.semantic_refresh.deleted_paths,
+    );
+
     emit_index_path_lines(
         output,
         "path",
         "paths",
         repository_id,
         "modified",
-        &plan.changed_paths,
+        &generic_changed_paths,
         extra_fields,
     )?;
     emit_index_path_lines(
@@ -1659,9 +2135,27 @@ pub(crate) fn emit_index_plan_events(
         "paths",
         repository_id,
         "deleted",
-        &plan.deleted_paths,
+        &generic_deleted_paths,
         extra_fields,
     )
+}
+
+fn visible_index_paths_without_semantic<'a>(
+    paths: &'a [String],
+    semantic_paths: &'a [String],
+) -> Vec<&'a str> {
+    if semantic_paths.is_empty() {
+        return paths.iter().map(String::as_str).collect();
+    }
+    let semantic_paths = semantic_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    paths
+        .iter()
+        .filter(|path| !semantic_paths.contains(path.as_str()))
+        .map(String::as_str)
+        .collect()
 }
 
 fn emit_index_semantic_events(
@@ -1729,7 +2223,7 @@ fn emit_index_path_lines(
     truncation_event: &'static str,
     repository_id: &str,
     action: &'static str,
-    paths: &[String],
+    paths: &[impl AsRef<str>],
     extra_fields: &[OutputField],
 ) -> io::Result<()> {
     for path in paths.iter().take(MAX_VERBOSE_PATH_LINES) {
@@ -1741,7 +2235,7 @@ fn emit_index_path_lines(
                 vec![field("action", action), field("repo", repository_id)],
                 extra_fields,
             ),
-            Some(path),
+            Some(path.as_ref()),
         )?;
     }
     if paths.len() > MAX_VERBOSE_PATH_LINES {
@@ -1967,10 +2461,11 @@ mod tests {
             false,
         );
 
-        assert!(output.contains("╭─  Index complete"));
+        assert!(output.contains("╭─● Index complete"));
         assert!(output.contains("repos"));
         assert!(output.contains("42ms"));
-        assert!(output.contains("╰─"));
+        assert!(output.contains("╰─  duration"));
+        assert!(!output.contains("╰ Index complete"));
     }
 
     #[test]
@@ -2008,7 +2503,7 @@ mod tests {
             false,
         );
 
-        assert!(output.contains("╭─  Frigg error"));
+        assert!(output.contains("╭─× Frigg error"));
         assert!(output.contains("run `frigg init`"));
         assert!(output.contains("storage db file is missing"));
         assert!(output.contains("/repo"));
@@ -2029,11 +2524,19 @@ mod tests {
             false,
         );
 
-        assert!(output.contains("◇ Watch Queued"));
+        assert!(output.contains("╭─○ Watch Queued"));
         assert!(output.contains("debounce"));
         assert!(output.contains("250ms"));
         assert!(!output.contains("debounce="));
-        assert!(output.contains("└─ path: /repo/src/main.rs"));
+        assert!(!output.starts_with('\n'));
+        assert!(!output.ends_with('\n'));
+        let path_line = output
+            .lines()
+            .find(|line| line.contains("/repo/src/main.rs"))
+            .expect("watch path should render as a kv row");
+        assert!(path_line.starts_with("╰─  "));
+        assert_eq!(char_column(path_line, "path"), Some(4));
+        assert!(!output.contains("└─ path: /repo/src/main.rs"));
     }
 
     #[test]
@@ -2063,12 +2566,76 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("◇ Index plan"));
+        assert!(output.contains("○ Index plan"));
         assert!(output.contains("repo"));
         assert!(output.contains("snapshot"));
         assert!(output.contains("full rebuild · local · 4 records"));
+        assert!(!output.contains("\n\n"));
         assert!(!output.contains("repo="));
         assert!(!output.contains("mode="));
+    }
+
+    #[test]
+    fn human_path_list_components_use_dot_without_sideline() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "semantic_paths",
+            &[
+                field("status", "truncated"),
+                field("repo", "repo-001"),
+                field("changed", 50),
+                field("deleted", 0),
+                field("action", "modified"),
+                field("shown", 50),
+                field("omitted", 139),
+            ],
+            None,
+            false,
+            80,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert!(lines[0].starts_with("╭─○ Semantic paths"));
+        assert_eq!(char_column(lines[0], "○"), Some(2));
+        assert_eq!(char_column(lines[0], "Semantic paths"), Some(4));
+        assert!(lines[1].starts_with("│   repo"));
+        assert!(
+            lines
+                .iter()
+                .filter(|line| !line.is_empty())
+                .all(|line| matches!(line.chars().next(), Some('╭' | '│' | '╰')))
+        );
+        assert!(lines.last().is_some_and(|line| line.starts_with("╰─  ")));
+        assert!(!output.contains("\n\n"));
+        assert!(!output.starts_with('\n'));
+        assert!(!output.ends_with('\n'));
+        assert!(output.contains("path list truncated"));
+    }
+
+    #[test]
+    fn human_metadata_components_use_side_rail_block() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "startup",
+            "semantic_model",
+            &[
+                field("status", "ok"),
+                field("provider", "local"),
+                field("model", "all-MiniLM-L6-v2"),
+            ],
+            None,
+            false,
+            80,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert!(lines[0].starts_with("╭─○ Semantic model"));
+        assert!(lines[1].starts_with("│   provider"));
+        assert!(lines[2].starts_with("╰─  model"));
+        assert_eq!(char_column(lines[0], "○"), Some(2));
+        assert_eq!(char_column(lines[0], "Semantic model"), Some(4));
+        assert_eq!(char_column(lines[1], "provider"), Some(4));
     }
 
     #[test]
@@ -2090,10 +2657,11 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("− Precise plan"));
+        assert!(output.contains("○ Precise plan"));
         assert!(output.contains("no generators need refresh"));
         assert!(!output.contains("reason="));
-        assert!(output.contains("└─ workspace: current directory (.)"));
+        assert!(output.contains("workspace current directory (.)"));
+        assert!(!output.contains("└─ workspace: current directory (.)"));
     }
 
     #[test]
@@ -2113,10 +2681,38 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("− Index paths"));
+        assert!(output.contains("○ Index paths"));
         assert!(output.contains("no path changes"));
         assert!(!output.contains("repo="));
         assert!(!output.contains("changed="));
+    }
+
+    #[test]
+    fn human_semantic_component_renders_refresh_story() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "semantic",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("mode", "incremental_advance"),
+                field("provider", "local"),
+                field("model", "all-MiniLM-L6-v2"),
+                field("records", 2),
+                field("changed", 2),
+                field("deleted", 0),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.starts_with("╭─○ Semantic refresh"));
+        assert!(output.contains("incremental advance"));
+        assert!(output.contains("local · all-MiniLM-L6-v2"));
+        assert!(output.contains("2 changed · 0 deleted"));
+        assert!(!output.contains("Semantic index"));
     }
 
     #[test]
@@ -2139,11 +2735,91 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("◇ Walking files"));
+        assert!(output.contains("│ Walking files..."));
         assert!(output.contains("477 scanned"));
         assert!(!output.contains("477 changed · 2 deleted"));
         assert!(!output.contains("phase="));
         assert!(!output.contains("status="));
+    }
+
+    #[test]
+    fn human_storage_checkpoint_phase_avoids_duplicate_snapshot_wording() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "phase",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("phase", "checkpoint_wal"),
+                field("mode", "changed"),
+                field("snapshot", "snapshot-218c693c9fbc6c2d2de5"),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("│ Saving storage checkpoint..."));
+        assert!(output.contains("manifest checkpoint snapshot-218"));
+        assert!(!output.contains("snapshot snapshot"));
+    }
+
+    #[test]
+    fn human_semantic_phase_completion_shows_duration_per_doc() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "index",
+            "phase",
+            &[
+                field("status", "ok"),
+                field("repo", "repo-001"),
+                field("phase", "semantic_refresh"),
+                field("mode", "changed"),
+                field("records", 4),
+                field("changed", 4),
+                field("deleted", 0),
+                field("duration_ms", 42),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("● Semantic chunks stored"));
+        assert!(output.contains("4 records"));
+        assert!(output.contains("42ms"));
+        assert!(output.contains("10.5ms/doc"));
+        assert!(!output.contains("phase="));
+    }
+
+    #[test]
+    fn human_semantic_phase_completion_uses_semantic_delta() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "index",
+            "phase",
+            &[
+                field("status", "ok"),
+                field("repo", "repo-001"),
+                field("phase", "semantic_refresh"),
+                field("mode", "changed"),
+                field("records", 1),
+                field("changed", 0),
+                field("deleted", 0),
+                field("changed_paths", 1),
+                field("deleted_paths", 0),
+                field("duration_ms", 8),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("● Semantic chunks stored"));
+        assert!(output.contains("1 records"));
+        assert!(output.contains("1 changed · 0 deleted"));
+        assert!(output.contains("8ms/doc"));
     }
 
     #[test]
@@ -2183,6 +2859,15 @@ mod tests {
 
     #[test]
     fn human_semantic_path_rows_color_only_action_keyword() {
+        let plain = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "semantic_path",
+            &[field("action", "modified"), field("repo", "repo-001")],
+            Some("src/lib.rs"),
+            false,
+            80,
+        );
         let output = format_human_event_with_width(
             OutputLevel::Info,
             "index",
@@ -2193,12 +2878,75 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("Semantic \u{1b}[1;33mModified\u{1b}[0m src/lib.rs"));
-        assert!(!output.contains("\u{1b}[1;33mSemantic Modified\u{1b}[0m"));
+        assert!(plain.starts_with("  ● Semantic embedding Modified src/lib.rs"));
+        assert!(output.contains("Semantic embedding"));
+        assert!(output.contains("\u{1b}[1;33mModified\u{1b}[0m src/lib.rs"));
+        assert!(output.contains("semantic embedding input"));
+        assert!(!output.contains("\u{1b}[1;33mSemantic embedding Modified\u{1b}[0m"));
     }
 
     #[test]
-    fn human_card_text_starts_at_shared_column() {
+    fn human_precise_generator_expands_compact_detail_rows() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "precise",
+            "generator",
+            &[
+                field("status", "ok"),
+                field("repo", "repo-001"),
+                field("generator", "rust"),
+                field("language", "rust"),
+                field("tool", "rust-analyzer"),
+                field("artifacts", 1),
+                field("bytes", 26067716),
+                field("duration_ms", 18820),
+                field(
+                    "detail",
+                    "generator=rust tool=rust-analyzer version=rust-analyzer 1.96.0 (ac68faa2 2026-05-25)",
+                ),
+            ],
+            Some("/repo/.frigg/scip/rust.scip"),
+            false,
+            120,
+        );
+
+        assert!(output.contains("● Precise rust"));
+        assert!(output.contains("generator rust"));
+        assert!(output.contains("tool      rust-analyzer"));
+        assert!(output.contains("version   rust-analyzer 1.96.0"));
+        assert!(!output.contains("detail    generator=rust"));
+        assert!(output.contains("path      /repo/.frigg/scip/rust.scip"));
+        assert!(!output.contains("└─ path: /repo/.frigg/scip/rust.scip"));
+    }
+
+    #[test]
+    fn human_precise_generator_start_renders_progress_line_only() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "precise",
+            "generator",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("command", "index"),
+                field("generator", "rust"),
+                field("language", "rust"),
+                field("tool", "rust-analyzer"),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.starts_with("  │ Running rust-analyzer..."));
+        assert!(output.contains("rust generator"));
+        assert_eq!(output.lines().count(), 1);
+        assert!(!output.contains("language"));
+        assert!(!output.contains("tool"));
+    }
+
+    #[test]
+    fn human_start_events_use_circle_message_with_context_rows() {
         let output = format_human_event_with_width(
             OutputLevel::Info,
             "serve",
@@ -2210,9 +2958,39 @@ mod tests {
         );
         let lines = output.lines().collect::<Vec<_>>();
 
-        assert_eq!(char_column(lines[0], "Frigg Serve"), Some(4));
+        assert!(lines[0].starts_with("╭─○ Serve starting"));
+        assert_eq!(char_column(lines[0], "○"), Some(2));
+        assert_eq!(char_column(lines[0], "Serve starting"), Some(4));
         assert_eq!(char_column(lines[1], "transport"), Some(4));
-        assert_eq!(char_column(lines[2], "starting"), Some(4));
+        assert!(lines[1].starts_with("╰─  "));
+        assert!(!output.starts_with('\n'));
+        assert!(!output.ends_with('\n'));
+    }
+
+    #[test]
+    fn human_card_short_rows_use_content_sized_label_column() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "index",
+            "complete",
+            &[
+                field("status", "ok"),
+                field("mode", "changed"),
+                field("repos", 1),
+            ],
+            None,
+            false,
+            100,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert_eq!(char_column(lines[1], "mode"), Some(4));
+        assert_eq!(char_column(lines[1], "changed"), Some(10));
+        assert_eq!(char_column(lines[2], "repos"), Some(4));
+        assert_eq!(char_column(lines[2], "1"), Some(10));
+        assert!(lines[2].starts_with("╰─  "));
+        assert!(!output.starts_with('\n'));
+        assert!(!output.ends_with('\n'));
     }
 
     #[test]
@@ -2242,6 +3020,9 @@ mod tests {
         assert_eq!(repos_value_column, generators_value_column);
         assert_eq!(repos_value_column, missing_tool_value_column);
         assert_eq!(repos_value_column, skipped_value_column);
+        assert!(lines[4].starts_with("╰─  "));
+        assert!(!output.starts_with('\n'));
+        assert!(!output.ends_with('\n'));
     }
 
     #[test]
@@ -2304,16 +3085,17 @@ mod tests {
         let lines = output.lines().collect::<Vec<_>>();
         let path_line = lines
             .iter()
-            .find(|line| line.contains("path: /Users/bnomei/Library/Caches/frigg/models"))
+            .find(|line| line.contains("/Users/bnomei/Library/Caches/frigg/models"))
             .expect("semantic model path line should be rendered");
 
         assert_eq!(char_column(lines[0], "Semantic model"), Some(4));
-        assert_eq!(char_column(path_line, "└─"), Some(4));
+        assert_eq!(char_column(path_line, "path"), Some(4));
+        assert!(!path_line.contains("└─"));
         assert!(lines.iter().all(|line| line.chars().count() <= 64));
     }
 
     #[test]
-    fn human_continuation_expands_current_directory_dot() {
+    fn human_component_path_expands_current_directory_dot() {
         let output = format_human_event_with_width(
             OutputLevel::Skip,
             "precise",
@@ -2328,7 +3110,8 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("└─ workspace: current directory (.)"));
+        assert!(output.contains("workspace current directory (.)"));
+        assert!(!output.contains("└─ workspace: current directory (.)"));
     }
 
     fn char_column(line: &str, needle: &str) -> Option<usize> {

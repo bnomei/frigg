@@ -7,7 +7,7 @@ use std::error::Error;
 
 use frigg::domain::FriggError;
 use frigg::indexer::{
-    IndexMode, ManifestDiagnosticKind,
+    IndexMode, IndexProgressPhase, IndexProgressStatus, ManifestDiagnosticKind,
     index_repository_with_runtime_config_and_dirty_paths_and_progress_callback,
 };
 use frigg::mcp::FriggMcpServer;
@@ -123,6 +123,7 @@ pub(crate) fn run_index_command_with_output(
             }
         }
 
+        let mut semantic_duration_ms = None;
         let summary =
             match index_repository_with_runtime_config_and_dirty_paths_and_progress_callback(
                 &repo.repository_id.0,
@@ -133,10 +134,19 @@ pub(crate) fn run_index_command_with_output(
                 &SemanticRuntimeCredentials::from_process_env(),
                 &[],
                 |plan| {
-                    emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
-                        .map_err(FriggError::from)
+                    if output.wants_progress_events() {
+                        emit_index_plan_events(*output, &repo.repository_id.0, plan, &[])
+                            .map_err(FriggError::from)
+                    } else {
+                        Ok(())
+                    }
                 },
                 |event| {
+                    if event.phase == IndexProgressPhase::SemanticRefresh
+                        && event.status == IndexProgressStatus::Ok
+                    {
+                        semantic_duration_ms = event.duration_ms;
+                    }
                     let _ = emit_index_progress_event(*output, event, &[]);
                 },
             ) {
@@ -207,22 +217,27 @@ pub(crate) fn run_index_command_with_output(
 
         if summary.semantic_refresh_mode.as_str() != "disabled"
             && summary.semantic_refresh_mode.as_str() != "reuse_existing"
+            && !output.tui_enabled()
         {
+            let mut semantic_fields = vec![
+                field("status", "ok"),
+                field("repo", &repo.repository_id.0),
+                field("mode", summary.semantic_refresh_mode.as_str()),
+                field(
+                    "provider",
+                    summary.semantic_provider.as_deref().unwrap_or("-"),
+                ),
+                field("model", summary.semantic_model.as_deref().unwrap_or("-")),
+                field("records", summary.semantic_records),
+            ];
+            if let Some(duration_ms) = semantic_duration_ms {
+                semantic_fields.push(field("duration_ms", duration_ms));
+            }
             output.progress_event(
                 OutputLevel::Info,
                 "index",
                 "semantic",
-                &[
-                    field("status", "ok"),
-                    field("repo", &repo.repository_id.0),
-                    field("mode", summary.semantic_refresh_mode.as_str()),
-                    field(
-                        "provider",
-                        summary.semantic_provider.as_deref().unwrap_or("-"),
-                    ),
-                    field("model", summary.semantic_model.as_deref().unwrap_or("-")),
-                    field("records", summary.semantic_records),
-                ],
+                &semantic_fields,
                 None,
             )?;
         }

@@ -193,6 +193,7 @@ pub struct IndexProgressEvent {
     pub changed_paths: Option<usize>,
     pub deleted_paths: Option<usize>,
     pub pruned_snapshots: Option<usize>,
+    pub duration_ms: Option<u128>,
 }
 
 impl IndexProgressEvent {
@@ -217,6 +218,7 @@ impl IndexProgressEvent {
             changed_paths: None,
             deleted_paths: None,
             pruned_snapshots: None,
+            duration_ms: None,
         }
     }
 
@@ -260,6 +262,11 @@ impl IndexProgressEvent {
 
     pub fn with_pruned_snapshots(mut self, pruned_snapshots: usize) -> Self {
         self.pruned_snapshots = Some(pruned_snapshots);
+        self
+    }
+
+    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ms = Some(duration_ms);
         self
     }
 }

@@ -7,9 +7,9 @@ use std::path::Path;
 
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
-    WorkspacePreciseGenerationPlanSummary, WorkspacePreciseGenerationRunItem,
-    WorkspacePreciseGenerationRunSummary, WorkspacePreciseGenerationStatus,
-    WorkspaceRecommendedAction,
+    WorkspacePreciseGenerationPlanItem, WorkspacePreciseGenerationPlanSummary,
+    WorkspacePreciseGenerationRunItem, WorkspacePreciseGenerationRunSummary,
+    WorkspacePreciseGenerationStatus, WorkspaceRecommendedAction,
 };
 
 use crate::cli_runtime::{CliOutput, OutputField, OutputLevel, field};
@@ -109,6 +109,7 @@ pub(crate) fn run_cli_precise_generation(
     if plan.generators.is_empty() {
         return CliPreciseGenerationCounters::default();
     }
+    emit_precise_generator_start_events(output, command_name, repository_id, &plan);
 
     let run = match server.run_precise_generation_for_repository(
         repository_id,
@@ -183,6 +184,39 @@ fn emit_precise_plan(
             field("deleted", deleted_paths.len()),
         ],
         Some(&root.display().to_string()),
+    );
+}
+
+fn emit_precise_generator_start_events(
+    output: CliOutput,
+    command_name: &'static str,
+    repository_id: &str,
+    plan: &WorkspacePreciseGenerationPlanSummary,
+) {
+    for generator in &plan.generators {
+        emit_precise_generator_start(output, command_name, repository_id, generator);
+    }
+}
+
+fn emit_precise_generator_start(
+    output: CliOutput,
+    command_name: &'static str,
+    repository_id: &str,
+    generator: &WorkspacePreciseGenerationPlanItem,
+) {
+    let _ = output.progress_event(
+        OutputLevel::Info,
+        "precise",
+        "generator",
+        &[
+            field("status", "starting"),
+            field("repo", repository_id),
+            field("command", command_name),
+            field("generator", &generator.generator_id),
+            field("language", &generator.language),
+            field("tool", &generator.tool),
+        ],
+        None,
     );
 }
 
