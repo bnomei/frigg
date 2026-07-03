@@ -107,6 +107,12 @@ pub(crate) fn resolve_watch_config(
     if let Some(retry_ms) = cli.watch_retry_ms {
         watch.retry_ms = retry_ms;
     }
+    if let Some(manifest_fast_concurrency) = cli.watch_manifest_fast_concurrency {
+        watch.manifest_fast_concurrency = manifest_fast_concurrency;
+    }
+    if let Some(semantic_followup_concurrency) = cli.watch_semantic_followup_concurrency {
+        watch.semantic_followup_concurrency = semantic_followup_concurrency;
+    }
     watch
 }
 

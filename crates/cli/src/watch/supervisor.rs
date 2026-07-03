@@ -420,6 +420,8 @@ pub fn maybe_start_watch_runtime_with_reporter(
     repository_cache_invalidation_callback: Option<RepositoryCacheInvalidationCallback>,
     reporter: Option<WatchEventReporter>,
 ) -> FriggResult<Option<WatchRuntime>> {
+    config.watch.validate()?;
+
     if !config.watch.enabled_for_transport(transport) {
         info!(
             watch_mode = %config.watch.mode.as_str(),
@@ -502,7 +504,11 @@ async fn run_supervisor(
 ) {
     let debounce = Duration::from_millis(watch_config.debounce_ms);
     let retry = Duration::from_millis(watch_config.retry_ms);
-    let mut scheduler = WatchSchedulerState::new(0);
+    let mut scheduler = WatchSchedulerState::with_concurrency_limits(
+        0,
+        watch_config.manifest_fast_concurrency,
+        watch_config.semantic_followup_concurrency,
+    );
     let mut repository_epochs = RepositoryEpochs::default();
     let mut ticker = tokio::time::interval(Duration::from_millis(WATCH_TICK_MS));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);

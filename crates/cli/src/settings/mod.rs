@@ -22,7 +22,10 @@ pub use semantic_runtime::{
     SemanticRuntimeConfigError, SemanticRuntimeCredentialError, SemanticRuntimeCredentials,
     SemanticRuntimeProvider, SemanticRuntimeStartupError,
 };
-pub use watch::{DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_RETRY_MS, WatchConfig, WatchMode};
+pub use watch::{
+    DEFAULT_WATCH_DEBOUNCE_MS, DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY, DEFAULT_WATCH_RETRY_MS,
+    DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY, WatchConfig, WatchMode,
+};
 
 #[cfg(test)]
 mod tests {
@@ -70,6 +73,14 @@ mod tests {
         assert_eq!(watch.mode, WatchMode::Auto);
         assert_eq!(watch.debounce_ms, DEFAULT_WATCH_DEBOUNCE_MS);
         assert_eq!(watch.retry_ms, DEFAULT_WATCH_RETRY_MS);
+        assert_eq!(
+            watch.manifest_fast_concurrency,
+            DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY
+        );
+        assert_eq!(
+            watch.semantic_followup_concurrency,
+            DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY
+        );
         assert!(watch.enabled_for_transport(RuntimeTransportKind::Stdio));
         assert!(watch.enabled_for_transport(RuntimeTransportKind::LoopbackHttp));
         assert!(!watch.enabled_for_transport(RuntimeTransportKind::RemoteHttp));
@@ -95,6 +106,8 @@ mod tests {
             mode: WatchMode::On,
             debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
             retry_ms: DEFAULT_WATCH_RETRY_MS,
+            manifest_fast_concurrency: DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY,
+            semantic_followup_concurrency: DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY,
         };
         assert!(on.enabled_for_transport(RuntimeTransportKind::RemoteHttp));
 
@@ -102,6 +115,8 @@ mod tests {
             mode: WatchMode::Off,
             debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
             retry_ms: DEFAULT_WATCH_RETRY_MS,
+            manifest_fast_concurrency: DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY,
+            semantic_followup_concurrency: DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY,
         };
         assert!(!off.enabled_for_transport(RuntimeTransportKind::Stdio));
     }
@@ -112,6 +127,14 @@ mod tests {
         assert_eq!(stdio.mode, WatchMode::Off);
         assert_eq!(stdio.debounce_ms, DEFAULT_WATCH_DEBOUNCE_MS);
         assert_eq!(stdio.retry_ms, DEFAULT_WATCH_RETRY_MS);
+        assert_eq!(
+            stdio.manifest_fast_concurrency,
+            DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY
+        );
+        assert_eq!(
+            stdio.semantic_followup_concurrency,
+            DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY
+        );
 
         let http = WatchConfig::default_for_transport(RuntimeTransportKind::LoopbackHttp);
         assert_eq!(http.mode, WatchMode::Auto);

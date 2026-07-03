@@ -249,6 +249,86 @@ fn scheduler_debounces_roots_and_serializes_execution() {
 }
 
 #[test]
+fn scheduler_respects_per_class_concurrency_limits() {
+    let mut scheduler = WatchSchedulerState::with_concurrency_limits(3, 2, 1);
+    let now = Instant::now();
+    let debounce = Duration::from_millis(750);
+
+    scheduler.record_path_change(0, PathBuf::from("one.rs"), now, debounce);
+    scheduler.record_path_change(1, PathBuf::from("two.rs"), now, debounce);
+    scheduler.record_path_change(2, PathBuf::from("three.rs"), now, debounce);
+
+    let ready_at = now + debounce;
+    assert_eq!(
+        scheduler.next_ready_refresh(ready_at),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.next_ready_refresh(ready_at),
+        Some(ScheduledRefresh {
+            root_idx: 1,
+            repository_id: "repo-001".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+    scheduler.mark_started(1, WatchRefreshClass::ManifestFast);
+    assert_eq!(
+        scheduler.next_ready_refresh(ready_at),
+        None,
+        "manifest-fast dispatch should stop at its configured class limit"
+    );
+
+    scheduler.mark_succeeded(0, WatchRefreshClass::ManifestFast, ready_at);
+    assert_eq!(
+        scheduler.next_ready_refresh(ready_at),
+        Some(ScheduledRefresh {
+            root_idx: 2,
+            repository_id: "repo-002".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+}
+
+#[test]
+fn scheduler_respects_semantic_followup_concurrency_limit() {
+    let mut scheduler = WatchSchedulerState::with_concurrency_limits(3, 1, 2);
+    let now = Instant::now();
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::SemanticFollowup, now);
+    scheduler.enqueue_initial_sync(1, WatchRefreshClass::SemanticFollowup, now);
+    scheduler.enqueue_initial_sync(2, WatchRefreshClass::SemanticFollowup, now);
+
+    assert_eq!(
+        scheduler.next_ready_refresh(now),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::SemanticFollowup,
+        })
+    );
+    scheduler.mark_started(0, WatchRefreshClass::SemanticFollowup);
+    assert_eq!(
+        scheduler.next_ready_refresh(now),
+        Some(ScheduledRefresh {
+            root_idx: 1,
+            repository_id: "repo-001".to_owned(),
+            class: WatchRefreshClass::SemanticFollowup,
+        })
+    );
+    scheduler.mark_started(1, WatchRefreshClass::SemanticFollowup);
+    assert_eq!(
+        scheduler.next_ready_refresh(now),
+        None,
+        "semantic-followup dispatch should stop at its configured class limit"
+    );
+}
+
+#[test]
 fn scheduler_caps_continuous_manifest_fast_debounce_latency() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
@@ -1074,6 +1154,63 @@ fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projec
     cleanup_workspace(&workspace_root);
 }
 
+#[test]
+fn maybe_start_watch_runtime_rejects_zero_watch_concurrency_direct_config() {
+    let workspace_root = temp_workspace_root("watch-runtime-zero-concurrency");
+    fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+
+    let mut manifest_fast_config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("config should load from workspace root");
+    manifest_fast_config.watch = WatchConfig {
+        mode: WatchMode::On,
+        manifest_fast_concurrency: 0,
+        ..WatchConfig::default()
+    };
+    let manifest_fast_error = match maybe_start_watch_runtime(
+        &manifest_fast_config,
+        RuntimeTransportKind::Stdio,
+        test_runtime_task_registry(),
+        test_validated_manifest_candidate_cache(),
+        None,
+    ) {
+        Ok(_) => panic!("watch runtime startup should reject zero manifest-fast concurrency"),
+        Err(error) => error,
+    };
+    assert!(
+        manifest_fast_error
+            .to_string()
+            .contains("watch.manifest_fast_concurrency must be greater than zero"),
+        "unexpected watch runtime startup error: {manifest_fast_error}"
+    );
+
+    let mut semantic_followup_config =
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("config should load from workspace root");
+    semantic_followup_config.watch = WatchConfig {
+        mode: WatchMode::On,
+        semantic_followup_concurrency: 0,
+        ..WatchConfig::default()
+    };
+    let semantic_followup_error = match maybe_start_watch_runtime(
+        &semantic_followup_config,
+        RuntimeTransportKind::Stdio,
+        test_runtime_task_registry(),
+        test_validated_manifest_candidate_cache(),
+        None,
+    ) {
+        Ok(_) => panic!("watch runtime startup should reject zero semantic-followup concurrency"),
+        Err(error) => error,
+    };
+    assert!(
+        semantic_followup_error
+            .to_string()
+            .contains("watch.semantic_followup_concurrency must be greater than zero"),
+        "unexpected watch runtime startup error: {semantic_followup_error}"
+    );
+
+    cleanup_workspace(&workspace_root);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn watch_runtime_initial_sync_indexes_when_manifest_missing() {
     let workspace_root = temp_workspace_root("initial-sync");
@@ -1088,6 +1225,7 @@ async fn watch_runtime_initial_sync_indexes_when_manifest_missing() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime = maybe_start_watch_runtime(
@@ -1133,6 +1271,7 @@ async fn watch_runtime_initial_sync_respects_gitignored_contracts_and_excludes_t
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime = maybe_start_watch_runtime(
@@ -1200,6 +1339,7 @@ async fn watch_runtime_startup_skips_initial_sync_for_valid_manifest() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime = maybe_start_watch_runtime(
@@ -1242,6 +1382,7 @@ async fn watch_runtime_notify_backend_indexes_after_real_file_change() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime = maybe_start_watch_runtime(
@@ -1324,6 +1465,7 @@ async fn watch_runtime_invokes_repository_cache_invalidation_callback_for_initia
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let invalidation_log = test_repository_cache_invalidation_log();
@@ -1433,6 +1575,7 @@ async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_tas
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let task_registry = test_runtime_task_registry();
@@ -1560,6 +1703,7 @@ async fn watch_runtime_repairs_missing_retrieval_projection_family_and_invalidat
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let invalidation_log = test_repository_cache_invalidation_log();

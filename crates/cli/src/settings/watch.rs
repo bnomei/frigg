@@ -4,12 +4,26 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{FriggError, FriggResult};
+
 use super::RuntimeTransportKind;
 
 /// Default debounce interval before watch-triggered index refresh runs.
 pub const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 2_000;
 /// Default retry interval after a watch-driven index refresh failure.
 pub const DEFAULT_WATCH_RETRY_MS: u64 = 5_000;
+/// Default manifest-fast refreshes allowed to run concurrently.
+pub const DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY: usize = 1;
+/// Default semantic-followup refreshes allowed to run concurrently.
+pub const DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY: usize = 1;
+
+fn default_manifest_fast_concurrency() -> usize {
+    DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY
+}
+
+fn default_semantic_followup_concurrency() -> usize {
+    DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY
+}
 
 /// Watch enablement mode resolved against transport defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -59,6 +73,10 @@ pub struct WatchConfig {
     pub mode: WatchMode,
     pub debounce_ms: u64,
     pub retry_ms: u64,
+    #[serde(default = "default_manifest_fast_concurrency")]
+    pub manifest_fast_concurrency: usize,
+    #[serde(default = "default_semantic_followup_concurrency")]
+    pub semantic_followup_concurrency: usize,
 }
 
 impl Default for WatchConfig {
@@ -67,11 +85,41 @@ impl Default for WatchConfig {
             mode: WatchMode::Auto,
             debounce_ms: DEFAULT_WATCH_DEBOUNCE_MS,
             retry_ms: DEFAULT_WATCH_RETRY_MS,
+            manifest_fast_concurrency: DEFAULT_WATCH_MANIFEST_FAST_CONCURRENCY,
+            semantic_followup_concurrency: DEFAULT_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY,
         }
     }
 }
 
 impl WatchConfig {
+    pub(crate) fn validate(&self) -> FriggResult<()> {
+        if self.debounce_ms == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.debounce_ms must be greater than zero".to_owned(),
+            ));
+        }
+
+        if self.retry_ms == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.retry_ms must be greater than zero".to_owned(),
+            ));
+        }
+
+        if self.manifest_fast_concurrency == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.manifest_fast_concurrency must be greater than zero".to_owned(),
+            ));
+        }
+
+        if self.semantic_followup_concurrency == 0 {
+            return Err(FriggError::InvalidInput(
+                "watch.semantic_followup_concurrency must be greater than zero".to_owned(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Applies transport-specific defaults, disabling watch for stdio unless overridden.
     pub fn default_for_transport(transport: RuntimeTransportKind) -> Self {
         let mut watch = Self::default();

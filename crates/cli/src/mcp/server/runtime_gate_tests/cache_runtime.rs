@@ -220,6 +220,7 @@ async fn watch_leases_follow_session_adoption_counts() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
     let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
     let validated_manifest_candidate_cache =
@@ -458,6 +459,7 @@ async fn watch_notify_invalidates_live_server_navigation_caches() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let declared_repository = config

@@ -278,11 +278,34 @@ pub(super) struct WatchSchedulerState {
     repository_ids_by_index: Vec<String>,
     in_flight_manifest_fast: BTreeSet<String>,
     in_flight_semantic_followup: BTreeSet<String>,
+    manifest_fast_concurrency_limit: usize,
+    semantic_followup_concurrency_limit: usize,
 }
 
 impl WatchSchedulerState {
+    #[cfg(test)]
     pub(super) fn new(root_count: usize) -> Self {
-        let mut scheduler = Self::default();
+        Self::with_concurrency_limits(root_count, 1, 1)
+    }
+
+    pub(super) fn with_concurrency_limits(
+        root_count: usize,
+        manifest_fast_concurrency_limit: usize,
+        semantic_followup_concurrency_limit: usize,
+    ) -> Self {
+        assert!(
+            manifest_fast_concurrency_limit > 0,
+            "manifest-fast watch concurrency limit must be greater than zero"
+        );
+        assert!(
+            semantic_followup_concurrency_limit > 0,
+            "semantic-followup watch concurrency limit must be greater than zero"
+        );
+        let mut scheduler = Self {
+            manifest_fast_concurrency_limit,
+            semantic_followup_concurrency_limit,
+            ..Self::default()
+        };
         for index in 0..root_count {
             let repository_id = format!("repo-{index:03}");
             scheduler.add_repository(&repository_id);
@@ -360,7 +383,7 @@ impl WatchSchedulerState {
 
     // Scheduler prefers manifest-fast work before semantic-followup when both are ready.
     pub(super) fn next_ready_refresh(&self, now: Instant) -> Option<ScheduledRefresh> {
-        if self.in_flight_manifest_fast.is_empty()
+        if self.in_flight_manifest_fast.len() < self.manifest_fast_concurrency_limit
             && let Some(repository_id) =
                 self.next_ready_repository_for_class(now, WatchRefreshClass::ManifestFast)
         {
@@ -371,7 +394,7 @@ impl WatchSchedulerState {
             });
         }
 
-        if self.in_flight_semantic_followup.is_empty()
+        if self.in_flight_semantic_followup.len() < self.semantic_followup_concurrency_limit
             && let Some(repository_id) =
                 self.next_ready_repository_for_class(now, WatchRefreshClass::SemanticFollowup)
         {

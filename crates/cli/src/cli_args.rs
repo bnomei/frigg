@@ -177,6 +177,30 @@ pub(crate) struct Cli {
     )]
     pub(crate) watch_retry_ms: Option<u64>,
 
+    /// Watch manifest-fast concurrency limit.
+    ///
+    /// [env: FRIGG_WATCH_MANIFEST_FAST_CONCURRENCY=1]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        env = "FRIGG_WATCH_MANIFEST_FAST_CONCURRENCY",
+        hide_env = true,
+        global = true
+    )]
+    pub(crate) watch_manifest_fast_concurrency: Option<usize>,
+
+    /// Watch semantic-followup concurrency limit.
+    ///
+    /// [env: FRIGG_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY=1]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        env = "FRIGG_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY",
+        hide_env = true,
+        global = true
+    )]
+    pub(crate) watch_semantic_followup_concurrency: Option<usize>,
+
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }

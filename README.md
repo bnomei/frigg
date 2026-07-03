@@ -230,6 +230,8 @@ Precedence is `CLI flag > environment variable > default`.
 | `--watch-mode` / `FRIGG_WATCH_MODE` | `auto` | Watch mode: `auto`, `on`, or `off`. |
 | `--watch-debounce-ms` / `FRIGG_WATCH_DEBOUNCE_MS` | `2000` | Delay before a watch-triggered refresh starts. |
 | `--watch-retry-ms` / `FRIGG_WATCH_RETRY_MS` | `5000` | Retry delay after a failed watch refresh. |
+| `--watch-manifest-fast-concurrency` / `FRIGG_WATCH_MANIFEST_FAST_CONCURRENCY` | `1` | Maximum concurrent manifest-fast watch refreshes. |
+| `--watch-semantic-followup-concurrency` / `FRIGG_WATCH_SEMANTIC_FOLLOWUP_CONCURRENCY` | `1` | Maximum concurrent semantic-followup watch refreshes. |
 | `--lexical-backend` / `FRIGG_LEXICAL_BACKEND` | `auto` | Lexical backend: `auto`, `native`, or `ripgrep`. |
 | `--ripgrep-executable` / `FRIGG_RIPGREP_EXECUTABLE` | PATH lookup | `rg` executable used by the ripgrep backend. |
 | `FRIGG_MCP_TOOL_SURFACE_PROFILE` | `extended` | MCP surface profile: `extended` or `core`. |

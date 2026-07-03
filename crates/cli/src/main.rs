@@ -158,6 +158,8 @@ mod tests {
             ripgrep_executable: None,
             watch_debounce_ms: None,
             watch_retry_ms: None,
+            watch_manifest_fast_concurrency: None,
+            watch_semantic_followup_concurrency: None,
             command: None,
         }
     }
@@ -577,6 +579,8 @@ mod tests {
         assert_eq!(watch.mode, WatchMode::Off);
         assert_eq!(watch.debounce_ms, 2_000);
         assert_eq!(watch.retry_ms, 5_000);
+        assert_eq!(watch.manifest_fast_concurrency, 1);
+        assert_eq!(watch.semantic_followup_concurrency, 1);
     }
 
     #[test]
@@ -586,6 +590,8 @@ mod tests {
         assert_eq!(watch.mode, WatchMode::Auto);
         assert_eq!(watch.debounce_ms, 2_000);
         assert_eq!(watch.retry_ms, 5_000);
+        assert_eq!(watch.manifest_fast_concurrency, 1);
+        assert_eq!(watch.semantic_followup_concurrency, 1);
     }
 
     #[test]
@@ -594,11 +600,15 @@ mod tests {
         cli.watch_mode = Some(WatchMode::On);
         cli.watch_debounce_ms = Some(1_250);
         cli.watch_retry_ms = Some(9_000);
+        cli.watch_manifest_fast_concurrency = Some(2);
+        cli.watch_semantic_followup_concurrency = Some(3);
 
         let watch = resolve_watch_config(&cli, Some(RuntimeTransportKind::Stdio));
         assert_eq!(watch.mode, WatchMode::On);
         assert_eq!(watch.debounce_ms, 1_250);
         assert_eq!(watch.retry_ms, 9_000);
+        assert_eq!(watch.manifest_fast_concurrency, 2);
+        assert_eq!(watch.semantic_followup_concurrency, 3);
     }
 
     #[test]
@@ -826,6 +836,30 @@ mod tests {
                 .to_string()
                 .contains("watch.retry_ms must be greater than zero"),
             "unexpected startup config error: {retry_error}"
+        );
+
+        let mut manifest_fast_cli = base_cli();
+        manifest_fast_cli.watch_manifest_fast_concurrency = Some(0);
+        let manifest_fast_error =
+            resolve_startup_config(&manifest_fast_cli, RuntimeTransportKind::Stdio)
+                .expect_err("startup config should reject watch-manifest-fast-concurrency=0");
+        assert!(
+            manifest_fast_error
+                .to_string()
+                .contains("watch.manifest_fast_concurrency must be greater than zero"),
+            "unexpected startup config error: {manifest_fast_error}"
+        );
+
+        let mut semantic_followup_cli = base_cli();
+        semantic_followup_cli.watch_semantic_followup_concurrency = Some(0);
+        let semantic_followup_error =
+            resolve_startup_config(&semantic_followup_cli, RuntimeTransportKind::Stdio)
+                .expect_err("startup config should reject watch-semantic-followup-concurrency=0");
+        assert!(
+            semantic_followup_error
+                .to_string()
+                .contains("watch.semantic_followup_concurrency must be greater than zero"),
+            "unexpected startup config error: {semantic_followup_error}"
         );
     }
 

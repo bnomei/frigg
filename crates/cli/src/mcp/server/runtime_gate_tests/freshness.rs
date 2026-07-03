@@ -754,6 +754,7 @@ async fn semantic_aware_response_freshness_recomputes_after_refresh_invalidation
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
     config.semantic_runtime = semantic_runtime_enabled_openai();
 
@@ -933,6 +934,7 @@ async fn semantic_refresh_function_invalidates_response_freshness_cache() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
@@ -1033,6 +1035,7 @@ async fn notify_dropped_invalidation_recomputes_response_freshness_as_dirty_root
         mode: WatchMode::On,
         debounce_ms: 500,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
 
     let runtime_task_registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
@@ -1184,6 +1187,7 @@ async fn failed_index_completion_invalidation_recomputes_response_freshness() {
         mode: WatchMode::On,
         debounce_ms: 25,
         retry_ms: 100,
+        ..WatchConfig::default()
     };
     config.semantic_runtime = semantic_runtime_enabled_openai();
 

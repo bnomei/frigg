@@ -118,17 +118,7 @@ impl FriggConfig {
             ));
         }
 
-        if self.watch.debounce_ms == 0 {
-            return Err(FriggError::InvalidInput(
-                "watch.debounce_ms must be greater than zero".to_owned(),
-            ));
-        }
-
-        if self.watch.retry_ms == 0 {
-            return Err(FriggError::InvalidInput(
-                "watch.retry_ms must be greater than zero".to_owned(),
-            ));
-        }
+        self.watch.validate()?;
 
         for root in &self.workspace_roots {
             if !root.exists() {
