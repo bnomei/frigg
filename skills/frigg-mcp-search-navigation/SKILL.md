@@ -60,4 +60,4 @@ For technical reviews or blog-style investigations, use this trust order:
 - Read [references/discovery-and-evidence.md](references/discovery-and-evidence.md) for `search_hybrid`, `search_symbol`, `search_text`, `read_file`, and `explore`.
 - Read [references/navigation-and-structure.md](references/navigation-and-structure.md) for defs/refs/call hierarchy, `document_symbols`, `inspect_syntax_tree`, and `search_structural`.
 - Read [references/workflows.md](references/workflows.md) for repeatable investigation loops.
-- Read [references/extended-tools.md](references/extended-tools.md) when the extended tool profile is enabled or when a task explicitly calls for deep-search traces or citation composition.
+- Read [references/extended-tools.md](references/extended-tools.md) when the extended tool profile is enabled or when a task explicitly calls for playbook traces or citation composition.

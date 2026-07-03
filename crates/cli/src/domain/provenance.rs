@@ -36,7 +36,7 @@ pub enum WorkloadToolFamily {
     Content,
     Search,
     Navigation,
-    DeepSearch,
+    Playbook,
     Workspace,
     Unknown,
 }
@@ -47,7 +47,7 @@ impl WorkloadToolFamily {
             Self::Content => "content",
             Self::Search => "search",
             Self::Navigation => "navigation",
-            Self::DeepSearch => "deep_search",
+            Self::Playbook => "playbook",
             Self::Workspace => "workspace",
             Self::Unknown => "unknown",
         }
@@ -63,12 +63,12 @@ pub enum WorkloadToolClass {
     BoundedFileExploration,
     CallHierarchy,
     DefinitionNavigation,
-    DeepSearchComposeCitations,
-    DeepSearchReplay,
-    DeepSearchRun,
     DocumentLookup,
     HybridDiscovery,
     LiteralLookup,
+    PlaybookComposeCitations,
+    PlaybookReplay,
+    PlaybookRun,
     ReferenceNavigation,
     StructuralSearch,
     SymbolLookup,
@@ -93,9 +93,9 @@ impl WorkloadToolClass {
             "outgoing_calls" => Self::CallHierarchy,
             "document_symbols" => Self::DocumentLookup,
             "search_structural" => Self::StructuralSearch,
-            "deep_search_run" => Self::DeepSearchRun,
-            "deep_search_replay" => Self::DeepSearchReplay,
-            "deep_search_compose_citations" => Self::DeepSearchComposeCitations,
+            "playbook_run" => Self::PlaybookRun,
+            "playbook_replay" => Self::PlaybookReplay,
+            "playbook_compose_citations" => Self::PlaybookComposeCitations,
             "list_repositories" => Self::WorkspaceMetadata,
             "workspace_attach" => Self::WorkspaceMetadata,
             "workspace_detach" => Self::WorkspaceMetadata,
@@ -114,8 +114,8 @@ impl WorkloadToolClass {
             Self::CallHierarchy => WorkloadToolFamily::Navigation,
             Self::ReferenceNavigation => WorkloadToolFamily::Navigation,
             Self::DocumentLookup => WorkloadToolFamily::Content,
-            Self::DeepSearchComposeCitations | Self::DeepSearchReplay | Self::DeepSearchRun => {
-                WorkloadToolFamily::DeepSearch
+            Self::PlaybookComposeCitations | Self::PlaybookReplay | Self::PlaybookRun => {
+                WorkloadToolFamily::Playbook
             }
             Self::LiteralLookup
             | Self::HybridDiscovery
@@ -130,13 +130,13 @@ impl WorkloadToolClass {
         match self {
             Self::BoundedFileExploration => "bounded_file_exploration",
             Self::DefinitionNavigation => "definition_navigation",
-            Self::DeepSearchComposeCitations => "deep_search_compose_citations",
-            Self::DeepSearchReplay => "deep_search_replay",
-            Self::DeepSearchRun => "deep_search_run",
             Self::DocumentLookup => "document_lookup",
             Self::CallHierarchy => "call_hierarchy",
             Self::HybridDiscovery => "hybrid_discovery",
             Self::LiteralLookup => "literal_lookup",
+            Self::PlaybookComposeCitations => "playbook_compose_citations",
+            Self::PlaybookReplay => "playbook_replay",
+            Self::PlaybookRun => "playbook_run",
             Self::ReferenceNavigation => "reference_navigation",
             Self::StructuralSearch => "structural_search",
             Self::SymbolLookup => "symbol_lookup",
@@ -294,7 +294,7 @@ impl WorkloadRepositoryScope {
     }
 }
 
-/// Timing and cardinality sample for one deep-search attribution stage.
+/// Timing and cardinality sample for one workload attribution stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadStageSample {
     pub elapsed_us: u64,
@@ -338,7 +338,7 @@ impl Default for WorkloadStageSample {
     }
 }
 
-/// Stage-level timing and cardinality samples for deep-search attribution.
+/// Stage-level timing and cardinality samples for workload attribution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkloadStageAttribution {
     pub candidate_intake: WorkloadStageSample,

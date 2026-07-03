@@ -5,12 +5,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use frigg::mcp::types::DeepSearchComposeCitationsParams;
+#[cfg(feature = "playbook")]
+use frigg::mcp::FriggMcpServer;
+#[cfg(feature = "playbook")]
+use frigg::mcp::types::PlaybookComposeCitationsParams;
 use frigg::mcp::{
     DeepSearchCitationPayload, DeepSearchHarness, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
-    FriggMcpServer,
 };
+#[cfg(feature = "playbook")]
 use frigg::settings::FriggConfig;
+#[cfg(feature = "playbook")]
 use rmcp::handler::server::wrapper::Parameters;
 use serde_json::Value;
 
@@ -23,6 +27,7 @@ fn load_fixture_trace() -> DeepSearchTraceArtifact {
         .expect("citation payload fixture trace must parse")
 }
 
+#[cfg(feature = "playbook")]
 fn runtime_server() -> FriggMcpServer {
     let workspace_root = std::env::current_dir()
         .expect("current working directory should exist for runtime citation tests");
@@ -321,13 +326,14 @@ fn citation_payloads_skip_error_steps_deterministically() {
     );
 }
 
+#[cfg(feature = "playbook")]
 #[tokio::test]
 async fn citation_payloads_runtime_handler_compose_is_deterministic() {
     let server = runtime_server();
     let trace = load_fixture_trace();
 
     let first = server
-        .deep_search_compose_citations(Parameters(DeepSearchComposeCitationsParams {
+        .playbook_compose_citations(Parameters(PlaybookComposeCitationsParams {
             trace_artifact: trace.clone().into(),
             answer: None,
         }))
@@ -335,7 +341,7 @@ async fn citation_payloads_runtime_handler_compose_is_deterministic() {
         .expect("runtime compose citations should succeed")
         .0;
     let second = server
-        .deep_search_compose_citations(Parameters(DeepSearchComposeCitationsParams {
+        .playbook_compose_citations(Parameters(PlaybookComposeCitationsParams {
             trace_artifact: trace.into(),
             answer: None,
         }))

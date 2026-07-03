@@ -60,12 +60,11 @@ impl FriggMcpServer {
             return;
         };
         let _ = client
-            .notify_progress(ProgressNotificationParam {
-                progress_token,
-                progress,
-                total: Some(total),
-                message: Some(message.into()),
-            })
+            .notify_progress(
+                ProgressNotificationParam::new(progress_token, progress)
+                    .with_total(total)
+                    .with_message(message.into()),
+            )
             .await;
     }
 

@@ -49,7 +49,9 @@ use crate::storage::{Storage, ensure_provenance_db_parent_dir, resolve_provenanc
 use protobuf::Enum;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::{CallToolResult, Content, Implementation, Meta, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, Meta, ServerCapabilities, ServerInfo,
+};
 use rmcp::transport::{
     StreamableHttpServerConfig, StreamableHttpService,
     streamable_http_server::session::local::LocalSessionManager,
@@ -63,6 +65,7 @@ use tokio::task;
 use tracing::{info, warn};
 
 use crate::agent_directive;
+#[cfg(feature = "playbook")]
 use crate::mcp::advanced::deep_search::{
     DeepSearchHarness, DeepSearchPlaybook, DeepSearchTraceArtifact, DeepSearchTraceOutcome,
 };
@@ -106,28 +109,27 @@ use crate::mcp::tool_surface::{
     manifest_for_tool_surface_profile,
 };
 use crate::mcp::types::{
-    CallHierarchyMatch, DeepSearchComposeCitationsParams, DeepSearchComposeCitationsResponse,
-    DeepSearchReplayParams, DeepSearchReplayResponse, DeepSearchRunParams, DeepSearchRunResponse,
-    DocumentSymbolsParams, DocumentSymbolsResponse, ExploreMatch, ExploreMetadata,
-    ExploreOperation, ExploreParams, ExploreResponse, ExploreWindow, FindDeclarationsParams,
-    FindDeclarationsResponse, FindImplementationsParams, FindImplementationsResponse,
-    FindReferencesParams, FindReferencesResponse, GoToDefinitionParams, GoToDefinitionResponse,
-    ImplementationMatch, IncomingCallsParams, IncomingCallsResponse, InspectSyntaxTreeParams,
-    InspectSyntaxTreeResponse, ListRepositoriesParams, ListRepositoriesResponse,
-    NavigationAvailability, NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
-    NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
-    ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RepositorySummary,
-    ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary,
-    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
-    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
-    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
-    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
-    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
-    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
-    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexAction,
-    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
-    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
-    WorkspaceIndexResponse, WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
+    CallHierarchyMatch, DocumentSymbolsParams, DocumentSymbolsResponse, ExploreMatch,
+    ExploreMetadata, ExploreOperation, ExploreParams, ExploreResponse, ExploreWindow,
+    FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
+    FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
+    GoToDefinitionParams, GoToDefinitionResponse, ImplementationMatch, IncomingCallsParams,
+    IncomingCallsResponse, InspectSyntaxTreeParams, InspectSyntaxTreeResponse,
+    ListRepositoriesParams, ListRepositoriesResponse, NavigationAvailability, NavigationLocation,
+    NavigationMode, NavigationTargetSelectionStatus, NavigationTargetSelectionSummary,
+    OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams,
+    ReadMatchResponse, ReadPresentationMode, RepositorySummary, ResponseMode, RuntimeStatusSummary,
+    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelWeightsParams,
+    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
+    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
+    SearchSymbolResponse, SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem,
+    WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction,
+    WorkspaceAttachIndexMode, WorkspaceAttachParams, WorkspaceAttachResponse,
+    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceDetachParams,
+    WorkspaceDetachResponse, WorkspaceIndexAction, WorkspaceIndexComponentState,
+    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase,
+    WorkspaceIndexLifecycleSummary, WorkspaceIndexParams, WorkspaceIndexResponse,
+    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
     WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
     WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
     WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
@@ -135,11 +137,15 @@ use crate::mcp::types::{
     WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
     WorkspaceResolveMode, WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
+#[cfg(feature = "playbook")]
+use crate::mcp::types::{
+    PlaybookComposeCitationsParams, PlaybookComposeCitationsResponse, PlaybookReplayParams,
+    PlaybookReplayResponse, PlaybookRunParams, PlaybookRunResponse,
+};
 use crate::mcp::workspace_registry::{AttachedWorkspace, WorkspaceRegistry};
 use crate::settings::RuntimeProfile;
 
 mod content;
-mod deep_search;
 mod errors;
 mod execution;
 mod navigation_cache;
@@ -147,6 +153,8 @@ mod navigation_metadata;
 mod navigation_precise;
 mod navigation_resolution;
 mod navigation_tools;
+#[cfg(feature = "playbook")]
+mod playbook;
 mod precise_graph;
 mod presentation;
 mod provenance;
@@ -1710,52 +1718,64 @@ impl FriggMcpServer {
         self.search_structural_impl(params.0).await
     }
 
-    #[tool(
-        name = "deep_search_run",
-        description = "Run a trace-oriented deep-search playbook and return the resulting trace artifact.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
+    #[cfg_attr(
+        feature = "playbook",
+        tool(
+            name = "playbook_run",
+            description = "Run a trace-oriented playbook and return the resulting trace artifact.",
+            annotations(
+                read_only_hint = true,
+                destructive_hint = false,
+                idempotent_hint = true
+            )
         )
     )]
-    pub async fn deep_search_run(
+    #[cfg(feature = "playbook")]
+    pub async fn playbook_run(
         &self,
-        params: Parameters<DeepSearchRunParams>,
-    ) -> Result<Json<DeepSearchRunResponse>, ErrorData> {
-        self.deep_search_run_impl(params.0.into()).await
+        params: Parameters<PlaybookRunParams>,
+    ) -> Result<Json<PlaybookRunResponse>, ErrorData> {
+        self.playbook_run_impl(params.0.into()).await
     }
 
-    #[tool(
-        name = "deep_search_replay",
-        description = "Replay a deep-search playbook against an expected trace artifact and report whether it still matches.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
+    #[cfg_attr(
+        feature = "playbook",
+        tool(
+            name = "playbook_replay",
+            description = "Replay a playbook against an expected trace artifact and report whether it still matches.",
+            annotations(
+                read_only_hint = true,
+                destructive_hint = false,
+                idempotent_hint = true
+            )
         )
     )]
-    pub async fn deep_search_replay(
+    #[cfg(feature = "playbook")]
+    pub async fn playbook_replay(
         &self,
-        params: Parameters<DeepSearchReplayParams>,
-    ) -> Result<Json<DeepSearchReplayResponse>, ErrorData> {
-        self.deep_search_replay_impl(params.0).await
+        params: Parameters<PlaybookReplayParams>,
+    ) -> Result<Json<PlaybookReplayResponse>, ErrorData> {
+        self.playbook_replay_impl(params.0).await
     }
 
-    #[tool(
-        name = "deep_search_compose_citations",
-        description = "Compose citation payloads from an existing deep-search trace artifact.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
+    #[cfg_attr(
+        feature = "playbook",
+        tool(
+            name = "playbook_compose_citations",
+            description = "Compose citation payloads from an existing playbook trace artifact.",
+            annotations(
+                read_only_hint = true,
+                destructive_hint = false,
+                idempotent_hint = true
+            )
         )
     )]
-    pub async fn deep_search_compose_citations(
+    #[cfg(feature = "playbook")]
+    pub async fn playbook_compose_citations(
         &self,
-        params: Parameters<DeepSearchComposeCitationsParams>,
-    ) -> Result<Json<DeepSearchComposeCitationsResponse>, ErrorData> {
-        self.deep_search_compose_citations_impl(params.0).await
+        params: Parameters<PlaybookComposeCitationsParams>,
+    ) -> Result<Json<PlaybookComposeCitationsResponse>, ErrorData> {
+        self.playbook_compose_citations_impl(params.0).await
     }
 }
 
@@ -1768,10 +1788,19 @@ impl ServerHandler for FriggMcpServer {
             format!(
                 "The extended tool surface is enabled by default. Set `{TOOL_SURFACE_PROFILE_ENV}=core` to restrict the runtime to the stable core subset."
             )
+        } else if cfg!(feature = "playbook") {
+            format!(
+                "The runtime is pinned to the restricted core tool surface. Set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose `explore` and compiled-in playbook tools."
+            )
         } else {
             format!(
-                "The runtime is pinned to the restricted core tool surface. Set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose `explore` and deep-search tools."
+                "The runtime is pinned to the restricted core tool surface. Set `{TOOL_SURFACE_PROFILE_ENV}=extended` to expose `explore`."
             )
+        };
+        let playbook_guidance = if cfg!(feature = "playbook") {
+            " Use playbook tools only for explicit trace workflows when those tools are present in the active profile."
+        } else {
+            ""
         };
         ServerInfo::new(
             ServerCapabilities::builder()
@@ -1782,13 +1811,11 @@ impl ServerHandler for FriggMcpServer {
         )
             .with_server_info(
                 Implementation::new("frigg", env!("CARGO_PKG_VERSION"))
-                    .with_title("Frigg Deep Search MCP")
-                    .with_description(
-                        "Local-first deterministic code search + navigation MCP server",
-                    ),
+                    .with_title("Frigg MCP")
+                    .with_description("Local-first code search + navigation MCP server"),
             )
             .with_instructions(agent_directive::mcp_instructions(&format!(
-                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid only for broad discovery-style repository questions when you do not yet have an exact string, symbol, or path anchor; for direct literal/regex matches call search_text, and for known identifiers call search_symbol. Then use navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and pivot to exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file and deep-search tools only for explicit trace workflows when those tools are present in the active profile. {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid only for broad discovery-style repository questions when you do not yet have an exact string, symbol, or path anchor; for direct literal/regex matches call search_text, and for known identifiers call search_symbol. Then use navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and pivot to exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file.{playbook_guidance} {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
             )))
     }
 

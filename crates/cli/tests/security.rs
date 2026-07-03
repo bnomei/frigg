@@ -106,6 +106,7 @@ fn retryable_tag(error: &rmcp::ErrorData) -> Option<bool> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolAnnotationFlags {
     name: String,
+    gated_feature: Option<String>,
     read_only_hint: Option<bool>,
     destructive_hint: Option<bool>,
 }
@@ -138,16 +139,34 @@ fn collect_rust_sources(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn parse_tool_annotation_blocks(source: &str) -> Vec<String> {
+fn parse_feature_cfg(trimmed: &str) -> Option<String> {
+    let remainder = trimmed.strip_prefix("#[cfg(feature = \"")?;
+    let feature = remainder.split_once('"')?.0;
+    Some(feature.to_owned())
+}
+
+fn parse_cfg_attr_feature(block: &str) -> Option<String> {
+    let remainder = block.split_once("feature = \"")?.1;
+    let feature = remainder.split_once('"')?.0;
+    Some(feature.to_owned())
+}
+
+fn parse_tool_annotation_blocks(source: &str) -> Vec<(Option<String>, String)> {
     let mut blocks = Vec::new();
     let mut current = String::new();
     let mut in_block = false;
+    let mut pending_feature = None;
+    let mut current_feature = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
-        if !in_block && trimmed.starts_with("#[tool(") {
+        if !in_block && (trimmed.starts_with("#[tool(") || trimmed.starts_with("#[cfg_attr(")) {
             in_block = true;
+            current_feature = pending_feature.take();
             current.clear();
+        }
+        if !in_block {
+            pending_feature = parse_feature_cfg(trimmed);
         }
         if !in_block {
             continue;
@@ -155,8 +174,13 @@ fn parse_tool_annotation_blocks(source: &str) -> Vec<String> {
 
         current.push_str(trimmed);
         current.push('\n');
-        if trimmed == ")]" {
-            blocks.push(current.clone());
+        if trimmed.ends_with(")]") {
+            if current.contains("tool(") {
+                let gated_feature = current_feature
+                    .take()
+                    .or_else(|| parse_cfg_attr_feature(&current));
+                blocks.push((gated_feature, current.clone()));
+            }
             in_block = false;
         }
     }
@@ -190,7 +214,7 @@ fn parse_tool_annotation_flags() -> Vec<ToolAnnotationFlags> {
     for source_path in collect_rust_sources(&source_root) {
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", source_path.display()));
-        for block in parse_tool_annotation_blocks(&source) {
+        for (gated_feature, block) in parse_tool_annotation_blocks(&source) {
             parsed.push(ToolAnnotationFlags {
                 name: parse_string_assignment(&block, "name").unwrap_or_else(|| {
                     panic!(
@@ -198,6 +222,7 @@ fn parse_tool_annotation_flags() -> Vec<ToolAnnotationFlags> {
                         source_path.display()
                     )
                 }),
+                gated_feature,
                 read_only_hint: parse_bool_assignment(&block, "read_only_hint"),
                 destructive_hint: parse_bool_assignment(&block, "destructive_hint"),
             });
@@ -207,12 +232,26 @@ fn parse_tool_annotation_flags() -> Vec<ToolAnnotationFlags> {
     parsed
 }
 
+fn tool_feature_enabled(feature: &str) -> bool {
+    match feature {
+        "playbook" => cfg!(feature = "playbook"),
+        _ => true,
+    }
+}
+
 #[test]
 fn security_public_tool_surface_remains_non_destructive_and_explicit() {
     let parsed = parse_tool_annotation_flags();
 
     let actual_names = parsed
         .iter()
+        .filter(|entry| {
+            entry
+                .gated_feature
+                .as_deref()
+                .map(tool_feature_enabled)
+                .unwrap_or(true)
+        })
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
     let expected_names = PUBLIC_TOOL_NAMES
@@ -233,7 +272,13 @@ fn security_public_tool_surface_remains_non_destructive_and_explicit() {
         "all public MCP tools must be source-read-only; .frigg and session-state changes stay on the read-only hint surface"
     );
 
-    for entry in parsed {
+    for entry in parsed.into_iter().filter(|entry| {
+        entry
+            .gated_feature
+            .as_deref()
+            .map(tool_feature_enabled)
+            .unwrap_or(true)
+    }) {
         assert_eq!(
             entry.read_only_hint,
             Some(true),

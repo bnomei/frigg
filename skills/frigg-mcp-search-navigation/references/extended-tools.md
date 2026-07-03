@@ -16,17 +16,17 @@ Presentation defaults:
 
 See [discovery-and-evidence.md](discovery-and-evidence.md) for the detailed input and output shape.
 
-## Deep Search Tools
+## Playbook Tools
 
-- `deep_search_run`
-- `deep_search_replay`
-- `deep_search_compose_citations`
+- `playbook_run`
+- `playbook_replay`
+- `playbook_compose_citations`
 
-These tools are for explicit trace-oriented search workflows, not normal first-line repo navigation.
+These tools require Frigg to be compiled with the `playbook` feature. They are for explicit trace-oriented search workflows, not normal first-line repo navigation.
 
 Use them when the task explicitly needs:
 - a replayable multi-step search trace
 - diffing a replay against an expected trace
 - citation payload composition from an existing trace
 
-Do not reach for deep-search tools when normal `search_hybrid`, `search_symbol`, navigation, and bounded reads will answer the question more simply.
+Do not reach for playbook tools when normal `search_hybrid`, `search_symbol`, navigation, and bounded reads will answer the question more simply.

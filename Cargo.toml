@@ -42,7 +42,7 @@ protobuf = "=3.7.2"
 rayon = "1.11.0"
 regex = "1.12.3"
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "1.2.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "2.1.0", default-features = false, features = ["macros", "server", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled"] }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 scip = "0.7.1"

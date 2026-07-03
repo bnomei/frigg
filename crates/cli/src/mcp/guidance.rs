@@ -2,8 +2,8 @@
 //! and when agents should prefer Frigg tools over shell reads.
 
 use rmcp::model::{
-    AnnotateAble, GetPromptResult, Prompt, PromptArgument, PromptMessage, PromptMessageRole,
-    RawResource, ReadResourceResult, Resource, ResourceContents,
+    GetPromptResult, Prompt, PromptArgument, PromptMessage, ReadResourceResult, Resource,
+    ResourceContents, Role,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -137,6 +137,11 @@ fn support_matrix_advanced_consumers() -> Vec<String> {
 
 fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
     let core = manifest_for_tool_surface_profile(ToolSurfaceProfile::Core);
+    let core_guidance = if cfg!(feature = "playbook") {
+        "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore or playbook tools."
+    } else {
+        "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore."
+    };
     serde_json::to_string_pretty(&json!({
         "schema_id": "frigg.policy.tool_surface.v1",
         "default_profile": ToolSurfaceProfile::Extended.as_str(),
@@ -150,7 +155,7 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
-            "The default runtime surface is extended. Set FRIGG_MCP_TOOL_SURFACE_PROFILE=core when you need the restricted stable subset without explore or deep-search tools."
+            core_guidance
         ]
     }))
     .expect("tool surface JSON should serialize")
@@ -186,20 +191,17 @@ If semantic status is disabled, degraded, or unavailable, treat the answer as le
 
 pub(crate) fn policy_resources() -> Vec<Resource> {
     vec![
-        RawResource::new(SUPPORT_MATRIX_RESOURCE_URI, "FRIGG Support Matrix")
+        Resource::new(SUPPORT_MATRIX_RESOURCE_URI, "FRIGG Support Matrix")
             .with_description("Machine-readable supported languages and capability notes.")
-            .with_mime_type("application/json")
-            .no_annotation(),
-        RawResource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
+            .with_mime_type("application/json"),
+        Resource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
             .with_description("Machine-readable core vs extended tool-surface policy.")
-            .with_mime_type("application/json")
-            .no_annotation(),
-        RawResource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
+            .with_mime_type("application/json"),
+        Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
             .with_description(
                 "Guidance for when to use shell tools versus repo-aware Frigg surfaces.",
             )
-            .with_mime_type("text/markdown")
-            .no_annotation(),
+            .with_mime_type("text/markdown"),
     ]
 }
 
@@ -271,21 +273,18 @@ pub(crate) fn read_guidance_prompt(
 
     Some(
         GetPromptResult::new(vec![
-            PromptMessage::new_text(PromptMessageRole::Assistant, text),
+            PromptMessage::new_text(Role::Assistant, text),
             PromptMessage::new_resource_link(
-                PromptMessageRole::Assistant,
-                RawResource::new(SUPPORT_MATRIX_RESOURCE_URI, "FRIGG Support Matrix")
-                    .no_annotation(),
+                Role::Assistant,
+                Resource::new(SUPPORT_MATRIX_RESOURCE_URI, "FRIGG Support Matrix"),
             ),
             PromptMessage::new_resource_link(
-                PromptMessageRole::Assistant,
-                RawResource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
-                    .no_annotation(),
+                Role::Assistant,
+                Resource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy"),
             ),
             PromptMessage::new_resource_link(
-                PromptMessageRole::Assistant,
-                RawResource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
-                    .no_annotation(),
+                Role::Assistant,
+                Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance"),
             ),
         ])
         .with_description("Guide shell-vs-FRIGG routing and link the relevant policy resources."),

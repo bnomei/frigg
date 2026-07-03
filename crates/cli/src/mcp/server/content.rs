@@ -1032,7 +1032,7 @@ impl FriggMcpServer {
     fn text_read_surface_result(content: String) -> CallToolResult {
         // Text mode is intentionally just the selected source bytes. Do not prepend path/line
         // headers or attach `structuredContent`: callers that need metadata must use JSON mode.
-        CallToolResult::success(vec![Content::text(content)])
+        CallToolResult::success(vec![ContentBlock::text(content)])
     }
 
     pub(super) fn map_lossy_line_slice_error(path: &Path, error: LossyLineSliceError) -> ErrorData {

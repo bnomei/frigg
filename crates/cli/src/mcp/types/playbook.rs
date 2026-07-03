@@ -1,4 +1,4 @@
-//! Deep-search MCP wire types for playbook run, replay, and citation composition tools.
+//! Playbook MCP wire types for playbook run, replay, and citation composition tools.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -16,85 +16,85 @@ use crate::mcp::advanced::deep_search::{
     DeepSearchTraceStep as InternalDeepSearchTraceStep,
 };
 
-/// Parameters for `deep_search_run`.
+/// Parameters for `playbook_run`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchRunParams {
-    pub playbook: DeepSearchPlaybookContract,
+pub struct PlaybookRunParams {
+    pub playbook: PlaybookContract,
 }
 
-/// Response from `deep_search_run` containing the executed trace artifact.
+/// Response from `playbook_run` containing the executed trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchRunResponse {
-    pub trace_artifact: DeepSearchTraceArtifactContract,
+pub struct PlaybookRunResponse {
+    pub trace_artifact: PlaybookTraceArtifactContract,
 }
 
-/// Parameters for `deep_search_replay`.
+/// Parameters for `playbook_replay`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchReplayParams {
-    pub playbook: DeepSearchPlaybookContract,
-    pub expected_trace_artifact: DeepSearchTraceArtifactContract,
+pub struct PlaybookReplayParams {
+    pub playbook: PlaybookContract,
+    pub expected_trace_artifact: PlaybookTraceArtifactContract,
 }
 
-/// Response from `deep_search_replay` comparing expected and replayed traces.
+/// Response from `playbook_replay` comparing expected and replayed traces.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchReplayResponse {
+pub struct PlaybookReplayResponse {
     pub matches: bool,
     pub diff: Option<String>,
-    pub replayed_trace_artifact: DeepSearchTraceArtifactContract,
+    pub replayed_trace_artifact: PlaybookTraceArtifactContract,
 }
 
-/// Parameters for `deep_search_compose_citations`.
+/// Parameters for `playbook_compose_citations`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchComposeCitationsParams {
-    pub trace_artifact: DeepSearchTraceArtifactContract,
+pub struct PlaybookComposeCitationsParams {
+    pub trace_artifact: PlaybookTraceArtifactContract,
     pub answer: Option<String>,
 }
 
-/// Response from `deep_search_compose_citations` with claim-linked file spans.
+/// Response from `playbook_compose_citations` with claim-linked file spans.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchComposeCitationsResponse {
-    pub citation_payload: DeepSearchCitationPayloadContract,
+pub struct PlaybookComposeCitationsResponse {
+    pub citation_payload: PlaybookCitationPayloadContract,
 }
 
-/// MCP wire contract for a deep-search playbook.
+/// MCP wire contract for a playbook.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchPlaybookContract {
+pub struct PlaybookContract {
     pub playbook_id: String,
-    pub steps: Vec<DeepSearchPlaybookStepContract>,
+    pub steps: Vec<PlaybookStepContract>,
 }
 
-/// One tool invocation step in a deep-search playbook contract.
+/// One tool invocation step in a playbook contract.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchPlaybookStepContract {
+pub struct PlaybookStepContract {
     pub step_id: String,
     pub tool_name: String,
     #[serde(default)]
     pub params: Value,
 }
 
-/// MCP wire contract for a deep-search trace artifact.
+/// MCP wire contract for a playbook trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchTraceArtifactContract {
+pub struct PlaybookTraceArtifactContract {
     pub trace_schema: String,
     pub playbook_id: String,
     pub step_count: usize,
-    pub steps: Vec<DeepSearchTraceStepContract>,
+    pub steps: Vec<PlaybookTraceStepContract>,
 }
 
-/// One executed step recorded in a deep-search trace artifact.
+/// One executed step recorded in a playbook trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchTraceStepContract {
+pub struct PlaybookTraceStepContract {
     pub step_index: usize,
     pub step_id: String,
     pub tool_name: String,
     pub params_json: String,
-    pub outcome: DeepSearchTraceOutcomeContract,
+    pub outcome: PlaybookTraceOutcomeContract,
 }
 
-/// Success or error outcome for one traced deep-search tool call.
+/// Success or error outcome for one traced playbook tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum DeepSearchTraceOutcomeContract {
+pub enum PlaybookTraceOutcomeContract {
     Ok {
         response_json: String,
     },
@@ -105,19 +105,19 @@ pub enum DeepSearchTraceOutcomeContract {
     },
 }
 
-/// Claim-linked citation payload composed from a deep-search trace artifact.
+/// Claim-linked citation payload composed from a playbook trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchCitationPayloadContract {
+pub struct PlaybookCitationPayloadContract {
     pub answer_schema: String,
     pub playbook_id: String,
     pub answer: String,
-    pub claims: Vec<DeepSearchClaimContract>,
-    pub citations: Vec<DeepSearchCitationContract>,
+    pub claims: Vec<PlaybookClaimContract>,
+    pub citations: Vec<PlaybookCitationContract>,
 }
 
 /// One answer claim backed by one or more file-span citations.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchClaimContract {
+pub struct PlaybookClaimContract {
     pub claim_id: String,
     pub text: String,
     pub citation_ids: Vec<String>,
@@ -125,31 +125,31 @@ pub struct DeepSearchClaimContract {
 
 /// One repository file-span citation tied to a traced tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchCitationContract {
+pub struct PlaybookCitationContract {
     pub citation_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
     pub repository_id: String,
     pub path: String,
-    pub span: DeepSearchFileSpanContract,
+    pub span: PlaybookFileSpanContract,
 }
 
-/// 1-based file span used by deep-search citation contracts.
+/// 1-based file span used by playbook citation contracts.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeepSearchFileSpanContract {
+pub struct PlaybookFileSpanContract {
     pub start_line: usize,
     pub start_column: usize,
     pub end_line: usize,
     pub end_column: usize,
 }
 
-impl From<DeepSearchRunParams> for InternalDeepSearchPlaybook {
-    fn from(value: DeepSearchRunParams) -> Self {
+impl From<PlaybookRunParams> for InternalDeepSearchPlaybook {
+    fn from(value: PlaybookRunParams) -> Self {
         value.playbook.into()
     }
 }
 
-impl From<InternalDeepSearchTraceArtifact> for DeepSearchRunResponse {
+impl From<InternalDeepSearchTraceArtifact> for PlaybookRunResponse {
     fn from(value: InternalDeepSearchTraceArtifact) -> Self {
         Self {
             trace_artifact: value.into(),
@@ -157,13 +157,13 @@ impl From<InternalDeepSearchTraceArtifact> for DeepSearchRunResponse {
     }
 }
 
-impl DeepSearchReplayParams {
+impl PlaybookReplayParams {
     pub fn into_internal(self) -> (InternalDeepSearchPlaybook, InternalDeepSearchTraceArtifact) {
         (self.playbook.into(), self.expected_trace_artifact.into())
     }
 }
 
-impl From<InternalDeepSearchReplayCheck> for DeepSearchReplayResponse {
+impl From<InternalDeepSearchReplayCheck> for PlaybookReplayResponse {
     fn from(value: InternalDeepSearchReplayCheck) -> Self {
         Self {
             matches: value.matches,
@@ -173,13 +173,13 @@ impl From<InternalDeepSearchReplayCheck> for DeepSearchReplayResponse {
     }
 }
 
-impl DeepSearchComposeCitationsParams {
+impl PlaybookComposeCitationsParams {
     pub fn into_internal(self) -> (InternalDeepSearchTraceArtifact, Option<String>) {
         (self.trace_artifact.into(), self.answer)
     }
 }
 
-impl From<InternalDeepSearchCitationPayload> for DeepSearchComposeCitationsResponse {
+impl From<InternalDeepSearchCitationPayload> for PlaybookComposeCitationsResponse {
     fn from(value: InternalDeepSearchCitationPayload) -> Self {
         Self {
             citation_payload: value.into(),
@@ -187,8 +187,8 @@ impl From<InternalDeepSearchCitationPayload> for DeepSearchComposeCitationsRespo
     }
 }
 
-impl From<DeepSearchPlaybookContract> for InternalDeepSearchPlaybook {
-    fn from(value: DeepSearchPlaybookContract) -> Self {
+impl From<PlaybookContract> for InternalDeepSearchPlaybook {
+    fn from(value: PlaybookContract) -> Self {
         Self {
             playbook_id: value.playbook_id,
             steps: value.steps.into_iter().map(Into::into).collect(),
@@ -196,7 +196,7 @@ impl From<DeepSearchPlaybookContract> for InternalDeepSearchPlaybook {
     }
 }
 
-impl From<InternalDeepSearchPlaybook> for DeepSearchPlaybookContract {
+impl From<InternalDeepSearchPlaybook> for PlaybookContract {
     fn from(value: InternalDeepSearchPlaybook) -> Self {
         Self {
             playbook_id: value.playbook_id,
@@ -205,8 +205,8 @@ impl From<InternalDeepSearchPlaybook> for DeepSearchPlaybookContract {
     }
 }
 
-impl From<DeepSearchPlaybookStepContract> for InternalDeepSearchPlaybookStep {
-    fn from(value: DeepSearchPlaybookStepContract) -> Self {
+impl From<PlaybookStepContract> for InternalDeepSearchPlaybookStep {
+    fn from(value: PlaybookStepContract) -> Self {
         Self {
             step_id: value.step_id,
             tool_name: value.tool_name,
@@ -215,7 +215,7 @@ impl From<DeepSearchPlaybookStepContract> for InternalDeepSearchPlaybookStep {
     }
 }
 
-impl From<InternalDeepSearchPlaybookStep> for DeepSearchPlaybookStepContract {
+impl From<InternalDeepSearchPlaybookStep> for PlaybookStepContract {
     fn from(value: InternalDeepSearchPlaybookStep) -> Self {
         Self {
             step_id: value.step_id,
@@ -225,8 +225,8 @@ impl From<InternalDeepSearchPlaybookStep> for DeepSearchPlaybookStepContract {
     }
 }
 
-impl From<DeepSearchTraceArtifactContract> for InternalDeepSearchTraceArtifact {
-    fn from(value: DeepSearchTraceArtifactContract) -> Self {
+impl From<PlaybookTraceArtifactContract> for InternalDeepSearchTraceArtifact {
+    fn from(value: PlaybookTraceArtifactContract) -> Self {
         Self {
             trace_schema: value.trace_schema,
             playbook_id: value.playbook_id,
@@ -236,7 +236,7 @@ impl From<DeepSearchTraceArtifactContract> for InternalDeepSearchTraceArtifact {
     }
 }
 
-impl From<InternalDeepSearchTraceArtifact> for DeepSearchTraceArtifactContract {
+impl From<InternalDeepSearchTraceArtifact> for PlaybookTraceArtifactContract {
     fn from(value: InternalDeepSearchTraceArtifact) -> Self {
         Self {
             trace_schema: value.trace_schema,
@@ -247,8 +247,8 @@ impl From<InternalDeepSearchTraceArtifact> for DeepSearchTraceArtifactContract {
     }
 }
 
-impl From<DeepSearchTraceStepContract> for InternalDeepSearchTraceStep {
-    fn from(value: DeepSearchTraceStepContract) -> Self {
+impl From<PlaybookTraceStepContract> for InternalDeepSearchTraceStep {
+    fn from(value: PlaybookTraceStepContract) -> Self {
         Self {
             step_index: value.step_index,
             step_id: value.step_id,
@@ -259,7 +259,7 @@ impl From<DeepSearchTraceStepContract> for InternalDeepSearchTraceStep {
     }
 }
 
-impl From<InternalDeepSearchTraceStep> for DeepSearchTraceStepContract {
+impl From<InternalDeepSearchTraceStep> for PlaybookTraceStepContract {
     fn from(value: InternalDeepSearchTraceStep) -> Self {
         Self {
             step_index: value.step_index,
@@ -271,11 +271,11 @@ impl From<InternalDeepSearchTraceStep> for DeepSearchTraceStepContract {
     }
 }
 
-impl From<DeepSearchTraceOutcomeContract> for InternalDeepSearchTraceOutcome {
-    fn from(value: DeepSearchTraceOutcomeContract) -> Self {
+impl From<PlaybookTraceOutcomeContract> for InternalDeepSearchTraceOutcome {
+    fn from(value: PlaybookTraceOutcomeContract) -> Self {
         match value {
-            DeepSearchTraceOutcomeContract::Ok { response_json } => Self::Ok { response_json },
-            DeepSearchTraceOutcomeContract::Err {
+            PlaybookTraceOutcomeContract::Ok { response_json } => Self::Ok { response_json },
+            PlaybookTraceOutcomeContract::Err {
                 code,
                 message,
                 error_code,
@@ -288,7 +288,7 @@ impl From<DeepSearchTraceOutcomeContract> for InternalDeepSearchTraceOutcome {
     }
 }
 
-impl From<InternalDeepSearchTraceOutcome> for DeepSearchTraceOutcomeContract {
+impl From<InternalDeepSearchTraceOutcome> for PlaybookTraceOutcomeContract {
     fn from(value: InternalDeepSearchTraceOutcome) -> Self {
         match value {
             InternalDeepSearchTraceOutcome::Ok { response_json } => Self::Ok { response_json },
@@ -305,8 +305,8 @@ impl From<InternalDeepSearchTraceOutcome> for DeepSearchTraceOutcomeContract {
     }
 }
 
-impl From<DeepSearchCitationPayloadContract> for InternalDeepSearchCitationPayload {
-    fn from(value: DeepSearchCitationPayloadContract) -> Self {
+impl From<PlaybookCitationPayloadContract> for InternalDeepSearchCitationPayload {
+    fn from(value: PlaybookCitationPayloadContract) -> Self {
         Self {
             answer_schema: value.answer_schema,
             playbook_id: value.playbook_id,
@@ -317,7 +317,7 @@ impl From<DeepSearchCitationPayloadContract> for InternalDeepSearchCitationPaylo
     }
 }
 
-impl From<InternalDeepSearchCitationPayload> for DeepSearchCitationPayloadContract {
+impl From<InternalDeepSearchCitationPayload> for PlaybookCitationPayloadContract {
     fn from(value: InternalDeepSearchCitationPayload) -> Self {
         Self {
             answer_schema: value.answer_schema,
@@ -329,8 +329,8 @@ impl From<InternalDeepSearchCitationPayload> for DeepSearchCitationPayloadContra
     }
 }
 
-impl From<DeepSearchClaimContract> for InternalDeepSearchClaim {
-    fn from(value: DeepSearchClaimContract) -> Self {
+impl From<PlaybookClaimContract> for InternalDeepSearchClaim {
+    fn from(value: PlaybookClaimContract) -> Self {
         Self {
             claim_id: value.claim_id,
             text: value.text,
@@ -339,7 +339,7 @@ impl From<DeepSearchClaimContract> for InternalDeepSearchClaim {
     }
 }
 
-impl From<InternalDeepSearchClaim> for DeepSearchClaimContract {
+impl From<InternalDeepSearchClaim> for PlaybookClaimContract {
     fn from(value: InternalDeepSearchClaim) -> Self {
         Self {
             claim_id: value.claim_id,
@@ -349,8 +349,8 @@ impl From<InternalDeepSearchClaim> for DeepSearchClaimContract {
     }
 }
 
-impl From<DeepSearchCitationContract> for InternalDeepSearchCitation {
-    fn from(value: DeepSearchCitationContract) -> Self {
+impl From<PlaybookCitationContract> for InternalDeepSearchCitation {
+    fn from(value: PlaybookCitationContract) -> Self {
         Self {
             citation_id: value.citation_id,
             tool_call_id: value.tool_call_id,
@@ -362,7 +362,7 @@ impl From<DeepSearchCitationContract> for InternalDeepSearchCitation {
     }
 }
 
-impl From<InternalDeepSearchCitation> for DeepSearchCitationContract {
+impl From<InternalDeepSearchCitation> for PlaybookCitationContract {
     fn from(value: InternalDeepSearchCitation) -> Self {
         Self {
             citation_id: value.citation_id,
@@ -375,8 +375,8 @@ impl From<InternalDeepSearchCitation> for DeepSearchCitationContract {
     }
 }
 
-impl From<DeepSearchFileSpanContract> for InternalDeepSearchFileSpan {
-    fn from(value: DeepSearchFileSpanContract) -> Self {
+impl From<PlaybookFileSpanContract> for InternalDeepSearchFileSpan {
+    fn from(value: PlaybookFileSpanContract) -> Self {
         Self {
             start_line: value.start_line,
             start_column: value.start_column,
@@ -386,7 +386,7 @@ impl From<DeepSearchFileSpanContract> for InternalDeepSearchFileSpan {
     }
 }
 
-impl From<InternalDeepSearchFileSpan> for DeepSearchFileSpanContract {
+impl From<InternalDeepSearchFileSpan> for PlaybookFileSpanContract {
     fn from(value: InternalDeepSearchFileSpan) -> Self {
         Self {
             start_line: value.start_line,

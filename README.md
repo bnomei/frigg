@@ -186,12 +186,15 @@ Core tool groups:
 - Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
 - Structure: `document_symbols`, `inspect_syntax_tree`, `search_structural`.
 
-Extended-only tools:
+Extended-only tools in default builds:
 
 - `explore`
-- `deep_search_run`
-- `deep_search_replay`
-- `deep_search_compose_citations`
+
+Feature-gated extended-only playbook tools are available only when Frigg is compiled with `--features playbook`:
+
+- `playbook_run`
+- `playbook_replay`
+- `playbook_compose_citations`
 
 Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics, freshness details, or selection notes matter.
 

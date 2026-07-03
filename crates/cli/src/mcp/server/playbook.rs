@@ -1,12 +1,12 @@
-//! Deep-search MCP tool handlers: run, replay, and citation composition over trace artifacts.
+//! Playbook MCP tool handlers: run, replay, and citation composition over trace artifacts.
 
 use super::*;
 
 impl FriggMcpServer {
-    pub(super) async fn deep_search_run_impl(
+    pub(super) async fn playbook_run_impl(
         &self,
         playbook: DeepSearchPlaybook,
-    ) -> Result<Json<DeepSearchRunResponse>, ErrorData> {
+    ) -> Result<Json<PlaybookRunResponse>, ErrorData> {
         let playbook_id = Self::bounded_text(&playbook.playbook_id);
         let step_count = playbook.steps.len();
         let step_tools = playbook
@@ -19,14 +19,14 @@ impl FriggMcpServer {
         let budget_metadata = internal_result
             .as_ref()
             .ok()
-            .map(Self::deep_search_budget_metadata_from_trace)
+            .map(Self::playbook_budget_metadata_from_trace)
             .unwrap_or_else(|| json!({ "resource_budgets": [], "resource_usage": [] }));
-        let result: Result<Json<DeepSearchRunResponse>, ErrorData> = internal_result
+        let result: Result<Json<PlaybookRunResponse>, ErrorData> = internal_result
             .map(|trace_artifact| Json(trace_artifact.into()))
             .map_err(Self::map_frigg_error);
         let provenance_result = self
             .record_provenance_blocking(
-                "deep_search_run",
+                "playbook_run",
                 None,
                 json!({
                     "playbook_id": playbook_id,
@@ -40,13 +40,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("deep_search_run", result, provenance_result)
+        self.finalize_with_provenance("playbook_run", result, provenance_result)
     }
 
-    pub(super) async fn deep_search_replay_impl(
+    pub(super) async fn playbook_replay_impl(
         &self,
-        params: DeepSearchReplayParams,
-    ) -> Result<Json<DeepSearchReplayResponse>, ErrorData> {
+        params: PlaybookReplayParams,
+    ) -> Result<Json<PlaybookReplayResponse>, ErrorData> {
         let playbook_id = Self::bounded_text(&params.playbook.playbook_id);
         let step_count = params.playbook.steps.len();
         let step_tools = params
@@ -66,14 +66,14 @@ impl FriggMcpServer {
         let budget_metadata = internal_result
             .as_ref()
             .ok()
-            .map(|replay| Self::deep_search_budget_metadata_from_trace(&replay.replayed))
+            .map(|replay| Self::playbook_budget_metadata_from_trace(&replay.replayed))
             .unwrap_or_else(|| json!({ "resource_budgets": [], "resource_usage": [] }));
-        let result: Result<Json<DeepSearchReplayResponse>, ErrorData> = internal_result
+        let result: Result<Json<PlaybookReplayResponse>, ErrorData> = internal_result
             .map(|replay| Json(replay.into()))
             .map_err(Self::map_frigg_error);
         let provenance_result = self
             .record_provenance_blocking(
-                "deep_search_replay",
+                "playbook_replay",
                 None,
                 json!({
                     "playbook_id": playbook_id,
@@ -94,13 +94,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("deep_search_replay", result, provenance_result)
+        self.finalize_with_provenance("playbook_replay", result, provenance_result)
     }
 
-    pub(super) async fn deep_search_compose_citations_impl(
+    pub(super) async fn playbook_compose_citations_impl(
         &self,
-        params: DeepSearchComposeCitationsParams,
-    ) -> Result<Json<DeepSearchComposeCitationsResponse>, ErrorData> {
+        params: PlaybookComposeCitationsParams,
+    ) -> Result<Json<PlaybookComposeCitationsResponse>, ErrorData> {
         let playbook_id = Self::bounded_text(&params.trace_artifact.playbook_id);
         let trace_schema = Self::bounded_text(&params.trace_artifact.trace_schema);
         let step_count = params.trace_artifact.step_count;
@@ -111,8 +111,8 @@ impl FriggMcpServer {
             .unwrap_or(false);
 
         let trace_artifact = params.trace_artifact.into();
-        let budget_metadata = Self::deep_search_budget_metadata_from_trace(&trace_artifact);
-        let result: Result<Json<DeepSearchComposeCitationsResponse>, ErrorData> =
+        let budget_metadata = Self::playbook_budget_metadata_from_trace(&trace_artifact);
+        let result: Result<Json<PlaybookComposeCitationsResponse>, ErrorData> =
             DeepSearchHarness::compose_citation_payload(
                 &trace_artifact,
                 answer.unwrap_or_default(),
@@ -121,7 +121,7 @@ impl FriggMcpServer {
             .map_err(Self::map_frigg_error);
         let provenance_result = self
             .record_provenance_blocking(
-                "deep_search_compose_citations",
+                "playbook_compose_citations",
                 None,
                 json!({
                     "playbook_id": playbook_id,
@@ -144,10 +144,10 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("deep_search_compose_citations", result, provenance_result)
+        self.finalize_with_provenance("playbook_compose_citations", result, provenance_result)
     }
 
-    fn deep_search_budget_metadata_from_trace(trace: &DeepSearchTraceArtifact) -> Value {
+    fn playbook_budget_metadata_from_trace(trace: &DeepSearchTraceArtifact) -> Value {
         let mut resource_budgets = Vec::new();
         let mut resource_usage = Vec::new();
 

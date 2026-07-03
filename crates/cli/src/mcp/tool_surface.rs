@@ -11,7 +11,7 @@ pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 pub enum ToolSurfaceProfile {
     /// Stable restricted public runtime surface.
     Core,
-    /// Default public runtime surface that layers advanced exploration and deep-search tools on top of the stable profile.
+    /// Default public runtime surface that layers advanced exploration and optional playbook tools on top of the stable profile.
     Extended,
 }
 
@@ -33,12 +33,15 @@ pub struct ToolSurfaceManifest {
     pub tool_names: Vec<String>,
 }
 
-const EXTENDED_ONLY_TOOL_NAMES: [&str; 4] = [
+#[cfg(feature = "playbook")]
+const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &[
     "explore",
-    "deep_search_compose_citations",
-    "deep_search_replay",
-    "deep_search_run",
+    "playbook_compose_citations",
+    "playbook_replay",
+    "playbook_run",
 ];
+#[cfg(not(feature = "playbook"))]
+const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &["explore"];
 
 /// Resolves the active tool-surface profile from `FRIGG_MCP_TOOL_SURFACE_PROFILE`.
 pub fn active_runtime_tool_surface_profile() -> ToolSurfaceProfile {
