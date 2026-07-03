@@ -2,9 +2,15 @@
 
 ## Unreleased
 
-- Removed legacy Cursor `.cursorrules` adoption support and the `legacy-cursor` adopt target.
-- Removed the explicit `prepare-semantic-model` CLI surface; local semantic artifacts are prepared automatically by semantic runtime startup when `provider=local`.
-- Renamed the context indexing command and MCP tool from `reindex` / `workspace_reindex` to `index` / `workspace_index`; the CLI still accepts `frigg reindex` as a compatibility alias.
+- Added `frigg adopt` for managed agent docs, MCP config entries, and Claude PreToolUse hook setup.
+- Added local semantic embeddings with optional FastEmbed support and automatic local model preparation.
+- Added context-efficiency telemetry for MCP search/read surfaces and a `frigg context` summary command.
+- Renamed `reindex` / `workspace_reindex` to `index` / `workspace_index`; `frigg reindex` remains as a CLI compatibility alias.
+- Standardized CLI output modes, quiet/verbose behavior, terminal progress, and watch/semantic refresh status reporting.
+- Hardened workspace write/path handling, marked MCP workspace tools read-only, and fixed text-mode reads to return source bytes only.
+- Renamed the internal trace MCP tools to feature-gated `playbook_*` tools so they are not exposed in default builds.
+- Removed legacy Cursor `.cursorrules` adoption support, the manual `prepare-semantic-model` command, and SQLite provenance event storage.
+- Updated dependencies and trimmed unused feature/dependency surface.
 
 ## 0.5.0 - 2026-06-29
 
