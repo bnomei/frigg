@@ -20,6 +20,19 @@ const HUMAN_ACTIVITY_PREFIX: &str = "  ";
 const HUMAN_DETAIL_PREFIX: &str = "    ";
 const HUMAN_DETAIL_RAIL_PREFIX: &str = "  │ ";
 const HUMAN_CONTINUATION_MARKER: &str = "└─ ";
+const HUMAN_COLOR_NEUTRAL: &str = "1;37";
+const HUMAN_COLOR_DIM: &str = "2";
+const HUMAN_COLOR_WARN: &str = "1;33";
+const HUMAN_COLOR_ERROR: &str = "1;31";
+const HUMAN_COLOR_ACTION_CREATED: &str = "1;32";
+const HUMAN_COLOR_ACTION_MODIFIED: &str = "1;33";
+const HUMAN_COLOR_ACTION_DELETED: &str = "1;31";
+const HUMAN_COLOR_ACTION_RENAMED: &str = "1;35";
+const HUMAN_COLOR_TOPIC_INDEX: &str = "1;38;2;130;170;255";
+const HUMAN_COLOR_TOPIC_SEMANTIC: &str = "1;38;2;90;205;210";
+const HUMAN_COLOR_TOPIC_PRECISE: &str = "1;38;2;185;150;255";
+const HUMAN_COLOR_TOPIC_STORAGE: &str = "1;38;2;205;180;120";
+const HUMAN_COLOR_TOPIC_WATCH: &str = "1;38;2;110;200;255";
 const HUMAN_INTRO_LOGO_LINES: &[&str] = &[
     "█████ ████  ███  ███   ███",
     "█     █   █  █  █     █",
@@ -1088,11 +1101,11 @@ fn colorize_action_title(color: bool, action: &str, title_prefix: &str, accent: 
 
 fn action_color(action: &str) -> &'static str {
     match action {
-        "created" | "create" | "added" | "add" | "new" => "1;32",
-        "modified" | "changed" | "updated" | "update" => "1;33",
-        "deleted" | "delete" | "removed" | "remove" => "1;31",
-        "renamed" | "moved" => "1;35",
-        "skipped" | "unchanged" => "2",
+        "created" | "create" | "added" | "add" | "new" => HUMAN_COLOR_ACTION_CREATED,
+        "modified" | "changed" | "updated" | "update" => HUMAN_COLOR_ACTION_MODIFIED,
+        "deleted" | "delete" | "removed" | "remove" => HUMAN_COLOR_ACTION_DELETED,
+        "renamed" | "moved" => HUMAN_COLOR_ACTION_RENAMED,
+        "skipped" | "unchanged" => HUMAN_COLOR_DIM,
         _ => "1;36",
     }
 }
@@ -1867,47 +1880,101 @@ fn human_title_accent_color(
     title: &str,
 ) -> &'static str {
     let status = field_value(fields, "status").unwrap_or_default();
-    if matches!(
-        level,
-        OutputLevel::Error | OutputLevel::Warn | OutputLevel::Skip
-    ) || matches!(
-        status,
-        "failed" | "blocked" | "retry" | "stale" | "empty" | "skipped" | "fresh"
-    ) {
-        return title_color(level);
+    if let Some(color) = human_severity_accent_color(level, status) {
+        return color;
     }
-    if title.starts_with("Semantic") {
-        return "1;38;2;125;199;190";
+    if let Some(color) = human_field_topic_color(fields, title) {
+        return color;
     }
-    if title.starts_with("Precise") {
-        return "1;38;2;151;185;100";
+    if let Some(color) = human_title_topic_color(title) {
+        return color;
     }
-    if title.starts_with("Storage") || title.contains("storage") {
-        return "1;38;2;196;181;133";
+    human_state_fallback_accent_color(level, status).unwrap_or_else(|| title_color(level))
+}
+
+fn human_severity_accent_color(level: OutputLevel, status: &str) -> Option<&'static str> {
+    match (level, status) {
+        (OutputLevel::Error, _) | (_, "failed") | (_, "blocked") => Some(HUMAN_COLOR_ERROR),
+        (OutputLevel::Warn, _) | (_, "retry") | (_, "stale") => Some(HUMAN_COLOR_WARN),
+        _ => None,
     }
-    if title.starts_with("Watch") {
-        return "1;38;2;116;169;225";
+}
+
+fn human_state_fallback_accent_color(level: OutputLevel, status: &str) -> Option<&'static str> {
+    match (level, status) {
+        (OutputLevel::Skip, _) | (_, "empty") | (_, "skipped") | (_, "fresh") => {
+            Some(HUMAN_COLOR_DIM)
+        }
+        _ => None,
     }
-    if title.starts_with("Index")
-        || title.starts_with("Search")
-        || title.starts_with("Manifest")
-        || title.starts_with("Files")
-        || title.starts_with("Walking")
-        || title.starts_with("Planning")
-        || title.starts_with("Writing")
+}
+
+fn human_field_topic_color(fields: &[OutputField], title: &str) -> Option<&'static str> {
+    if let Some(phase) = field_value(fields, "phase") {
+        return match phase {
+            "initialize_storage" | "checkpoint_wal" | "prune_manifest_snapshots" => {
+                Some(HUMAN_COLOR_TOPIC_STORAGE)
+            }
+            "semantic_refresh" => Some(HUMAN_COLOR_TOPIC_SEMANTIC),
+            "load_manifest"
+            | "build_manifest"
+            | "build_plan"
+            | "persist_manifest_snapshot"
+            | "refresh_retrieval_projections" => Some(HUMAN_COLOR_TOPIC_INDEX),
+            _ => None,
+        };
+    }
+    if title.starts_with("Running ")
+        && (field_value(fields, "generator").is_some()
+            || field_value(fields, "tool").is_some()
+            || field_value(fields, "language").is_some())
     {
-        return "1;38;2;130;170;255";
+        return Some(HUMAN_COLOR_TOPIC_PRECISE);
     }
-    title_color(level)
+    None
+}
+
+fn human_title_topic_color(title: &str) -> Option<&'static str> {
+    let normalized = title.to_ascii_lowercase();
+    if normalized.starts_with("semantic") || normalized.starts_with("embedding") {
+        return Some(HUMAN_COLOR_TOPIC_SEMANTIC);
+    }
+    if normalized.starts_with("precise") {
+        return Some(HUMAN_COLOR_TOPIC_PRECISE);
+    }
+    if normalized.starts_with("storage")
+        || normalized.contains("storage")
+        || normalized.contains("snapshot")
+        || normalized.contains("checkpoint")
+        || normalized.starts_with("prune")
+    {
+        return Some(HUMAN_COLOR_TOPIC_STORAGE);
+    }
+    if normalized.starts_with("watch") {
+        return Some(HUMAN_COLOR_TOPIC_WATCH);
+    }
+    if normalized.starts_with("index")
+        || normalized.starts_with("search")
+        || normalized.starts_with("manifest")
+        || normalized.starts_with("files")
+        || normalized.starts_with("file ")
+        || normalized.starts_with("walking")
+        || normalized.starts_with("planning")
+        || normalized.starts_with("writing")
+        || normalized.starts_with("loading manifest")
+        || normalized.starts_with("refreshing search")
+    {
+        return Some(HUMAN_COLOR_TOPIC_INDEX);
+    }
+    None
 }
 
 fn title_color(level: OutputLevel) -> &'static str {
     match level {
-        OutputLevel::Ok => "1;32",
-        OutputLevel::Info => "1;36",
-        OutputLevel::Warn => "1;33",
-        OutputLevel::Error => "1;31",
-        OutputLevel::Skip => "2",
+        OutputLevel::Ok | OutputLevel::Info => HUMAN_COLOR_NEUTRAL,
+        OutputLevel::Warn => HUMAN_COLOR_WARN,
+        OutputLevel::Error => HUMAN_COLOR_ERROR,
+        OutputLevel::Skip => HUMAN_COLOR_DIM,
     }
 }
 
@@ -2369,8 +2436,10 @@ pub(crate) fn error_was_reported(error: &(dyn Error + 'static)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        OutputLevel, OutputMode, field, format_event_line, format_human_event,
-        format_human_event_with_width, format_human_intro,
+        HUMAN_COLOR_ACTION_CREATED, HUMAN_COLOR_ACTION_DELETED, HUMAN_COLOR_ACTION_MODIFIED,
+        HUMAN_COLOR_TOPIC_INDEX, HUMAN_COLOR_TOPIC_PRECISE, HUMAN_COLOR_TOPIC_SEMANTIC,
+        HUMAN_COLOR_TOPIC_STORAGE, HUMAN_COLOR_TOPIC_WATCH, OutputLevel, OutputMode, field,
+        format_event_line, format_human_event, format_human_event_with_width, format_human_intro,
     };
 
     #[test]
@@ -2852,9 +2921,108 @@ mod tests {
             80,
         );
 
-        assert!(modified.contains("\u{1b}[1;33mModified\u{1b}[0m"));
-        assert!(deleted.contains("\u{1b}[1;31mDeleted\u{1b}[0m"));
-        assert!(created.contains("\u{1b}[1;32mCreated\u{1b}[0m"));
+        assert!(modified.contains(&format!(
+            "\u{1b}[{HUMAN_COLOR_ACTION_MODIFIED}mModified\u{1b}[0m"
+        )));
+        assert!(deleted.contains(&format!(
+            "\u{1b}[{HUMAN_COLOR_ACTION_DELETED}mDeleted\u{1b}[0m"
+        )));
+        assert!(created.contains(&format!(
+            "\u{1b}[{HUMAN_COLOR_ACTION_CREATED}mCreated\u{1b}[0m"
+        )));
+    }
+
+    #[test]
+    fn human_topic_colors_are_distinct_from_action_green() {
+        let semantic = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "semantic",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("mode", "incremental_advance"),
+                field("provider", "local"),
+                field("model", "all-MiniLM-L6-v2"),
+                field("records", 2),
+                field("changed", 2),
+                field("deleted", 0),
+            ],
+            None,
+            true,
+            100,
+        );
+        let precise = format_human_event_with_width(
+            OutputLevel::Info,
+            "precise",
+            "generator",
+            &[
+                field("status", "starting"),
+                field("generator", "rust"),
+                field("language", "rust"),
+                field("tool", "rust-analyzer"),
+            ],
+            None,
+            true,
+            100,
+        );
+        let storage = format_human_event_with_width(
+            OutputLevel::Ok,
+            "index",
+            "phase",
+            &[
+                field("status", "ok"),
+                field("phase", "prune_manifest_snapshots"),
+                field("pruned_snapshots", 1),
+            ],
+            None,
+            true,
+            100,
+        );
+        let index = format_human_event_with_width(
+            OutputLevel::Skip,
+            "index",
+            "phase",
+            &[
+                field("status", "skipped"),
+                field("phase", "load_manifest"),
+                field("previous", "snapshot-218c693c9fbc6c2d2de5"),
+            ],
+            None,
+            true,
+            100,
+        );
+        let precise_skip = format_human_event_with_width(
+            OutputLevel::Skip,
+            "precise",
+            "plan",
+            &[
+                field("status", "empty"),
+                field("reason", "no_generators_need_refresh"),
+            ],
+            None,
+            true,
+            100,
+        );
+        let watch_skip = format_human_event_with_width(
+            OutputLevel::Skip,
+            "watch",
+            "refresh",
+            &[field("status", "skipped"), field("repo", "repo-001")],
+            None,
+            true,
+            100,
+        );
+
+        assert!(semantic.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_SEMANTIC}m")));
+        assert!(precise.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_PRECISE}m")));
+        assert!(storage.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_STORAGE}m")));
+        assert!(index.starts_with(&format!("  \u{1b}[{HUMAN_COLOR_TOPIC_INDEX}m○")));
+        assert!(precise_skip.starts_with(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_PRECISE}m╭─○")));
+        assert!(watch_skip.starts_with(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_WATCH}m╭─○")));
+        assert!(!semantic.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
+        assert!(!precise.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
+        assert!(!storage.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
     }
 
     #[test]

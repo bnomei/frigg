@@ -20,6 +20,13 @@ const HF_HOME_ENV: &str = "HF_HOME";
 const HF_ENDPOINT_ENV: &str = "HF_ENDPOINT";
 const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
 const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
+#[cfg(test)]
+const DOWNLOAD_PROGRESS_SEMANTIC_COLOR: &str = "\x1b[1;38;2;90;205;210m";
+#[cfg(test)]
+const DOWNLOAD_PROGRESS_COLOR_RESET: &str = "\x1b[0m";
+const DOWNLOAD_PROGRESS_TEMPLATE_PLAIN: &str =
+    "╭─○ Loading semantic model\n╰─  {msg:28} {bytes}/{total_bytes}";
+const DOWNLOAD_PROGRESS_TEMPLATE_COLOR: &str = "\x1b[1;38;2;90;205;210m╭─○ Loading semantic model\x1b[0m\n\x1b[1;38;2;90;205;210m╰─  \x1b[0m{msg:28} {bytes}/{total_bytes}";
 
 /// Mapping between a semantic runtime model name and its fastembed artifact metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,10 +443,38 @@ impl Progress for StableDownloadProgress {
 }
 
 fn stable_download_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template(
-        "{msg:28} {bytes:>12}/{total_bytes:<12} {bytes_per_sec:>13} eta={eta:<8} {wide_bar:.cyan/blue}",
-    )
-    .expect("download progress template should be valid")
+    ProgressStyle::with_template(stable_download_progress_template())
+        .expect("download progress template should be valid")
+}
+
+fn stable_download_progress_template() -> &'static str {
+    stable_download_progress_template_for_color(std::env::var_os("NO_COLOR").is_none())
+}
+
+fn stable_download_progress_template_for_color(color: bool) -> &'static str {
+    if color {
+        DOWNLOAD_PROGRESS_TEMPLATE_COLOR
+    } else {
+        DOWNLOAD_PROGRESS_TEMPLATE_PLAIN
+    }
+}
+
+#[cfg(test)]
+fn stable_download_progress_preview(
+    filename: &str,
+    loaded: &str,
+    total: &str,
+    color: bool,
+) -> String {
+    let label = download_progress_label(filename);
+    let label_width = DOWNLOAD_PROGRESS_LABEL_WIDTH;
+    if color {
+        format!(
+            "{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╭─○ Loading semantic model{DOWNLOAD_PROGRESS_COLOR_RESET}\n{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╰─  {DOWNLOAD_PROGRESS_COLOR_RESET}{label:<label_width$} {loaded}/{total}",
+        )
+    } else {
+        format!("╭─○ Loading semantic model\n╰─  {label:<label_width$} {loaded}/{total}",)
+    }
 }
 
 fn download_progress_label(filename: &str) -> String {
@@ -640,8 +675,39 @@ mod tests {
     }
 
     #[test]
-    fn local_model_download_progress_template_is_valid() {
+    fn local_model_download_progress_template_is_compact_card() {
         let _style = stable_download_progress_style();
+        let plain_template = stable_download_progress_template_for_color(false);
+        let color_template = stable_download_progress_template_for_color(true);
+
+        assert!(plain_template.starts_with("╭─○ Loading semantic model"));
+        assert!(plain_template.contains("╰─  {msg:28} {bytes}/{total_bytes}"));
+        assert!(color_template.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
+        assert!(color_template.contains("╰─  \u{1b}[0m{msg:28} {bytes}/{total_bytes}"));
+        for template in [plain_template, color_template] {
+            assert!(!template.contains("bytes_per_sec"));
+            assert!(!template.contains("eta"));
+            assert!(!template.contains("wide_bar"));
+        }
+    }
+
+    #[test]
+    fn local_model_download_progress_preview_uses_file_key_and_byte_value() {
+        let preview =
+            stable_download_progress_preview("model.onnx", "19.53 MiB", "86.20 MiB", false);
+        let colored =
+            stable_download_progress_preview("model.onnx", "19.53 MiB", "86.20 MiB", true);
+
+        assert_eq!(
+            preview,
+            "╭─○ Loading semantic model\n╰─  model.onnx                   19.53 MiB/86.20 MiB"
+        );
+        assert!(colored.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
+        assert!(colored.contains("model.onnx"));
+        assert!(colored.contains("19.53 MiB/86.20 MiB"));
+        assert!(!preview.contains("MiB/s"));
+        assert!(!preview.contains("eta"));
+        assert!(!preview.contains('['));
     }
 
     #[test]
