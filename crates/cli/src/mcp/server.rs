@@ -913,32 +913,31 @@ impl FriggMcpServer {
             requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
             "workspace prepare started"
         );
-        if self.repository_has_active_runtime_work(&workspace.repository_id) {
-            let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
-            warn!(
-                repository_id = %workspace.repository_id,
-                root = %workspace.root.display(),
-                active_tasks = active_tasks.len(),
-                duration_ms = started_at.elapsed().as_millis() as u64,
-                "workspace prepare rejected because runtime work is active"
-            );
-            return Err(Self::invalid_params(
-                "repository already has active runtime work",
-                Some(json!({
-                    "repository_id": workspace.repository_id,
-                    "active_tasks": active_tasks,
-                })),
-            ));
-        }
-
-        Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
-        let mut task_guard = RuntimeTaskGuard::start(
-            Arc::clone(&self.runtime_state.runtime_task_registry),
+        let mut task_guard = match self.try_start_repository_runtime_task(
+            &workspace,
             RuntimeTaskKind::WorkspacePrepare,
-            workspace.repository_id.clone(),
             "workspace_prepare",
             Some(format!("prepare {}", workspace.root.display())),
-        );
+        ) {
+            Ok(task_guard) => task_guard,
+            Err(active_tasks) => {
+                warn!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    active_tasks = active_tasks.len(),
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    "workspace prepare rejected because runtime work is active"
+                );
+                return Err(Self::invalid_params(
+                    "repository already has active runtime work",
+                    Some(json!({
+                        "repository_id": workspace.repository_id,
+                        "active_tasks": active_tasks,
+                    })),
+                ));
+            }
+        };
+        Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
 
         Self::notify_progress(&meta, &client, 1.0, 4.0, "initialize storage").await;
         let prepared_storage = Self::run_blocking_task("workspace_prepare", {
@@ -992,6 +991,7 @@ impl FriggMcpServer {
                 );
                 task_guard.finish(RuntimeTaskStatus::Failed, Some(error.message.to_string()));
             })?;
+        task_guard.finish(RuntimeTaskStatus::Succeeded, None);
         self.maybe_spawn_workspace_runtime_prewarm(&workspace);
         let _ = self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
 
@@ -1015,7 +1015,6 @@ impl FriggMcpServer {
             duration_ms = started_at.elapsed().as_millis() as u64,
             "workspace prepare completed"
         );
-        task_guard.finish(RuntimeTaskStatus::Succeeded, None);
         Self::notify_progress(&meta, &client, 4.0, 4.0, "finalize").await;
 
         let finalization = self.tool_execution_finalization(
@@ -1105,31 +1104,30 @@ impl FriggMcpServer {
             requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
             "workspace index started"
         );
-        if self.repository_has_active_runtime_work(&workspace.repository_id) {
-            let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
-            warn!(
-                repository_id = %workspace.repository_id,
-                root = %workspace.root.display(),
-                active_tasks = active_tasks.len(),
-                duration_ms = started_at.elapsed().as_millis() as u64,
-                "workspace index rejected because runtime work is active"
-            );
-            return Err(Self::invalid_params(
-                "repository already has active runtime work",
-                Some(json!({
-                    "repository_id": workspace.repository_id,
-                    "active_tasks": active_tasks,
-                })),
-            ));
-        }
-
-        let mut task_guard = RuntimeTaskGuard::start(
-            Arc::clone(&self.runtime_state.runtime_task_registry),
+        let mut task_guard = match self.try_start_repository_runtime_task(
+            &workspace,
             RuntimeTaskKind::WorkspaceIndex,
-            workspace.repository_id.clone(),
             "workspace_index",
             Some(format!("index {}", workspace.root.display())),
-        );
+        ) {
+            Ok(task_guard) => task_guard,
+            Err(active_tasks) => {
+                warn!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    active_tasks = active_tasks.len(),
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    "workspace index rejected because runtime work is active"
+                );
+                return Err(Self::invalid_params(
+                    "repository already has active runtime work",
+                    Some(json!({
+                        "repository_id": workspace.repository_id,
+                        "active_tasks": active_tasks,
+                    })),
+                ));
+            }
+        };
         Self::notify_progress(&meta, &client, 0.0, 4.0, "resolve target").await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "index refresh").await;
         let semantic_runtime = self.config.semantic_runtime.clone();

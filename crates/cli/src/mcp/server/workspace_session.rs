@@ -331,6 +331,46 @@ impl FriggMcpServer {
             .collect()
     }
 
+    pub(in crate::mcp::server) fn runtime_task_repository_aliases(
+        workspace: &AttachedWorkspace,
+    ) -> Vec<&str> {
+        if workspace.runtime_repository_id == workspace.repository_id {
+            vec![workspace.repository_id.as_str()]
+        } else {
+            vec![
+                workspace.repository_id.as_str(),
+                workspace.runtime_repository_id.as_str(),
+            ]
+        }
+    }
+
+    pub(in crate::mcp::server) fn runtime_index_task_kinds() -> &'static [RuntimeTaskKind] {
+        &[
+            RuntimeTaskKind::ChangedIndex,
+            RuntimeTaskKind::SemanticRefresh,
+            RuntimeTaskKind::WorkspacePrepare,
+            RuntimeTaskKind::WorkspaceIndex,
+        ]
+    }
+
+    pub(in crate::mcp::server) fn try_start_repository_runtime_task(
+        &self,
+        workspace: &AttachedWorkspace,
+        kind: RuntimeTaskKind,
+        phase: impl Into<String>,
+        detail: Option<String>,
+    ) -> Result<RuntimeTaskGuard, Vec<RuntimeTaskSummary>> {
+        RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
+            Arc::clone(&self.runtime_state.runtime_task_registry),
+            Self::runtime_index_task_kinds(),
+            &Self::runtime_task_repository_aliases(workspace),
+            kind,
+            workspace.repository_id.clone(),
+            phase,
+            detail,
+        )
+    }
+
     async fn wait_for_repository_index_work(&self, repository_id: &str, timeout: Duration) -> bool {
         let now = tokio::time::Instant::now();
         let deadline = now
@@ -444,18 +484,20 @@ impl FriggMcpServer {
     fn spawn_workspace_attach_index_refresh(
         &self,
         workspace: &AttachedWorkspace,
-    ) -> tokio::task::JoinHandle<Result<crate::indexer::IndexSummary, String>> {
-        let task_guard = RuntimeTaskGuard::start(
-            Arc::clone(&self.runtime_state.runtime_task_registry),
+    ) -> Result<
+        tokio::task::JoinHandle<Result<crate::indexer::IndexSummary, String>>,
+        Vec<RuntimeTaskSummary>,
+    > {
+        let task_guard = self.try_start_repository_runtime_task(
+            workspace,
             RuntimeTaskKind::WorkspaceIndex,
-            workspace.repository_id.clone(),
             "attach_index_ensure",
             Some(format!("attach index ensure {}", workspace.root.display())),
-        );
+        )?;
         let server = self.clone();
         let workspace = workspace.clone();
         let semantic_runtime = self.config.semantic_runtime.clone();
-        tokio::task::spawn_blocking(move || {
+        Ok(tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<crate::indexer::IndexSummary, String> {
                 let db_path = ensure_provenance_db_parent_dir(&workspace.root)
                     .map_err(|err| err.to_string())?;
@@ -478,7 +520,7 @@ impl FriggMcpServer {
             let mut task_guard = task_guard;
             task_guard.finish(status, detail);
             result
-        })
+        }))
     }
 
     pub(super) async fn ensure_workspace_index_for_attach(
@@ -595,7 +637,77 @@ impl FriggMcpServer {
             }
         }
 
-        let handle = self.spawn_workspace_attach_index_refresh(workspace);
+        let handle = loop {
+            match self.spawn_workspace_attach_index_refresh(workspace) {
+                Ok(handle) => break handle,
+                Err(_) if !wait_for_index => {
+                    return (
+                        self.workspace_index_lifecycle_summary(
+                            workspace,
+                            WorkspaceAttachIndexMode::Ensure,
+                            false,
+                            false,
+                            WorkspaceIndexAction::SkippedActiveTask,
+                            None,
+                        ),
+                        None,
+                    );
+                }
+                Err(_) => {
+                    let remaining_timeout = timeout
+                        .checked_sub(started_at.elapsed())
+                        .unwrap_or(Duration::ZERO);
+                    if remaining_timeout.is_zero()
+                        || !self
+                            .wait_for_repository_index_work(
+                                &workspace.repository_id,
+                                remaining_timeout,
+                            )
+                            .await
+                    {
+                        return (
+                            self.workspace_index_lifecycle_summary(
+                                workspace,
+                                WorkspaceAttachIndexMode::Ensure,
+                                true,
+                                true,
+                                WorkspaceIndexAction::SkippedActiveTask,
+                                None,
+                            ),
+                            None,
+                        );
+                    }
+                    let (lexical_ready, semantic_ready, readiness_error) =
+                        self.workspace_index_readiness(workspace);
+                    if lexical_ready && semantic_ready {
+                        return (
+                            self.workspace_index_lifecycle_summary(
+                                workspace,
+                                WorkspaceAttachIndexMode::Ensure,
+                                true,
+                                false,
+                                WorkspaceIndexAction::SkippedActiveTask,
+                                None,
+                            ),
+                            None,
+                        );
+                    }
+                    if let Some(error) = readiness_error {
+                        return (
+                            self.workspace_index_lifecycle_summary(
+                                workspace,
+                                WorkspaceAttachIndexMode::Ensure,
+                                true,
+                                false,
+                                WorkspaceIndexAction::Failed,
+                                Some(error),
+                            ),
+                            None,
+                        );
+                    }
+                }
+            }
+        };
         if !wait_for_index {
             return (
                 self.workspace_index_lifecycle_summary(
@@ -791,19 +903,12 @@ impl FriggMcpServer {
             .runtime_task_registry
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        [
-            RuntimeTaskKind::ChangedIndex,
-            RuntimeTaskKind::SemanticRefresh,
-            RuntimeTaskKind::WorkspacePrepare,
-            RuntimeTaskKind::WorkspaceIndex,
-        ]
-        .into_iter()
-        .any(|kind| {
-            registry.has_active_task_for_repository(kind, repository_id)
+        Self::runtime_index_task_kinds().iter().any(|kind| {
+            registry.has_active_task_for_repository(*kind, repository_id)
                 || workspace.as_ref().is_some_and(|workspace| {
                     workspace.runtime_repository_id != repository_id
                         && registry
-                            .has_active_task_for_repository(kind, &workspace.runtime_repository_id)
+                            .has_active_task_for_repository(*kind, &workspace.runtime_repository_id)
                 })
         })
     }

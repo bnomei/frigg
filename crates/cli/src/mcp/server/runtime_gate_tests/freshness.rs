@@ -202,6 +202,169 @@ fn semantic_refresh_plan_detects_latest_snapshot_missing_active_model() {
 }
 
 #[test]
+fn semantic_attach_refresh_is_not_admitted_during_active_index_work() {
+    let workspace_root = temp_workspace_root("semantic-refresh-active-index-admission");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.semantic_runtime = semantic_runtime_enabled_openai();
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    Storage::new(&workspace.db_path)
+        .replace_semantic_embeddings_for_repository(
+            &workspace.runtime_repository_id,
+            "snapshot-001",
+            "openai",
+            "text-embedding-3-small",
+            &[semantic_record(
+                &workspace.runtime_repository_id,
+                "snapshot-001",
+                "src/lib.rs",
+            )],
+        )
+        .expect("seed semantic embeddings should persist");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-002",
+        &["src/lib.rs"],
+    );
+    let plan = server
+        .workspace_semantic_refresh_plan(&workspace)
+        .expect("latest snapshot without active-model semantic rows should trigger refresh");
+    assert_eq!(plan.latest_snapshot_id, "snapshot-002");
+
+    let active_task_id = server
+        .runtime_state
+        .runtime_task_registry
+        .write()
+        .expect("runtime task registry should not be poisoned")
+        .start_task(
+            RuntimeTaskKind::WorkspaceIndex,
+            workspace.runtime_repository_id.clone(),
+            "workspace_index",
+            Some("active alias index".to_owned()),
+        );
+
+    server.maybe_spawn_workspace_runtime_prewarm(&workspace);
+    let runtime = server.runtime_status_summary();
+    let spawned_semantic_refresh = runtime
+        .active_tasks
+        .iter()
+        .chain(runtime.recent_tasks.iter())
+        .any(|task| {
+            task.kind == RuntimeTaskKind::SemanticRefresh && task.phase == "semantic_attach_refresh"
+        });
+    assert!(
+        !spawned_semantic_refresh,
+        "semantic attach refresh must not be admitted while alias index work is active"
+    );
+
+    server
+        .runtime_state
+        .runtime_task_registry
+        .write()
+        .expect("runtime task registry should not be poisoned")
+        .finish_task(&active_task_id, RuntimeTaskStatus::Succeeded, None);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn semantic_attach_refresh_is_admitted_after_prepare_task_finishes() {
+    let workspace_root = temp_workspace_root("semantic-refresh-after-prepare-finished");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct User;\n")
+        .expect("failed to write source fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.semantic_runtime = semantic_runtime_enabled_openai();
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    Storage::new(&workspace.db_path)
+        .replace_semantic_embeddings_for_repository(
+            &workspace.runtime_repository_id,
+            "snapshot-001",
+            "openai",
+            "text-embedding-3-small",
+            &[semantic_record(
+                &workspace.runtime_repository_id,
+                "snapshot-001",
+                "src/lib.rs",
+            )],
+        )
+        .expect("seed semantic embeddings should persist");
+    seed_manifest_snapshot(
+        &workspace_root,
+        &workspace.runtime_repository_id,
+        "snapshot-002",
+        &["src/lib.rs"],
+    );
+
+    let mut prepare_guard = server
+        .try_start_repository_runtime_task(
+            &workspace,
+            RuntimeTaskKind::WorkspacePrepare,
+            "workspace_prepare",
+            Some("prepare before prewarm".to_owned()),
+        )
+        .expect("prepare guard should start for regression setup");
+    prepare_guard.finish(RuntimeTaskStatus::Succeeded, None);
+
+    server.maybe_spawn_workspace_runtime_prewarm(&workspace);
+    let runtime = server.runtime_status_summary();
+    let spawned_semantic_refresh = runtime
+        .active_tasks
+        .iter()
+        .chain(runtime.recent_tasks.iter())
+        .any(|task| {
+            task.kind == RuntimeTaskKind::SemanticRefresh && task.phase == "semantic_attach_refresh"
+        });
+    assert!(
+        spawned_semantic_refresh,
+        "workspace_prepare must finish its guard before spawning semantic attach refresh"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn repository_response_cache_freshness_returns_ready_manifest_scope() {
     let workspace_root = temp_workspace_root("response-cache-freshness-ready");
     fs::create_dir_all(workspace_root.join("src"))

@@ -212,6 +212,23 @@ impl RuntimeTaskRegistry {
         task_id
     }
 
+    pub fn start_task_if_no_active_for_any_repository(
+        &mut self,
+        conflict_kinds: &[RuntimeTaskKind],
+        repository_ids: &[&str],
+        kind: RuntimeTaskKind,
+        repository_id: impl Into<String>,
+        phase: impl Into<String>,
+        detail: Option<String>,
+    ) -> Result<String, Vec<RuntimeTaskSummary>> {
+        let active_tasks =
+            self.active_tasks_for_kinds_and_any_repository(conflict_kinds, repository_ids);
+        if !active_tasks.is_empty() {
+            return Err(active_tasks);
+        }
+        Ok(self.start_task(kind, repository_id, phase, detail))
+    }
+
     pub fn finish_task(
         &mut self,
         task_id: &str,
@@ -279,6 +296,27 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && repository_ids.contains(&task.repository_id.as_str()))
     }
 
+    pub fn active_tasks_for_kinds_and_any_repository(
+        &self,
+        kinds: &[RuntimeTaskKind],
+        repository_ids: &[&str],
+    ) -> Vec<RuntimeTaskSummary> {
+        let mut tasks = self
+            .active
+            .values()
+            .filter(|task| {
+                kinds.contains(&task.kind) && repository_ids.contains(&task.repository_id.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        tasks.sort_by(|left, right| {
+            left.created_at_ms
+                .cmp(&right.created_at_ms)
+                .then(left.task_id.cmp(&right.task_id))
+        });
+        tasks
+    }
+
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }
@@ -325,6 +363,32 @@ impl RuntimeTaskGuard {
             registry,
             task_id: Some(task_id),
         }
+    }
+
+    pub fn try_start_if_no_active_for_any_repository(
+        registry: Arc<RwLock<RuntimeTaskRegistry>>,
+        conflict_kinds: &[RuntimeTaskKind],
+        repository_ids: &[&str],
+        kind: RuntimeTaskKind,
+        repository_id: impl Into<String>,
+        phase: impl Into<String>,
+        detail: Option<String>,
+    ) -> Result<Self, Vec<RuntimeTaskSummary>> {
+        let task_id = registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .start_task_if_no_active_for_any_repository(
+                conflict_kinds,
+                repository_ids,
+                kind,
+                repository_id,
+                phase,
+                detail,
+            )?;
+        Ok(Self {
+            registry,
+            task_id: Some(task_id),
+        })
     }
 
     pub fn task_id(&self) -> &str {
@@ -461,6 +525,54 @@ mod tests {
     }
 
     #[test]
+    fn runtime_task_registry_atomic_start_rejects_conflicting_alias_without_insert() {
+        let mut registry = RuntimeTaskRegistry::new();
+        let active = registry.start_task(
+            RuntimeTaskKind::WorkspaceIndex,
+            "stable-repo",
+            "workspace_index",
+            None,
+        );
+
+        let rejected = registry
+            .start_task_if_no_active_for_any_repository(
+                &[
+                    RuntimeTaskKind::WorkspaceIndex,
+                    RuntimeTaskKind::ChangedIndex,
+                ],
+                &["repo-001", "stable-repo"],
+                RuntimeTaskKind::ChangedIndex,
+                "repo-001",
+                "watch_manifest_fast",
+                None,
+            )
+            .expect_err("conflicting active alias should reject atomic task start");
+
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].task_id, active);
+        assert_eq!(registry.active_tasks().len(), 1);
+
+        registry.finish_task(&active, RuntimeTaskStatus::Succeeded, None);
+        let started = registry
+            .start_task_if_no_active_for_any_repository(
+                &[
+                    RuntimeTaskKind::WorkspaceIndex,
+                    RuntimeTaskKind::ChangedIndex,
+                ],
+                &["repo-001", "stable-repo"],
+                RuntimeTaskKind::ChangedIndex,
+                "repo-001",
+                "watch_manifest_fast",
+                None,
+            )
+            .expect("task should start once conflicting alias finishes");
+        let active_tasks = registry.active_tasks();
+        assert_eq!(active_tasks.len(), 1);
+        assert_eq!(active_tasks[0].task_id, started);
+        assert_eq!(active_tasks[0].repository_id, "repo-001");
+    }
+
+    #[test]
     fn runtime_task_guard_finishes_explicit_status_once() {
         let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
         let mut guard = RuntimeTaskGuard::start(
@@ -536,6 +648,67 @@ mod tests {
             recent[0].detail.as_deref(),
             Some("runtime task owner dropped before reporting completion")
         );
+    }
+
+    #[test]
+    fn runtime_task_guard_atomic_start_returns_conflicts_or_guard() {
+        let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
+        let active = registry
+            .write()
+            .expect("registry lock should be available")
+            .start_task(
+                RuntimeTaskKind::WorkspacePrepare,
+                "repo-001",
+                "workspace_prepare",
+                None,
+            );
+
+        let rejected = match RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
+            Arc::clone(&registry),
+            &[RuntimeTaskKind::WorkspacePrepare],
+            &["repo-001"],
+            RuntimeTaskKind::WorkspaceIndex,
+            "repo-001",
+            "workspace_index",
+            None,
+        ) {
+            Ok(_) => panic!("guard start should return active conflicts"),
+            Err(conflicts) => conflicts,
+        };
+
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].task_id, active);
+        assert_eq!(
+            registry
+                .read()
+                .expect("registry lock should be available")
+                .active_tasks()
+                .len(),
+            1
+        );
+
+        registry
+            .write()
+            .expect("registry lock should be available")
+            .finish_task(&active, RuntimeTaskStatus::Succeeded, None);
+        let mut guard = RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
+            Arc::clone(&registry),
+            &[RuntimeTaskKind::WorkspacePrepare],
+            &["repo-001"],
+            RuntimeTaskKind::WorkspaceIndex,
+            "repo-001",
+            "workspace_index",
+            None,
+        )
+        .expect("guard should start when no conflicts remain");
+        let task_id = guard.task_id().to_owned();
+        guard.finish(RuntimeTaskStatus::Succeeded, None);
+
+        let recent = registry
+            .read()
+            .expect("registry lock should be available")
+            .recent_tasks();
+        assert!(recent.iter().any(|task| task.task_id == task_id));
     }
 
     #[test]

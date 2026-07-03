@@ -621,30 +621,46 @@ async fn run_supervisor(
             };
             let stable_repository_id =
                 crate::domain::model::stable_repository_id_for_root(&repository.root).0;
-            let refresh_task_active = active_refresh_task_running_for_repository(
-                &task_registry
-                    .read()
-                    .expect("watch runtime task registry poisoned"),
-                class,
+            let repository_ids = watch_runtime_task_repository_aliases(
                 &repository.repository_id,
                 &stable_repository_id,
             );
-            if refresh_task_active {
-                let retry_delay = scheduler
-                    .mark_failed(&repository_id, class, now, retry)
-                    .unwrap_or(retry);
-                report_watch_event(
-                    &reporter,
-                    WatchEvent::RefreshDeferred {
-                        repository_id: repository.repository_id.clone(),
-                        root: repository.root.clone(),
-                        refresh_class: class.as_str(),
-                        reason: "active_task",
-                        retry_ms: retry_delay.as_millis(),
-                    },
-                );
-                continue;
-            }
+            let repository_id_refs = repository_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let task_guard = RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
+                Arc::clone(&task_registry),
+                conflicting_task_kinds_for_class(class),
+                &repository_id_refs,
+                watch_task_kind_for_class(class),
+                repository.repository_id.clone(),
+                watch_task_phase_for_class(class),
+                Some(format!(
+                    "watch root {} class {}",
+                    repository.root.display(),
+                    class.as_str()
+                )),
+            );
+            let mut task_guard = match task_guard {
+                Ok(task_guard) => task_guard,
+                Err(_) => {
+                    let retry_delay = scheduler
+                        .mark_failed(&repository_id, class, now, retry)
+                        .unwrap_or(retry);
+                    report_watch_event(
+                        &reporter,
+                        WatchEvent::RefreshDeferred {
+                            repository_id: repository.repository_id.clone(),
+                            root: repository.root.clone(),
+                            refresh_class: class.as_str(),
+                            reason: "active_task",
+                            retry_ms: retry_delay.as_millis(),
+                        },
+                    );
+                    continue;
+                }
+            };
             let recent_paths = scheduler.mark_started(&repository_id, class);
             // Capture dispatch epoch so completion handlers can detect lease churn.
             let dispatch_epoch = repository_epochs.current(&repository.repository_id);
@@ -664,17 +680,6 @@ async fn run_supervisor(
                     debounce_ms: watch_config.debounce_ms,
                     sampled_paths: recent_paths.len(),
                 },
-            );
-            let mut task_guard = RuntimeTaskGuard::start(
-                Arc::clone(&task_registry),
-                watch_task_kind_for_class(class),
-                repository.repository_id.clone(),
-                watch_task_phase_for_class(class),
-                Some(format!(
-                    "watch root {} class {}",
-                    repository.root.display(),
-                    class.as_str()
-                )),
             );
             let completion_tx = command_tx.clone();
             let semantic_runtime = semantic_runtime.clone();
@@ -809,20 +814,35 @@ fn conflicting_task_kinds_for_class(class: WatchRefreshClass) -> &'static [Runti
     }
 }
 
+#[cfg(test)]
 fn active_refresh_task_running_for_repository(
     registry: &RuntimeTaskRegistry,
     class: WatchRefreshClass,
     repository_id: &str,
     stable_repository_id: &str,
 ) -> bool {
-    let repository_ids = if repository_id == stable_repository_id {
-        vec![repository_id]
-    } else {
-        vec![repository_id, stable_repository_id]
-    };
-    conflicting_task_kinds_for_class(class)
+    let repository_ids = watch_runtime_task_repository_aliases(repository_id, stable_repository_id);
+    let repository_ids = repository_ids
         .iter()
-        .any(|kind| registry.has_active_task_for_any_repository(*kind, &repository_ids))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    !registry
+        .active_tasks_for_kinds_and_any_repository(
+            conflicting_task_kinds_for_class(class),
+            &repository_ids,
+        )
+        .is_empty()
+}
+
+fn watch_runtime_task_repository_aliases(
+    repository_id: &str,
+    stable_repository_id: &str,
+) -> Vec<String> {
+    if repository_id == stable_repository_id {
+        vec![repository_id.to_owned()]
+    } else {
+        vec![repository_id.to_owned(), stable_repository_id.to_owned()]
+    }
 }
 
 fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {

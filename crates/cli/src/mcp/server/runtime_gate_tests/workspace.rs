@@ -457,6 +457,78 @@ fn repository_active_runtime_work_ignores_precise_generation_but_still_blocks_in
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[test]
+fn repository_runtime_task_atomic_start_rejects_alias_conflict() {
+    let workspace_root = temp_workspace_root("atomic-runtime-task-alias-conflict");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Atomic;\n")
+        .expect("failed to write workspace root fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    let active_task_id = server
+        .runtime_state
+        .runtime_task_registry
+        .write()
+        .expect("runtime task registry should not be poisoned")
+        .start_task(
+            RuntimeTaskKind::WorkspaceIndex,
+            workspace.runtime_repository_id.clone(),
+            "workspace_index",
+            Some("active alias index".to_owned()),
+        );
+
+    let rejected = match server.try_start_repository_runtime_task(
+        &workspace,
+        RuntimeTaskKind::WorkspacePrepare,
+        "workspace_prepare",
+        Some("prepare during active index".to_owned()),
+    ) {
+        Ok(_) => panic!("atomic start should reject active alias work"),
+        Err(active_tasks) => active_tasks,
+    };
+
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].task_id, active_task_id);
+    assert_eq!(
+        server
+            .runtime_state
+            .runtime_task_registry
+            .read()
+            .expect("runtime task registry should not be poisoned")
+            .active_tasks()
+            .len(),
+        1,
+        "failed atomic start must not insert a second active task"
+    );
+
+    server
+        .runtime_state
+        .runtime_task_registry
+        .write()
+        .expect("runtime task registry should not be poisoned")
+        .finish_task(&active_task_id, RuntimeTaskStatus::Succeeded, None);
+    let mut guard = server
+        .try_start_repository_runtime_task(
+            &workspace,
+            RuntimeTaskKind::WorkspacePrepare,
+            "workspace_prepare",
+            Some("prepare after active index".to_owned()),
+        )
+        .expect("atomic start should succeed after alias conflict finishes");
+    guard.finish(RuntimeTaskStatus::Succeeded, None);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 #[tokio::test]
 async fn read_file_rejects_non_adopted_repository_for_detached_session() {
     let workspace_root_a = temp_workspace_root("adoption-gate-repo-a");

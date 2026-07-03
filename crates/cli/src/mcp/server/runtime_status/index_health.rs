@@ -886,25 +886,13 @@ impl FriggMcpServer {
             return;
         }
 
-        let semantic_refresh_already_running = should_refresh_semantic
-            && self
-                .runtime_state
-                .runtime_task_registry
-                .read()
-                .expect("runtime task registry poisoned")
-                .has_active_task_for_any_repository(
-                    crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                    &[&workspace.repository_id, &workspace.runtime_repository_id],
-                );
-
-        if should_refresh_semantic && !semantic_refresh_already_running {
+        if should_refresh_semantic {
             let server = self.clone();
             let workspace = workspace.clone();
             let semantic_plan = semantic_plan.clone();
-            let task_guard = RuntimeTaskGuard::start(
-                Arc::clone(&self.runtime_state.runtime_task_registry),
+            let task_guard = self.try_start_repository_runtime_task(
+                &workspace,
                 crate::mcp::types::RuntimeTaskKind::SemanticRefresh,
-                workspace.repository_id.clone(),
                 "semantic_attach_refresh",
                 semantic_plan.as_ref().map(|plan| {
                     format!(
@@ -915,47 +903,56 @@ impl FriggMcpServer {
                     )
                 }),
             );
-            let spawn_task_id = task_guard.task_id().to_owned();
-            let spawn_repository_id = workspace.repository_id.clone();
-            let spawn_result = std::thread::Builder::new()
-                .name(format!(
-                    "frigg-semantic-refresh-{}",
-                    workspace.repository_id
-                ))
-                .spawn(move || {
-                    let result = semantic_plan
-                        .as_ref()
-                        .ok_or_else(|| "missing semantic refresh plan".to_owned())
-                        .and_then(|plan| {
-                            server.refresh_workspace_semantic_snapshot_with_plan(&workspace, plan)
-                        });
-                    let (status, detail) = match result {
-                        Ok(()) => (crate::mcp::types::RuntimeTaskStatus::Succeeded, None),
-                        Err(err) => {
-                            warn!(
-                                repository_id = workspace.repository_id,
-                                error = %err,
-                                "workspace semantic refresh failed during runtime prewarm"
-                            );
-                            (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
-                        }
-                    };
-                    let mut task_guard = task_guard;
-                    task_guard.finish(status, detail);
-                });
-            if let Err(err) = spawn_result {
-                self.runtime_state
-                    .runtime_task_registry
-                    .write()
-                    .expect("runtime task registry poisoned")
-                    .update_task_detail(
-                        &spawn_task_id,
-                        Some(format!("failed to spawn semantic prewarm thread: {err}")),
+            if let Ok(task_guard) = task_guard {
+                let spawn_task_id = task_guard.task_id().to_owned();
+                let spawn_repository_id = workspace.repository_id.clone();
+                let spawn_result = std::thread::Builder::new()
+                    .name(format!(
+                        "frigg-semantic-refresh-{}",
+                        workspace.repository_id
+                    ))
+                    .spawn(move || {
+                        let result = semantic_plan
+                            .as_ref()
+                            .ok_or_else(|| "missing semantic refresh plan".to_owned())
+                            .and_then(|plan| {
+                                server
+                                    .refresh_workspace_semantic_snapshot_with_plan(&workspace, plan)
+                            });
+                        let (status, detail) = match result {
+                            Ok(()) => (crate::mcp::types::RuntimeTaskStatus::Succeeded, None),
+                            Err(err) => {
+                                warn!(
+                                    repository_id = workspace.repository_id,
+                                    error = %err,
+                                    "workspace semantic refresh failed during runtime prewarm"
+                                );
+                                (crate::mcp::types::RuntimeTaskStatus::Failed, Some(err))
+                            }
+                        };
+                        let mut task_guard = task_guard;
+                        task_guard.finish(status, detail);
+                    });
+                if let Err(err) = spawn_result {
+                    self.runtime_state
+                        .runtime_task_registry
+                        .write()
+                        .expect("runtime task registry poisoned")
+                        .update_task_detail(
+                            &spawn_task_id,
+                            Some(format!("failed to spawn semantic prewarm thread: {err}")),
+                        );
+                    warn!(
+                        repository_id = spawn_repository_id,
+                        error = %err,
+                        "failed to spawn semantic prewarm thread"
                     );
-                warn!(
-                    repository_id = spawn_repository_id,
-                    error = %err,
-                    "failed to spawn semantic prewarm thread"
+                }
+            } else {
+                tracing::trace!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    "workspace semantic refresh skipped because runtime index work is active"
                 );
             }
         }
