@@ -14,7 +14,8 @@ use tracing::warn;
 
 use super::*;
 use crate::embeddings::{
-    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, cached_semantic_embedding_provider,
+    LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig,
+    cached_semantic_embedding_provider, provider_factory::canonical_provider_model,
 };
 use crate::indexer::manifest::normalize_repository_relative_path;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -292,6 +293,10 @@ pub(super) fn build_semantic_embedding_records(
     let model = semantic_runtime.normalized_model().ok_or_else(|| {
         FriggError::Internal("semantic runtime model missing after validation".to_owned())
     })?;
+    let model = canonical_provider_model(provider, model).map_err(|err| {
+        FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
+    })?;
+    let model = model.as_str();
     let SemanticChunkBuild {
         candidates: chunks,
         unreadable_paths,

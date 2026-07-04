@@ -457,8 +457,6 @@ pub mod provider_factory;
 pub use google::GoogleEmbeddingProvider;
 pub use local::LocalEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;
-#[cfg(test)]
-pub(crate) use provider_factory::build_semantic_embedding_provider;
 pub use provider_factory::{
     LocalArtifactPolicy, SemanticEmbeddingProviderFactoryConfig, cached_semantic_embedding_provider,
 };

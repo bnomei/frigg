@@ -15,6 +15,7 @@ use crate::domain::{
 use crate::embeddings::{
     EmbeddingPurpose, EmbeddingRequest, LocalArtifactPolicy,
     SemanticEmbeddingProviderFactoryConfig, cached_semantic_embedding_provider,
+    provider_factory::canonical_provider_model,
 };
 use crate::manifest_validation::latest_validated_manifest_snapshot;
 use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
@@ -217,6 +218,10 @@ pub(super) fn search_semantic_channel_hits(
                 "semantic runtime model missing after successful startup validation".to_owned(),
             )
         })?;
+    let model = canonical_provider_model(provider, model).map_err(|err| {
+        FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
+    })?;
+    let model = model.as_str();
     let query_embedding = block_on_semantic_query_embedding(
         semantic_executor,
         provider,

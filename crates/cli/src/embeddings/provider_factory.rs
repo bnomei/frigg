@@ -9,7 +9,7 @@ use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, Semanti
 use super::local::{local_model_error_to_embedding_error, reject_hf_home_override_for_provider};
 use super::local_model::{
     LocalModelArtifact, prepare_local_semantic_model, require_prepared_local_model,
-    resolve_local_model_artifact,
+    resolve_local_model_artifact, resolve_model_alias,
 };
 use super::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderKind, EmbeddingResult,
@@ -48,7 +48,7 @@ static SEMANTIC_EMBEDDING_PROVIDER_BUILD_LOCKS: OnceLock<
 > = OnceLock::new();
 
 /// Builds the active semantic embedding provider from runtime configuration and credentials.
-pub(crate) fn build_semantic_embedding_provider(
+fn build_semantic_embedding_provider(
     config: SemanticEmbeddingProviderFactoryConfig<'_>,
 ) -> EmbeddingResult<Arc<dyn EmbeddingProvider>> {
     let model = config.model.trim();
@@ -110,6 +110,21 @@ pub fn cached_semantic_embedding_provider(
     Ok(provider)
 }
 
+/// Returns the canonical model identifier used for provider-cache and semantic storage keys.
+pub(crate) fn canonical_provider_model(
+    provider: SemanticRuntimeProvider,
+    model: &str,
+) -> EmbeddingResult<String> {
+    match provider {
+        SemanticRuntimeProvider::Local => resolve_model_alias(model)
+            .map(|alias| alias.semantic_model.to_owned())
+            .map_err(local_model_error_to_embedding_error),
+        SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
+            Ok(model.trim().to_owned())
+        }
+    }
+}
+
 fn provider_build_lock(
     key: &SemanticEmbeddingProviderCacheKey,
     provider: SemanticRuntimeProvider,
@@ -159,7 +174,7 @@ fn provider_cache_key(
             let artifact = resolve_local_model_artifact(config.model)
                 .map_err(local_model_error_to_embedding_error)?;
             reject_hf_home_override_for_provider(&artifact, hf_home_from_process_env())?;
-            let model = artifact.semantic_model.clone();
+            let model = canonical_provider_model(config.provider, config.model)?;
             (model, Some(local_artifact_cache_identity(&artifact)))
         }
         SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
@@ -375,6 +390,20 @@ mod tests {
         assert_eq!(canonical, fastembed_alias);
         assert_eq!(canonical, repository_alias);
         assert_eq!(canonical.model, "all-MiniLM-L6-v2");
+    }
+
+    #[test]
+    fn canonical_provider_model_only_canonicalizes_local_aliases() {
+        assert_eq!(
+            canonical_provider_model(SemanticRuntimeProvider::Local, "AllMiniLML6V2")
+                .expect("local alias should canonicalize"),
+            "all-MiniLM-L6-v2"
+        );
+        assert_eq!(
+            canonical_provider_model(SemanticRuntimeProvider::OpenAi, " text-embedding-3-small ")
+                .expect("remote model should trim only"),
+            "text-embedding-3-small"
+        );
     }
 
     #[test]

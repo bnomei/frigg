@@ -1282,7 +1282,7 @@ fn local_embedding_missing_and_corrupt_artifacts_map_to_provider_errors() {
 
 #[test]
 fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call() {
-    let openai = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+    let openai = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
         provider: crate::settings::SemanticRuntimeProvider::OpenAi,
         model: "text-embedding-3-small",
         credentials: &crate::settings::SemanticRuntimeCredentials {
@@ -1294,7 +1294,7 @@ fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call
     .expect("openai provider should construct from credentials");
     assert_eq!(openai.kind(), EmbeddingProviderKind::OpenAi);
 
-    let google = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+    let google = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
         provider: crate::settings::SemanticRuntimeProvider::Google,
         model: "gemini-embedding-001",
         credentials: &crate::settings::SemanticRuntimeCredentials {
@@ -1309,7 +1309,7 @@ fn semantic_provider_factory_constructs_openai_and_google_without_embedding_call
 
 #[test]
 fn semantic_provider_factory_routes_local_without_requiring_api_key() {
-    let result = build_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
+    let result = cached_semantic_embedding_provider(SemanticEmbeddingProviderFactoryConfig {
         provider: crate::settings::SemanticRuntimeProvider::Local,
         model: "unsupported-local-model",
         credentials: &crate::settings::SemanticRuntimeCredentials::default(),
