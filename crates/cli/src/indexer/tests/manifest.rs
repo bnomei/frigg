@@ -81,6 +81,33 @@ fn changed_only_retains_previous_entry_when_digest_read_fails() -> FriggResult<(
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn changed_only_fails_when_new_file_digest_read_fails() -> FriggResult<()> {
+    let root = temp_workspace_root("manifest-changed-only-new-read-failure-errors");
+    prepare_workspace(&root, &[("src/lib.rs", "pub fn original() {}\n")])?;
+
+    let builder = ManifestBuilder::default();
+    let previous = builder.build(&root)?;
+    let new_file_path = root.join("src/new.rs");
+    fs::write(&new_file_path, "pub fn new_file() {}\n").map_err(FriggError::Io)?;
+    set_file_mode(&new_file_path, 0o000)?;
+
+    let err = builder
+        .build_changed_only_with_diagnostics(&root, &previous)
+        .expect_err("new files with unreadable content must fail changed-only manifest build");
+
+    set_file_mode(&new_file_path, 0o644)?;
+
+    assert!(
+        matches!(err, FriggError::Io(_)),
+        "expected unreadable new file to surface as an IO error, got {err:?}"
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
 #[test]
 fn changed_only_directory_hint_rehashes_child_with_matching_metadata() -> FriggResult<()> {
     let root = temp_workspace_root("manifest-changed-only-directory-hint");

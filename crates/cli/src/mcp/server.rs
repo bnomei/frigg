@@ -11,7 +11,9 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::model::{GeneratedStructuralFollowUp, ReferenceMatch, SymbolMatch};
-use crate::domain::{ChannelResult, EvidenceChannel, FriggError, WorkloadPrecisionMode};
+use crate::domain::{
+    ChannelResult, EvidenceChannel, FriggError, FriggResult, WorkloadPrecisionMode,
+};
 use crate::graph::{
     PreciseRelationshipKind, RelationKind, ScipIngestError, ScipResourceBudgets, SymbolGraph,
 };
@@ -403,6 +405,7 @@ struct WorkspaceAttachSessionState {
 #[derive(Clone)]
 struct FriggMcpCacheState {
     symbol_corpus_cache: Arc<RwLock<BTreeMap<SymbolCorpusCacheKey, Arc<RepositorySymbolCorpus>>>>,
+    symbol_corpus_cache_epoch: Arc<AtomicU64>,
     precise_graph_cache: Arc<RwLock<BTreeMap<PreciseGraphCacheKey, Arc<CachedPreciseGraph>>>>,
     latest_precise_graph_cache: Arc<RwLock<BTreeMap<String, Arc<CachedPreciseGraph>>>>,
     repository_response_freshness_cache: Arc<
@@ -529,6 +532,7 @@ impl FriggMcpServer {
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
                 symbol_corpus_cache: Arc::new(RwLock::new(BTreeMap::new())),
+                symbol_corpus_cache_epoch: Arc::new(AtomicU64::new(0)),
                 precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 latest_precise_graph_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 repository_response_freshness_cache: Arc::new(RwLock::new(BTreeMap::new())),
@@ -598,7 +602,7 @@ impl FriggMcpServer {
             .as_ref()
             .map(|workspace| self.public_repository_summary(workspace));
         let repositories = self
-            .known_workspaces()
+            .visible_workspaces()
             .into_iter()
             .map(|workspace| self.public_repository_summary(&workspace))
             .collect::<Vec<_>>();
@@ -663,8 +667,8 @@ impl FriggMcpServer {
             return Ok(());
         }
 
-        let known_workspaces = self.known_workspaces();
-        if let [workspace] = known_workspaces.as_slice() {
+        let auto_adoptable_workspaces = self.auto_adoptable_workspaces();
+        if let [workspace] = auto_adoptable_workspaces.as_slice() {
             self.adopt_workspace(workspace, true)?;
             return Ok(());
         }
@@ -798,7 +802,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "list_repositories",
-        description = "List globally known repositories with compact session, watch, and storage state.",
+        description = "List session-visible repositories with compact session, watch, and storage state.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -816,7 +820,7 @@ impl FriggMcpServer {
         let (result, provenance_result) = self
             .run_read_only_tool_blocking(&execution_context, move || {
                 let repositories = server
-                    .known_workspaces()
+                    .visible_workspaces()
                     .into_iter()
                     .map(|workspace| server.public_repository_summary(&workspace))
                     .collect::<Vec<_>>();
@@ -1102,6 +1106,17 @@ impl FriggMcpServer {
         self.invalidate_repository_precise_generator_probe_cache(&workspace.repository_id);
         self.scip_invalidate_repository_precise_generation_cache(&workspace.repository_id);
         self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
+        let active_session_count = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_session_count(&workspace.repository_id);
+        if active_session_count == 0
+            && !self.repository_has_active_watch_lease(&workspace.repository_id)
+        {
+            self.clear_pending_precise_dirty_paths(&workspace.repository_id);
+        }
         let response = WorkspaceDetachResponse {
             repository_id: workspace.repository_id.clone(),
             session_default: self.current_repository_id().as_deref()
@@ -1206,12 +1221,10 @@ impl FriggMcpServer {
         Self::notify_progress(&meta, &client, 1.0, 4.0, "initialize storage").await;
         let prepared_storage_result = match Self::run_blocking_task("workspace_prepare", {
             let workspace = workspace.clone();
-            move || -> Result<WorkspaceStorageSummary, String> {
-                let db_path = ensure_provenance_db_parent_dir(&workspace.root)
-                    .map_err(|err| err.to_string())?;
+            move || -> FriggResult<WorkspaceStorageSummary> {
+                let db_path = ensure_provenance_db_parent_dir(&workspace.root)?;
                 let storage = Storage::new(&db_path);
-                storage.initialize().map_err(|err| err.to_string())?;
-                storage.verify().map_err(|err| err.to_string())?;
+                storage.initialize_with_auto_repair()?;
                 Ok(FriggMcpServer::workspace_storage_summary(&workspace))
             }
         })
@@ -1224,18 +1237,16 @@ impl FriggMcpServer {
             }
         };
         let prepared_storage = prepared_storage_result.map_err(|err| {
+            let error_message = err.to_string();
             warn!(
                 repository_id = %workspace.repository_id,
                 root = %workspace.root.display(),
                 duration_ms = started_at.elapsed().as_millis() as u64,
-                error = %err,
+                error = %error_message,
                 "workspace prepare failed during storage initialization"
             );
-            task_guard.finish(RuntimeTaskStatus::Failed, Some(err.clone()));
-            Self::internal(
-                err,
-                Some(json!({ "repository_id": workspace.repository_id })),
-            )
+            task_guard.finish(RuntimeTaskStatus::Failed, Some(error_message));
+            Self::map_frigg_error(err)
         })?;
 
         Self::notify_progress(&meta, &client, 2.0, 4.0, "validate storage").await;

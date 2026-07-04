@@ -1,13 +1,15 @@
 //! Manifest freshness validation and watch-time reuse of validated digest snapshots.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::{FriggError, FriggResult};
-use crate::indexer::{FileMetadataDigest, ManifestBuilder};
+use crate::indexer::{
+    FileMetadataDigest, ManifestBuildDiagnostic, ManifestBuilder, ManifestMetadataBuildOutput,
+};
 use crate::languages::semantic_chunk_language_for_path;
 use crate::settings::SemanticRuntimeConfig;
 use crate::storage::{ManifestEntry, ManifestMetadataEntry, RepositoryManifestSnapshot, Storage};
@@ -24,11 +26,19 @@ pub(crate) fn validate_manifest_digests_for_root(
     root: &Path,
     file_digests: &[FileMetadataDigest],
 ) -> Option<Vec<FileMetadataDigest>> {
-    let snapshot_digests = normalized_manifest_digests_for_root(root, file_digests)?;
     let live_output = ManifestBuilder::default()
         .build_metadata_with_diagnostics(root)
         .ok()?;
-    if !live_output.diagnostics.is_empty() {
+    validate_manifest_digests_against_live_output(root, file_digests, live_output)
+}
+
+fn validate_manifest_digests_against_live_output(
+    root: &Path,
+    file_digests: &[FileMetadataDigest],
+    live_output: ManifestMetadataBuildOutput,
+) -> Option<Vec<FileMetadataDigest>> {
+    let snapshot_digests = normalized_manifest_digests_for_root(root, file_digests)?;
+    if manifest_diagnostics_invalidate_snapshot(root, &snapshot_digests, &live_output.diagnostics) {
         return None;
     }
     let live_digests = normalized_manifest_digests_for_root(root, &live_output.entries)?;
@@ -42,14 +52,7 @@ fn normalized_manifest_digests_for_root(
 ) -> Option<Vec<FileMetadataDigest>> {
     let mut normalized = Vec::with_capacity(file_digests.len());
     for digest in file_digests {
-        let path = if digest.path.is_absolute() {
-            digest.path.clone()
-        } else {
-            root.join(&digest.path)
-        };
-        if !path.starts_with(root) {
-            return None;
-        }
+        let path = normalize_manifest_path_for_root(root, &digest.path)?;
         normalized.push(FileMetadataDigest {
             path,
             size_bytes: digest.size_bytes,
@@ -58,6 +61,39 @@ fn normalized_manifest_digests_for_root(
     }
     normalized.sort_by(file_metadata_digest_order);
     Some(normalized)
+}
+
+fn manifest_diagnostics_invalidate_snapshot(
+    root: &Path,
+    snapshot_digests: &[FileMetadataDigest],
+    diagnostics: &[ManifestBuildDiagnostic],
+) -> bool {
+    if diagnostics.is_empty() {
+        return false;
+    }
+
+    let snapshot_paths = snapshot_digests
+        .iter()
+        .map(|digest| digest.path.clone())
+        .collect::<BTreeSet<_>>();
+    diagnostics.iter().any(|diagnostic| {
+        let Some(path) = diagnostic.path.as_deref() else {
+            return true;
+        };
+        let Some(path) = normalize_manifest_path_for_root(root, path) else {
+            return true;
+        };
+        snapshot_paths.contains(&path)
+    })
+}
+
+fn normalize_manifest_path_for_root(root: &Path, path: &Path) -> Option<PathBuf> {
+    let normalized = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    normalized.starts_with(root).then_some(normalized)
 }
 
 fn file_metadata_digest_order(
@@ -153,14 +189,22 @@ impl ValidatedManifestCandidateCache {
         root: &Path,
         snapshot_id: &str,
         digests: Arc<Vec<FileMetadataDigest>>,
-    ) {
+    ) -> bool {
+        let key = Self::cache_key(root);
+        if matches!(
+            self.entries.get(&key),
+            Some(ValidatedManifestCandidateCacheEntry::Dirty)
+        ) {
+            return false;
+        }
         self.entries.insert(
-            Self::cache_key(root),
+            key,
             ValidatedManifestCandidateCacheEntry::Ready {
                 snapshot_id: snapshot_id.to_owned(),
                 digests,
             },
         );
+        true
     }
 
     pub(crate) fn invalidate_root(&mut self, root: &Path) {
@@ -217,12 +261,16 @@ pub(crate) fn latest_validated_manifest_snapshot(
     repository_id: &str,
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
-) -> Option<ValidatedManifestSnapshot> {
-    let shared = latest_validated_manifest_snapshot_shared(storage, repository_id, root, cache)?;
-    Some(ValidatedManifestSnapshot {
+) -> FriggResult<Option<ValidatedManifestSnapshot>> {
+    let Some(shared) =
+        latest_validated_manifest_snapshot_shared(storage, repository_id, root, cache)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ValidatedManifestSnapshot {
         snapshot_id: shared.snapshot_id,
         digests: shared.digests.as_ref().clone(),
-    })
+    }))
 }
 
 pub(crate) fn latest_validated_manifest_snapshot_shared(
@@ -230,10 +278,10 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     repository_id: &str,
     root: &Path,
     cache: Option<&Arc<RwLock<ValidatedManifestCandidateCache>>>,
-) -> Option<SharedValidatedManifestSnapshot> {
-    let latest = storage
-        .load_latest_manifest_metadata_for_repository(repository_id)
-        .ok()??;
+) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
+    let Some(latest) = storage.load_latest_manifest_metadata_for_repository(repository_id)? else {
+        return Ok(None);
+    };
     let snapshot_id = latest.snapshot_id.clone();
 
     if let Some(cache) = cache {
@@ -244,25 +292,29 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
         match lookup {
             ValidatedManifestCandidateCacheLookup::Hit(digests) => {
                 if validate_manifest_digests_for_root(root, digests.as_ref()).is_some() {
-                    return Some(SharedValidatedManifestSnapshot {
+                    return Ok(Some(SharedValidatedManifestSnapshot {
                         snapshot_id,
                         digests,
-                    });
+                    }));
                 }
 
                 cache
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .invalidate_root(root);
-                return None;
+                return Ok(None);
             }
-            ValidatedManifestCandidateCacheLookup::Dirty => return None,
+            ValidatedManifestCandidateCacheLookup::Dirty => return Ok(None),
             ValidatedManifestCandidateCacheLookup::Miss => {}
         }
     }
 
     let snapshot_digests = manifest_digests_from_metadata_entries(&latest.entries);
-    let validated_digests = Arc::new(validate_manifest_digests_for_root(root, &snapshot_digests)?);
+    let Some(validated_digests) = validate_manifest_digests_for_root(root, &snapshot_digests)
+    else {
+        return Ok(None);
+    };
+    let validated_digests = Arc::new(validated_digests);
 
     if let Some(cache) = cache {
         cache
@@ -271,10 +323,10 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
             .store_validated_shared(root, &snapshot_id, Arc::clone(&validated_digests));
     }
 
-    Some(SharedValidatedManifestSnapshot {
+    Ok(Some(SharedValidatedManifestSnapshot {
         snapshot_id,
         digests: validated_digests,
-    })
+    }))
 }
 
 /// Return a cached validated snapshot without re-walking the workspace.
@@ -286,10 +338,10 @@ pub(crate) fn latest_cached_validated_manifest_snapshot_shared(
     repository_id: &str,
     root: &Path,
     cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
-) -> Option<SharedValidatedManifestSnapshot> {
-    let latest = storage
-        .load_latest_manifest_metadata_for_repository(repository_id)
-        .ok()??;
+) -> FriggResult<Option<SharedValidatedManifestSnapshot>> {
+    let Some(latest) = storage.load_latest_manifest_metadata_for_repository(repository_id)? else {
+        return Ok(None);
+    };
     let snapshot_id = latest.snapshot_id.clone();
     let lookup = cache
         .write()
@@ -297,13 +349,13 @@ pub(crate) fn latest_cached_validated_manifest_snapshot_shared(
         .lookup(root, &snapshot_id);
     match lookup {
         ValidatedManifestCandidateCacheLookup::Hit(digests) => {
-            Some(SharedValidatedManifestSnapshot {
+            Ok(Some(SharedValidatedManifestSnapshot {
                 snapshot_id,
                 digests,
-            })
+            }))
         }
         ValidatedManifestCandidateCacheLookup::Dirty
-        | ValidatedManifestCandidateCacheLookup::Miss => None,
+        | ValidatedManifestCandidateCacheLookup::Miss => Ok(None),
     }
 }
 
@@ -516,6 +568,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexer::ManifestDiagnosticKind;
     use std::fs;
 
     fn temp_workspace_root(test_name: &str) -> PathBuf {
@@ -557,6 +610,66 @@ mod tests {
     }
 
     #[test]
+    fn validate_manifest_digests_ignores_diagnostics_outside_snapshot() {
+        let workspace_root = temp_workspace_root("diagnostic-outside-snapshot");
+        let snapshot_digests = vec![FileMetadataDigest {
+            path: PathBuf::from("src/lib.rs"),
+            size_bytes: 10,
+            mtime_ns: Some(100),
+        }];
+
+        let validated = validate_manifest_digests_against_live_output(
+            &workspace_root,
+            &snapshot_digests,
+            ManifestMetadataBuildOutput {
+                entries: snapshot_digests.clone(),
+                diagnostics: vec![ManifestBuildDiagnostic {
+                    path: Some(workspace_root.join("generated/unreadable.rs")),
+                    kind: ManifestDiagnosticKind::Read,
+                    message: "permission denied".to_owned(),
+                }],
+            },
+        )
+        .expect("unrelated diagnostics should not stale an otherwise matching snapshot");
+
+        assert_eq!(validated.len(), 1);
+        assert_eq!(validated[0].path, workspace_root.join("src/lib.rs"));
+
+        assert!(
+            validate_manifest_digests_against_live_output(
+                &workspace_root,
+                &snapshot_digests,
+                ManifestMetadataBuildOutput {
+                    entries: snapshot_digests.clone(),
+                    diagnostics: vec![ManifestBuildDiagnostic {
+                        path: Some(workspace_root.join("src/lib.rs")),
+                        kind: ManifestDiagnosticKind::Read,
+                        message: "permission denied".to_owned(),
+                    }],
+                },
+            )
+            .is_none(),
+            "diagnostics touching indexed snapshot paths must stay conservative"
+        );
+        assert!(
+            validate_manifest_digests_against_live_output(
+                &workspace_root,
+                &snapshot_digests,
+                ManifestMetadataBuildOutput {
+                    entries: snapshot_digests.clone(),
+                    diagnostics: vec![ManifestBuildDiagnostic {
+                        path: None,
+                        kind: ManifestDiagnosticKind::Walk,
+                        message: "walk failed".to_owned(),
+                    }],
+                },
+            )
+            .is_none(),
+            "unscoped walk diagnostics must stay conservative"
+        );
+    }
+
+    #[test]
     fn latest_validated_manifest_snapshot_shared_reuses_cached_digest_arc() -> FriggResult<()> {
         let workspace_root = temp_workspace_root("shared-cache-hit");
         fs::create_dir_all(&workspace_root)
@@ -582,14 +695,14 @@ mod tests {
             "repo-001",
             &workspace_root,
             Some(&cache),
-        )
+        )?
         .expect("first shared manifest validation should succeed");
         let second = latest_validated_manifest_snapshot_shared(
             &storage,
             "repo-001",
             &workspace_root,
             Some(&cache),
-        )
+        )?
         .expect("second shared manifest validation should hit cache");
 
         assert!(Arc::ptr_eq(&first.digests, &second.digests));
@@ -632,7 +745,7 @@ mod tests {
                 "repo-001",
                 &workspace_root,
                 Some(&cache),
-            )
+            )?
             .is_some(),
             "initial shared manifest validation should populate cache"
         );
@@ -646,7 +759,7 @@ mod tests {
                 "repo-001",
                 &workspace_root,
                 Some(&cache),
-            )
+            )?
             .is_none(),
             "cached manifest snapshots must be rejected when live files are missing from the snapshot"
         );
@@ -689,7 +802,7 @@ mod tests {
                 "repo-001",
                 &workspace_root,
                 Some(&cache),
-            )
+            )?
             .is_some(),
             "initial shared manifest validation should populate cache"
         );
@@ -704,7 +817,7 @@ mod tests {
                 "repo-001",
                 &workspace_root,
                 Some(&cache),
-            )
+            )?
             .is_none(),
             "dirty roots should bypass shared manifest snapshot reuse"
         );
@@ -716,5 +829,60 @@ mod tests {
 
         cleanup_workspace(&workspace_root);
         Ok(())
+    }
+
+    #[test]
+    fn latest_validated_manifest_snapshot_shared_propagates_storage_errors() -> FriggResult<()> {
+        let workspace_root = temp_workspace_root("shared-storage-error");
+        fs::create_dir_all(workspace_root.join(".frigg"))
+            .expect("manifest-validation db parent should be creatable");
+        let db_path = workspace_root.join(".frigg/provenance.db");
+        let conn = rusqlite::Connection::open(&db_path).map_err(|err| {
+            FriggError::Internal(format!("failed to create incompatible fixture db: {err}"))
+        })?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              version INTEGER NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version (id, version, updated_at)
+            VALUES (1, 0, CURRENT_TIMESTAMP);
+            "#,
+        )
+        .map_err(|err| {
+            FriggError::Internal(format!("failed to seed incompatible fixture db: {err}"))
+        })?;
+        drop(conn);
+
+        let storage = Storage::new(&db_path);
+        let err =
+            latest_validated_manifest_snapshot_shared(&storage, "repo-001", &workspace_root, None)
+                .expect_err("schema-incompatible storage should be propagated");
+        assert!(
+            matches!(err, FriggError::StorageSchemaIncompatible { .. }),
+            "expected typed storage schema error, got {err:?}"
+        );
+
+        cleanup_workspace(&workspace_root);
+        Ok(())
+    }
+
+    #[test]
+    fn store_validated_shared_does_not_clobber_dirty_root() {
+        let workspace_root = temp_workspace_root("dirty-store-not-clobbered");
+        let mut cache = ValidatedManifestCandidateCache::default();
+        cache.mark_dirty_root(&workspace_root);
+
+        let stored =
+            cache.store_validated_shared(&workspace_root, "snapshot-001", Arc::new(Vec::new()));
+
+        assert!(!stored, "dirty roots must reject ready snapshot stores");
+        assert!(cache.is_dirty_root(&workspace_root));
+        assert!(matches!(
+            cache.lookup(&workspace_root, "snapshot-001"),
+            ValidatedManifestCandidateCacheLookup::Dirty
+        ));
     }
 }

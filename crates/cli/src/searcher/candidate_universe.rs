@@ -22,7 +22,8 @@ use super::ordering::sort_search_diagnostics_deterministically;
 use super::{
     HybridRankingIntent, ManifestCandidateFilesBuild, NormalizedSearchFilters,
     RepositoryCandidateUniverse, SearchCandidateFile, SearchCandidateUniverse,
-    SearchCandidateUniverseBuild, SearchExecutionDiagnostics, SearchTextQuery, TextSearcher,
+    SearchCandidateUniverseBuild, SearchDiagnostic, SearchDiagnosticKind,
+    SearchExecutionDiagnostics, SearchTextQuery, TextSearcher,
 };
 
 impl TextSearcher {
@@ -65,14 +66,15 @@ impl TextSearcher {
             .map(|(_, repository)| {
                 let repository_id = repository.repository_id.0;
                 let root = PathBuf::from(repository.root_path);
-                let (snapshot_id, mut candidates) = self
+                let manifest_candidates = self
                     .manifest_candidate_files_for_repository_with_attribution(
                         &repository_id,
                         &root,
                         query,
                         filters,
-                    )
-                    .map(|manifest| {
+                    );
+                let (snapshot_id, mut candidates) = match manifest_candidates {
+                    Ok(Some(manifest)) => {
                         candidate_intake_elapsed_us = candidate_intake_elapsed_us
                             .saturating_add(manifest.candidate_intake_elapsed_us);
                         freshness_validation_elapsed_us = freshness_validation_elapsed_us
@@ -80,8 +82,8 @@ impl TextSearcher {
                         manifest_backed_repository_count =
                             manifest_backed_repository_count.saturating_add(1);
                         (Some(manifest.snapshot_id), manifest.candidates)
-                    })
-                    .unwrap_or_else(|| {
+                    }
+                    Ok(None) => {
                         let walk_started_at = Instant::now();
                         let walked = walk_candidate_files_for_repository(
                             &repository_id,
@@ -93,7 +95,29 @@ impl TextSearcher {
                         candidate_intake_elapsed_us =
                             candidate_intake_elapsed_us.saturating_add(elapsed_us(walk_started_at));
                         (None, walked)
-                    });
+                    }
+                    Err(err) => {
+                        diagnostics.entries.push(SearchDiagnostic {
+                            repository_id: repository_id.clone(),
+                            path: Some(root.display().to_string()),
+                            kind: SearchDiagnosticKind::Read,
+                            message: format!(
+                                "failed to read validated manifest snapshot from storage: {err}"
+                            ),
+                        });
+                        let walk_started_at = Instant::now();
+                        let walked = walk_candidate_files_for_repository(
+                            &repository_id,
+                            &root,
+                            query,
+                            filters,
+                            &mut diagnostics,
+                        );
+                        candidate_intake_elapsed_us =
+                            candidate_intake_elapsed_us.saturating_add(elapsed_us(walk_started_at));
+                        (None, walked)
+                    }
+                };
                 let root_config_started_at = Instant::now();
                 merge_candidate_files(
                     &mut candidates,
@@ -200,20 +224,26 @@ impl TextSearcher {
         root: &Path,
         query: &SearchTextQuery,
         filters: &NormalizedSearchFilters,
-    ) -> Option<ManifestCandidateFilesBuild> {
-        let db_path = resolve_provenance_db_path(root).ok()?;
+    ) -> crate::domain::FriggResult<Option<ManifestCandidateFilesBuild>> {
+        let db_path = match resolve_provenance_db_path(root) {
+            Ok(db_path) => db_path,
+            Err(_) => return Ok(None),
+        };
         if !db_path.exists() {
-            return None;
+            return Ok(None);
         }
 
         let storage = Storage::new(db_path);
         let freshness_started_at = Instant::now();
-        let validated_snapshot = latest_validated_manifest_snapshot(
+        let Some(validated_snapshot) = latest_validated_manifest_snapshot(
             &storage,
             repository_id,
             root,
             Some(&self.validated_manifest_candidate_cache),
-        )?;
+        )?
+        else {
+            return Ok(None);
+        };
         let freshness_validation_elapsed_us = elapsed_us(freshness_started_at);
         let candidate_intake_started_at = Instant::now();
         let root_ignore_matcher = build_root_ignore_matcher(root);
@@ -225,26 +255,26 @@ impl TextSearcher {
             }
             let rel_path = normalize_repository_relative_path(root, &path);
 
-            if let Some(language) = filters.language {
-                if !language.matches_path(&path) {
-                    continue;
-                }
+            if let Some(language) = filters.language
+                && !language.matches_path(&path)
+            {
+                continue;
             }
-            if let Some(path_regex) = &query.path_regex {
-                if !path_regex.is_match(&rel_path) {
-                    continue;
-                }
+            if let Some(path_regex) = &query.path_regex
+                && !path_regex.is_match(&rel_path)
+            {
+                continue;
             }
 
             candidates.push((rel_path, path));
         }
         candidates.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
         candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
-        Some(ManifestCandidateFilesBuild {
+        Ok(Some(ManifestCandidateFilesBuild {
             snapshot_id: validated_snapshot.snapshot_id,
             candidates,
             candidate_intake_elapsed_us: elapsed_us(candidate_intake_started_at),
             freshness_validation_elapsed_us,
-        })
+        }))
     }
 }

@@ -197,6 +197,8 @@ fn removal_span(contents: &str, block: Span) -> Span {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic)]
+
     use super::{
         MANAGED_BLOCK_END, MANAGED_BLOCK_START, ManagedBlockEdit, desired_markdown,
         has_managed_block, remove_managed_block, upsert_managed_block,

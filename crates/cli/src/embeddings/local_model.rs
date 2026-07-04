@@ -742,15 +742,18 @@ mod enabled {
             };
 
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::Linux), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::Linux), &env)
+                    .expect("linux cache root should resolve"),
                 PathBuf::from("/tmp/frigg-models")
             );
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::MacOs), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::MacOs), &env)
+                    .expect("macOS cache root should resolve"),
                 PathBuf::from("/tmp/frigg-models")
             );
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::Windows), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::Windows), &env)
+                    .expect("windows cache root should resolve"),
                 PathBuf::from("/tmp/frigg-models")
             );
         }
@@ -765,15 +768,18 @@ mod enabled {
             };
 
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::MacOs), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::MacOs), &env)
+                    .expect("macOS cache root should resolve"),
                 PathBuf::from("/home/tester/Library/Caches/frigg/models")
             );
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::Linux), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::Linux), &env)
+                    .expect("linux cache root should resolve"),
                 PathBuf::from("/xdg/cache/frigg/models")
             );
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::Windows), &env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::Windows), &env)
+                    .expect("windows cache root should resolve"),
                 PathBuf::from(r"C:\Users\tester\AppData\Local")
                     .join("frigg")
                     .join("models")
@@ -784,7 +790,8 @@ mod enabled {
                 ..env
             };
             assert_eq!(
-                resolve_cache_root_with_env(Some(CachePlatform::Linux), &linux_home_env).unwrap(),
+                resolve_cache_root_with_env(Some(CachePlatform::Linux), &linux_home_env)
+                    .expect("linux home fallback cache root should resolve"),
                 PathBuf::from("/home/tester/.cache/frigg/models")
             );
         }
@@ -800,7 +807,7 @@ mod enabled {
                 Some(CachePlatform::Linux),
                 &env,
             )
-            .unwrap();
+            .expect("local model artifact should resolve");
 
             assert_eq!(
                 artifact.cache_key,
@@ -954,7 +961,7 @@ mod enabled {
                 uuid::Uuid::now_v7()
             ));
             let repo = root.join("models--Qdrant--all-MiniLM-L6-v2-onnx");
-            fs::create_dir_all(&repo).unwrap();
+            fs::create_dir_all(&repo).expect("corrupt model repository should be created");
             let artifact = LocalModelArtifact {
                 semantic_model: DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
                 cache_root: root.clone(),
@@ -965,7 +972,8 @@ mod enabled {
                 required_files: vec!["model.onnx".to_owned()],
             };
 
-            let error = check_resolved_local_model_artifact(artifact).unwrap_err();
+            let error = check_resolved_local_model_artifact(artifact)
+                .expect_err("corrupt local model artifact should fail validation");
             assert!(matches!(error, LocalModelError::Corrupt { .. }));
 
             let _ = fs::remove_dir_all(root);

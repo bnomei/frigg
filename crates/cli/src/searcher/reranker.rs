@@ -289,6 +289,23 @@ fn coverage_keys(
     keys
 }
 
+fn coverage_representation_keys(
+    entry: &HybridRankedEvidence,
+    coverage_hints: &CoverageProjectionHintMap,
+) -> Vec<(String, GenericWitnessSurfaceFamily, String)> {
+    coverage_keys(entry, coverage_hints)
+        .into_iter()
+        .map(|(family, subtree_root)| (entry.document.repository_id.clone(), family, subtree_root))
+        .collect()
+}
+
+fn document_identity(entry: &HybridRankedEvidence) -> (String, String) {
+    (
+        entry.document.repository_id.clone(),
+        entry.document.path.clone(),
+    )
+}
+
 pub(super) fn build_coverage_grouped_pool(
     grouped: &[HybridRankedEvidence],
     selection_limit: usize,
@@ -306,15 +323,15 @@ pub(super) fn build_coverage_grouped_pool(
 
     let base_take = rank_limit.saturating_sub(reserve);
     let mut baseline = grouped.iter().take(base_take).cloned().collect::<Vec<_>>();
-    let mut represented = BTreeSet::<(GenericWitnessSurfaceFamily, String)>::new();
+    let mut represented = BTreeSet::<(String, GenericWitnessSurfaceFamily, String)>::new();
     let mut included_paths = baseline
         .iter()
-        .map(|entry| entry.document.path.clone())
+        .map(document_identity)
         .collect::<BTreeSet<_>>();
 
     for entry in &baseline {
         if is_coverage_backed(entry, coverage_hints) {
-            represented.extend(coverage_keys(entry, coverage_hints));
+            represented.extend(coverage_representation_keys(entry, coverage_hints));
         }
     }
 
@@ -323,11 +340,11 @@ pub(super) fn build_coverage_grouped_pool(
         if preserved.len() >= reserve || !is_coverage_backed(entry, coverage_hints) {
             continue;
         }
-        let keys = coverage_keys(entry, coverage_hints);
+        let keys = coverage_representation_keys(entry, coverage_hints);
         if keys.is_empty() || keys.iter().all(|key| represented.contains(key)) {
             continue;
         }
-        if !included_paths.insert(entry.document.path.clone()) {
+        if !included_paths.insert(document_identity(entry)) {
             continue;
         }
         represented.extend(keys);
@@ -339,7 +356,7 @@ pub(super) fn build_coverage_grouped_pool(
         if baseline.len() >= rank_limit {
             break;
         }
-        if included_paths.insert(entry.document.path.clone()) {
+        if included_paths.insert(document_identity(entry)) {
             baseline.push(entry.clone());
         }
     }
@@ -355,9 +372,18 @@ mod tests {
     use crate::domain::{EvidenceAnchor, EvidenceAnchorKind, EvidenceDocumentRef};
 
     fn ranked(path: &str, blended_score: f32, witness_score: f32) -> HybridRankedEvidence {
+        ranked_in_repo("repo-001", path, blended_score, witness_score)
+    }
+
+    fn ranked_in_repo(
+        repository_id: &str,
+        path: &str,
+        blended_score: f32,
+        witness_score: f32,
+    ) -> HybridRankedEvidence {
         HybridRankedEvidence {
             document: EvidenceDocumentRef {
-                repository_id: "repo-001".to_owned(),
+                repository_id: repository_id.to_owned(),
                 path: path.to_owned(),
                 line: 1,
                 column: 1,
@@ -501,6 +527,32 @@ mod tests {
             paths.contains(&"packages/worker/package.json"),
             "projection-backed exemplar should be preserved even without direct witness score"
         );
+    }
+
+    #[test]
+    fn coverage_grouped_pool_preserves_same_relative_path_across_repositories() {
+        let grouped = vec![
+            ranked_in_repo("repo-a", "src/lib.rs", 0.95, 0.8),
+            ranked_in_repo("repo-b", "src/lib.rs", 0.94, 0.8),
+            ranked_in_repo("repo-a", "src/extra.rs", 0.93, 0.7),
+            ranked_in_repo("repo-b", "src/extra.rs", 0.92, 0.7),
+            ranked_in_repo("repo-a", "README.md", 0.91, 0.0),
+        ];
+
+        let pool = build_coverage_grouped_pool(&grouped, 1, 3, &CoverageProjectionHintMap::new());
+        let documents = pool
+            .iter()
+            .map(|entry| {
+                (
+                    entry.document.repository_id.as_str(),
+                    entry.document.path.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(documents.len(), 3);
+        assert!(documents.contains(&("repo-a", "src/lib.rs")));
+        assert!(documents.contains(&("repo-b", "src/lib.rs")));
     }
 
     #[test]

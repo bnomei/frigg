@@ -26,6 +26,8 @@ use super::plan::{
 };
 use super::store::ManifestStore;
 
+type SemanticDelta = (ManifestDiff, Vec<String>, Vec<String>);
+
 /// Runs the standard repository refresh path using semantic runtime settings resolved from the
 /// current process environment.
 pub fn index_repository(
@@ -534,7 +536,7 @@ fn semantic_delta_from_head_manifest(
     storage: &dyn SemanticIndexStorage,
     semantic_head_snapshot_id: &str,
     current_manifest: &[FileDigest],
-) -> FriggResult<Option<(ManifestDiff, Vec<String>, Vec<String>)>> {
+) -> FriggResult<Option<SemanticDelta>> {
     let head_manifest = storage
         .load_manifest_for_snapshot(semantic_head_snapshot_id)?
         .into_iter()

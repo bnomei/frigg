@@ -217,10 +217,10 @@ impl GoogleEmbeddingProvider {
                 code = Some(error_status);
             }
 
-            if let Some(provider_status_code) = envelope.error.code {
-                if !retryable_from_grpc_status {
-                    retryability = status_retryability(provider_status_code);
-                }
+            if let Some(provider_status_code) = envelope.error.code
+                && !retryable_from_grpc_status
+            {
+                retryability = status_retryability(provider_status_code);
             }
         }
         let message =

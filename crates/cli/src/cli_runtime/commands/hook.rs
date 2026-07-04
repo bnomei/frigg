@@ -54,11 +54,10 @@ fn should_nudge_pretooluse(value: &Value) -> bool {
 }
 
 fn contains_grep_like_command(command: &str) -> bool {
-    let mut tokens = ShellTokens::new(command);
     let mut command_position = true;
     let mut git_subcommand_position = false;
 
-    while let Some(token) = tokens.next() {
+    for token in ShellTokens::new(command) {
         match token {
             ShellToken::Separator => {
                 command_position = true;

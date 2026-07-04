@@ -73,14 +73,13 @@ impl RegexPrefilterPlan {
 
         for check in &self.checks {
             if !check.trigram_hashes.is_empty() {
-                if let Some(bitmap) = bitmap.as_ref() {
-                    if check
+                if let Some(bitmap) = bitmap.as_ref()
+                    && check
                         .trigram_hashes
                         .iter()
                         .any(|&hash| !bitmap.contains(hash))
-                    {
-                        return false;
-                    }
+                {
+                    return false;
                 }
             } else if !content.contains(check.literal.as_str()) {
                 return false;

@@ -462,9 +462,7 @@ impl WatchSchedulerState {
         now: Instant,
         retry: Duration,
     ) -> Option<Duration> {
-        let Some(repository_id) = self.resolve_repository_id(repository_id.into()) else {
-            return None;
-        };
+        let repository_id = self.resolve_repository_id(repository_id.into())?;
         self.in_flight_set_mut(class).remove(&repository_id);
         self.repositories
             .get_mut(&repository_id)

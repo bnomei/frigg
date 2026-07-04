@@ -57,6 +57,30 @@ impl WorkspaceRegistry {
         self.workspaces.clone()
     }
 
+    pub(crate) fn startup_workspaces(&self) -> Vec<AttachedWorkspace> {
+        self.workspaces
+            .iter()
+            .filter(|workspace| {
+                self.startup_repository_ids
+                    .contains(&workspace.repository_id)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn is_startup_repository_id(&self, repository_id: &str) -> bool {
+        self.workspaces
+            .iter()
+            .find(|workspace| {
+                workspace.repository_id == repository_id
+                    || workspace.runtime_repository_id == repository_id
+            })
+            .is_some_and(|workspace| {
+                self.startup_repository_ids
+                    .contains(&workspace.repository_id)
+            })
+    }
+
     pub(crate) fn workspace_by_repository_id(
         &self,
         repository_id: &str,

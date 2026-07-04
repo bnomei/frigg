@@ -241,11 +241,25 @@ impl WatchRuntime {
                 .lease_counts
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let count = lease_counts
-                .entry(repository.repository_id.clone())
-                .or_insert(0);
-            *count = count.saturating_add(1);
-            *count
+            if let Some(count) = lease_counts.get_mut(&repository.repository_id)
+                && *count > 0
+            {
+                *count = count.saturating_add(1);
+                *count
+            } else {
+                self.watcher
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .watch(&repository.root, RecursiveMode::Recursive)
+                    .map_err(|err| {
+                        FriggError::Internal(format!(
+                            "failed to register watcher for root {}: {err}",
+                            repository.root.display()
+                        ))
+                    })?;
+                lease_counts.insert(repository.repository_id.clone(), 1);
+                1
+            }
         };
 
         if lease_count > 1 {
@@ -259,22 +273,6 @@ impl WatchRuntime {
             );
             return Ok(lease_count);
         }
-
-        self.watcher
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .watch(&repository.root, RecursiveMode::Recursive)
-            .map_err(|err| {
-                let mut lease_counts = self
-                    .lease_counts
-                    .write()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                lease_counts.remove(&repository.repository_id);
-                FriggError::Internal(format!(
-                    "failed to register watcher for root {}: {err}",
-                    repository.root.display()
-                ))
-            })?;
 
         self.repositories
             .write()
@@ -887,6 +885,7 @@ fn watch_task_phase_for_class(class: WatchRefreshClass) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_notify_event(
     repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,
@@ -948,6 +947,7 @@ fn handle_notify_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_notify_dropped(
     repositories: &Arc<RwLock<BTreeMap<String, WatchedRepository>>>,
     scheduler: &mut WatchSchedulerState,

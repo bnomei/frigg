@@ -252,7 +252,12 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
     assert_eq!(requested_json_context.returned_unique_paths, Some(1));
     assert_eq!(
         requested_json_context.returned_source_bytes_estimate,
-        Some(requested_json.bytes.try_into().unwrap())
+        Some(
+            requested_json
+                .bytes
+                .try_into()
+                .expect("read_file byte count should fit u64")
+        )
     );
 
     let search = server
@@ -318,7 +323,12 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
     assert_eq!(read_match_context.returned_unique_paths, Some(1));
     assert_eq!(
         read_match_context.returned_source_bytes_estimate,
-        Some(read_match.bytes.try_into().unwrap())
+        Some(
+            read_match
+                .bytes
+                .try_into()
+                .expect("read_match byte count should fit u64")
+        )
     );
 
     let explore_zoom_text_context_error = server
@@ -403,7 +413,9 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
     let returned_window_bytes = explore
         .matches
         .iter()
-        .map(|matched| u64::try_from(matched.window.bytes).unwrap())
+        .map(|matched| {
+            u64::try_from(matched.window.bytes).expect("explore window bytes should fit u64")
+        })
         .sum::<u64>();
     assert_eq!(explore_context.returned_unique_paths, Some(1));
     assert_eq!(

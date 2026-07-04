@@ -49,7 +49,7 @@ pub struct ListRepositoriesParams {}
 /// Parameters for `list_files`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ListFilesParams {
-    /// Optional. Omit to use the current session default repository, auto-adopt the only known
+    /// Optional. Omit to use the current session default repository, auto-adopt the only visible
     /// startup repository, or list across adopted repositories. Set only for multi-repo searches.
     pub repository_id: Option<String>,
     /// Repository-relative path filter replacing `rg --files path/`, `find path/`, or `fd`.

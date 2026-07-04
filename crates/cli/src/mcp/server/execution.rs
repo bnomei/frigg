@@ -256,10 +256,14 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("system time should be after unix epoch")
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "frigg-mcp-execution-{name}-{}-{stamp}",
-                std::process::id()
-            ));
+            let root = std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join(".codex-cache")
+                .join("mcp-execution-tests")
+                .join(format!(
+                    "frigg-mcp-execution-{name}-{}-{stamp}",
+                    std::process::id()
+                ));
             fs::create_dir_all(&root).expect("temporary workspace should be creatable");
             Self { root }
         }

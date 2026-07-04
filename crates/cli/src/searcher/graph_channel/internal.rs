@@ -1226,16 +1226,15 @@ fn hybrid_graph_file_analysis(
     absolute_path: &Path,
 ) -> Option<std::sync::Arc<HybridGraphFileAnalysis>> {
     let cache_key = hybrid_graph_file_analysis_cache_key(absolute_path);
-    if let Some(key) = cache_key.as_ref() {
-        if let Some(cached) = searcher
+    if let Some(key) = cache_key.as_ref()
+        && let Some(cached) = searcher
             .hybrid_graph_file_analysis_cache
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(key)
             .cloned()
-        {
-            return Some(cached);
-        }
+    {
+        return Some(cached);
     }
 
     let analysis = std::sync::Arc::new(build_hybrid_graph_file_analysis(absolute_path)?);

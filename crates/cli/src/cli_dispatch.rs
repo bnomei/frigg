@@ -10,15 +10,13 @@ use frigg::searcher::ValidatedManifestCandidateCache;
 use frigg::settings::{RuntimeTransportKind, runtime_profile_for_transport};
 use frigg::watch::{WatchEvent, WatchEventReporter, maybe_start_watch_runtime_with_reporter};
 
-#[path = "cli_runtime/commands/hook.rs"]
-mod hook_command;
-
 use crate::cli_args::{HiddenHookCli, HiddenHookCommand, HookEvent};
 use crate::cli_runtime::{
     CliOutput, OutputField, OutputLevel, StorageMaintenanceCommand, emit_index_plan_events,
     emit_index_progress_event, field, resolve_command_config, resolve_startup_config,
     resolve_watch_runtime_config, run_adopt_command_with_output, run_context_summary_command,
-    run_hash_command, run_index_command_with_output, run_semantic_runtime_startup_gate_with_output,
+    run_hash_command, run_index_command_with_output, run_pretooluse_hook_command,
+    run_semantic_runtime_startup_gate_with_output,
     run_semantic_runtime_startup_gate_with_stderr_prepare_output,
     run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
@@ -32,7 +30,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         startup_trace(startup_trace_enabled, "async_main: hidden hook parsed");
         match event {
             HookEvent::Pretooluse => {
-                hook_command::run_pretooluse_hook_command(std::io::stdin(), std::io::stdout())?
+                run_pretooluse_hook_command(std::io::stdin(), std::io::stdout())?
             }
         }
         startup_trace(startup_trace_enabled, "async_main: hidden hook complete");

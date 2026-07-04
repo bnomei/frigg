@@ -403,13 +403,16 @@ mod tests {
 
     #[test]
     fn output_mode_resolves_quiet() {
-        assert_eq!(OutputMode::resolve(true, false).unwrap(), OutputMode::Quiet);
+        assert_eq!(
+            OutputMode::resolve(true, false).expect("quiet mode should resolve"),
+            OutputMode::Quiet
+        );
     }
 
     #[test]
     fn output_mode_resolves_normal() {
         assert_eq!(
-            OutputMode::resolve(false, false).unwrap(),
+            OutputMode::resolve(false, false).expect("normal mode should resolve"),
             OutputMode::Normal
         );
     }
@@ -417,7 +420,7 @@ mod tests {
     #[test]
     fn output_mode_resolves_verbose() {
         assert_eq!(
-            OutputMode::resolve(false, true).unwrap(),
+            OutputMode::resolve(false, true).expect("verbose mode should resolve"),
             OutputMode::Verbose
         );
     }

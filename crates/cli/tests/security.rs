@@ -228,10 +228,7 @@ fn parse_tool_annotation_flags() -> Vec<ToolAnnotationFlags> {
 }
 
 fn tool_feature_enabled(feature: &str) -> bool {
-    match feature {
-        "playbook" => cfg!(feature = "playbook"),
-        _ => true,
-    }
+    !matches!(feature, "playbook") || cfg!(feature = "playbook")
 }
 
 #[test]
@@ -438,24 +435,23 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
 
 #[test]
 fn security_session_state_tools_are_public_read_only_hinted_and_classified() {
-    for tool_name in ["workspace"] {
-        assert!(
-            PUBLIC_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be part of the public tool surface"
-        );
-        assert!(
-            PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be declared read-only at the MCP hint layer"
-        );
-        assert!(
-            PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be classified as session-stateful"
-        );
-        assert!(
-            !PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must not be classified as confirm-gated .frigg maintenance"
-        );
-    }
+    let tool_name = "workspace";
+    assert!(
+        PUBLIC_TOOL_NAMES.contains(&tool_name),
+        "{tool_name} must be part of the public tool surface"
+    );
+    assert!(
+        PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
+        "{tool_name} must be declared read-only at the MCP hint layer"
+    );
+    assert!(
+        PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),
+        "{tool_name} must be classified as session-stateful"
+    );
+    assert!(
+        !PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
+        "{tool_name} must not be classified as confirm-gated .frigg maintenance"
+    );
 }
 
 #[test]
@@ -502,7 +498,7 @@ async fn security_extended_explore_enforces_workspace_boundary() {
         .await
         .expect_err("explore should reject paths outside workspace roots");
 
-    assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
+    assert_eq!(error.code, ErrorCode::INVALID_REQUEST, "{error:?}");
     assert_eq!(error_code_tag(&error), Some("access_denied"));
     assert_eq!(retryable_tag(&error), Some(false));
     assert!(
@@ -812,7 +808,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
         .expect("failed to seed second root fixture file");
 
     let server = build_server_for_roots(vec![first_root.clone(), second_root.clone()]).await;
-    let repository_ids = public_repository_ids(&server).await;
+    let second_repository_id = frigg::domain::model::stable_repository_id_for_root(&second_root).0;
     let response = server
         .read_file(Parameters(ReadFileParams {
             path: second_root.join("src/lib.rs").display().to_string(),
@@ -831,7 +827,7 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
     let response: ReadFileResponse =
         from_value(response).expect("structured read_file response should deserialize");
 
-    assert_eq!(response.repository_id, repository_ids[1]);
+    assert_eq!(response.repository_id, second_repository_id);
     assert_eq!(response.path, "src/lib.rs");
     assert!(
         !Path::new(&response.path).is_absolute(),

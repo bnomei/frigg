@@ -320,12 +320,6 @@ impl FriggMcpServer {
         let mut repositories = Vec::with_capacity(workspaces.len());
 
         for workspace in workspaces {
-            let dirty_root_before_store = self
-                .runtime_state
-                .validated_manifest_candidate_cache
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_dirty_root(&workspace.root);
             let status = self
                 .workspace_repository_freshness_status(workspace, &semantic_runtime)
                 .map_err(|err| {
@@ -337,12 +331,10 @@ impl FriggMcpServer {
                         None,
                     )
                 })?;
-            if !dirty_root_before_store
-                && let (Some(snapshot_id), Some(validated_digests)) = (
-                    status.snapshot_id.as_deref(),
-                    status.validated_manifest_digests.as_ref(),
-                )
-            {
+            if let (Some(snapshot_id), Some(validated_digests)) = (
+                status.snapshot_id.as_deref(),
+                status.validated_manifest_digests.as_ref(),
+            ) {
                 self.runtime_state
                     .validated_manifest_candidate_cache
                     .write()
@@ -518,7 +510,7 @@ impl FriggMcpServer {
         let db_path = resolve_provenance_db_path(&workspace.root).ok()?;
         if db_path.exists() {
             let storage = Storage::new(db_path.clone());
-            if let Some(snapshot) =
+            if let Ok(Some(snapshot)) =
                 crate::manifest_validation::latest_validated_manifest_snapshot_shared(
                     &storage,
                     &workspace.runtime_repository_id,

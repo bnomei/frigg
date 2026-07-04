@@ -77,13 +77,12 @@ impl DeepSearchHarness {
                 error_code: Some(error_code),
                 ..
             } = &outcome
+                && error_code == "invalid_params"
             {
-                if error_code == "invalid_params" {
-                    return Err(FriggError::InvalidInput(format!(
-                        "deep-search playbook step '{}' failed with invalid_params: {message}",
-                        step.step.step_id
-                    )));
-                }
+                return Err(FriggError::InvalidInput(format!(
+                    "deep-search playbook step '{}' failed with invalid_params: {message}",
+                    step.step.step_id
+                )));
             }
             trace_steps.push(DeepSearchTraceStep {
                 step_index,

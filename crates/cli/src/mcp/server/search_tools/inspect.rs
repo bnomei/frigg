@@ -420,10 +420,10 @@ impl FriggMcpServer {
                         ) else {
                             continue;
                         };
-                        if let Some(target_language) = target_language {
-                            if language != target_language {
-                                continue;
-                            }
+                        if let Some(target_language) = target_language
+                            && language != target_language
+                        {
+                            continue;
                         }
                         let display_path = Self::relative_display_path(&corpus.root, source_path);
                         if let Some(path_regex) = &path_regex

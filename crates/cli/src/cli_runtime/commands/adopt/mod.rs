@@ -159,6 +159,7 @@ pub(crate) fn run_adopt_command_with_output(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn adopt_summary_fields(
     status: &str,
     repositories: usize,

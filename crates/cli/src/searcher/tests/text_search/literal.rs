@@ -382,6 +382,85 @@ fn diagnostics_literal_search_reports_read_failures_deterministically() -> Frigg
 }
 
 #[test]
+fn diagnostics_literal_search_reports_manifest_storage_errors() -> FriggResult<()> {
+    let root = temp_workspace_root("literal-search-diagnostics-manifest-storage-error");
+    prepare_workspace(
+        &root,
+        &[(
+            "src/lib.rs",
+            "pub fn fallback_walk_still_finds_needle() {}\n",
+        )],
+    )?;
+
+    let db_path = resolve_provenance_db_path(&root)?;
+    fs::create_dir_all(
+        db_path
+            .parent()
+            .expect("resolved provenance path should have a parent"),
+    )
+    .map_err(FriggError::Io)?;
+    let conn = rusqlite::Connection::open(&db_path).map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to create incompatible search fixture db: {err}"
+        ))
+    })?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE schema_version (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          version INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO schema_version (id, version, updated_at)
+        VALUES (1, 0, CURRENT_TIMESTAMP);
+        "#,
+    )
+    .map_err(|err| {
+        FriggError::Internal(format!(
+            "failed to seed incompatible search fixture db: {err}"
+        ))
+    })?;
+    drop(conn);
+
+    let searcher = TextSearcher::new(FriggConfig::from_workspace_roots(vec![root.clone()])?);
+    let output = searcher.search_literal_with_filters_diagnostics(
+        SearchTextQuery {
+            query: "fallback_walk_still_finds_needle".to_owned(),
+            path_regex: None,
+            limit: 20,
+        },
+        SearchFilters::default(),
+    )?;
+
+    assert_eq!(output.matches.len(), 1);
+    assert_eq!(output.matches[0].path, "src/lib.rs");
+    assert_eq!(
+        output.diagnostics.count_by_kind(SearchDiagnosticKind::Read),
+        1
+    );
+    let diagnostic = output
+        .diagnostics
+        .entries
+        .iter()
+        .find(|entry| {
+            entry
+                .message
+                .contains("failed to read validated manifest snapshot from storage")
+        })
+        .expect("manifest storage error should be surfaced as a read diagnostic");
+    assert!(
+        diagnostic
+            .message
+            .contains("storage schema is incompatible"),
+        "diagnostic should preserve the actionable storage error, got {:?}",
+        diagnostic.message
+    );
+
+    cleanup_workspace(&root);
+    Ok(())
+}
+
+#[test]
 fn literal_search_reuses_validated_manifest_candidates_across_repeated_queries() -> FriggResult<()>
 {
     let root = temp_workspace_root("literal-search-manifest-cache-hit");

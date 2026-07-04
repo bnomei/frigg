@@ -90,7 +90,7 @@ async fn workspace_auto_adopts_single_known_repository_and_returns_status() {
 }
 
 #[tokio::test]
-async fn repository_scoped_tools_auto_adopt_explicit_known_repository() {
+async fn repository_scoped_tools_require_explicit_workspace_adoption() {
     let root_a = temp_workspace_root("workspace-auto-adopt-explicit-a");
     let root_b = temp_workspace_root("workspace-auto-adopt-explicit-b");
     fs::create_dir_all(root_a.join("src")).expect("repo a src dir should be creatable");
@@ -113,6 +113,42 @@ async fn repository_scoped_tools_auto_adopt_explicit_known_repository() {
         }))
         .await
         .expect("workspace should adopt repo a");
+    let error = match server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: Some(repo_b.clone()),
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(10),
+            resume_from: None,
+        }))
+        .await
+    {
+        Ok(_) => panic!("list_files should require explicit workspace adoption for repo b"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    assert_eq!(error_code_tag(&error), Some("resource_not_found"));
+    assert_eq!(
+        error_data_field(&error, "next_tool"),
+        &serde_json::json!("workspace")
+    );
+    assert_eq!(
+        error_data_field(&error, "next_params"),
+        &serde_json::json!({ "repository_id": repo_b })
+    );
+
+    server
+        .workspace(Parameters(WorkspaceParams {
+            path: None,
+            repository_id: Some(repo_b.clone()),
+            set_default: Some(true),
+            resolve_mode: None,
+        }))
+        .await
+        .expect("workspace should adopt repo b explicitly");
     let files = server
         .list_files(Parameters(ListFilesParams {
             repository_id: Some(repo_b.clone()),
@@ -125,7 +161,7 @@ async fn repository_scoped_tools_auto_adopt_explicit_known_repository() {
             resume_from: None,
         }))
         .await
-        .expect("list_files should auto-adopt explicit repo b")
+        .expect("list_files should succeed after explicit repo b adoption")
         .0;
 
     assert_eq!(files.files.len(), 1);

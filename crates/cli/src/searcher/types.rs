@@ -324,6 +324,7 @@ pub(crate) struct HybridPathWitnessProjectionCacheKey {
     pub(crate) repository_id: String,
     pub(crate) root: PathBuf,
     pub(crate) snapshot_id: String,
+    pub(crate) heuristic_version: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -369,6 +370,27 @@ pub(crate) fn empty_channel_result(
         Vec::new(),
         ChannelStats::default(),
     )
+}
+
+#[cfg(test)]
+mod projection_cache_key_tests {
+    use super::*;
+
+    #[test]
+    fn projection_cache_key_includes_heuristic_version() {
+        let base = HybridPathWitnessProjectionCacheKey {
+            repository_id: "repo-001".to_owned(),
+            root: PathBuf::from("/tmp/repo"),
+            snapshot_id: "snapshot-001".to_owned(),
+            heuristic_version: 1,
+        };
+        let upgraded = HybridPathWitnessProjectionCacheKey {
+            heuristic_version: 2,
+            ..base.clone()
+        };
+
+        assert_ne!(base, upgraded);
+    }
 }
 
 fn channel_result_by_channel(

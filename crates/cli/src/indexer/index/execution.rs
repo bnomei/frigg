@@ -309,17 +309,13 @@ fn execute_retrieval_projection_phase(
             });
 
     if let Err(err) = projection_bundle {
-        if matches!(plan.snapshot_plan, ManifestSnapshotPlan::PersistNew { .. }) {
-            if let Err(rollback_err) = execute_snapshot_rollback_phase(storage_session, snapshot_id)
-            {
-                return Err(FriggError::Internal(format!(
-                    "{err}; {}",
-                    wrap_index_phase_error(
-                        IndexExecutionPhase::RollbackManifestSnapshot,
-                        rollback_err,
-                    )
-                )));
-            }
+        if matches!(plan.snapshot_plan, ManifestSnapshotPlan::PersistNew { .. })
+            && let Err(rollback_err) = execute_snapshot_rollback_phase(storage_session, snapshot_id)
+        {
+            return Err(FriggError::Internal(format!(
+                "{err}; {}",
+                wrap_index_phase_error(IndexExecutionPhase::RollbackManifestSnapshot, rollback_err,)
+            )));
         }
         return Err(err);
     }
@@ -355,18 +351,14 @@ fn execute_semantic_refresh_phase(
 
     if let Err(err) = semantic_result {
         let semantic_error = wrap_index_phase_error(IndexExecutionPhase::SemanticRefresh, err);
-        if plan.snapshot_plan.rollback_on_semantic_failure() {
-            if let Err(rollback_err) =
+        if plan.snapshot_plan.rollback_on_semantic_failure()
+            && let Err(rollback_err) =
                 execute_snapshot_rollback_phase(storage_session, plan.snapshot_plan.snapshot_id())
-            {
-                return Err(FriggError::Internal(format!(
-                    "{semantic_error}; {}",
-                    wrap_index_phase_error(
-                        IndexExecutionPhase::RollbackManifestSnapshot,
-                        rollback_err,
-                    )
-                )));
-            }
+        {
+            return Err(FriggError::Internal(format!(
+                "{semantic_error}; {}",
+                wrap_index_phase_error(IndexExecutionPhase::RollbackManifestSnapshot, rollback_err,)
+            )));
         }
         return Err(semantic_error);
     }

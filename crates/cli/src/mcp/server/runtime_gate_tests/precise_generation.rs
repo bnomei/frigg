@@ -269,6 +269,102 @@ printf '%s' "fake-scip-rust"
 }
 
 #[test]
+fn workspace_detach_clears_pending_precise_dirty_paths_after_last_adoption() {
+    let workspace_root = temp_workspace_root("precise-detach-clears-pending");
+    let bin_dir = temp_workspace_root("precise-detach-clears-pending-bin");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+
+    let _rust_analyzer = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "rust-analyzer",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "rust-analyzer 1.85.0"
+  exit 0
+fi
+printf '%s' "fake-scip-rust"
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test tokio runtime should build");
+        runtime.block_on(async {
+            let server = FriggMcpServer::new(
+                FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                    .expect("workspace root must produce valid config"),
+            );
+            let workspace = server
+                .known_workspaces()
+                .into_iter()
+                .next()
+                .expect("server should register workspace");
+            server
+                .adopt_workspace(&workspace, true)
+                .expect("test session should adopt workspace");
+            let _active_task = RuntimeTaskGuard::start(
+                Arc::clone(&server.runtime_state.runtime_task_registry),
+                RuntimeTaskKind::PreciseGenerate,
+                workspace.repository_id.clone(),
+                "precise_generation",
+                Some("active task".to_owned()),
+            );
+
+            let action = server.maybe_spawn_workspace_precise_generation(
+                &workspace,
+                &[String::from("Cargo.toml")],
+                &[String::from("old/dropped.rs")],
+            );
+            assert!(
+                matches!(
+                    action,
+                    crate::mcp::types::WorkspacePreciseGenerationAction::SkippedActiveTask
+                ),
+                "expected pending paths to be recorded behind active generation, got {action:?}"
+            );
+            assert!(
+                server
+                    .take_pending_precise_dirty_paths(&workspace.repository_id)
+                    .is_some(),
+                "pending paths should be present before detach"
+            );
+            server.maybe_spawn_workspace_precise_generation(
+                &workspace,
+                &[String::from("Cargo.toml")],
+                &[String::from("old/dropped.rs")],
+            );
+
+            server
+                .workspace_detach(Parameters(WorkspaceDetachParams {
+                    repository_id: Some(workspace.repository_id.clone()),
+                }))
+                .await
+                .expect("workspace_detach should detach the last session");
+
+            assert!(
+                server
+                    .take_pending_precise_dirty_paths(&workspace.repository_id)
+                    .is_none(),
+                "detaching the last session should clear abandoned precise replay paths"
+            );
+        });
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
 fn precise_generation_handoff_does_not_strand_pending_paths_after_finish() {
     let workspace_root = temp_workspace_root("precise-handoff-no-strand");
     let bin_dir = temp_workspace_root("precise-handoff-no-strand-bin");

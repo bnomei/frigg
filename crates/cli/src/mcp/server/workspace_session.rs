@@ -9,6 +9,16 @@ pub(super) struct WorkspaceAttachTargetOutcome {
     pub(super) rollback_guard: Option<WorkspaceAttachRollbackGuard>,
 }
 
+type WorkspaceTargetResolution = Result<
+    (
+        AttachedWorkspace,
+        Option<String>,
+        Option<WorkspaceResolveMode>,
+        Option<WorkspaceResolutionGuard>,
+    ),
+    ErrorData,
+>;
+
 impl FriggMcpServer {
     pub(super) fn clone_for_new_session(&self) -> Self {
         Self {
@@ -82,15 +92,7 @@ impl FriggMcpServer {
         path: Option<&str>,
         repository_id: Option<&str>,
         resolve_mode: WorkspaceResolveMode,
-    ) -> Result<
-        (
-            AttachedWorkspace,
-            Option<String>,
-            Option<WorkspaceResolveMode>,
-            Option<WorkspaceResolutionGuard>,
-        ),
-        ErrorData,
-    > {
+    ) -> WorkspaceTargetResolution {
         match (path, repository_id) {
             (Some(path), None) => {
                 if path.trim().is_empty() {
@@ -100,15 +102,19 @@ impl FriggMcpServer {
                     ));
                 }
                 let path = Path::new(path);
-                let resolved_from = match Self::effective_attach_directory(path) {
-                    Ok(resolved_from) => resolved_from,
-                    Err(original_error) if path.is_relative() => {
-                        match self.effective_attach_directory_relative_to_session_root(path) {
-                            Some(resolved_from) => resolved_from,
-                            None => return Err(original_error),
-                        }
+                if path.is_relative() && Self::relative_attach_path_has_parent(path) {
+                    return Err(Self::access_denied(
+                        "workspace_attach.path must not contain parent directory components",
+                        Some(json!({ "path": path.display().to_string() })),
+                    ));
+                }
+                let resolved_from = if path.is_relative() {
+                    match self.effective_attach_directory_relative_to_session_root(path) {
+                        Some(resolved_from) => resolved_from,
+                        None => Self::effective_attach_directory(path)?,
                     }
-                    Err(err) => return Err(err),
+                } else {
+                    Self::effective_attach_directory(path)?
                 };
                 let (root, resolution) = match resolve_mode {
                     WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
@@ -119,6 +125,7 @@ impl FriggMcpServer {
                         (resolved_from.clone(), WorkspaceResolveMode::Direct)
                     }
                 };
+                self.authorize_attach_root(&root)?;
                 let (workspace, resolution_guard) = {
                     let mut registry = self
                         .runtime_state
@@ -141,6 +148,15 @@ impl FriggMcpServer {
                 ))
             }
             (None, Some(repository_id)) => {
+                if !self.is_visible_repository_id(repository_id) {
+                    return Err(Self::resource_not_found(
+                        "repository_id not found",
+                        Some(json!({
+                            "repository_id": repository_id,
+                            "hint": "Only startup repositories and repositories adopted by this session are visible by id.",
+                        })),
+                    ));
+                }
                 let workspace = self
                     .runtime_state
                     .workspace_registry
@@ -171,9 +187,7 @@ impl FriggMcpServer {
             let attached_workspaces = self.attached_workspaces();
             (attached_workspaces.len() == 1).then(|| attached_workspaces[0].clone())
         });
-        let Some(workspace) = workspace else {
-            return None;
-        };
+        let workspace = workspace?;
 
         Self::effective_attach_directory(&workspace.root.join(path)).ok()
     }
@@ -866,10 +880,10 @@ impl FriggMcpServer {
         );
 
         let adoption = self.adopt_workspace(&workspace, set_default)?;
-        if adoption.newly_adopted {
-            if let Some(guard) = rollback_guard.as_mut() {
-                guard.mark_created_adoption();
-            }
+        if adoption.newly_adopted
+            && let Some(guard) = rollback_guard.as_mut()
+        {
+            guard.mark_created_adoption();
         }
 
         self.invalidate_workspace_index_runtime_caches(&workspace, false);
@@ -1102,8 +1116,9 @@ impl FriggMcpServer {
         .collect::<Result<Vec<_>, ErrorData>>()?;
 
         let mut saw_workspace_candidate = false;
+        let mut matches = Vec::new();
 
-        for (repository_id, root_canonical) in roots {
+        for (repository_id, root_canonical) in &roots {
             let candidate = if requested.is_absolute() {
                 requested.clone()
             } else {
@@ -1112,7 +1127,7 @@ impl FriggMcpServer {
 
             match candidate.canonicalize() {
                 Ok(candidate_canonical) => {
-                    if !candidate_canonical.starts_with(&root_canonical) {
+                    if !candidate_canonical.starts_with(root_canonical) {
                         continue;
                     }
                     saw_workspace_candidate = true;
@@ -1128,12 +1143,12 @@ impl FriggMcpServer {
                     })?;
                     if metadata.is_file() {
                         let display_path =
-                            Self::relative_display_path(&root_canonical, &candidate_canonical);
-                        return Ok((repository_id, candidate_canonical, display_path));
+                            Self::relative_display_path(root_canonical, &candidate_canonical);
+                        matches.push((repository_id.clone(), candidate_canonical, display_path));
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    if Self::candidate_within_root(&candidate, &root_canonical)? {
+                    if Self::candidate_within_root(&candidate, root_canonical)? {
                         saw_workspace_candidate = true;
                     }
                 }
@@ -1144,6 +1159,22 @@ impl FriggMcpServer {
                     ));
                 }
             }
+        }
+
+        if matches.len() > 1 && !requested.is_absolute() && params.repository_id.is_none() {
+            return Err(Self::invalid_params(
+                "relative path is ambiguous across adopted repositories; pass repository_id",
+                Some(serde_json::json!({
+                    "path": params.path,
+                    "repository_ids": matches
+                        .iter()
+                        .map(|(repository_id, _, _)| repository_id)
+                        .collect::<Vec<_>>(),
+                })),
+            ));
+        }
+        if let Some(resolved) = matches.into_iter().next() {
+            return Ok(resolved);
         }
 
         if saw_workspace_candidate {

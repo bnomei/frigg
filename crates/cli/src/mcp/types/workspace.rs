@@ -302,7 +302,7 @@ pub enum WorkspaceAttachAction {
 pub struct WorkspaceAttachParams {
     /// File or directory path to attach.
     pub path: Option<String>,
-    /// Known repository identifier from `list_repositories`.
+    /// Visible repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the attached repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
@@ -317,7 +317,7 @@ pub struct WorkspaceAttachParams {
 pub struct WorkspaceParams {
     /// File or directory path to adopt before returning status.
     pub path: Option<String>,
-    /// Known repository id to adopt before returning status.
+    /// Visible repository id to adopt before returning status.
     pub repository_id: Option<String>,
     /// When adopting, make the repository the session default. Defaults true.
     pub set_default: Option<bool>,
@@ -372,7 +372,7 @@ pub struct WorkspaceDetachResponse {
 pub struct WorkspacePrepareParams {
     /// File or directory path to prepare.
     pub path: Option<String>,
-    /// Known repository identifier from `list_repositories`.
+    /// Visible repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the prepared repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
@@ -399,7 +399,7 @@ pub struct WorkspacePrepareResponse {
 pub struct WorkspaceIndexParams {
     /// File or directory path to index.
     pub path: Option<String>,
-    /// Known repository identifier from `list_repositories`.
+    /// Visible repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the indexed repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,

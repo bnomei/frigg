@@ -19,18 +19,18 @@ pub(super) fn hybrid_query_exact_terms(query_text: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(token) = normalize_hybrid_recall_token(&current) {
-            if seen.insert(token.clone()) {
-                tokens.push(token);
-            }
+        if let Some(token) = normalize_hybrid_recall_token(&current)
+            && seen.insert(token.clone())
+        {
+            tokens.push(token);
         }
         current.clear();
     }
 
-    if let Some(token) = normalize_hybrid_recall_token(&current) {
-        if seen.insert(token.clone()) {
-            tokens.push(token);
-        }
+    if let Some(token) = normalize_hybrid_recall_token(&current)
+        && seen.insert(token.clone())
+    {
+        tokens.push(token);
     }
 
     tokens
@@ -340,10 +340,10 @@ fn push_hybrid_query_overlap_terms(
     if current.is_empty() {
         return;
     }
-    if let Some(token) = normalize_hybrid_overlap_token(current) {
-        if seen.insert(token.clone()) {
-            tokens.push(token);
-        }
+    if let Some(token) = normalize_hybrid_overlap_token(current)
+        && seen.insert(token.clone())
+    {
+        tokens.push(token);
     }
     for token in hybrid_identifier_tokens(current) {
         if seen.insert(token.clone()) {
@@ -362,10 +362,11 @@ pub(super) fn hybrid_path_overlap_tokens(path: &str) -> Vec<String> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or(raw_component);
-        if let Some(token) = normalize_hybrid_overlap_token(normalized_component) {
-            if !is_low_signal_path_overlap_token(&token) && seen.insert(token.clone()) {
-                tokens.push(token);
-            }
+        if let Some(token) = normalize_hybrid_overlap_token(normalized_component)
+            && !is_low_signal_path_overlap_token(&token)
+            && seen.insert(token.clone())
+        {
+            tokens.push(token);
         }
         for token in hybrid_identifier_tokens(normalized_component) {
             if is_low_signal_path_overlap_token(&token) {

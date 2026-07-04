@@ -1,4 +1,5 @@
 //! Unit tests for watch scheduler debouncing, refresh coalescing, repository invalidation, and supervisor-driven index cycles.
+#![allow(clippy::panic)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -115,10 +116,9 @@ async fn wait_for_snapshot_id_change(
         if let Some(snapshot) = Storage::new(db_path)
             .load_latest_manifest_for_repository(repository_id)
             .expect("latest manifest query should succeed")
+            && snapshot.snapshot_id != previous_snapshot_id
         {
-            if snapshot.snapshot_id != previous_snapshot_id {
-                return Some(snapshot.snapshot_id);
-            }
+            return Some(snapshot.snapshot_id);
         }
 
         if tokio::time::Instant::now() >= deadline {

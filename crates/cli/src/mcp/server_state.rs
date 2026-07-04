@@ -2,7 +2,7 @@
 //! navigation target resolution envelopes, and per-tool execution result bundles.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,11 +78,11 @@ fn path_bytes(path: &Path) -> usize {
 }
 
 fn path_vec_bytes(paths: &[PathBuf]) -> usize {
-    paths.len() * size_of::<PathBuf>() + paths.iter().map(|path| path_bytes(path)).sum::<usize>()
+    size_of_val(paths) + paths.iter().map(|path| path_bytes(path)).sum::<usize>()
 }
 
 fn symbol_vec_bytes(symbols: &[SymbolDefinition]) -> usize {
-    symbols.len() * size_of::<SymbolDefinition>()
+    size_of_val(symbols)
         + symbols
             .iter()
             .map(|symbol| symbol.stable_id.len() + symbol.name.len() + path_bytes(&symbol.path))
@@ -108,11 +108,11 @@ fn optional_string_bytes(value: &Option<String>) -> usize {
 }
 
 fn string_vec_bytes(values: &[String]) -> usize {
-    values.len() * size_of::<String>() + values.iter().map(String::len).sum::<usize>()
+    size_of_val(values) + values.iter().map(String::len).sum::<usize>()
 }
 
 fn rust_implementation_fact_vec_bytes(facts: &[RustImplementationFact]) -> usize {
-    facts.len() * size_of::<RustImplementationFact>()
+    size_of_val(facts)
         + facts
             .iter()
             .map(|fact| optional_string_bytes(&fact.trait_name) + fact.self_type.len())
@@ -779,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::panic)]
     fn runtime_task_guard_drop_marks_task_failed_during_unwind() {
         let registry = Arc::new(RwLock::new(RuntimeTaskRegistry::new()));
         let result = std::panic::catch_unwind({
@@ -791,7 +792,7 @@ mod tests {
                     "precise_generation",
                     None,
                 );
-                panic!("simulate runtime task panic");
+                std::panic::panic_any("simulate runtime task panic");
             }
         });
 
@@ -820,7 +821,7 @@ mod tests {
                 None,
             );
 
-        let rejected = match RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
+        let rejected = RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
             Arc::clone(&registry),
             &[RuntimeTaskKind::WorkspacePrepare],
             &["repo-001"],
@@ -828,10 +829,12 @@ mod tests {
             "repo-001",
             "workspace_index",
             None,
-        ) {
-            Ok(_) => panic!("guard start should return active conflicts"),
-            Err(conflicts) => conflicts,
-        };
+        );
+        assert!(
+            rejected.is_err(),
+            "guard start should return active conflicts"
+        );
+        let rejected = rejected.err().expect("active conflicts should be returned");
 
         assert_eq!(rejected.len(), 1);
         assert_eq!(rejected[0].task_id, active);

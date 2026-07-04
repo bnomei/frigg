@@ -26,6 +26,14 @@ impl Storage {
         self.initialize_with_vector_store(true)
     }
 
+    /// Initializes storage and auto-repairs regenerable invariants when verification fails.
+    pub fn initialize_with_auto_repair(&self) -> FriggResult<Vec<String>> {
+        match self.initialize() {
+            Ok(()) => self.verify_with_auto_repair(),
+            Err(original_err) => self.repair_then_verify(original_err),
+        }
+    }
+
     pub(crate) fn initialize_without_vector_store(&self) -> FriggResult<()> {
         self.initialize_with_vector_store(false)
     }
@@ -163,6 +171,23 @@ impl Storage {
         Ok(())
     }
 
+    /// Verifies storage invariants and attempts one repair pass before surfacing the original error.
+    pub fn verify_with_auto_repair(&self) -> FriggResult<Vec<String>> {
+        match self.verify() {
+            Ok(()) => Ok(Vec::new()),
+            Err(original_err) => self.repair_then_verify(original_err),
+        }
+    }
+
+    fn repair_then_verify(&self, original_err: FriggError) -> FriggResult<Vec<String>> {
+        let repair_summary = self.repair_storage_invariants()?;
+        match self.verify() {
+            Ok(()) => Ok(repair_summary.repaired_categories),
+            Err(_) if repair_summary.repaired_categories.is_empty() => Err(original_err),
+            Err(err) => Err(err),
+        }
+    }
+
     pub fn verify_relational_schema(&self) -> FriggResult<()> {
         let mut conn = open_existing_connection(&self.db_path)?;
         self.require_current_schema_on_connection(&conn)?;
@@ -182,7 +207,7 @@ impl Storage {
             }
         }
 
-        let version = read_schema_version(&conn)?;
+        let version = read_schema_version(conn)?;
         if version != CURRENT_SCHEMA_VERSION {
             return Err(FriggError::Internal(format!(
                 "storage verification failed: schema version mismatch (found {version}, expected {CURRENT_SCHEMA_VERSION}); automatic schema migrations are disabled; delete '{}' and run `frigg index` to rebuild current storage",

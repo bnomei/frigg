@@ -304,6 +304,7 @@ pub(crate) fn format_human_path_row(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_human_action_line(
     level: OutputLevel,
     fields: &[OutputField],

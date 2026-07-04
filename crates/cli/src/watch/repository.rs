@@ -179,10 +179,10 @@ pub(super) fn repository_relative_watch_path<'a>(
         if let Ok(relative) = path.strip_prefix(canonical_root) {
             return Some(relative.to_path_buf());
         }
-        if let Ok(canonical_path) = path.canonicalize() {
-            if let Ok(relative) = canonical_path.strip_prefix(canonical_root) {
-                return Some(relative.to_path_buf());
-            }
+        if let Ok(canonical_path) = path.canonicalize()
+            && let Ok(relative) = canonical_path.strip_prefix(canonical_root)
+        {
+            return Some(relative.to_path_buf());
         }
     }
 

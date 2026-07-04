@@ -1995,7 +1995,7 @@ async fn navigation_implementations_and_call_hierarchy_prefer_precise_relationsh
     assert_eq!(incoming.matches.len(), 1);
     assert_eq!(incoming.matches[0].source_symbol, "consumer");
     assert_eq!(incoming.matches[0].target_symbol, "Service");
-    assert_eq!(incoming.matches[0].relation, "calls");
+    assert_eq!(incoming.matches[0].relation, "refers_to");
     assert_eq!(incoming.matches[0].precision.as_deref(), Some("precise"));
     assert_response_metadata_has_freshness(&incoming.metadata, "incoming_calls");
 

@@ -12,6 +12,7 @@ mod storage;
 pub(crate) use adopt::run_adopt_command_with_output;
 pub(crate) use context::run_context_summary_command;
 pub(crate) use hash::run_hash_command;
+pub(crate) use hook::run_pretooluse_hook_command;
 pub(crate) use index::run_index_command_with_output;
 pub(crate) use precise::{
     CliPreciseGenerationCounters, precise_counter_fields, run_cli_precise_generation,

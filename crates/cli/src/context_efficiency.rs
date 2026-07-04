@@ -4,7 +4,7 @@
 //! JSONL operator logs controlled by `FRIGG_CONTEXT_EFFICIENCY_LOG`.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -160,13 +160,17 @@ impl ManifestMetadataCache {
     }
 
     fn insert(&mut self, key: ManifestMetadataCacheKey, value: ManifestMetadataSummary) {
-        if self.entries.contains_key(&key) {
-            self.entries.insert(key, value);
-            return;
+        match self.entries.entry(key) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                return;
+            }
+            Entry::Vacant(entry) => {
+                self.insertion_order.push_back(entry.key().clone());
+                entry.insert(value);
+            }
         }
 
-        self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, value);
         while self.entries.len() > MANIFEST_METADATA_CACHE_LIMIT {
             let Some(oldest_key) = self.insertion_order.pop_front() else {
                 break;
@@ -509,23 +513,12 @@ pub struct ContextLogSummary {
     pub totals: ContextLogAggregate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ContextLogFileSummary {
     exists: bool,
     repositories: BTreeSet<String>,
     tools: BTreeMap<String, usize>,
     aggregate: ContextLogAggregate,
-}
-
-impl Default for ContextLogFileSummary {
-    fn default() -> Self {
-        Self {
-            exists: false,
-            repositories: BTreeSet::new(),
-            tools: BTreeMap::new(),
-            aggregate: ContextLogAggregate::default(),
-        }
-    }
 }
 
 impl ContextLogFileSummary {
@@ -562,13 +555,17 @@ impl JsonlSummaryCache {
     }
 
     fn insert(&mut self, key: JsonlSummaryCacheKey, value: ContextLogFileSummary) {
-        if self.entries.contains_key(&key) {
-            self.entries.insert(key, value);
-            return;
+        match self.entries.entry(key) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                return;
+            }
+            Entry::Vacant(entry) => {
+                self.insertion_order.push_back(entry.key().clone());
+                entry.insert(value);
+            }
         }
 
-        self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, value);
         while self.entries.len() > JSONL_SUMMARY_CACHE_LIMIT {
             let Some(oldest_key) = self.insertion_order.pop_front() else {
                 break;
@@ -1122,7 +1119,7 @@ mod tests {
         let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
             .expect("window should resolve");
 
-        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+        let summary = summarize_context_logs_for_roots(std::slice::from_ref(&root), &window)
             .expect("missing context log should summarize");
 
         assert_eq!(summary.date_since, "2026-06-01T00:00:00+00:00");
@@ -1230,7 +1227,7 @@ mod tests {
             .with_timezone(&Utc);
         let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
             .expect("window should resolve");
-        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+        let summary = summarize_context_logs_for_roots(std::slice::from_ref(&root), &window)
             .expect("context log should summarize");
 
         assert_eq!(summary.totals.events, 2);
@@ -1328,7 +1325,7 @@ mod tests {
             .with_timezone(&Utc);
         let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
             .expect("window should resolve");
-        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+        let summary = summarize_context_logs_for_roots(std::slice::from_ref(&root), &window)
             .expect("malformed rows should be skipped");
 
         assert_eq!(summary.totals.events, 2);
@@ -1390,21 +1387,21 @@ mod tests {
         let first_window =
             ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
                 .expect("first window should resolve");
-        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+        summarize_context_logs_for_roots(std::slice::from_ref(&root), &first_window)
             .expect("first summary should load");
-        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+        summarize_context_logs_for_roots(std::slice::from_ref(&root), &first_window)
             .expect("second summary should use cache");
         assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 1);
 
         let second_window =
             ContextSummaryWindow::resolve(Some("2026-06-02"), Some("2026-07-01"), now)
                 .expect("second window should resolve");
-        summarize_context_logs_for_roots(&[root.clone()], &second_window)
+        summarize_context_logs_for_roots(std::slice::from_ref(&root), &second_window)
             .expect("changed window should load");
         assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 2);
 
         std::fs::write(&log_path, "").expect("log should be truncated");
-        summarize_context_logs_for_roots(&[root.clone()], &first_window)
+        summarize_context_logs_for_roots(std::slice::from_ref(&root), &first_window)
             .expect("changed file size should load");
         assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 3);
 

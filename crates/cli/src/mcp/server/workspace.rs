@@ -301,6 +301,45 @@ impl FriggMcpServer {
             .known_workspaces()
     }
 
+    pub(super) fn startup_workspaces(&self) -> Vec<AttachedWorkspace> {
+        self.runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .startup_workspaces()
+    }
+
+    pub(super) fn auto_adoptable_workspaces(&self) -> Vec<AttachedWorkspace> {
+        self.startup_workspaces()
+    }
+
+    pub(super) fn visible_workspaces(&self) -> Vec<AttachedWorkspace> {
+        let mut visible = BTreeMap::new();
+        {
+            let registry = self
+                .runtime_state
+                .workspace_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for workspace in registry.startup_workspaces() {
+                visible.insert(workspace.repository_id.clone(), workspace);
+            }
+            for repository_id in self
+                .session_state
+                .inner
+                .adopted_repository_ids
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+            {
+                if let Some(workspace) = registry.workspace_by_repository_id(repository_id) {
+                    visible.insert(workspace.repository_id.clone(), workspace);
+                }
+            }
+        }
+        visible.into_values().collect()
+    }
+
     pub(super) fn attached_workspaces(&self) -> Vec<AttachedWorkspace> {
         let adopted_repository_ids = self
             .session_state
@@ -341,6 +380,26 @@ impl FriggMcpServer {
         *current = repository_id;
     }
 
+    pub(super) fn is_visible_repository_id(&self, repository_id: &str) -> bool {
+        let registry = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if registry.is_startup_repository_id(repository_id) {
+            return true;
+        }
+        let Some(workspace) = registry.workspace_by_any_repository_id(repository_id) else {
+            return false;
+        };
+        self.session_state
+            .inner
+            .adopted_repository_ids
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&workspace.repository_id)
+    }
+
     pub(super) fn adopt_workspace(
         &self,
         workspace: &AttachedWorkspace,
@@ -369,25 +428,23 @@ impl FriggMcpServer {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .as_ref()
                 .cloned()
-            {
-                if let Err(err) = watch_runtime
+                && let Err(err) = watch_runtime
                     .acquire_lease(workspace)
                     .map_err(Self::map_frigg_error)
+            {
                 {
-                    {
-                        let mut adopted = self
-                            .session_state
-                            .inner
-                            .adopted_repository_ids
-                            .write()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        adopted.remove(&workspace.repository_id);
-                    }
-                    self.session_state
+                    let mut adopted = self
+                        .session_state
                         .inner
-                        .release_repository_id(&workspace.repository_id);
-                    return Err(err);
+                        .adopted_repository_ids
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    adopted.remove(&workspace.repository_id);
                 }
+                self.session_state
+                    .inner
+                    .release_repository_id(&workspace.repository_id);
+                return Err(err);
             }
         }
 
@@ -405,9 +462,7 @@ impl FriggMcpServer {
         workspace: &AttachedWorkspace,
         set_default: bool,
     ) -> Option<WorkspaceAttachRollbackGuard> {
-        if path.is_none() {
-            return None;
-        }
+        path?;
 
         Some(WorkspaceAttachRollbackGuard::new(
             self.session_state.clone(),
@@ -518,8 +573,16 @@ impl FriggMcpServer {
             if is_adopted {
                 return Ok(vec![workspace]);
             }
-            self.adopt_workspace(&workspace, true)?;
-            return Ok(vec![workspace]);
+            return Err(Self::resource_not_found(
+                "repository_id is not adopted for this session",
+                Some(json!({
+                    "repository_id": repository_id,
+                    "attached_repositories": adopted_repository_ids,
+                    "hint": "Call workspace with next_params, then retry.",
+                    "next_tool": "workspace",
+                    "next_params": { "repository_id": workspace.repository_id },
+                })),
+            ));
         }
 
         if let Some(repository_id) = self.current_repository_id() {
@@ -553,8 +616,8 @@ impl FriggMcpServer {
         }
 
         if adopted_repository_ids.is_empty() {
-            let known_workspaces = self.known_workspaces();
-            if let [workspace] = known_workspaces.as_slice() {
+            let auto_adoptable_workspaces = self.auto_adoptable_workspaces();
+            if let [workspace] = auto_adoptable_workspaces.as_slice() {
                 self.adopt_workspace(workspace, true)?;
                 return Ok(vec![workspace.clone()]);
             }
@@ -642,5 +705,59 @@ impl FriggMcpServer {
                 .exists()
                 .then(|| ancestor.to_path_buf())
         })
+    }
+
+    pub(super) fn relative_attach_path_has_parent(path: &Path) -> bool {
+        path.components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    }
+
+    pub(super) fn authorized_attach_roots(&self) -> Vec<PathBuf> {
+        let mut roots = BTreeSet::new();
+        for workspace in self.startup_workspaces() {
+            roots.insert(workspace.root);
+        }
+        for workspace in self.attached_workspaces() {
+            roots.insert(workspace.root);
+        }
+        if let Ok(current_dir) = std::env::current_dir() {
+            let current_root = Self::find_git_root(&current_dir).unwrap_or(current_dir);
+            roots.insert(
+                current_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| current_root.to_path_buf()),
+            );
+        }
+        roots.into_iter().collect()
+    }
+
+    pub(super) fn authorize_attach_root(&self, root: &Path) -> Result<(), ErrorData> {
+        let root = root.canonicalize().map_err(|err| {
+            Self::invalid_params(
+                format!(
+                    "failed to canonicalize attach root {}: {err}",
+                    root.display()
+                ),
+                Some(json!({ "path": root.display().to_string() })),
+            )
+        })?;
+        let authorized_roots = self.authorized_attach_roots();
+        if authorized_roots
+            .iter()
+            .any(|authorized_root| root.starts_with(authorized_root))
+        {
+            return Ok(());
+        }
+
+        Err(Self::access_denied(
+            "workspace attach path is outside authorized workspace roots",
+            Some(json!({
+                "path": root.display().to_string(),
+                "authorized_roots": authorized_roots
+                    .iter()
+                    .map(|root| root.display().to_string())
+                    .collect::<Vec<_>>(),
+            })),
+        ))
     }
 }

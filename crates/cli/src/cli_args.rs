@@ -342,6 +342,8 @@ impl AdoptTarget {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic)]
+
     use clap::Parser;
 
     use super::{AdoptTarget, Cli, Command, HiddenHookCli, HiddenHookCommand, HookEvent};

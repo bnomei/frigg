@@ -449,7 +449,7 @@ impl FileContentSnapshot {
         line_end: Option<usize>,
         max_bytes: usize,
     ) -> Result<LossyLineSlice, LossyLineSliceError> {
-        if self.total_lines > 0 && line_start > self.total_lines {
+        if line_start > self.total_lines && !(self.total_lines == 0 && line_start == 1) {
             return Err(LossyLineSliceError::LineStartOutside {
                 line_start,
                 line_end,
@@ -583,7 +583,7 @@ impl FileContentSnapshot {
 
         let effective_scope = match self.total_lines {
             0 => ExploreLineWindow {
-                start_line: 0,
+                start_line: 1,
                 end_line: 0,
             },
             _ => ExploreLineWindow {

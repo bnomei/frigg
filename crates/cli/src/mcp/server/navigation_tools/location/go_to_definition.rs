@@ -231,7 +231,11 @@ impl FriggMcpServer {
 
                             let location_hint = params_for_blocking.column.and_then(|column| {
                                 Self::navigation_symbol_query_token_from_location(
-                                    &corpora, path, line, column,
+                                    &corpora,
+                                    params_for_blocking.repository_id.as_deref(),
+                                    path,
+                                    line,
+                                    column,
                                 )
                             });
 

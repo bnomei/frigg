@@ -163,7 +163,7 @@ fn format_human_tool_call_row(
     let title = field_value(fields, "tool").unwrap_or("tool").to_owned();
     let mut details = Vec::new();
     if let Some(duration_ms) = field_value(fields, "duration_ms") {
-        details.push(human_field_value("duration_ms", &duration_ms));
+        details.push(human_field_value("duration_ms", duration_ms));
     }
     if let Some(saved_percent) = field_value(fields, "context_saved_percent") {
         details.push(format!("{saved_percent} saved"));

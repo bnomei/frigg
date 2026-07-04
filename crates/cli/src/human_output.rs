@@ -224,7 +224,7 @@ fn trim_human_separators(rows: &mut Vec<HumanRow>) {
 fn human_path_row(value: &str) -> (String, String) {
     match value.trim() {
         "." | "./" => ("workspace".to_owned(), "current directory (.)".to_owned()),
-        trimmed if trimmed.is_empty() => ("path".to_owned(), "-".to_owned()),
+        "" => ("path".to_owned(), "-".to_owned()),
         _ => ("path".to_owned(), value.to_owned()),
     }
 }

@@ -108,7 +108,7 @@ fn default_tracing_filter(cli: &Cli, transport: RuntimeTransportKind) -> &'stati
 }
 
 fn tracing_env_override_allowed(cli: &Cli, transport: RuntimeTransportKind) -> bool {
-    !cli.quiet && !(cli.command.is_none() && transport == RuntimeTransportKind::Stdio)
+    !(cli.quiet || cli.command.is_none() && transport == RuntimeTransportKind::Stdio)
 }
 
 fn init_tracing(default_filter: &str, allow_env_override: bool) {

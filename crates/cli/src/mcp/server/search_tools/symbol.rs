@@ -104,16 +104,15 @@ impl FriggMcpServer {
                                         .canonical_symbol_name_by_stable_id
                                         .get(corpus.symbols[*symbol_index].stable_id.as_str())
                                         .is_some_and(|canonical| canonical != &query)
-                                    {
-                                        if let Some(candidate) = Self::build_ranked_symbol_match(
+                                        && let Some(candidate) = Self::build_ranked_symbol_match(
                                             corpus,
                                             *symbol_index,
                                             1,
                                             path_class_filter,
                                             path_regex.as_ref(),
-                                        ) {
-                                            ranked_matches.push(candidate);
-                                        }
+                                        )
+                                    {
+                                        ranked_matches.push(candidate);
                                     }
                                 }
                             }
@@ -163,16 +162,16 @@ impl FriggMcpServer {
                             corpus.symbol_indices_by_lower_name.get(&query_lower)
                         {
                             for symbol_index in symbol_indices {
-                                if corpus.symbols[*symbol_index].name != query {
-                                    if let Some(candidate) = Self::build_ranked_symbol_match(
+                                if corpus.symbols[*symbol_index].name != query
+                                    && let Some(candidate) = Self::build_ranked_symbol_match(
                                         corpus,
                                         *symbol_index,
                                         name_rank_offset + 1,
                                         path_class_filter,
                                         path_regex.as_ref(),
-                                    ) {
-                                        ranked_matches.push(candidate);
-                                    }
+                                    )
+                                {
+                                    ranked_matches.push(candidate);
                                 }
                             }
                         }

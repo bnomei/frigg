@@ -44,19 +44,19 @@ pub(super) fn hybrid_lexical_recall_tokens(query_text: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(token) = normalize_hybrid_recall_token(&current) {
-            if seen.insert(token.clone()) {
-                tokens.push(token);
-            }
+        if let Some(token) = normalize_hybrid_recall_token(&current)
+            && seen.insert(token.clone())
+        {
+            tokens.push(token);
             current.clear();
         } else {
             current.clear();
         }
     }
-    if let Some(token) = normalize_hybrid_recall_token(&current) {
-        if seen.insert(token.clone()) {
-            tokens.push(token);
-        }
+    if let Some(token) = normalize_hybrid_recall_token(&current)
+        && seen.insert(token.clone())
+    {
+        tokens.push(token);
     }
 
     tokens

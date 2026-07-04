@@ -136,15 +136,15 @@ impl FriggMcpServer {
     ) -> Option<RankedSymbolMatch> {
         let symbol = &corpus.symbols[symbol_index];
         let path = Self::relative_display_path(&corpus.root, &symbol.path);
-        if let Some(path_class_filter) = path_class_filter {
-            if Self::navigation_path_class(&path) != path_class_filter.as_str() {
-                return None;
-            }
+        if let Some(path_class_filter) = path_class_filter
+            && Self::navigation_path_class(&path) != path_class_filter.as_str()
+        {
+            return None;
         }
-        if let Some(path_regex) = path_regex {
-            if !path_regex.is_match(&path) {
-                return None;
-            }
+        if let Some(path_regex) = path_regex
+            && !path_regex.is_match(&path)
+        {
+            return None;
         }
         let rust_context = corpus
             .rust_symbol_context_by_index
@@ -578,10 +578,11 @@ impl FriggMcpServer {
                 if symbol.line > line {
                     break;
                 }
-                if let Some(column) = column {
-                    if symbol.line == line && symbol.span.start_column > column {
-                        break;
-                    }
+                if let Some(column) = column
+                    && symbol.line == line
+                    && symbol.span.start_column > column
+                {
+                    break;
                 }
 
                 let line_distance = line.saturating_sub(symbol.line);
@@ -602,6 +603,24 @@ impl FriggMcpServer {
                     symbol.stable_id.clone(),
                 ));
             }
+        }
+
+        let candidate_repository_ids = candidates
+            .iter()
+            .map(|candidate| candidate.2.as_str())
+            .collect::<BTreeSet<_>>();
+        if repository_id_hint.is_none() && candidate_repository_ids.len() > 1 {
+            return Err(Self::invalid_params(
+                "location path is ambiguous across adopted repositories; pass repository_id",
+                Some(json!({
+                    "path": raw_path,
+                    "line": line,
+                    "column": column,
+                    "repository_ids": candidate_repository_ids
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                })),
+            ));
         }
 
         candidates.sort_by(|left, right| {
@@ -633,11 +652,34 @@ impl FriggMcpServer {
 
     pub(in crate::mcp::server) fn navigation_symbol_query_token_from_location(
         corpora: &[Arc<RepositorySymbolCorpus>],
+        repository_id_hint: Option<&str>,
         raw_path: &str,
         line: usize,
         column: usize,
     ) -> Option<NavigationLocationTokenHint> {
+        if repository_id_hint.is_none()
+            && corpora
+                .iter()
+                .filter(|corpus| {
+                    let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
+                    let absolute_path = corpus.root.join(&requested_path);
+                    Self::navigation_path_within_root(&corpus.root, &absolute_path)
+                        && absolute_path.is_file()
+                })
+                .take(2)
+                .count()
+                > 1
+        {
+            return None;
+        }
+
         for corpus in corpora {
+            if let Some(repository_id_hint) = repository_id_hint
+                && corpus.repository_id != repository_id_hint
+                && corpus.runtime_repository_id != repository_id_hint
+            {
+                continue;
+            }
             let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
             let absolute_path = corpus.root.join(&requested_path);
             if !Self::navigation_path_within_root(&corpus.root, &absolute_path) {
@@ -1003,7 +1045,13 @@ impl FriggMcpServer {
         let line = line
             .ok_or_else(|| Self::invalid_params("line is required when resolving by path", None))?;
         let location_hint = column.and_then(|column| {
-            Self::navigation_symbol_query_token_from_location(corpora, raw_path, line, column)
+            Self::navigation_symbol_query_token_from_location(
+                corpora,
+                repository_id_hint,
+                raw_path,
+                line,
+                column,
+            )
         });
         Self::resolve_navigation_target_from_location_hint(
             corpora,

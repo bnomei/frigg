@@ -142,7 +142,7 @@ pub(crate) fn encode_f32_vector(values: &[f32]) -> Vec<u8> {
 }
 
 pub(super) fn decode_f32_vector(blob: &[u8]) -> Result<Vec<f32>, String> {
-    if blob.len() % std::mem::size_of::<f32>() != 0 {
+    if !blob.len().is_multiple_of(std::mem::size_of::<f32>()) {
         return Err(format!(
             "semantic embedding blob length {} is not divisible by {}",
             blob.len(),

@@ -391,13 +391,45 @@ impl FriggMcpServer {
                 ReadFileProvenanceContext::read_match(&params.result_handle, &params.match_id),
             )
             .await?;
+        let effective_end_line = {
+            let read_params = ReadFileParams {
+                path: read.path.clone(),
+                repository_id: Some(read.repository_id.clone()),
+                max_bytes: None,
+                start_line: Some(line_start),
+                end_line: Some(line_end),
+                line_count: None,
+                presentation_mode: Some(ReadPresentationMode::Json),
+                include_context_efficiency: None,
+            };
+            let (repository_id, path, _) = self.resolve_file_path(&read_params)?;
+            let workspace = self
+                .attached_workspaces_for_repository(Some(repository_id.as_str()))?
+                .into_iter()
+                .find(|workspace| workspace.repository_id == repository_id)
+                .ok_or_else(|| {
+                    Self::resource_not_found(
+                        "repository_id not found",
+                        Some(json!({ "repository_id": repository_id })),
+                    )
+                })?;
+            let line_slice = self
+                .file_content_snapshot_for_workspace(&workspace, &path)?
+                .read_line_slice_lossy(line_start, Some(line_end), self.config.max_file_bytes)
+                .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
+            if line_slice.total_lines == 0 {
+                0
+            } else {
+                line_end.min(line_slice.total_lines)
+            }
+        };
         Ok(ReadMatchResponse {
             repository_id: read.repository_id,
             path: read.path,
             line: anchor.line,
             column: anchor.column,
             start_line: line_start,
-            end_line: line_end,
+            end_line: effective_end_line,
             bytes: read.bytes,
             content: read.content,
             context_efficiency: read.context_efficiency,
@@ -997,7 +1029,9 @@ impl FriggMcpServer {
                     return Ok(None);
                 }
                 Storage::new(&workspace.db_path)
-                    .load_latest_context_efficiency_manifest_summary_for_repository(repository_id)
+                    .load_latest_context_efficiency_manifest_summary_for_repository(
+                        &workspace.runtime_repository_id,
+                    )
                     .map_err(Self::map_frigg_error)
             })
             .transpose()?

@@ -332,6 +332,8 @@ fn serialize_value(value: Value) -> Result<String, McpJsonError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::panic, clippy::unwrap_used)]
+
     use super::{
         DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
         classify_mcp_entry, desired_claude_hook_command, desired_mcp_config, desired_mcp_server,

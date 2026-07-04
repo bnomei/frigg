@@ -11,12 +11,13 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         .split('/')
         .filter(|component| !component.is_empty())
         .collect::<Vec<_>>();
-    if components.iter().any(|component| {
-        matches!(
-            *component,
-            "benches" | "bench" | "examples" | "example" | "tests" | "test"
-        )
-    }) {
+    let src_index = components.iter().position(|component| *component == "src");
+    let support_component_index = components
+        .iter()
+        .position(|component| is_generic_support_component(component));
+    if support_component_index
+        .is_some_and(|support_index| src_index.is_none_or(|src_index| support_index < src_index))
+    {
         PathClass::Support
     } else if is_roc_platform_source_path(normalized)
         || normalized == "bootstrap/app.php"
@@ -30,11 +31,18 @@ pub(crate) fn classify_repository_path(relative_path: &str) -> PathClass {
         PathClass::Runtime
     } else if normalized.starts_with("resources/views/") {
         PathClass::Support
-    } else if components.contains(&"src") || is_repo_root_supported_source_file(normalized) {
+    } else if src_index.is_some() || is_repo_root_supported_source_file(normalized) {
         PathClass::Runtime
     } else {
         PathClass::Project
     }
+}
+
+fn is_generic_support_component(component: &str) -> bool {
+    matches!(
+        component,
+        "benches" | "bench" | "examples" | "example" | "tests" | "test"
+    )
 }
 
 fn is_repo_root_supported_source_file(relative_path: &str) -> bool {
@@ -94,6 +102,18 @@ mod tests {
         );
         assert_eq!(
             classify_repository_path("crates/cli/examples/server.rs"),
+            PathClass::Support
+        );
+        assert_eq!(
+            classify_repository_path("crates/cli/src/examples/server.rs"),
+            PathClass::Runtime
+        );
+        assert_eq!(
+            classify_repository_path("src/examples/live_handler.rs"),
+            PathClass::Runtime
+        );
+        assert_eq!(
+            classify_repository_path("tests/fixtures/src/server.rs"),
             PathClass::Support
         );
         assert_eq!(classify_repository_path("Cargo.toml"), PathClass::Project);

@@ -234,38 +234,38 @@ fn collect_source_evidence(
             }
         }
         "method_declaration" => {
-            if let Some((kind, name)) = symbol_from_node(source, node) {
-                if let Some(class_name) = next_class_canonical_name.as_deref() {
-                    let canonical_name = format!("{class_name}::{name}");
-                    if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| canonical_name.clone());
-                        next_owner_symbol_id = Some(symbol.stable_id.clone());
-                        if let Some(parameters) = node.child_by_field_name("parameters") {
-                            collect_parameter_type_evidence(
-                                source,
-                                parameters,
-                                file_symbols,
-                                context,
-                                next_class_canonical_name.as_deref(),
-                                Some(symbol.stable_id.as_str()),
-                                evidence,
-                            );
-                        }
-                        if let Some(return_type) = node.child_by_field_name("return_type") {
-                            collect_type_evidence(
-                                source,
-                                return_type,
-                                context,
-                                next_class_canonical_name.as_deref(),
-                                Some(symbol.stable_id.as_str()),
-                                PhpTypeEvidenceKind::Return,
-                                source_span(node).start_line,
-                                &mut evidence.type_evidence,
-                            );
-                        }
+            if let Some((kind, name)) = symbol_from_node(source, node)
+                && let Some(class_name) = next_class_canonical_name.as_deref()
+            {
+                let canonical_name = format!("{class_name}::{name}");
+                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
+                    evidence
+                        .canonical_names_by_stable_id
+                        .entry(symbol.stable_id.clone())
+                        .or_insert_with(|| canonical_name.clone());
+                    next_owner_symbol_id = Some(symbol.stable_id.clone());
+                    if let Some(parameters) = node.child_by_field_name("parameters") {
+                        collect_parameter_type_evidence(
+                            source,
+                            parameters,
+                            file_symbols,
+                            context,
+                            next_class_canonical_name.as_deref(),
+                            Some(symbol.stable_id.as_str()),
+                            evidence,
+                        );
+                    }
+                    if let Some(return_type) = node.child_by_field_name("return_type") {
+                        collect_type_evidence(
+                            source,
+                            return_type,
+                            context,
+                            next_class_canonical_name.as_deref(),
+                            Some(symbol.stable_id.as_str()),
+                            PhpTypeEvidenceKind::Return,
+                            source_span(node).start_line,
+                            &mut evidence.type_evidence,
+                        );
                     }
                 }
             }
@@ -304,43 +304,41 @@ fn collect_source_evidence(
             }
         }
         "property_element" => {
-            if let Some((kind, name)) = symbol_from_node(source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    if let Some(class_name) = next_class_canonical_name.as_deref() {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| format!("{class_name}::{name}"));
-                    }
-                }
+            if let Some((kind, name)) = symbol_from_node(source, node)
+                && let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node)
+                && let Some(class_name) = next_class_canonical_name.as_deref()
+            {
+                evidence
+                    .canonical_names_by_stable_id
+                    .entry(symbol.stable_id.clone())
+                    .or_insert_with(|| format!("{class_name}::{name}"));
             }
         }
         "const_element" => {
-            if let Some((kind, name)) = symbol_from_node(source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    let canonical_name =
-                        if let Some(class_name) = next_class_canonical_name.as_deref() {
-                            format!("{class_name}::{name}")
-                        } else {
-                            namespace_qualified_name(next_namespace.as_deref(), &name)
-                        };
-                    evidence
-                        .canonical_names_by_stable_id
-                        .entry(symbol.stable_id.clone())
-                        .or_insert(canonical_name);
-                }
+            if let Some((kind, name)) = symbol_from_node(source, node)
+                && let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node)
+            {
+                let canonical_name = if let Some(class_name) = next_class_canonical_name.as_deref()
+                {
+                    format!("{class_name}::{name}")
+                } else {
+                    namespace_qualified_name(next_namespace.as_deref(), &name)
+                };
+                evidence
+                    .canonical_names_by_stable_id
+                    .entry(symbol.stable_id.clone())
+                    .or_insert(canonical_name);
             }
         }
         "enum_case" => {
-            if let Some((kind, name)) = symbol_from_node(source, node) {
-                if let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node) {
-                    if let Some(class_name) = next_class_canonical_name.as_deref() {
-                        evidence
-                            .canonical_names_by_stable_id
-                            .entry(symbol.stable_id.clone())
-                            .or_insert_with(|| format!("{class_name}::{name}"));
-                    }
-                }
+            if let Some((kind, name)) = symbol_from_node(source, node)
+                && let Some(symbol) = find_symbol_for_node(file_symbols, kind, &name, node)
+                && let Some(class_name) = next_class_canonical_name.as_deref()
+            {
+                evidence
+                    .canonical_names_by_stable_id
+                    .entry(symbol.stable_id.clone())
+                    .or_insert_with(|| format!("{class_name}::{name}"));
             }
         }
         "catch_clause" => {
@@ -619,12 +617,11 @@ fn collect_type_targets(
 ) {
     match node.kind() {
         "named_type" | "name" | "qualified_name" | "relative_name" => {
-            if let Ok(raw_name) = node.utf8_text(source.as_bytes()) {
-                if let Some(target) =
+            if let Ok(raw_name) = node.utf8_text(source.as_bytes())
+                && let Some(target) =
                     context.resolve_class_like_name(raw_name, current_class_canonical_name)
-                {
-                    targets.insert(target);
-                }
+            {
+                targets.insert(target);
             }
         }
         _ => {

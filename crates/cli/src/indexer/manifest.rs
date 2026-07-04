@@ -134,11 +134,12 @@ impl ManifestBuilder {
 
         for metadata in metadata_output.entries {
             let is_hinted = dirty_hint_matches_manifest_path(&hinted_paths, &metadata.path);
-            if let Some(previous) = previous_by_path.get(&metadata.path) {
-                if !is_hinted && metadata_matches_previous_digest(&metadata, previous) {
-                    entries.push(previous.clone());
-                    continue;
-                }
+            if let Some(previous) = previous_by_path.get(&metadata.path)
+                && !is_hinted
+                && metadata_matches_previous_digest(&metadata, previous)
+            {
+                entries.push(previous.clone());
+                continue;
             }
 
             hash_jobs.push(metadata);
@@ -151,14 +152,16 @@ impl ManifestBuilder {
         for result in hashed_entries {
             match result {
                 Ok(entry) => entries.push(entry),
-                Err((metadata, message)) => {
+                Err((metadata, err)) => {
                     diagnostics.push(ManifestBuildDiagnostic {
                         path: Some(metadata.path.clone()),
                         kind: ManifestDiagnosticKind::Read,
-                        message,
+                        message: err.to_string(),
                     });
                     if let Some(previous) = previous_by_path.get(&metadata.path) {
                         entries.push(previous.clone());
+                    } else {
+                        return Err(FriggError::Io(err));
                     }
                 }
             }
@@ -203,9 +206,9 @@ fn hash_manifest_path_with_diagnostic(
 
 fn hash_manifest_metadata(
     metadata: FileMetadataDigest,
-) -> Result<FileDigest, (FileMetadataDigest, String)> {
-    let (size_bytes, digest) = stream_file_blake3_digest(&metadata.path)
-        .map_err(|err| (metadata.clone(), err.to_string()))?;
+) -> Result<FileDigest, (FileMetadataDigest, std::io::Error)> {
+    let (size_bytes, digest) =
+        stream_file_blake3_digest(&metadata.path).map_err(|err| (metadata.clone(), err))?;
     Ok(FileDigest {
         path: metadata.path,
         size_bytes,

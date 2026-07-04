@@ -1586,7 +1586,7 @@ fn index_plan_changed_only_with_dirty_hint_advances_after_manifest_fast_pass() -
             IndexMode::ChangedOnly,
             &SemanticRuntimeConfig::default(),
             &SemanticRuntimeCredentials::default(),
-            &[dirty_hint.clone()],
+            std::slice::from_ref(&dirty_hint),
             |_| Ok(()),
         )?;
     assert_ne!(

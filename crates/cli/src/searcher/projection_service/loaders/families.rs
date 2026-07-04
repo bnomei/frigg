@@ -74,6 +74,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: PATH_WITNESS_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .path_witness_cache
@@ -218,6 +219,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: TEST_SUBJECT_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .test_subject_cache
@@ -361,6 +363,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: ENTRYPOINT_SURFACE_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .entrypoint_surface_cache
@@ -508,6 +511,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .path_relation_cache
@@ -519,36 +523,34 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
-            if db_path.exists() {
-                let storage = Storage::new(db_path);
-                if let Some(head) = storage
-                    .load_retrieval_projection_head_for_repository_snapshot_family(
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
+            && db_path.exists()
+        {
+            let storage = Storage::new(db_path);
+            if let Some(head) = storage
+                .load_retrieval_projection_head_for_repository_snapshot_family(
+                    &repository.repository_id,
+                    snapshot_id,
+                    RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
+                )
+                .ok()
+                .flatten()
+                .filter(|head| head.heuristic_version == PATH_RELATION_PROJECTION_HEURISTIC_VERSION)
+            {
+                let rows = storage
+                    .load_path_relation_projections_for_repository_snapshot(
                         &repository.repository_id,
                         snapshot_id,
-                        RETRIEVAL_PROJECTION_FAMILY_PATH_RELATION,
                     )
-                    .ok()
-                    .flatten()
-                    .filter(|head| {
-                        head.heuristic_version == PATH_RELATION_PROJECTION_HEURISTIC_VERSION
-                    })
-                {
-                    let rows = storage
-                        .load_path_relation_projections_for_repository_snapshot(
-                            &repository.repository_id,
-                            snapshot_id,
-                        )
-                        .ok()?;
-                    if rows.len() == head.row_count {
-                        let projections = Arc::new(rows);
-                        self.insert_cached_projection_entry(
-                            &self.path_relation_cache,
-                            cache_key.clone(),
-                            Arc::clone(&projections),
-                        )?;
-                        return Some(projections);
-                    }
+                    .ok()?;
+                if rows.len() == head.row_count {
+                    let projections = Arc::new(rows);
+                    self.insert_cached_projection_entry(
+                        &self.path_relation_cache,
+                        cache_key.clone(),
+                        Arc::clone(&projections),
+                    )?;
+                    return Some(projections);
                 }
             }
         }
@@ -635,6 +637,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .subtree_coverage_cache
@@ -646,36 +649,36 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
-            if db_path.exists() {
-                let storage = Storage::new(db_path);
-                if let Some(head) = storage
-                    .load_retrieval_projection_head_for_repository_snapshot_family(
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
+            && db_path.exists()
+        {
+            let storage = Storage::new(db_path);
+            if let Some(head) = storage
+                .load_retrieval_projection_head_for_repository_snapshot_family(
+                    &repository.repository_id,
+                    snapshot_id,
+                    RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
+                )
+                .ok()
+                .flatten()
+                .filter(|head| {
+                    head.heuristic_version == SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION
+                })
+            {
+                let rows = storage
+                    .load_subtree_coverage_projections_for_repository_snapshot(
                         &repository.repository_id,
                         snapshot_id,
-                        RETRIEVAL_PROJECTION_FAMILY_SUBTREE_COVERAGE,
                     )
-                    .ok()
-                    .flatten()
-                    .filter(|head| {
-                        head.heuristic_version == SUBTREE_COVERAGE_PROJECTION_HEURISTIC_VERSION
-                    })
-                {
-                    let rows = storage
-                        .load_subtree_coverage_projections_for_repository_snapshot(
-                            &repository.repository_id,
-                            snapshot_id,
-                        )
-                        .ok()?;
-                    if rows.len() == head.row_count {
-                        let projections = Arc::new(rows);
-                        self.insert_cached_projection_entry(
-                            &self.subtree_coverage_cache,
-                            cache_key.clone(),
-                            Arc::clone(&projections),
-                        )?;
-                        return Some(projections);
-                    }
+                    .ok()?;
+                if rows.len() == head.row_count {
+                    let projections = Arc::new(rows);
+                    self.insert_cached_projection_entry(
+                        &self.subtree_coverage_cache,
+                        cache_key.clone(),
+                        Arc::clone(&projections),
+                    )?;
+                    return Some(projections);
                 }
             }
         }
@@ -733,6 +736,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .path_surface_term_cache
@@ -744,40 +748,40 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
-            if db_path.exists() {
-                let storage = Storage::new(db_path);
-                if let Some(head) = storage
-                    .load_retrieval_projection_head_for_repository_snapshot_family(
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
+            && db_path.exists()
+        {
+            let storage = Storage::new(db_path);
+            if let Some(head) = storage
+                .load_retrieval_projection_head_for_repository_snapshot_family(
+                    &repository.repository_id,
+                    snapshot_id,
+                    RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
+                )
+                .ok()
+                .flatten()
+                .filter(|head| {
+                    head.heuristic_version == PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION
+                })
+            {
+                let rows = storage
+                    .load_path_surface_term_projections_for_repository_snapshot(
                         &repository.repository_id,
                         snapshot_id,
-                        RETRIEVAL_PROJECTION_FAMILY_PATH_SURFACE_TERM,
                     )
-                    .ok()
-                    .flatten()
-                    .filter(|head| {
-                        head.heuristic_version == PATH_SURFACE_TERM_PROJECTION_HEURISTIC_VERSION
-                    })
-                {
-                    let rows = storage
-                        .load_path_surface_term_projections_for_repository_snapshot(
-                            &repository.repository_id,
-                            snapshot_id,
-                        )
-                        .ok()?;
-                    if rows.len() == head.row_count {
-                        let projections = Arc::new(
-                            rows.into_iter()
-                                .map(|row| (row.path.clone(), row))
-                                .collect::<BTreeMap<_, _>>(),
-                        );
-                        self.insert_cached_projection_entry(
-                            &self.path_surface_term_cache,
-                            cache_key.clone(),
-                            Arc::clone(&projections),
-                        )?;
-                        return Some(projections);
-                    }
+                    .ok()?;
+                if rows.len() == head.row_count {
+                    let projections = Arc::new(
+                        rows.into_iter()
+                            .map(|row| (row.path.clone(), row))
+                            .collect::<BTreeMap<_, _>>(),
+                    );
+                    self.insert_cached_projection_entry(
+                        &self.path_surface_term_cache,
+                        cache_key.clone(),
+                        Arc::clone(&projections),
+                    )?;
+                    return Some(projections);
                 }
             }
         }
@@ -848,6 +852,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .path_anchor_sketch_cache
@@ -859,36 +864,36 @@ impl ProjectionStoreService {
             return Some(cached);
         }
 
-        if let Ok(db_path) = resolve_provenance_db_path(&repository.root) {
-            if db_path.exists() {
-                let storage = Storage::new(db_path);
-                if let Some(head) = storage
-                    .load_retrieval_projection_head_for_repository_snapshot_family(
+        if let Ok(db_path) = resolve_provenance_db_path(&repository.root)
+            && db_path.exists()
+        {
+            let storage = Storage::new(db_path);
+            if let Some(head) = storage
+                .load_retrieval_projection_head_for_repository_snapshot_family(
+                    &repository.repository_id,
+                    snapshot_id,
+                    RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
+                )
+                .ok()
+                .flatten()
+                .filter(|head| {
+                    head.heuristic_version == PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION
+                })
+            {
+                let rows = storage
+                    .load_path_anchor_sketch_projections_for_repository_snapshot(
                         &repository.repository_id,
                         snapshot_id,
-                        RETRIEVAL_PROJECTION_FAMILY_PATH_ANCHOR_SKETCH,
                     )
-                    .ok()
-                    .flatten()
-                    .filter(|head| {
-                        head.heuristic_version == PATH_ANCHOR_SKETCH_PROJECTION_HEURISTIC_VERSION
-                    })
-                {
-                    let rows = storage
-                        .load_path_anchor_sketch_projections_for_repository_snapshot(
-                            &repository.repository_id,
-                            snapshot_id,
-                        )
-                        .ok()?;
-                    if rows.len() == head.row_count {
-                        let projections = Arc::new(group_anchor_sketches_by_path(rows));
-                        self.insert_cached_projection_entry(
-                            &self.path_anchor_sketch_cache,
-                            cache_key.clone(),
-                            Arc::clone(&projections),
-                        )?;
-                        return Some(projections);
-                    }
+                    .ok()?;
+                if rows.len() == head.row_count {
+                    let projections = Arc::new(group_anchor_sketches_by_path(rows));
+                    self.insert_cached_projection_entry(
+                        &self.path_anchor_sketch_cache,
+                        cache_key.clone(),
+                        Arc::clone(&projections),
+                    )?;
+                    return Some(projections);
                 }
             }
         }

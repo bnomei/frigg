@@ -497,25 +497,24 @@ impl FriggMcpServer {
             if !candidate.contains(std::path::MAIN_SEPARATOR)
                 && !candidate.contains('/')
                 && !candidate.contains('\\')
+                && let Some(bin_dir) = Self::test_precise_generator_bin_override()
             {
-                if let Some(bin_dir) = Self::test_precise_generator_bin_override() {
-                    let tool_name = Path::new(candidate)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(|name| name.trim_start_matches('$'))
-                        .unwrap_or(candidate);
-                    let override_path = bin_dir.join(tool_name);
-                    if override_path.is_file() {
-                        let display = override_path.display().to_string();
-                        if seen.insert(display.clone()) {
-                            resolved.push(ResolvedPreciseGeneratorTool {
-                                command: display.clone(),
-                                display,
-                            });
-                        }
+                let tool_name = Path::new(candidate)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.trim_start_matches('$'))
+                    .unwrap_or(candidate);
+                let override_path = bin_dir.join(tool_name);
+                if override_path.is_file() {
+                    let display = override_path.display().to_string();
+                    if seen.insert(display.clone()) {
+                        resolved.push(ResolvedPreciseGeneratorTool {
+                            command: display.clone(),
+                            display,
+                        });
                     }
-                    continue;
                 }
+                continue;
             }
             let Some(tool) = Self::resolve_generator_candidate(workspace_root, candidate) else {
                 continue;
@@ -1467,14 +1466,14 @@ impl FriggMcpServer {
             }
         })();
 
-        if let Some(filtered_generation_root) = filtered_generation_root {
-            if let Err(error) = fs::remove_dir_all(&filtered_generation_root) {
-                warn!(
-                    path = %filtered_generation_root.display(),
-                    error = %error,
-                    "failed to clean filtered precise generation workspace"
-                );
-            }
+        if let Some(filtered_generation_root) = filtered_generation_root
+            && let Err(error) = fs::remove_dir_all(&filtered_generation_root)
+        {
+            warn!(
+                path = %filtered_generation_root.display(),
+                error = %error,
+                "failed to clean filtered precise generation workspace"
+            );
         }
 
         finish(generation_result)
@@ -1578,6 +1577,32 @@ impl FriggMcpServer {
         })
     }
 
+    pub(in crate::mcp::server) fn clear_pending_precise_dirty_paths(
+        &self,
+        repository_id: &str,
+    ) -> bool {
+        self.runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths poisoned")
+            .remove(repository_id)
+            .is_some()
+    }
+
+    fn repository_has_active_precise_generation_consumer(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> bool {
+        let active_sessions = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_session_count(&workspace.repository_id)
+            > 0;
+        active_sessions || self.repository_has_active_watch_lease(&workspace.repository_id)
+    }
+
     pub(in crate::mcp::server) fn maybe_spawn_workspace_precise_generation(
         &self,
         workspace: &AttachedWorkspace,
@@ -1623,36 +1648,10 @@ impl FriggMcpServer {
                 .precise_generation_pending_dirty_paths
                 .write()
                 .expect("precise generation pending dirty paths poisoned");
-            let active_precise_generation = self
-                .runtime_state
-                .runtime_task_registry
-                .read()
-                .expect("runtime task registry poisoned")
-                .active_tasks()
-                .iter()
-                .any(|task| {
-                    task.kind == crate::mcp::types::RuntimeTaskKind::PreciseGenerate
-                        && task.repository_id == workspace.repository_id
-                });
-            if active_precise_generation {
-                tracing::info!(
-                    repository_id = %workspace.repository_id,
-                    root = %workspace.root.display(),
-                    changed_paths = changed_paths.len(),
-                    deleted_paths = deleted_paths.len(),
-                    generators = %selected_generator_ids,
-                    "workspace precise generation skipped because a generation task is already active"
-                );
-                Self::record_pending_precise_dirty_paths_locked(
-                    &mut pending,
-                    &workspace.repository_id,
-                    &changed_paths,
-                    &deleted_paths,
-                );
-                return WorkspacePreciseGenerationAction::SkippedActiveTask;
-            }
-            RuntimeTaskGuard::start(
+            match RuntimeTaskGuard::try_start_if_no_active_for_any_repository(
                 Arc::clone(&self.runtime_state.runtime_task_registry),
+                &[crate::mcp::types::RuntimeTaskKind::PreciseGenerate],
+                &Self::runtime_task_repository_aliases(&workspace),
                 crate::mcp::types::RuntimeTaskKind::PreciseGenerate,
                 workspace.repository_id.clone(),
                 "precise_generation",
@@ -1661,7 +1660,27 @@ impl FriggMcpServer {
                     changed_paths.len(),
                     deleted_paths.len()
                 )),
-            )
+            ) {
+                Ok(task_guard) => task_guard,
+                Err(active_tasks) => {
+                    tracing::info!(
+                        repository_id = %workspace.repository_id,
+                        root = %workspace.root.display(),
+                        changed_paths = changed_paths.len(),
+                        deleted_paths = deleted_paths.len(),
+                        generators = %selected_generator_ids,
+                        active_tasks = active_tasks.len(),
+                        "workspace precise generation skipped because a generation task is already active"
+                    );
+                    Self::record_pending_precise_dirty_paths_locked(
+                        &mut pending,
+                        &workspace.repository_id,
+                        &changed_paths,
+                        &deleted_paths,
+                    );
+                    return WorkspacePreciseGenerationAction::SkippedActiveTask;
+                }
+            }
         };
         tracing::info!(
             repository_id = %workspace.repository_id,
@@ -1731,11 +1750,21 @@ impl FriggMcpServer {
                     )
                 };
                 if let Some((pending_changed, pending_deleted)) = pending_after_finish {
-                    server.maybe_spawn_workspace_precise_generation(
-                        &workspace,
-                        &pending_changed,
-                        &pending_deleted,
-                    );
+                    if server.repository_has_active_precise_generation_consumer(&workspace) {
+                        server.maybe_spawn_workspace_precise_generation(
+                            &workspace,
+                            &pending_changed,
+                            &pending_deleted,
+                        );
+                    } else {
+                        tracing::info!(
+                            repository_id = %workspace.repository_id,
+                            root = %workspace.root.display(),
+                            changed_paths = pending_changed.len(),
+                            deleted_paths = pending_deleted.len(),
+                            "workspace precise generation dropped pending replay because the repository is no longer adopted"
+                        );
+                    }
                 }
             });
         if let Err(err) = spawn_result {

@@ -4,8 +4,9 @@
 
 use super::*;
 use crate::mcp::types::{
-    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspacePreciseGenerationAction,
-    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
+    ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode,
+    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
+    WorkspacePreciseLifecyclePhase,
 };
 
 #[tokio::test]
@@ -374,7 +375,7 @@ async fn workspace_detach_clears_session_default_and_preserves_known_workspace()
 
 #[tokio::test]
 async fn workspace_detach_prunes_ephemeral_known_workspace_after_last_session() {
-    let workspace_root = temp_workspace_root("detach-prunes-ephemeral-workspace");
+    let workspace_root = authorized_temp_workspace_root("detach-prunes-ephemeral-workspace");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Ephemeral;\n")
@@ -421,7 +422,7 @@ async fn workspace_detach_prunes_ephemeral_known_workspace_after_last_session() 
 
 #[test]
 fn provisional_path_workspace_can_be_pruned_after_pre_adoption_failure() {
-    let workspace_root = temp_workspace_root("pre-adoption-failure-prunes-workspace");
+    let workspace_root = authorized_temp_workspace_root("pre-adoption-failure-prunes-workspace");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(
@@ -472,7 +473,7 @@ fn provisional_path_workspace_can_be_pruned_after_pre_adoption_failure() {
 
 #[test]
 fn adopted_path_workspace_survives_pending_guard_drop() {
-    let workspace_root = temp_workspace_root("adopted-path-survives-pending-drop");
+    let workspace_root = authorized_temp_workspace_root("adopted-path-survives-pending-drop");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Adopted;\n")
@@ -508,7 +509,7 @@ fn adopted_path_workspace_survives_pending_guard_drop() {
 
 #[test]
 fn workspace_target_relative_path_falls_back_to_current_workspace_before_direct_resolution() {
-    let workspace_root = temp_workspace_root("relative-path-current-workspace-root");
+    let workspace_root = authorized_temp_workspace_root("relative-path-current-workspace-root");
     let nested_dir = workspace_root.join("fallback-only/src");
     fs::create_dir_all(&nested_dir).expect("failed to create nested workspace fixture");
     fs::write(nested_dir.join("lib.rs"), "pub struct RelativeAttach;\n")
@@ -534,20 +535,176 @@ fn workspace_target_relative_path_falls_back_to_current_workspace_before_direct_
         "direct resolution should attach the resolved file parent as its own workspace"
     );
     assert_eq!(resolution, Some(WorkspaceResolveMode::Direct));
-    let expected_resolved_from = nested_dir.canonicalize().unwrap().display().to_string();
+    let expected_resolved_from = nested_dir
+        .canonicalize()
+        .expect("nested directory should canonicalize")
+        .display()
+        .to_string();
     assert_eq!(
         resolved_from.as_deref(),
         Some(expected_resolved_from.as_str())
     );
-    assert_eq!(workspace.root, nested_dir.canonicalize().unwrap());
+    assert_eq!(
+        workspace.root,
+        nested_dir
+            .canonicalize()
+            .expect("nested directory should canonicalize")
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_attach_rejects_absolute_path_outside_authorized_roots() {
+    let workspace_root = temp_workspace_root("attach-outside-authorized-roots");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create outside workspace fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Outside;\n")
+        .expect("failed to write outside workspace fixture");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+
+    let err = match server.resolve_workspace_target(
+        Some(
+            workspace_root
+                .to_str()
+                .expect("workspace root path is utf-8"),
+        ),
+        None,
+        WorkspaceResolveMode::Direct,
+    ) {
+        Ok(_) => panic!("outside absolute attach path should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.message.contains("outside authorized workspace roots"),
+        "unexpected error: {err:?}"
+    );
+    assert!(
+        server.known_workspaces().is_empty(),
+        "rejected paths must not enter the process registry"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_attach_rejects_relative_parent_directory_components() {
+    let workspace_root = authorized_temp_workspace_root("attach-relative-parent");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Root;\n")
+        .expect("failed to write workspace source");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    server
+        .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::Direct)
+        .expect("absolute path attach should establish a session default");
+
+    let err = match server.resolve_workspace_target(
+        Some("../outside"),
+        None,
+        WorkspaceResolveMode::Direct,
+    ) {
+        Ok(_) => panic!("relative parent traversal should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.message.contains("parent directory components"),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(
+        server.known_workspaces().len(),
+        1,
+        "rejected relative paths must not create provisional workspaces"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn ephemeral_workspace_is_hidden_from_other_sessions_by_repository_id() {
+    let workspace_root = authorized_temp_workspace_root("cross-session-ephemeral-hidden");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Hidden;\n")
+        .expect("failed to write workspace source");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let first_session = server.clone_for_new_session();
+    let second_session = server.clone_for_new_session();
+
+    let attach = first_session
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: Some(workspace_root.display().to_string()),
+            repository_id: None,
+            set_default: Some(true),
+            resolve_mode: Some(WorkspaceResolveMode::Direct),
+            wait_for_precise: Some(false),
+        }))
+        .await
+        .expect("first session should attach the ad hoc workspace")
+        .0;
+    let repository_id = attach.repository.repository_id.clone();
+
+    let listed = second_session
+        .list_repositories(Parameters(ListRepositoriesParams::default()))
+        .await
+        .expect("list_repositories should succeed")
+        .0;
+    assert!(
+        listed
+            .repositories
+            .iter()
+            .all(|repository| repository.repository_id != repository_id),
+        "another session must not list a peer session's ad hoc repository"
+    );
+
+    let attach_by_id = second_session
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: None,
+            repository_id: Some(repository_id.clone()),
+            set_default: Some(true),
+            resolve_mode: None,
+            wait_for_precise: Some(false),
+        }))
+        .await;
+    assert!(
+        attach_by_id.is_err(),
+        "another session must not adopt a peer ad hoc workspace by repository_id"
+    );
+
+    let read_by_id = second_session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: Some(repository_id),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await;
+    assert!(
+        read_by_id.is_err(),
+        "another session must not read a peer ad hoc workspace by repository_id"
+    );
+    assert!(second_session.attached_workspaces().is_empty());
 
     let _ = fs::remove_dir_all(workspace_root);
 }
 
 #[test]
 fn workspace_attach_path_rollback_guard_releases_fresh_adoption_on_cancellation() {
-    let first_workspace_root = temp_workspace_root("attach-rollback-preserves-default");
-    let second_workspace_root = temp_workspace_root("attach-rollback-prunes-fresh-path");
+    let first_workspace_root = authorized_temp_workspace_root("attach-rollback-preserves-default");
+    let second_workspace_root = authorized_temp_workspace_root("attach-rollback-prunes-fresh-path");
     for workspace_root in [&first_workspace_root, &second_workspace_root] {
         fs::create_dir_all(workspace_root.join("src"))
             .expect("failed to create workspace root fixture");
@@ -623,7 +780,8 @@ fn workspace_attach_path_rollback_guard_releases_fresh_adoption_on_cancellation(
 
 #[test]
 fn workspace_attach_path_rollback_guard_preserves_later_completed_same_session_reuse() {
-    let workspace_root = temp_workspace_root("attach-rollback-preserves-completed-reuse");
+    let workspace_root =
+        authorized_temp_workspace_root("attach-rollback-preserves-completed-reuse");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Reused;\n")
@@ -710,8 +868,8 @@ fn workspace_attach_path_rollback_guard_preserves_later_completed_same_session_r
 
 #[test]
 fn workspace_attach_completed_reuse_without_default_restores_cancelled_default_change() {
-    let first_workspace_root = temp_workspace_root("attach-rollback-default-first");
-    let second_workspace_root = temp_workspace_root("attach-rollback-default-second");
+    let first_workspace_root = authorized_temp_workspace_root("attach-rollback-default-first");
+    let second_workspace_root = authorized_temp_workspace_root("attach-rollback-default-second");
     for workspace_root in [&first_workspace_root, &second_workspace_root] {
         fs::create_dir_all(workspace_root.join("src"))
             .expect("failed to create workspace root fixture");
@@ -792,9 +950,10 @@ fn workspace_attach_completed_reuse_without_default_restores_cancelled_default_c
 
 #[test]
 fn workspace_attach_completed_reuse_before_fresh_cancel_restores_cancelled_default_change() {
-    let first_workspace_root = temp_workspace_root("attach-rollback-default-first-complete-first");
+    let first_workspace_root =
+        authorized_temp_workspace_root("attach-rollback-default-first-complete-first");
     let second_workspace_root =
-        temp_workspace_root("attach-rollback-default-second-complete-first");
+        authorized_temp_workspace_root("attach-rollback-default-second-complete-first");
     for workspace_root in [&first_workspace_root, &second_workspace_root] {
         fs::create_dir_all(workspace_root.join("src"))
             .expect("failed to create workspace root fixture");
@@ -871,7 +1030,7 @@ fn workspace_attach_completed_reuse_before_fresh_cancel_restores_cancelled_defau
 
 #[test]
 fn workspace_attach_path_rollback_guard_ignores_cancelled_same_session_reuse() {
-    let workspace_root = temp_workspace_root("attach-rollback-ignores-cancelled-reuse");
+    let workspace_root = authorized_temp_workspace_root("attach-rollback-ignores-cancelled-reuse");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Cancelled;\n")
@@ -952,7 +1111,8 @@ fn workspace_attach_path_rollback_guard_ignores_cancelled_same_session_reuse() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn workspace_attach_failed_watch_lease_rolls_back_and_prunes_ephemeral_workspace() {
-    let workspace_root = temp_workspace_root("attach-watch-lease-failure-prunes-workspace");
+    let workspace_root =
+        authorized_temp_workspace_root("attach-watch-lease-failure-prunes-workspace");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Rollback;\n")
@@ -1326,7 +1486,7 @@ fn repository_runtime_task_atomic_start_rejects_alias_conflict() {
 }
 
 #[tokio::test]
-async fn read_file_auto_adopts_explicit_known_repository_but_rejects_unadopted_absolute_path() {
+async fn read_file_requires_explicit_workspace_adoption_for_repository_id() {
     let workspace_root_a = temp_workspace_root("adoption-gate-repo-a");
     let workspace_root_b = temp_workspace_root("adoption-gate-repo-b");
     fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
@@ -1399,6 +1559,44 @@ async fn read_file_auto_adopts_explicit_known_repository_but_rejects_unadopted_a
         "session scoped to repo A must not read repo B by absolute path before repo B is explicitly adopted"
     );
 
+    let explicit_before_adoption = session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/secret.rs".to_owned(),
+            repository_id: Some(workspace_b.repository_id.clone()),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await;
+    assert!(
+        explicit_before_adoption.is_err(),
+        "repository_id reads must not auto-adopt another visible repository"
+    );
+    assert_eq!(
+        session.current_repository_id().as_deref(),
+        Some(workspace_a.repository_id.as_str()),
+        "failed repository_id reads must not replace the session default"
+    );
+
+    session
+        .workspace_attach(Parameters(WorkspaceAttachParams {
+            path: None,
+            repository_id: Some(workspace_b.repository_id.clone()),
+            set_default: Some(false),
+            resolve_mode: None,
+            wait_for_precise: Some(false),
+        }))
+        .await
+        .expect("workspace_attach should explicitly adopt repo B without making it default");
+    assert_eq!(
+        session.current_repository_id().as_deref(),
+        Some(workspace_a.repository_id.as_str()),
+        "set_default=false adoption must preserve repo A as the session default"
+    );
+
     let explicit = session
         .read_file_impl(crate::mcp::types::ReadFileParams {
             path: "src/secret.rs".to_owned(),
@@ -1411,7 +1609,7 @@ async fn read_file_auto_adopts_explicit_known_repository_but_rejects_unadopted_a
             include_context_efficiency: None,
         })
         .await
-        .expect("explicit known repository_id should auto-adopt repo B");
+        .expect("explicitly adopted repo B should be readable by repository_id");
     assert!(explicit.content.contains("pub struct Secret"));
 
     let absolute_a = workspace_root_a
@@ -1432,6 +1630,79 @@ async fn read_file_auto_adopts_explicit_known_repository_but_rejects_unadopted_a
         .await
         .expect("adopted repo A must remain readable");
     assert!(allowed.content.contains("pub struct A"));
+
+    let _ = fs::remove_dir_all(workspace_root_a);
+    let _ = fs::remove_dir_all(workspace_root_b);
+}
+
+#[tokio::test]
+async fn read_file_rejects_ambiguous_relative_path_across_adopted_repositories() {
+    let workspace_root_a = temp_workspace_root("ambiguous-read-repo-a");
+    let workspace_root_b = temp_workspace_root("ambiguous-read-repo-b");
+    fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
+    fs::create_dir_all(workspace_root_b.join("src")).expect("failed to create repo B fixture root");
+    fs::write(workspace_root_a.join("src/shared.rs"), "pub struct A;\n")
+        .expect("failed to write repo A source");
+    fs::write(workspace_root_b.join("src/shared.rs"), "pub struct B;\n")
+        .expect("failed to write repo B source");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root_a.clone(), workspace_root_b.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    let canonical_b = workspace_root_b
+        .canonicalize()
+        .expect("repo B root should canonicalize");
+    let workspaces = server.known_workspaces();
+    let workspace_b = workspaces
+        .iter()
+        .find(|workspace| {
+            workspace
+                .root
+                .canonicalize()
+                .map(|root| root == canonical_b)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .expect("repo B should be globally known at startup");
+    for workspace in &workspaces {
+        server
+            .adopt_workspace(workspace, false)
+            .expect("workspace should adopt");
+    }
+    server.set_current_repository_id(None);
+
+    let ambiguous = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/shared.rs".to_owned(),
+            repository_id: None,
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await;
+    assert!(
+        ambiguous.is_err(),
+        "relative reads that match multiple adopted repositories should require repository_id"
+    );
+
+    let explicit = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/shared.rs".to_owned(),
+            repository_id: Some(workspace_b.repository_id.clone()),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("explicit repository_id should disambiguate");
+    assert!(explicit.content.contains("pub struct B"));
 
     let _ = fs::remove_dir_all(workspace_root_a);
     let _ = fs::remove_dir_all(workspace_root_b);

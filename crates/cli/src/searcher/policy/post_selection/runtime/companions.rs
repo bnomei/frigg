@@ -172,21 +172,20 @@ pub(in crate::searcher::policy::post_selection) fn apply_runtime_companion_surfa
                         && !surfaces::is_ci_workflow_path(&entry.document.path)))
         });
     }
-    if let Some(selected_path) = selected_best {
-        if let Some(index) = matches
+    if let Some(selected_path) = selected_best
+        && let Some(index) = matches
             .iter()
             .position(|entry| entry.document.path == selected_path)
-        {
-            let replaced_path = matches[index].document.path.clone();
-            matches[index] = candidate;
-            ctx.record_repair(
-                meta,
-                PostSelectionRepairAction::Replaced,
-                &matches[index].document.path,
-                Some(replaced_path),
-            );
-            return matches;
-        }
+    {
+        let replaced_path = matches[index].document.path.clone();
+        matches[index] = candidate;
+        ctx.record_repair(
+            meta,
+            PostSelectionRepairAction::Replaced,
+            &matches[index].document.path,
+            Some(replaced_path),
+        );
+        return matches;
     }
 
     insert_guardrail_candidate(matches, Some(candidate), ctx, meta, |entry| {

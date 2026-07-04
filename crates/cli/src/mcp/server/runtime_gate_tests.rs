@@ -78,6 +78,21 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
+fn authorized_temp_workspace_root(test_name: &str) -> PathBuf {
+    let nanos_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let base = std::env::current_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(".codex-cache")
+        .join("runtime-gate-tests");
+    base.join(format!(
+        "frigg-runtime-gate-tests-{test_name}-{}-{nanos_since_epoch}",
+        std::process::id()
+    ))
+}
+
 fn write_fake_precise_generator_script(
     bin_dir: &Path,
     name: &str,

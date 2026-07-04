@@ -23,6 +23,7 @@ use super::super::path_witness_projection::{
     generic_surface_family_from_name,
 };
 use super::super::path_witness_search::PathWitnessCandidate;
+use super::super::retrieval_projection::PATH_RELATION_PROJECTION_HEURISTIC_VERSION;
 use super::super::types::{HybridPathWitnessProjectionCacheKey, RepositoryCandidateUniverse};
 
 use super::{ProjectedGraphAdjacentRelation, ProjectedGraphContext, ProjectionStoreService};
@@ -62,6 +63,7 @@ impl ProjectionStoreService {
             repository_id: repository.repository_id.clone(),
             root: repository.root.clone(),
             snapshot_id: snapshot_id.to_owned(),
+            heuristic_version: PATH_RELATION_PROJECTION_HEURISTIC_VERSION,
         };
         if let Some(cached) = self
             .projected_graph_adjacency_cache
@@ -221,22 +223,20 @@ impl ProjectionStoreService {
         let mut overlay_boosts_by_path = BTreeMap::<String, PathOverlayBoost>::new();
         let base_repository = base_repository.unwrap_or(repository);
 
-        if intent.wants_tests || intent.wants_test_witness_recall {
-            if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-                if let Some(test_subject_projections) = self
-                    .load_read_only_test_subject_projections_for_repository(
-                        base_repository,
-                        snapshot_id,
-                    )
-                {
-                    for (path, boost) in accumulate_test_subject_overlay_boosts(
-                        test_subject_projections.as_ref(),
-                        intent,
-                        query_context,
-                    ) {
-                        merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
-                    }
-                }
+        if (intent.wants_tests || intent.wants_test_witness_recall)
+            && let Some(snapshot_id) = base_repository.snapshot_id.as_deref()
+            && let Some(test_subject_projections) = self
+                .load_read_only_test_subject_projections_for_repository(
+                    base_repository,
+                    snapshot_id,
+                )
+        {
+            for (path, boost) in accumulate_test_subject_overlay_boosts(
+                test_subject_projections.as_ref(),
+                intent,
+                query_context,
+            ) {
+                merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
             }
         }
 
@@ -265,20 +265,19 @@ impl ProjectionStoreService {
                 _ => false,
             };
 
-            if !relation_overlay_applied {
-                if let Some(path_witness_projections) = self
+            if !relation_overlay_applied
+                && let Some(path_witness_projections) = self
                     .load_read_only_path_witness_projections_for_repository(
                         base_repository,
                         snapshot_id,
                     )
-                {
-                    for (path, boost) in accumulate_companion_surface_overlay_boosts(
-                        path_witness_projections.as_ref(),
-                        intent,
-                        query_context,
-                    ) {
-                        merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
-                    }
+            {
+                for (path, boost) in accumulate_companion_surface_overlay_boosts(
+                    path_witness_projections.as_ref(),
+                    intent,
+                    query_context,
+                ) {
+                    merge_path_overlay_boost(&mut overlay_boosts_by_path, path, boost);
                 }
             }
         } else {
@@ -302,24 +301,23 @@ impl ProjectionStoreService {
         }
 
         let mut stored_projection_paths = BTreeSet::<String>::new();
-        if let Some(snapshot_id) = base_repository.snapshot_id.as_deref() {
-            if let Some(entrypoint_surface_projections) = self
+        if let Some(snapshot_id) = base_repository.snapshot_id.as_deref()
+            && let Some(entrypoint_surface_projections) = self
                 .load_read_only_entrypoint_surface_projections_for_repository(
                     base_repository,
                     snapshot_id,
                 )
-            {
-                for projection in entrypoint_surface_projections.iter() {
-                    stored_projection_paths.insert(projection.path.clone());
-                    if let Some(boost) =
-                        entrypoint_surface_overlay_boost(projection, intent, query_context)
-                    {
-                        merge_path_overlay_boost(
-                            &mut overlay_boosts_by_path,
-                            projection.path.clone(),
-                            boost,
-                        );
-                    }
+        {
+            for projection in entrypoint_surface_projections.iter() {
+                stored_projection_paths.insert(projection.path.clone());
+                if let Some(boost) =
+                    entrypoint_surface_overlay_boost(projection, intent, query_context)
+                {
+                    merge_path_overlay_boost(
+                        &mut overlay_boosts_by_path,
+                        projection.path.clone(),
+                        boost,
+                    );
                 }
             }
         }
@@ -330,16 +328,14 @@ impl ProjectionStoreService {
             }
             if let Some(projection) =
                 StoredEntrypointSurfaceProjection::from_path(&candidate.relative_path)
-            {
-                if let Some(boost) =
+                && let Some(boost) =
                     entrypoint_surface_overlay_boost(&projection, intent, query_context)
-                {
-                    merge_path_overlay_boost(
-                        &mut overlay_boosts_by_path,
-                        candidate.relative_path.clone(),
-                        boost,
-                    );
-                }
+            {
+                merge_path_overlay_boost(
+                    &mut overlay_boosts_by_path,
+                    candidate.relative_path.clone(),
+                    boost,
+                );
             }
         }
 

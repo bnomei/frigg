@@ -275,21 +275,21 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
             || ranking_intent.wants_benchmarks);
     if should_expand_lexical {
         if prefer_graph_over_path_witness {
-            if !lexical_seeded_with_terms {
-                if let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text) {
-                    let expanded_query = SearchTextQuery {
-                        query: token_regex,
-                        path_regex: None,
-                        limit: lexical_working_limit,
-                    };
-                    let expanded =
-                        search_regex_with_universe(searcher, &expanded_query, &candidate_universe)?;
-                    merge_hybrid_lexical_search_output(
-                        &mut lexical_output,
-                        expanded,
-                        lexical_working_limit,
-                    );
-                }
+            if !lexical_seeded_with_terms
+                && let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text)
+            {
+                let expanded_query = SearchTextQuery {
+                    query: token_regex,
+                    path_regex: None,
+                    limit: lexical_working_limit,
+                };
+                let expanded =
+                    search_regex_with_universe(searcher, &expanded_query, &candidate_universe)?;
+                merge_hybrid_lexical_search_output(
+                    &mut lexical_output,
+                    expanded,
+                    lexical_working_limit,
+                );
             }
         } else {
             if !lexical_seeded_with_terms {
@@ -339,21 +339,21 @@ pub(in crate::searcher) fn search_hybrid_with_filters_using_executor(
 
             let should_run_regex_expansion = lexical_output.matches.len() < lexical_working_limit
                 && (!wants_path_witness_recall || lexical_output.matches.is_empty());
-            if should_run_regex_expansion {
-                if let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text) {
-                    let expanded_query = SearchTextQuery {
-                        query: token_regex,
-                        path_regex: None,
-                        limit: lexical_working_limit,
-                    };
-                    let expanded =
-                        search_regex_with_universe(searcher, &expanded_query, &candidate_universe)?;
-                    merge_hybrid_lexical_search_output(
-                        &mut lexical_output,
-                        expanded,
-                        lexical_working_limit,
-                    );
-                }
+            if should_run_regex_expansion
+                && let Some(token_regex) = build_hybrid_lexical_recall_regex(&query_text)
+            {
+                let expanded_query = SearchTextQuery {
+                    query: token_regex,
+                    path_regex: None,
+                    limit: lexical_working_limit,
+                };
+                let expanded =
+                    search_regex_with_universe(searcher, &expanded_query, &candidate_universe)?;
+                merge_hybrid_lexical_search_output(
+                    &mut lexical_output,
+                    expanded,
+                    lexical_working_limit,
+                );
             }
         }
 

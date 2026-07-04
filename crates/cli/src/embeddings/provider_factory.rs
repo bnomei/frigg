@@ -295,10 +295,10 @@ fn local_embeddings_unavailable_error() -> EmbeddingError {
     ))
 }
 
-fn require_api_key<'a>(
+fn require_api_key(
     provider: SemanticRuntimeProvider,
-    credentials: &'a SemanticRuntimeCredentials,
-) -> EmbeddingResult<&'a str> {
+    credentials: &SemanticRuntimeCredentials,
+) -> EmbeddingResult<&str> {
     credentials.api_key_for(provider).ok_or_else(|| {
         EmbeddingError::Provider(ProviderFailure::non_retryable(
             provider_kind(provider),
@@ -363,14 +363,20 @@ mod tests {
     #[test]
     #[cfg(feature = "local-embeddings")]
     fn require_prepared_policy_does_not_invoke_local_preparer() {
+        let called = Cell::new(false);
+
         prepare_local_artifacts_for_policy_with(
             LocalArtifactPolicy::RequirePrepared,
             "all-MiniLM-L6-v2",
-            |_| panic!("RequirePrepared must not prepare or download local artifacts"),
+            |_| {
+                called.set(true);
+                Ok(())
+            },
         )
         .expect(
             "RequirePrepared should only require later provider construction to load artifacts",
         );
+        assert!(!called.get());
     }
 
     #[test]

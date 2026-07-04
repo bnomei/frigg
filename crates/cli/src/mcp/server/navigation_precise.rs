@@ -34,7 +34,7 @@ impl FriggMcpServer {
         }
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub(in crate::mcp::server) fn try_precise_definition_fast_path(
         &self,
         corpora: &[Arc<RepositorySymbolCorpus>],
@@ -649,6 +649,7 @@ impl FriggMcpServer {
         precise_target: &crate::graph::PreciseSymbolRecord,
     ) -> Vec<CallHierarchyMatch> {
         let precision = Self::precise_match_precision(coverage_mode).to_owned();
+        let mut source_cache: BTreeMap<String, Option<String>> = BTreeMap::new();
         let mut matches = Self::precise_relationships_to_symbol_by_kind(
             graph,
             repository_id,
@@ -665,6 +666,22 @@ impl FriggMcpServer {
                 repository_id,
                 &relationship.from_symbol,
             )?;
+            let relation = if graph
+                .precise_references_for_symbol(repository_id, &precise_target.symbol)
+                .into_iter()
+                .filter(|occurrence| occurrence.path == caller_definition.path)
+                .any(|occurrence| {
+                    Self::precise_occurrence_has_call_like_source(
+                        root,
+                        precise_target,
+                        &occurrence,
+                        &mut source_cache,
+                    )
+                }) {
+                "calls"
+            } else {
+                "refers_to"
+            };
             Some(CallHierarchyMatch {
                 match_id: None,
                 source_stable_symbol_id: None,
@@ -683,7 +700,7 @@ impl FriggMcpServer {
                 path: Self::canonicalize_navigation_path(root, &caller_definition.path),
                 line: caller_definition.range.start_line,
                 column: caller_definition.range.start_column,
-                relation: "calls".to_owned(),
+                relation: relation.to_owned(),
                 source_container: None,
                 target_container: None,
                 source_signature: None,
@@ -1046,10 +1063,10 @@ impl FriggMcpServer {
             return None;
         }
 
-        if let Some(value) = Self::precise_kind_numeric_value(normalized) {
-            if let Some(kind) = ScipSymbolKind::from_i32(value) {
-                return Some(Self::camel_to_snake_case(&format!("{kind:?}")));
-            }
+        if let Some(value) = Self::precise_kind_numeric_value(normalized)
+            && let Some(kind) = ScipSymbolKind::from_i32(value)
+        {
+            return Some(Self::camel_to_snake_case(&format!("{kind:?}")));
         }
 
         Some(Self::camel_to_snake_case(normalized))

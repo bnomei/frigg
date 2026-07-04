@@ -188,7 +188,7 @@ impl FriggMcpServer {
         for workspace in workspaces {
             let snapshot_id = Storage::new(&workspace.db_path)
                 .load_latest_context_efficiency_manifest_summary_for_repository(
-                    &workspace.repository_id,
+                    &workspace.runtime_repository_id,
                 )
                 .ok()
                 .flatten()
@@ -279,7 +279,7 @@ impl FriggMcpServer {
             let storage = Storage::new(&workspace.db_path);
             if let Some(summary) = storage
                 .load_latest_context_efficiency_manifest_summary_for_repository(
-                    &workspace.repository_id,
+                    &workspace.runtime_repository_id,
                 )
                 .map_err(Self::map_frigg_error)?
             {
@@ -361,7 +361,7 @@ impl FriggMcpServer {
             let storage = Storage::new(&workspace.db_path);
             if let Some(summary) = storage
                 .load_latest_context_efficiency_manifest_summary_for_repository(
-                    &workspace.repository_id,
+                    &workspace.runtime_repository_id,
                 )
                 .map_err(Self::map_frigg_error)?
             {

@@ -54,6 +54,9 @@ impl FriggMcpServer {
 
     pub(super) fn invalidate_repository_symbol_corpus_cache(&self, repository_id: &str) {
         self.cache_state
+            .symbol_corpus_cache_epoch
+            .fetch_add(1, Ordering::Relaxed);
+        self.cache_state
             .symbol_corpus_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -105,6 +108,10 @@ impl FriggMcpServer {
         runtime_repository_id: String,
         root: PathBuf,
     ) -> Result<Arc<RepositorySymbolCorpus>, ErrorData> {
+        let cache_epoch = self
+            .cache_state
+            .symbol_corpus_cache_epoch
+            .load(Ordering::Relaxed);
         let mut diagnostics = RepositoryDiagnosticsSummary::default();
         let mut manifest_output = None;
         let mut source_paths = None;
@@ -119,22 +126,23 @@ impl FriggMcpServer {
             && !self.repository_has_active_runtime_work(&repository_id);
         let can_reuse_dirty_live_corpus =
             dirty_root && self.repository_has_active_watch_lease(&repository_id);
-        let trusted_snapshot = can_trust_validated_manifest_cache
-            .then(|| {
-                Self::load_latest_cached_validated_manifest_snapshot_shared(
-                    &root,
-                    &runtime_repository_id,
-                    &self.runtime_state.validated_manifest_candidate_cache,
-                )
-            })
-            .flatten();
-        let validated_snapshot = trusted_snapshot.or_else(|| {
-            Self::load_latest_validated_manifest_snapshot_shared(
+        let trusted_snapshot = if can_trust_validated_manifest_cache {
+            Self::load_latest_cached_validated_manifest_snapshot_shared(
+                &root,
+                &runtime_repository_id,
+                &self.runtime_state.validated_manifest_candidate_cache,
+            )?
+        } else {
+            None
+        };
+        let validated_snapshot = match trusted_snapshot {
+            Some(snapshot) => Some(snapshot),
+            None => Self::load_latest_validated_manifest_snapshot_shared(
                 &root,
                 &runtime_repository_id,
                 Some(&self.runtime_state.validated_manifest_candidate_cache),
-            )
-        });
+            )?,
+        };
         let (file_digests, manifest_token) = match validated_snapshot {
             Some(snapshot) => {
                 let snapshot_source_paths =
@@ -321,11 +329,18 @@ impl FriggMcpServer {
             .symbol_corpus_cache
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cache.retain(|key, _| {
-            key.repository_id != repository_id || key.manifest_token == manifest_token
-        });
-        cache.insert(cache_key, corpus.clone());
-        Self::trim_symbol_corpus_cache(&mut cache);
+        if self
+            .cache_state
+            .symbol_corpus_cache_epoch
+            .load(Ordering::Relaxed)
+            == cache_epoch
+        {
+            cache.retain(|key, _| {
+                key.repository_id != repository_id || key.manifest_token == manifest_token
+            });
+            cache.insert(cache_key, corpus.clone());
+            Self::trim_symbol_corpus_cache(&mut cache);
+        }
 
         Ok(corpus)
     }
@@ -352,10 +367,11 @@ impl FriggMcpServer {
                 std::sync::RwLock<crate::manifest_validation::ValidatedManifestCandidateCache>,
             >,
         >,
-    ) -> Option<crate::manifest_validation::SharedValidatedManifestSnapshot> {
-        let db_path = resolve_provenance_db_path(root).ok()?;
+    ) -> Result<Option<crate::manifest_validation::SharedValidatedManifestSnapshot>, ErrorData>
+    {
+        let db_path = resolve_provenance_db_path(root).map_err(Self::map_frigg_error)?;
         if !db_path.exists() {
-            return None;
+            return Ok(None);
         }
         let storage = Storage::new(db_path);
         crate::manifest_validation::latest_validated_manifest_snapshot_shared(
@@ -364,6 +380,7 @@ impl FriggMcpServer {
             root,
             cache,
         )
+        .map_err(Self::map_frigg_error)
     }
 
     fn load_latest_cached_validated_manifest_snapshot_shared(
@@ -372,10 +389,11 @@ impl FriggMcpServer {
         cache: &std::sync::Arc<
             std::sync::RwLock<crate::manifest_validation::ValidatedManifestCandidateCache>,
         >,
-    ) -> Option<crate::manifest_validation::SharedValidatedManifestSnapshot> {
-        let db_path = resolve_provenance_db_path(root).ok()?;
+    ) -> Result<Option<crate::manifest_validation::SharedValidatedManifestSnapshot>, ErrorData>
+    {
+        let db_path = resolve_provenance_db_path(root).map_err(Self::map_frigg_error)?;
         if !db_path.exists() {
-            return None;
+            return Ok(None);
         }
         let storage = Storage::new(db_path);
         crate::manifest_validation::latest_cached_validated_manifest_snapshot_shared(
@@ -384,13 +402,14 @@ impl FriggMcpServer {
             root,
             cache,
         )
+        .map_err(Self::map_frigg_error)
     }
 
     pub(super) fn current_root_signature_for_repository(
         root: &Path,
         repository_id: &str,
     ) -> Option<String> {
-        if let Some(snapshot) =
+        if let Ok(Some(snapshot)) =
             Self::load_latest_validated_manifest_snapshot_shared(root, repository_id, None)
         {
             return Some(Self::root_signature(snapshot.digests.as_ref()));

@@ -204,6 +204,99 @@ async fn read_file_and_explore_read_current_file_content() {
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[tokio::test]
+async fn read_file_rejects_empty_file_start_line_outside_bounds() {
+    let workspace_root = temp_workspace_root("read-file-empty-start-line-outside");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/empty.rs"), "")
+        .expect("failed to write empty source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let error = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/empty.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            max_bytes: None,
+            start_line: Some(2),
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect_err("empty files should reject out-of-range start_line");
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error.message, "start_line is outside file bounds");
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("total_lines")),
+        Some(&Value::from(0))
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn explore_empty_file_scan_scope_stays_one_based() {
+    let workspace_root = temp_workspace_root("explore-empty-scan-scope");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/empty.rs"), "")
+        .expect("failed to write empty source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let response = server
+        .explore_impl(crate::mcp::types::ExploreParams {
+            path: "src/empty.rs".to_owned(),
+            repository_id: Some(workspace.repository_id.clone()),
+            operation: crate::mcp::types::ExploreOperation::Probe,
+            query: Some("needle".to_owned()),
+            pattern_type: Some(crate::mcp::types::SearchPatternType::Literal),
+            anchor: None,
+            context_lines: None,
+            max_matches: Some(4),
+            resume_from: None,
+            presentation_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("explore should scan empty files without zero-based coordinates");
+
+    assert_eq!(response.total_lines, 0);
+    assert_eq!(response.scan_scope.start_line, 1);
+    assert_eq!(response.scan_scope.end_line, 0);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn watch_leases_follow_session_adoption_counts() {
     let workspace_root = temp_workspace_root("watch-lease-counts");
@@ -308,7 +401,7 @@ async fn watch_leases_follow_session_adoption_counts() {
 
 #[test]
 fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
-    let workspace_root = temp_workspace_root("attach-invalidates-manifest-cache");
+    let workspace_root = authorized_temp_workspace_root("attach-invalidates-manifest-cache");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Cached;\n")
@@ -349,7 +442,7 @@ fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
     );
 
     let _ = server
-        .attach_workspace_internal(&root, true, WorkspaceResolveMode::GitRoot)
+        .attach_workspace_internal(&root, true, WorkspaceResolveMode::Direct)
         .expect("workspace attach should succeed");
 
     assert!(
@@ -364,7 +457,8 @@ fn workspace_attach_invalidates_validated_manifest_candidate_cache() {
 
 #[test]
 fn workspace_attach_invalidates_only_attached_repository_navigation_caches() {
-    let workspace_root = temp_workspace_root("attach-invalidates-only-attached-navigation-caches");
+    let workspace_root =
+        authorized_temp_workspace_root("attach-invalidates-only-attached-navigation-caches");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
     fs::write(workspace_root.join("src/lib.rs"), "pub struct Cached;\n")
@@ -411,7 +505,7 @@ fn workspace_attach_invalidates_only_attached_repository_navigation_caches() {
     );
 
     let _ = server
-        .attach_workspace_internal(&root, true, WorkspaceResolveMode::GitRoot)
+        .attach_workspace_internal(&root, true, WorkspaceResolveMode::Direct)
         .expect("workspace attach should succeed");
 
     assert_eq!(
@@ -566,7 +660,7 @@ async fn read_match_reads_from_cached_result_handle() {
         .expect("failed to create workspace root fixture");
     fs::write(
         workspace_root.join("src/lib.rs"),
-        "pub fn unique_marker_alpha() {}\n",
+        "pub fn before_marker() {}\npub fn middle_marker() {}\npub fn unique_marker_alpha() {}\n",
     )
     .expect("failed to write source fixture");
 
@@ -636,17 +730,21 @@ async fn read_match_reads_from_cached_result_handle() {
         .and_then(|found| found.match_id.clone())
         .expect("search_text match should carry a match id");
 
-    server
+    let read_match = server
         .read_match_impl(crate::mcp::types::ReadMatchParams {
             result_handle: result_handle.clone(),
             match_id: match_id.clone(),
-            before: None,
-            after: None,
+            before: Some(0),
+            after: Some(10),
             presentation_mode: None,
             include_context_efficiency: None,
         })
         .await
         .expect("read_match should succeed");
+
+    assert_eq!(read_match.line, 3);
+    assert_eq!(read_match.start_line, 3);
+    assert_eq!(read_match.end_line, 3);
 
     let _ = fs::remove_dir_all(workspace_root);
 }

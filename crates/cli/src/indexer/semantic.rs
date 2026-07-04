@@ -268,6 +268,7 @@ fn parse_optional_bool_env(name: &str) -> FriggResult<Option<bool>> {
     Ok(Some(value))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_semantic_embedding_records(
     repository_id: &str,
     workspace_root: &Path,

@@ -29,10 +29,10 @@ pub(crate) fn format_human_precise_plan_component(
     if field_is(fields, "status", "empty") {
         notes.push("no generators need refresh".to_owned());
     }
-    if field_is(fields, "status", "failed") {
-        if let Some(error) = super::human_block::field_display(fields, "error") {
-            notes.push(error);
-        }
+    if field_is(fields, "status", "failed")
+        && let Some(error) = super::human_block::field_display(fields, "error")
+    {
+        notes.push(error);
     }
 
     format_human_component(
@@ -155,9 +155,7 @@ fn push_precise_detail_rows(rows: &mut Vec<HumanRow>, fields: &[OutputField]) {
         push_human_row(rows, &human_field_label(&key), Some(value));
         pushed = true;
     }
-    if !parsed {
-        push_field_row(rows, fields, "detail", "detail");
-    } else if !pushed && structured_version.is_none() {
+    if !parsed || (!pushed && structured_version.is_none()) {
         push_field_row(rows, fields, "detail", "detail");
     }
 }

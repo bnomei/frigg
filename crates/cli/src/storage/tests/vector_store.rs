@@ -253,6 +253,34 @@ fn repair_storage_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
 }
 
 #[test]
+fn verify_with_auto_repair_rebuilds_mismatched_vector_table_schema() -> FriggResult<()> {
+    let db_path = temp_db_path("vector-schema-verify-auto-repair");
+    let storage = Storage::new(&db_path);
+    storage.initialize()?;
+
+    {
+        let conn = open_test_connection(&db_path)?;
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {VECTOR_TABLE_NAME}"))
+            .map_err(|err| {
+                FriggError::Internal(format!(
+                    "failed to drop vector table for auto-repair fixture: {err}"
+                ))
+            })?;
+        create_sqlite_vec_like_table(&conn, DEFAULT_VECTOR_DIMENSIONS + 1)?;
+    }
+
+    let repaired_categories = storage.verify_with_auto_repair()?;
+    assert_eq!(
+        repaired_categories,
+        vec!["semantic_vector_partition_in_sync".to_owned()]
+    );
+    storage.verify()?;
+
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_vector_repair_restores_partition_consistency() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-vector-repair");
     let storage = Storage::new(&db_path);

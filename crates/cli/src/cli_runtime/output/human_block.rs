@@ -36,6 +36,7 @@ pub(crate) enum HumanMarkerKind {
     Tool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_human_component(
     level: OutputLevel,
     fields: &[OutputField],
@@ -60,6 +61,7 @@ pub(crate) fn format_human_component(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_human_progress_component(
     level: OutputLevel,
     fields: &[OutputField],
@@ -142,6 +144,7 @@ fn human_block_marker_kind(marker_kind: HumanMarkerKind) -> HumanMarkerKind {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_human_kv_block(
     level: OutputLevel,
     fields: &[OutputField],
@@ -246,6 +249,7 @@ fn human_card_marker(level: OutputLevel) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_human_activity_line(
     level: OutputLevel,
     fields: &[OutputField],
@@ -494,7 +498,7 @@ pub(crate) fn format_per_doc_duration(duration_ms: u128, records: u128) -> Strin
     if tenths == 0 {
         return "<0.1".to_owned();
     }
-    if tenths >= 1000 || tenths % 10 == 0 {
+    if tenths >= 1000 || tenths.is_multiple_of(10) {
         (tenths / 10).to_string()
     } else {
         format!("{}.{:01}", tenths / 10, tenths % 10)
@@ -756,7 +760,7 @@ pub(crate) fn format_human_intro(color: bool) -> String {
 fn human_continuation_value(value: &str) -> String {
     match value.trim() {
         "." | "./" => "workspace: current directory (.)".to_owned(),
-        trimmed if trimmed.is_empty() => "path: -".to_owned(),
+        "" => "path: -".to_owned(),
         _ => format!("path: {value}"),
     }
 }

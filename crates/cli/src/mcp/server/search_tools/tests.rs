@@ -243,6 +243,77 @@ fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_st
 }
 
 #[test]
+fn context_efficiency_metadata_uses_runtime_repository_id_for_manifest_lookup() {
+    let root = std::env::temp_dir().join(format!(
+        "frigg-context-efficiency-runtime-id-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".frigg")).expect("temp frigg directory should be writable");
+    let db_path = root.join(".frigg/storage.sqlite3");
+    let storage = Storage::new(&db_path);
+    storage.initialize().expect("storage should initialize");
+    storage
+        .upsert_manifest(
+            "runtime-repo-001",
+            "snapshot-001",
+            &[manifest_entry("src/lib.rs", 100, Some(10))],
+        )
+        .expect("manifest should be writable");
+
+    let workspace = AttachedWorkspace {
+        repository_id: "public-repo-001".to_owned(),
+        runtime_repository_id: "runtime-repo-001".to_owned(),
+        display_name: "fixture".to_owned(),
+        root: root.clone(),
+        db_path,
+    };
+    let text_matches = vec![TextMatch {
+        match_id: None,
+        repository_id: "public-repo-001".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line: 1,
+        column: 1,
+        excerpt: "alpha".to_owned(),
+        witness_score_hint_millis: None,
+        witness_provenance_ids: None,
+    }];
+
+    let text_metadata = FriggMcpServer::search_text_context_efficiency_metadata(
+        std::slice::from_ref(&workspace),
+        &text_matches,
+        1,
+    )
+    .expect("text context-efficiency metadata should use runtime repository id");
+
+    assert_eq!(text_metadata.indexed_readable_files, 1);
+    assert_eq!(text_metadata.indexed_readable_bytes, 100);
+    assert_eq!(text_metadata.returned_unique_file_bytes, Some(100));
+
+    let mut hybrid_match = match_fixture(
+        "src/lib.rs",
+        Some(SourceClass::Runtime),
+        &["runtime"],
+        true,
+        true,
+        true,
+    );
+    hybrid_match.repository_id = "public-repo-001".to_owned();
+    let hybrid_metadata = FriggMcpServer::search_hybrid_context_efficiency_metadata(
+        std::slice::from_ref(&workspace),
+        &[hybrid_match],
+        None,
+    )
+    .expect("hybrid context-efficiency metadata should use runtime repository id");
+
+    assert_eq!(hybrid_metadata.indexed_readable_files, 1);
+    assert_eq!(hybrid_metadata.indexed_readable_bytes, 100);
+    assert_eq!(hybrid_metadata.returned_unique_file_bytes, Some(100));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn search_text_context_efficiency_matches_absolute_manifest_paths() {
     let root = std::env::temp_dir().join(format!(
         "frigg-text-context-efficiency-absolute-{}",
@@ -378,7 +449,7 @@ fn context_efficiency_log_for_workspaces_respects_log_state() {
         .expect("manifest should be writable");
 
     let workspace = AttachedWorkspace {
-        repository_id: "repo-001".to_owned(),
+        repository_id: "public-repo-001".to_owned(),
         runtime_repository_id: "repo-001".to_owned(),
         display_name: "fixture".to_owned(),
         root: root.clone(),
@@ -429,7 +500,7 @@ fn context_efficiency_log_for_workspaces_respects_log_state() {
     let value: Value = serde_json::from_str(logged.trim()).expect("context row should be json");
     assert_eq!(value["tool"], "search_text");
     assert_eq!(value["session_id"], "connected-session-full-123456");
-    assert_eq!(value["repository_id"], "repo-001");
+    assert_eq!(value["repository_id"], "public-repo-001");
     assert_eq!(value["snapshot_id"], "snapshot-001");
     assert_eq!(value["returned_match_count"], 1);
     assert!(value.get("query").is_none());

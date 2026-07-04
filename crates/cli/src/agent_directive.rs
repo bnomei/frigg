@@ -63,10 +63,7 @@ mod tests {
             return None;
         }
 
-        Some(
-            std::fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display())),
-        )
+        Some(std::fs::read_to_string(&path).expect("workspace file should be readable"))
     }
 
     #[test]

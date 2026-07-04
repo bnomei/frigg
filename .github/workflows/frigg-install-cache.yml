@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FRIGG_VERSION: "0.5.0"
+  FRIGG_VERSION: "0.6.0"
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
@@ -42,11 +42,10 @@ jobs:
           restore-keys: |
             frigg-${{ runner.os }}-${{ runner.arch }}-${{ steps.frigg_hash.outputs.frigg-hash }}-
 
-      - name: Refresh and verify Frigg state
+      - name: Refresh Frigg state
         run: |
           frigg init
-          frigg reindex --changed
-          frigg verify
+          frigg index --changed
 
       - name: Save Frigg index cache
         if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.frigg_cache.outputs.cache-hit != 'true' }}
