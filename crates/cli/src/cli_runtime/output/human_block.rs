@@ -4,7 +4,8 @@ use frigg::human_output::{HumanBlock, HumanRow};
 
 use super::fields::FieldBag;
 use super::human_topic::{
-    HumanTopic, action_color, human_sidecar_line_color, human_title_accent_color,
+    HUMAN_COLOR_NEUTRAL, HumanTopic, action_color, human_severity_accent_color,
+    human_sidecar_line_color, human_title_accent_color,
 };
 use super::{OutputField, OutputLevel};
 
@@ -216,7 +217,12 @@ pub(crate) fn format_human_activity_line(
     width: usize,
 ) -> String {
     let fields = FieldBag::new(fields);
-    let accent = human_title_accent_color(level, fields, topic, &title);
+    let accent = if marker_kind == HumanMarkerKind::Tool {
+        human_severity_accent_color(level, fields.value("status").unwrap_or_default())
+            .unwrap_or(HUMAN_COLOR_NEUTRAL)
+    } else {
+        human_title_accent_color(level, fields, topic, &title)
+    };
     let symbol = human_symbol_with_color(level, fields, marker_kind, color, accent);
     let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
     let title = truncate_display(&title, content_width);
