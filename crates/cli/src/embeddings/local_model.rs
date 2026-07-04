@@ -3,11 +3,12 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use fastembed::{EmbeddingModel, ModelTrait, TextEmbedding, TextInitOptions};
 use hf_hub::api::Progress;
 use hf_hub::api::sync::ApiBuilder;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{HumanBytes, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use thiserror::Error;
 
 use crate::settings::SemanticRuntimeConfig;
@@ -22,11 +23,8 @@ const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
 const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
 #[cfg(test)]
 const DOWNLOAD_PROGRESS_SEMANTIC_COLOR: &str = "\x1b[1;38;2;90;205;210m";
-#[cfg(test)]
-const DOWNLOAD_PROGRESS_COLOR_RESET: &str = "\x1b[0m";
-const DOWNLOAD_PROGRESS_TEMPLATE_PLAIN: &str =
-    "╭─○ Loading semantic model\n╰─╮ {msg:28} {bytes}/{total_bytes}";
-const DOWNLOAD_PROGRESS_TEMPLATE_COLOR: &str = "\x1b[1;38;2;90;205;210m╭─○ Loading semantic model\x1b[0m\n\x1b[1;38;2;90;205;210m╰─╮ \x1b[0m{msg:28} {bytes}/{total_bytes}";
+const DOWNLOAD_PROGRESS_TEMPLATE: &str = "{msg}";
+const DOWNLOAD_PROGRESS_TITLE: &str = "Loading semantic model";
 
 /// Mapping between a semantic runtime model name and its fastembed artifact metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,8 +387,10 @@ fn prefetch_local_model_files(artifact: &LocalModelArtifact) -> LocalModelResult
         })?
         .model(artifact.repository.clone());
 
-    for file in local_model_download_files(artifact) {
-        repo.download_with_progress(file, StableDownloadProgress::new())
+    let files = local_model_download_files(artifact);
+    let progress = StableDownloadProgressGroup::new(files.len());
+    for file in files {
+        repo.download_with_progress(file, progress.next_file_progress())
             .map_err(|err| LocalModelError::PreparationFailed {
                 model: artifact.semantic_model.clone(),
                 cache_root: artifact.cache_root.clone(),
@@ -414,67 +414,217 @@ fn local_model_download_files(artifact: &LocalModelArtifact) -> Vec<&str> {
     files
 }
 
-struct StableDownloadProgress {
+#[derive(Clone)]
+struct StableDownloadProgressGroup {
     progress: ProgressBar,
+    state: Arc<Mutex<StableDownloadProgressState>>,
+    color: bool,
 }
 
-impl StableDownloadProgress {
-    fn new() -> Self {
+struct StableDownloadProgressState {
+    rows: Vec<StableDownloadProgressRow>,
+    expected_rows: usize,
+}
+
+struct StableDownloadProgressRow {
+    label: String,
+    loaded_bytes: usize,
+    total_bytes: usize,
+    finished: bool,
+}
+
+struct StableDownloadProgress {
+    group: StableDownloadProgressGroup,
+    row_index: Option<usize>,
+}
+
+impl StableDownloadProgressGroup {
+    fn new(expected_rows: usize) -> Self {
+        Self::with_color(expected_rows, std::env::var_os("NO_COLOR").is_none())
+    }
+
+    fn with_color(expected_rows: usize, color: bool) -> Self {
+        let progress = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12));
+        progress.set_style(stable_download_progress_style());
         Self {
-            progress: ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr_with_hz(12)),
+            progress,
+            state: Arc::new(Mutex::new(StableDownloadProgressState {
+                rows: Vec::with_capacity(expected_rows),
+                expected_rows,
+            })),
+            color,
         }
+    }
+
+    fn next_file_progress(&self) -> StableDownloadProgress {
+        StableDownloadProgress {
+            group: self.clone(),
+            row_index: None,
+        }
+    }
+
+    fn init_row(&self, row_index: Option<usize>, size: usize, filename: &str) -> usize {
+        let mut state = self
+            .state
+            .lock()
+            .expect("download progress state lock should not be poisoned");
+        let row_index = match row_index {
+            Some(row_index) if row_index < state.rows.len() => {
+                state.rows[row_index] = StableDownloadProgressRow {
+                    label: download_progress_label(filename),
+                    loaded_bytes: 0,
+                    total_bytes: size,
+                    finished: false,
+                };
+                row_index
+            }
+            _ => {
+                let row_index = state.rows.len();
+                state.rows.push(StableDownloadProgressRow {
+                    label: download_progress_label(filename),
+                    loaded_bytes: 0,
+                    total_bytes: size,
+                    finished: false,
+                });
+                row_index
+            }
+        };
+        self.progress
+            .set_message(render_download_progress_card(&state.rows, self.color));
+        row_index
+    }
+
+    fn update_row(&self, row_index: usize, size: usize) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("download progress state lock should not be poisoned");
+        if let Some(row) = state.rows.get_mut(row_index) {
+            row.loaded_bytes = row.loaded_bytes.saturating_add(size).min(row.total_bytes);
+        }
+        self.progress
+            .set_message(render_download_progress_card(&state.rows, self.color));
+    }
+
+    fn finish_row(&self, row_index: usize) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("download progress state lock should not be poisoned");
+        if let Some(row) = state.rows.get_mut(row_index) {
+            row.loaded_bytes = row.total_bytes;
+            row.finished = true;
+        }
+        let card = render_download_progress_card(&state.rows, self.color);
+        if state.rows.len() >= state.expected_rows && state.rows.iter().all(|row| row.finished) {
+            self.progress.finish_with_message(card);
+        } else {
+            self.progress.set_message(card);
+        }
+    }
+}
+
+#[cfg(test)]
+impl StableDownloadProgressGroup {
+    fn rendered_card_for_test(&self) -> String {
+        let state = self
+            .state
+            .lock()
+            .expect("download progress state lock should not be poisoned");
+        render_download_progress_card(&state.rows, self.color)
+    }
+
+    fn row_count_for_test(&self) -> usize {
+        self.state
+            .lock()
+            .expect("download progress state lock should not be poisoned")
+            .rows
+            .len()
+    }
+
+    fn all_rows_finished_for_test(&self) -> bool {
+        self.state
+            .lock()
+            .expect("download progress state lock should not be poisoned")
+            .rows
+            .iter()
+            .all(|row| row.finished)
     }
 }
 
 impl Progress for StableDownloadProgress {
     fn init(&mut self, size: usize, filename: &str) {
-        self.progress.set_length(size as u64);
-        self.progress.set_style(stable_download_progress_style());
-        self.progress.set_message(download_progress_label(filename));
+        self.row_index = Some(self.group.init_row(self.row_index, size, filename));
     }
 
     fn update(&mut self, size: usize) {
-        self.progress.inc(size as u64);
+        if let Some(row_index) = self.row_index {
+            self.group.update_row(row_index, size);
+        }
     }
 
     fn finish(&mut self) {
-        self.progress.finish();
+        if let Some(row_index) = self.row_index {
+            self.group.finish_row(row_index);
+        }
     }
 }
 
 fn stable_download_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template(stable_download_progress_template())
+    ProgressStyle::with_template(DOWNLOAD_PROGRESS_TEMPLATE)
         .expect("download progress template should be valid")
 }
 
-fn stable_download_progress_template() -> &'static str {
-    stable_download_progress_template_for_color(std::env::var_os("NO_COLOR").is_none())
+fn render_download_progress_card(rows: &[StableDownloadProgressRow], color: bool) -> String {
+    let mut output =
+        colorize_download_progress(color, format!("╭─○ {DOWNLOAD_PROGRESS_TITLE}").as_str());
+    for (index, row) in rows.iter().enumerate() {
+        output.push('\n');
+        let row_prefix = if index + 1 == rows.len() {
+            "╰─╮ "
+        } else {
+            "│   "
+        };
+        output.push_str(&colorize_download_progress(color, row_prefix));
+        output.push_str(&format!(
+            "{:<DOWNLOAD_PROGRESS_LABEL_WIDTH$} {}",
+            row.label,
+            download_progress_value(row.loaded_bytes, row.total_bytes)
+        ));
+    }
+    output
 }
 
-fn stable_download_progress_template_for_color(color: bool) -> &'static str {
+fn download_progress_value(loaded_bytes: usize, total_bytes: usize) -> String {
+    format!(
+        "{}/{}",
+        HumanBytes(loaded_bytes as u64),
+        HumanBytes(total_bytes as u64)
+    )
+}
+
+fn colorize_download_progress(color: bool, value: &str) -> String {
     if color {
-        DOWNLOAD_PROGRESS_TEMPLATE_COLOR
+        format!("\x1b[1;38;2;90;205;210m{value}\x1b[0m")
     } else {
-        DOWNLOAD_PROGRESS_TEMPLATE_PLAIN
+        value.to_owned()
     }
 }
 
 #[cfg(test)]
-fn stable_download_progress_preview(
-    filename: &str,
-    loaded: &str,
-    total: &str,
-    color: bool,
-) -> String {
-    let label = download_progress_label(filename);
-    let label_width = DOWNLOAD_PROGRESS_LABEL_WIDTH;
-    if color {
-        format!(
-            "{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╭─○ Loading semantic model{DOWNLOAD_PROGRESS_COLOR_RESET}\n{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╰─╮ {DOWNLOAD_PROGRESS_COLOR_RESET}{label:<label_width$} {loaded}/{total}",
+fn stable_download_progress_preview(rows: &[(&str, usize, usize)], color: bool) -> String {
+    let rows = rows
+        .iter()
+        .map(
+            |(label, loaded_bytes, total_bytes)| StableDownloadProgressRow {
+                label: download_progress_label(label),
+                loaded_bytes: *loaded_bytes,
+                total_bytes: *total_bytes,
+                finished: loaded_bytes == total_bytes,
+            },
         )
-    } else {
-        format!("╭─○ Loading semantic model\n╰─╮ {label:<label_width$} {loaded}/{total}",)
-    }
+        .collect::<Vec<_>>();
+    render_download_progress_card(&rows, color)
 }
 
 fn download_progress_label(filename: &str) -> String {
@@ -677,30 +827,29 @@ mod tests {
     #[test]
     fn local_model_download_progress_template_is_compact_card() {
         let _style = stable_download_progress_style();
-        let plain_template = stable_download_progress_template_for_color(false);
-        let color_template = stable_download_progress_template_for_color(true);
 
-        assert!(plain_template.starts_with("╭─○ Loading semantic model"));
-        assert!(plain_template.contains("╰─╮ {msg:28} {bytes}/{total_bytes}"));
-        assert!(color_template.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
-        assert!(color_template.contains("╰─╮ \u{1b}[0m{msg:28} {bytes}/{total_bytes}"));
-        for template in [plain_template, color_template] {
-            assert!(!template.contains("bytes_per_sec"));
-            assert!(!template.contains("eta"));
-            assert!(!template.contains("wide_bar"));
-        }
+        assert_eq!(DOWNLOAD_PROGRESS_TEMPLATE, "{msg}");
+        assert!(!DOWNLOAD_PROGRESS_TEMPLATE.contains("bytes_per_sec"));
+        assert!(!DOWNLOAD_PROGRESS_TEMPLATE.contains("eta"));
+        assert!(!DOWNLOAD_PROGRESS_TEMPLATE.contains("wide_bar"));
     }
 
     #[test]
-    fn local_model_download_progress_preview_uses_file_key_and_byte_value() {
-        let preview =
-            stable_download_progress_preview("model.onnx", "19.53 MiB", "86.20 MiB", false);
+    fn local_model_download_progress_preview_groups_file_rows() {
+        let preview = stable_download_progress_preview(
+            &[
+                ("model.onnx", 90_387_251, 90_387_251),
+                ("config.json", 650, 650),
+                ("tokenizer.json", 711_659, 711_659),
+            ],
+            false,
+        );
         let colored =
-            stable_download_progress_preview("model.onnx", "19.53 MiB", "86.20 MiB", true);
+            stable_download_progress_preview(&[("model.onnx", 20_478_689, 90_387_251)], true);
 
         assert_eq!(
             preview,
-            "╭─○ Loading semantic model\n╰─╮ model.onnx                   19.53 MiB/86.20 MiB"
+            "╭─○ Loading semantic model\n│   model.onnx                   86.20 MiB/86.20 MiB\n│   config.json                  650 B/650 B\n╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
         );
         assert!(colored.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
         assert!(colored.contains("model.onnx"));
@@ -708,6 +857,37 @@ mod tests {
         assert!(!preview.contains("MiB/s"));
         assert!(!preview.contains("eta"));
         assert!(!preview.contains('['));
+    }
+
+    #[test]
+    fn local_model_download_progress_reuses_row_for_repeated_init() {
+        let group = StableDownloadProgressGroup::with_color(2, false);
+        let mut first = group.next_file_progress();
+        let mut second = group.next_file_progress();
+
+        first.init(650, "config.json");
+        first.init(650, "config.json");
+        first.update(325);
+
+        assert_eq!(group.row_count_for_test(), 1);
+        assert_eq!(
+            group.rendered_card_for_test(),
+            "╭─○ Loading semantic model\n╰─╮ config.json                  325 B/650 B"
+        );
+
+        first.finish();
+        second.init(711_659, "tokenizer.json");
+        second.init(711_659, "tokenizer.json");
+        second.update(1024);
+        second.update(710_635);
+        second.finish();
+
+        assert_eq!(group.row_count_for_test(), 2);
+        assert!(group.all_rows_finished_for_test());
+        assert_eq!(
+            group.rendered_card_for_test(),
+            "╭─○ Loading semantic model\n│   config.json                  650 B/650 B\n╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
+        );
     }
 
     #[test]
