@@ -1,5 +1,8 @@
 //! Startup gates that block serve and semantic index until vector storage and embedding
 //! credentials satisfy the resolved runtime contract.
+//!
+//! Fails fast before serve or semantic index when vector storage, sqlite-vec, or embedding
+//! credentials violate the resolved contract.
 
 use std::io;
 

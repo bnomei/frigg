@@ -1,4 +1,7 @@
 //! Selection novelty bonuses and repeat penalties by source class and Laravel surface.
+//!
+//! Applies source-class novelty bonuses and repeat penalties, including Laravel UI surface
+//! diversification guards.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

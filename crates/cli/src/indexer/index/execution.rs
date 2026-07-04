@@ -1,4 +1,7 @@
 //! Ordered index execution across manifest persistence, retrieval projections, and semantic refresh.
+//!
+//! Runs manifest snapshot writes, projection bundle rebuilds, and semantic refresh in a fixed
+//! phase order with rollback hooks so partial failures leave stored snapshots consistent.
 
 use std::path::Path;
 use std::time::Instant;

@@ -1,4 +1,7 @@
 //! Byte-offset and tree-sitter span helpers shared by symbol extraction and structural search.
+//!
+//! Converts tree-sitter byte ranges into line-column `SourceSpan` values so symbol definitions and
+//! structural captures stay aligned across languages and downstream excerpt rendering.
 
 use super::*;
 

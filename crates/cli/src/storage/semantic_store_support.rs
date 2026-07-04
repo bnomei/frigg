@@ -1,4 +1,7 @@
 //! Internal semantic partition sync, vector row maintenance, and head bookkeeping.
+//!
+//! Keeps embedding rows, vector partitions, and semantic heads consistent during replace and
+//! prune; internal helpers stay below the public semantic-store API.
 
 use crate::domain::{FriggError, FriggResult};
 use rusqlite::types::Value as SqlValue;

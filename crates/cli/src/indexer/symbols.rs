@@ -1,4 +1,7 @@
 //! Symbol extraction, structural search, heuristic references, and graph registration.
+//!
+//! Coordinates tree-sitter extraction, structural inspection, and heuristic relation resolution
+//! into symbol inventories the graph layer and retrieval projections can consume after indexing.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;

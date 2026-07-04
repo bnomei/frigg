@@ -1,4 +1,7 @@
 //! Selection rules for test-witness recall, harness paths, and example-support companions.
+//!
+//! Targets test-witness recall, harness paths, and example-support companions under test intent
+//! flags.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

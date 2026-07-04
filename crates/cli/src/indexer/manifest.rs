@@ -1,4 +1,7 @@
 //! Manifest walk, content hashing, snapshot diffing, and repository-relative path normalization.
+//!
+//! Applies workspace ignore rules during walks, hashes discovered files in parallel, and classifies
+//! snapshot deltas that downstream index planning and manifest validation reuse.
 
 use super::*;
 use crate::storage::ManifestEntry;

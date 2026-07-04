@@ -1,4 +1,7 @@
 //! Clap-derived CLI surface: global runtime flags and utility or serve subcommands.
+//!
+//! Defines the `Cli` parser, subcommand enums, and flag defaults that `cli_dispatch` and HTTP
+//! runtime wiring deserialize before startup gates and MCP serve begin.
 
 use std::net::IpAddr;
 use std::path::PathBuf;

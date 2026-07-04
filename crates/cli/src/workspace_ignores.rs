@@ -1,4 +1,7 @@
 //! Workspace ignore matching shared by manifest walks and runtime path filtering.
+//!
+//! Compiles root `.gitignore` and `.ignore` rules once per workspace so manifest indexing and
+//! runtime candidate filtering skip the same vendored and generated paths.
 
 use std::path::Path;
 

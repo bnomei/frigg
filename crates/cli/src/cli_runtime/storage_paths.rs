@@ -1,4 +1,7 @@
 //! SQLite storage path helpers shared by CLI bootstrap, index, and maintenance commands.
+//!
+//! Centralizes provenance DB path resolution and parent-dir creation for bootstrap, index, and
+//! maintenance commands.
 
 use std::io;
 use std::path::{Path, PathBuf};

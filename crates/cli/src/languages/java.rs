@@ -1,4 +1,7 @@
 //! Java language adapter for tree-sitter symbol extraction.
+//!
+//! Registered through the language registry for indexer symbol corpora and MCP structural tools;
+//! extension-gated parsing skips unrelated paths.
 
 use std::path::Path;
 

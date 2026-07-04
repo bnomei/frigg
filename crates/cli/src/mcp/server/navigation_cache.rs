@@ -1,4 +1,7 @@
 //! Navigation helper caches that are not query-answer caches.
+//!
+//! Caches heuristic reference and related navigation helper state; invalidated on repository
+//! manifest refresh, not per query answer.
 
 use super::*;
 use crate::mcp::server::runtime_cache::serialized_value_estimated_bytes;

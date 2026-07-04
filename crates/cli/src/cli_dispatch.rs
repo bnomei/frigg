@@ -1,5 +1,8 @@
 //! Async CLI dispatch: utility commands, startup gates, watch supervisor attach, and serve over
 //! stdio or HTTP runtime.
+//!
+//! Parses `Cli` arguments, runs storage and indexing utilities, attaches the watch supervisor when
+//! configured, and hands off long-lived MCP serve to the stdio or HTTP runtime entry points.
 
 use std::error::Error;
 use std::sync::{Arc, RwLock};

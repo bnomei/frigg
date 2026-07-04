@@ -1,4 +1,7 @@
 //! Normalized workload metadata emitted by MCP tool invocations.
+//!
+//! Bounds repository ids, query text, and timing fields into compact workload records attached to
+//! MCP tool responses for observability without leaking full request payloads.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

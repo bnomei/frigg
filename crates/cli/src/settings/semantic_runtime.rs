@@ -1,4 +1,7 @@
 //! Semantic runtime configuration, credential validation, and provider defaults.
+//!
+//! Validates provider credentials and model aliases at startup so semantic indexing and recall
+//! fail fast with MCP-friendly diagnostics instead of deferring errors to the first embed call.
 
 use std::str::FromStr;
 

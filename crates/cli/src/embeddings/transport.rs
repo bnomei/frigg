@@ -1,4 +1,7 @@
 //! Shared HTTP transport, retry backoff, and diagnostic redaction for embedding providers.
+//!
+//! Wraps reqwest calls with bounded retries and redacts secrets from failure diagnostics so
+//! OpenAI and Google providers report comparable transport errors.
 
 use std::time::Duration;
 

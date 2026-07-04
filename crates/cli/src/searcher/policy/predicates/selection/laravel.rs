@@ -1,4 +1,7 @@
 //! Selection predicates for Laravel UI surfaces, providers, routes, and bootstrap entrypoints.
+//!
+//! Laravel-specific leaves for blade, Livewire, routes, providers, and bootstrap surfaces in
+//! selection diversification.
 
 use super::{PredicateLeaf, SelectionFacts};
 use crate::searcher::laravel::LaravelUiSurfaceClass;

@@ -1,4 +1,7 @@
 //! Repository identity and match payloads exchanged between indexing, search, and MCP tools.
+//!
+//! Holds stable repository ids, manifest match records, and structural follow-up shapes that stay
+//! serde- and schema-stable across storage, retrieval, and MCP response envelopes.
 
 use std::path::Path;
 

@@ -1,4 +1,7 @@
 //! `search_hybrid` implementation combining lexical, graph, and optional semantic channels.
+//!
+//! Fuses lexical, projection, and optional semantic channels; surfaces channel warnings when a
+//! backend is stale or disabled.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

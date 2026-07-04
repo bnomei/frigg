@@ -1,4 +1,7 @@
 //! Tree-sitter-backed symbol extraction for single sources and parallel path batches.
+//!
+//! Parses supported language grammars, collects definition nodes into stable symbol records, and
+//! batches path reads so indexer symbol passes stay bounded on large repositories.
 
 use super::*;
 use rayon::prelude::*;

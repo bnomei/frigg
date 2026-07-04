@@ -1,4 +1,7 @@
 //! CLI `context` command: compact summaries for local context-efficiency JSONL logs.
+//!
+//! Summarizes local context-efficiency JSONL logs for operator review without mutating workspace
+//! index state.
 
 use std::error::Error;
 

@@ -1,4 +1,7 @@
 //! Read-only tool execution scoping, blocking offload, and normalized workload metadata assembly.
+//!
+//! Scopes read-only tool work to attached repositories and offloads blocking IO; assembles
+//! normalized workload metadata for provenance on MCP responses.
 
 use super::*;
 use rmcp::model::ProgressNotificationParam;

@@ -1,4 +1,7 @@
 //! Symbol and cursor target resolution for navigation tools across corpora and source evidence.
+//!
+//! Resolves cursor and symbol targets across corpora, source evidence, and precise graph when
+//! multiple candidates compete.
 
 use super::*;
 use std::fs::File;

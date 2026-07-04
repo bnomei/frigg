@@ -1,4 +1,7 @@
 //! Path anchor sketch projection load for exact-anchor biased retrieval.
+//!
+//! Loads anchor-sketch witnesses that bias retrieval toward exact query anchors without
+//! requiring full lexical path matches.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{PathAnchorSketchProjection, Storage, db_runtime::i64_to_u64};

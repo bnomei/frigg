@@ -1,4 +1,6 @@
 //! Path-quality penalties for generic runtime docs, frontend noise, and repo metadata.
+//!
+//! Down-ranks generic runtime docs, frontend noise, and repo metadata that dilute witness recall.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

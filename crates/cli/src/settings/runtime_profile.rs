@@ -1,4 +1,7 @@
 //! Runtime profile resolution from transport and watch settings.
+//!
+//! Maps stdio versus HTTP transport and watch attachment into persistence and freshness profiles
+//! that gate manifest reuse, watch supervisor startup, and long-lived service behavior.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

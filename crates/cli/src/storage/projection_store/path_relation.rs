@@ -1,4 +1,7 @@
 //! Path relation projection load for graph-backed retrieval witnesses.
+//!
+//! Loads graph-backed path-relation witnesses derived from precise or heuristic symbol edges for
+//! hybrid retrieval.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{PathRelationProjection, Storage, db_runtime::i64_to_u64};

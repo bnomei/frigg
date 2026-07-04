@@ -2,13 +2,16 @@
 //! surface for agents. This is where runtime state, schemas, and transport-facing orchestration
 //! meet the lower-level search and storage subsystems.
 
+/// Advanced-consumer MCP extensions that build on the stable runtime surface.
 pub mod advanced;
 mod explorer;
 mod guidance;
 mod server;
 mod server_cache;
 mod server_state;
+/// Stable MCP tool names, schemas, and handler wiring shared by stdio and HTTP transports.
 pub mod tool_surface;
+/// Wire contracts for Frigg's public MCP tool surface.
 pub mod types;
 pub(crate) mod workspace_registry;
 

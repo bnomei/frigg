@@ -1,4 +1,7 @@
 //! CLI-to-config resolution for serve startup and per-command operating profiles.
+//!
+//! Maps CLI flags and workspace roots into `FriggConfig` profiles for serve, watch, lexical, and
+//! semantic runtime contracts.
 
 use std::error::Error;
 use std::io;

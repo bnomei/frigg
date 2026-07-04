@@ -1,4 +1,7 @@
 //! Adopt target selection from explicit flags, `--all`, or detected project client markers.
+//!
+//! Selects adopt destinations from explicit flags, `--all`, or detected agent client markers in the
+//! workspace.
 
 use std::path::Path;
 

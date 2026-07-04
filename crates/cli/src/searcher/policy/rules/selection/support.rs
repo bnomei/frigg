@@ -1,4 +1,6 @@
 //! Shared selection helpers for class novelty bonuses and repeat penalties.
+//!
+//! Shared novelty bonus and repeat-penalty helpers reused across selection rule families.
 
 use crate::searcher::surfaces::HybridSourceClass;
 

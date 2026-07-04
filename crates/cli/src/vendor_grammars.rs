@@ -2,6 +2,9 @@
 
 //! Package-local tree-sitter wrappers keep the published crate self-contained without requiring
 //! unpublished registry dependencies for vendored grammars.
+//!
+//! Exposes `LanguageFn` bindings for Blade, Roc, and other vendored parsers so the indexer and
+//! language registry can load grammars from the crate root instead of external git dependencies.
 
 use tree_sitter_language::LanguageFn;
 

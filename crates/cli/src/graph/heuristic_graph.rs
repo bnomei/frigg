@@ -1,4 +1,7 @@
 //! Heuristic symbol registration and relation traversal on the in-memory graph.
+//!
+//! Registers tree-sitter symbol nodes and walks heuristic relation edges so graph-channel search
+//! and navigation can expand from lexical seeds without waiting for SCIP ingest.
 
 use petgraph::Direction;
 use petgraph::visit::EdgeRef;

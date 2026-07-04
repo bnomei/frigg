@@ -1,4 +1,7 @@
 //! SCIP payload decode, normalization, and document application into the symbol graph.
+//!
+//! Accepts JSON or protobuf SCIP indexes, normalizes document paths and symbol keys, and applies
+//! precise symbol, occurrence, and relationship records through the storage upsert helpers.
 
 use super::*;
 use protobuf::Message;

@@ -1,4 +1,7 @@
 //! Semantic corpus write paths, health probes, and snapshot retention.
+//!
+//! Writes live semantic partitions keyed by repository and provider model; retention hooks prune
+//! superseded snapshot corpora without touching manifest rows.
 
 use crate::domain::{FriggError, FriggResult};
 

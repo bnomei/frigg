@@ -1,4 +1,7 @@
 //! Selection tail-stage repairs: late multipliers for sparse or mis-ranked candidates.
+//!
+//! Late-stage repairs for sparse or mis-ranked candidates after primary witness and
+//! diversification multipliers.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

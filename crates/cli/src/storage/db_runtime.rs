@@ -1,4 +1,7 @@
 //! SQLite connection helpers, manifest loaders, and schema compatibility checks.
+//!
+//! Opens connections with sqlite-vec registration and busy-timeout policy; rejects stale schema
+//! versions so callers rebuild regenerable index state instead of migrating in place.
 
 #[cfg(test)]
 use std::cell::RefCell;

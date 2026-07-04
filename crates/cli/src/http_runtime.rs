@@ -1,4 +1,7 @@
 //! HTTP runtime for MCP serve: bind resolution, bearer auth, and streamable HTTP transport wiring.
+//!
+//! Builds the Axum router, optional bearer middleware, and streamable HTTP MCP transport used when
+//! `frigg serve` runs as a loopback or remote HTTP service instead of stdio.
 
 use std::error::Error;
 use std::io;

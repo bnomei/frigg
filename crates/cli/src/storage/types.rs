@@ -1,4 +1,7 @@
 //! Storage record types for manifests, semantic chunks, and retrieval projections.
+//!
+//! Serde-stable record shapes exchanged between indexing, storage replace paths, and searcher
+//! projection loads; no runtime policy lives here.
 
 use super::*;
 

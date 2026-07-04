@@ -1,4 +1,7 @@
 //! Baseline runtime-witness selection multipliers for runtime class and overlap tiers.
+//!
+//! Baseline multipliers keyed on runtime class and path overlap before support and locality
+//! refinements.
 
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;

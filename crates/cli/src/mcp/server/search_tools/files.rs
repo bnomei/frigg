@@ -1,4 +1,7 @@
 //! `list_files` implementation for repository-aware file discovery.
+//!
+//! Lists manifest paths under repository roots with ignore-aware filtering for agent file
+//! discovery.
 
 use super::*;
 use crate::mcp::types::ListFilesEntry;

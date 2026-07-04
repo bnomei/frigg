@@ -1,4 +1,7 @@
 //! Navigation response metadata, structural follow-up derivation, and compact selection notes.
+//!
+//! Attaches navigation follow-up hints, compact selection notes, and structural metadata to
+//! location tool responses.
 
 use super::*;
 use crate::languages::rust_implementation_candidates_from_facts;

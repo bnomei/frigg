@@ -452,8 +452,10 @@ use transport::*;
 mod google;
 #[cfg(feature = "local-embeddings")]
 mod local;
+/// Feature-gated local fastembed model loading and readiness checks.
 pub mod local_model;
 mod openai;
+/// Factory that selects and caches embedding providers from semantic runtime configuration.
 pub mod provider_factory;
 pub use google::GoogleEmbeddingProvider;
 #[cfg(feature = "local-embeddings")]

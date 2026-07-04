@@ -1,4 +1,7 @@
 //! Read-only cache fingerprint command for CI/install workflows.
+//!
+//! Emits a read-only cache fingerprint for CI and install workflows to detect stale embedding or
+//! model artifacts.
 
 use std::env;
 use std::fs::OpenOptions;

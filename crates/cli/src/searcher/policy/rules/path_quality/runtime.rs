@@ -1,4 +1,7 @@
 //! Path-quality rules for runtime, MCP, benchmark, test, and fixture intent alignment.
+//!
+//! Aligns runtime, MCP, benchmark, test, and fixture paths with matching retrieval intent
+//! flags.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

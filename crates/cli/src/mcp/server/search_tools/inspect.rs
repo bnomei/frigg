@@ -1,4 +1,7 @@
 //! `inspect_syntax_tree` and `search_structural` Tree-sitter query tools.
+//!
+//! Runs Tree-sitter queries against repository-scoped sources with freshness metadata; structural
+//! hits are not cached as final query answers.
 
 use super::*;
 use crate::indexer::{

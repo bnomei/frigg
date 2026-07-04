@@ -1,4 +1,7 @@
 //! `search_text` implementation with repository scoping and freshness metadata.
+//!
+//! Lexical search over manifest-scoped files with repository freshness metadata for
+//! response-cache eligibility.
 
 use super::*;
 

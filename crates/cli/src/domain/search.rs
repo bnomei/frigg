@@ -1,4 +1,7 @@
 //! Search planner vocabulary for path classes, source bias, and intent routing.
+//!
+//! Defines path tiers, source-class labels, and planner intent flags that lexical recall,
+//! path-witness projection, and hybrid policy stages interpret with shared semantics.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

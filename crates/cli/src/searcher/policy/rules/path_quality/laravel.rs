@@ -1,4 +1,7 @@
 //! Path-quality multipliers for Laravel blade, Livewire, layout, and view-component surfaces.
+//!
+//! Laravel blade, Livewire, layout, and view-component multipliers gated by Laravel surface
+//! classification.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

@@ -1,4 +1,7 @@
 //! `document_symbols` outline extraction for a single supported source file.
+//!
+//! Builds a single-file outline from cached symbol corpora for supported extensions; rejects
+//! unsupported paths before parsing.
 
 use super::*;
 

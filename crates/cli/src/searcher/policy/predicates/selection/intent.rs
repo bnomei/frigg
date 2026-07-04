@@ -1,4 +1,7 @@
 //! Selection predicates over normalized retrieval intent and witness-recall combinators.
+//!
+//! Leaves normalize retrieval intent and witness-recall combinators before runtime-witness and
+//! test-witness rules apply.
 
 use super::{PredicateLeaf, SelectionFacts};
 

@@ -1,4 +1,7 @@
 //! Watch and index freshness policy for long-lived MCP runtimes.
+//!
+//! Resolves watch enablement against transport defaults and exposes debounce, retry, and
+//! concurrency knobs that the supervisor uses to schedule manifest-fast and semantic-followup work.
 
 use std::str::FromStr;
 

@@ -1,4 +1,7 @@
 //! Search-oriented MCP tools: text, hybrid, symbol, structural, syntax inspection, and document outlines.
+//!
+//! Routes search MCP tools through shared runtime caches, repository scoping, and freshness
+//! metadata assembly.
 
 use super::*;
 use crate::context_efficiency::{

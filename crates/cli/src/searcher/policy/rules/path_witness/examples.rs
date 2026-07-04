@@ -1,4 +1,7 @@
 //! Path-witness bonuses and penalties for example, bench, and test-support surfaces.
+//!
+//! Adjusts example, bench, and test-support witnesses when recall intent favors illustrative or
+//! harness surfaces.
 
 use super::*;
 

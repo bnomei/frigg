@@ -1,4 +1,7 @@
 //! Test-to-subject path projection replace and load.
+//!
+//! Maps test paths to subject paths so test-witness recall can promote runtime-adjacent
+//! companions during selection.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{

@@ -1,4 +1,7 @@
 //! Selection predicates over query text signals (CLI mentions, anchors, excerpt matches).
+//!
+//! Leaves extract CLI mentions, path anchors, and excerpt-match signals from normalized query
+//! text.
 
 use super::{PredicateLeaf, SelectionFacts};
 

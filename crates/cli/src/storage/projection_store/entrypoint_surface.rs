@@ -1,4 +1,7 @@
 //! Entrypoint surface projection replace and load.
+//!
+//! Persists entrypoint-surface witnesses for bootstrap, CLI, and Laravel runtime paths used in
+//! selection diversification.
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::storage::{EntrypointSurfaceProjection, Storage};

@@ -1,4 +1,7 @@
 //! Selection rules for Laravel blade, Livewire, layout, and view-component diversification.
+//!
+//! Diversifies blade, Livewire, layout, and view-component witnesses so Laravel UI recall does
+//! not collapse to one path.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

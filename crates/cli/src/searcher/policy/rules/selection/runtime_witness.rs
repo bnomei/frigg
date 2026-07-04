@@ -1,4 +1,7 @@
 //! Selection runtime-witness stage: baseline, support, locality, and language-navigation rules.
+//!
+//! Composes baseline, support, locality, and language-navigation stages after entrypoint and
+//! test-witness multipliers.
 
 use super::super::super::dsl::{ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

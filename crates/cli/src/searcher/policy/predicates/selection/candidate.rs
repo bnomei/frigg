@@ -1,4 +1,7 @@
 //! Selection predicates over candidate class, path shape, overlap, and Laravel surface flags.
+//!
+//! Leaves over candidate class, path overlap tiers, and Laravel surface flags feeding early
+//! selection multipliers.
 
 use super::{PredicateLeaf, SelectionFacts};
 use crate::searcher::surfaces::HybridSourceClass;

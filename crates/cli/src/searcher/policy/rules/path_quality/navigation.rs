@@ -1,4 +1,7 @@
 //! Path-quality rules for navigation-runtime and reference-doc fallback intent.
+//!
+//! Biases navigation-runtime and reference-doc paths when agents query symbol or API navigation
+//! context.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

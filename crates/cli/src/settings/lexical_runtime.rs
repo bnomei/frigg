@@ -1,4 +1,7 @@
 //! Lexical search backend selection for manifest-backed text retrieval.
+//!
+//! Chooses between native scanning and optional ripgrep acceleration so lexical channels honor the
+//! same backend policy across CLI startup, MCP serve, and hybrid search execution.
 
 use std::path::PathBuf;
 use std::str::FromStr;

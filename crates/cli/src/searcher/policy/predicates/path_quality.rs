@@ -1,4 +1,7 @@
 //! Path-quality predicates over intent flags and candidate surface classification.
+//!
+//! Leaves test intent flags and surface classification facts consumed by the path-quality score
+//! pipeline in fixed stage order.
 
 #![allow(dead_code)]
 

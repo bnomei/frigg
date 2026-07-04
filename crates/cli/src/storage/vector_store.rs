@@ -1,4 +1,7 @@
 //! sqlite-vec registration, encoding, and vector table lifecycle.
+//!
+//! Registers sqlite-vec, validates table dimensions, and maintains the semantic vector partition
+//! lifecycle tied to embedding replace events.
 
 use super::*;
 

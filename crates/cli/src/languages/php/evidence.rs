@@ -1,4 +1,7 @@
 //! PHP type and target evidence extraction for graph edge construction.
+//!
+//! Collects type and call-target evidence from PHP sources for heuristic graph edges when
+//! precise SCIP coverage is absent.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

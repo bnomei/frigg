@@ -1,4 +1,7 @@
 //! Precise-graph-backed navigation when SCIP artifacts provide symbol coverage for a workspace.
+//!
+//! Selects precise-graph symbol coverage when SCIP artifacts are fresh; falls back to heuristic
+//! corpora when precise partial coverage applies.
 
 use super::*;
 

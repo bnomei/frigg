@@ -1,4 +1,7 @@
 //! `find_implementations` across precise, Rust-fact, and language-specific heuristic strategies.
+//!
+//! `find_implementations` chains precise coverage, Rust facts, and language-specific heuristics
+//! before ranking locations.
 
 use super::*;
 

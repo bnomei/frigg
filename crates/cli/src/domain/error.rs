@@ -1,4 +1,7 @@
 //! Shared error vocabulary for CLI, storage, indexing, and MCP boundaries.
+//!
+//! Centralizes `FriggError` variants and the `FriggResult` alias so every layer maps failures into
+//! consistent CLI exits and MCP error codes without duplicating transport-specific wrappers.
 
 use std::path::PathBuf;
 

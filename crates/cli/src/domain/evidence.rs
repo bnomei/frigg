@@ -1,4 +1,7 @@
 //! Evidence-channel contracts for multi-source retrieval, health reporting, and replay.
+//!
+//! Models channel hits, health diagnostics, and product-ring labels so hybrid search, MCP tools,
+//! and replay fixtures describe multi-channel evidence with one shared vocabulary.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

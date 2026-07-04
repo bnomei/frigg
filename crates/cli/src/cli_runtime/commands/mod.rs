@@ -1,4 +1,7 @@
 //! CLI command handlers for storage bootstrap, indexing, context summaries, and precise generation.
+//!
+//! Dispatches CLI handlers that bootstrap storage, rebuild manifests, and run synchronous precise
+//! generation hooks.
 
 mod adopt;
 mod context;

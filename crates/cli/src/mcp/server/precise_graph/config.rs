@@ -1,4 +1,7 @@
 //! Workspace `.frigg/precise.json` configuration and external precise-generator probing.
+//!
+//! Reads workspace `.frigg/precise.json` and probes configured external SCIP generators before
+//! generation or ingest.
 
 use super::*;
 

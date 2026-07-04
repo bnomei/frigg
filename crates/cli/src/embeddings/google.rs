@@ -1,4 +1,7 @@
 //! Google Gemini embeddings HTTP provider with batch request mapping.
+//!
+//! Maps document and query purposes to Gemini task types, batches inputs within provider limits,
+//! and normalizes vector dimensions for storage and semantic-channel scoring.
 
 use std::sync::Arc;
 

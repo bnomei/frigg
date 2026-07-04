@@ -1,4 +1,7 @@
 //! Search helper caches that are not query-answer caches.
+//!
+//! Caches expensive search helper state such as corpora slices; distinct from MCP query-answer
+//! response caches.
 
 use super::*;
 

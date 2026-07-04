@@ -1,4 +1,7 @@
 //! Top-level Frigg configuration for workspace roots, budgets, and runtime subsystems.
+//!
+//! Aggregates watch, lexical, and semantic runtime sections into one serde-backed profile that CLI
+//! dispatch, indexing, and MCP startup deserialize from flags, env vars, and config files.
 
 use std::path::{Path, PathBuf};
 

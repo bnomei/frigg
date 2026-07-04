@@ -10,6 +10,7 @@ const HUMAN_BADGE_STYLE: &str = "1;97;48;5;240";
 const HUMAN_BADGE_WIDTH: usize = 3;
 const HUMAN_BADGE_SEPARATOR_WIDTH: usize = 1;
 
+/// One rendered row inside a [`HumanBlock`] card: key-value pair, note, separator, or path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HumanRow {
     Kv { label: String, value: String },
@@ -51,6 +52,7 @@ impl HumanRow {
     }
 }
 
+/// Terminal card block with titled rows, accent styling, and optional badge column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HumanBlock {
     title: String,
@@ -180,6 +182,7 @@ impl HumanBlock {
     }
 }
 
+/// Column width reserved before card content when a badge column is active.
 pub fn human_badge_prefix_width(badge: Option<&str>) -> usize {
     if badge.is_some() {
         HUMAN_BADGE_WIDTH + HUMAN_BADGE_SEPARATOR_WIDTH
@@ -188,6 +191,7 @@ pub fn human_badge_prefix_width(badge: Option<&str>) -> usize {
     }
 }
 
+/// Prefixes one rendered line with an optional three-character badge column.
 pub fn format_human_badged_line(
     badge: Option<&str>,
     line: impl Into<String>,

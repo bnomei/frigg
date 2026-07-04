@@ -1,4 +1,7 @@
 //! Workspace precise-graph generation, SCIP artifact discovery, ingest, and cache reuse.
+//!
+//! Orchestrates SCIP artifact discovery, ingest, generation triggers, and process-wide
+//! precise-graph cache reuse.
 
 use super::*;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};

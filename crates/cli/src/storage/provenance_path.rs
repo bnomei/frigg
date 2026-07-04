@@ -1,4 +1,7 @@
 //! Workspace-scoped SQLite storage path resolution and boundary checks.
+//!
+//! Resolves workspace-relative provenance DB locations and rejects paths that escape the
+//! workspace boundary before storage open or bootstrap.
 
 use super::*;
 use std::path::Component;

@@ -1,4 +1,7 @@
 //! Shared repository-snapshot id normalization for projection writes.
+//!
+//! Normalizes repository and snapshot ids before projection writes so replace transactions key
+//! the same manifest snapshot across families.
 
 use crate::domain::{FriggError, FriggResult};
 

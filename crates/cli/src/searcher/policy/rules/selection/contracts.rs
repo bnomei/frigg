@@ -1,4 +1,7 @@
 //! Selection rules for contract, error-taxonomy, and tool-contract witness intent.
+//!
+//! Adjusts scores for contract docs, error taxonomies, and tool-contract paths under
+//! witness-recall intent.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

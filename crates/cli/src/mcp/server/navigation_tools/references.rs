@@ -1,4 +1,7 @@
 //! `find_references` combining precise-graph and heuristic source evidence under resource budgets.
+//!
+//! `find_references` merges precise-graph hits with heuristic source scans under bounded IO and
+//! cache reuse.
 
 use super::*;
 

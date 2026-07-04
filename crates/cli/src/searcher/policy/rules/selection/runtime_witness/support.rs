@@ -1,4 +1,7 @@
 //! Runtime-witness selection rules for test-support and runtime-anchor companions.
+//!
+//! Promotes test-support and runtime-anchor companion paths adjacent to primary runtime
+//! witnesses.
 
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;

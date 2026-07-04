@@ -1,4 +1,7 @@
 //! `RepositorySummary` assembly for list and workspace tools.
+//!
+//! Assembles `RepositorySummary` rows for workspace list tools from manifest, index, and
+//! precise-generation status.
 
 use super::*;
 

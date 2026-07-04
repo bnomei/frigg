@@ -1,4 +1,6 @@
 //! `go_to_definition` and `find_declarations` shared resolution and response assembly.
+//!
+//! Shared resolution and response assembly for definition and declaration location tools.
 
 use super::*;
 

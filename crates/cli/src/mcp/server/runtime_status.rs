@@ -1,4 +1,7 @@
 //! Runtime status summaries for repository health, precise generation, and tasks.
+//!
+//! Aggregates repository health, index readiness, and precise-generation summaries for workspace
+//! status tools.
 
 use super::*;
 use std::ffi::OsStr;

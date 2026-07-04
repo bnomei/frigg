@@ -1,4 +1,7 @@
 //! Selection rule pipeline: sequential score stages from base multipliers through tail repair.
+//!
+//! Runs score stages from base multipliers through runtime witness, novelty, and tail repair in
+//! one `PolicyProgram`.
 
 pub(crate) mod base;
 pub(crate) mod ci_scripts_ops;

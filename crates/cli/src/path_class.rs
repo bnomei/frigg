@@ -1,4 +1,7 @@
 //! Repository-relative path classification for runtime, support, and project surfaces.
+//!
+//! Maps normalized repository-relative paths into `PathClass` tiers shared by hybrid ranking,
+//! path-witness recall, and diversification guardrails across language ecosystems.
 
 use std::path::Path;
 

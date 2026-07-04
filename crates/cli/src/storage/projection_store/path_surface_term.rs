@@ -1,4 +1,7 @@
 //! Path surface term projection load for lexical witness scoring.
+//!
+//! Loads lexical surface-term witnesses that score path overlap from tokenized path segments
+//! rather than graph edges.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{PathSurfaceTermProjection, Storage};

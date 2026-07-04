@@ -1,4 +1,7 @@
 //! Selection rules promoting runtime-adjacent test and CLI test companions.
+//!
+//! Promotes runtime-adjacent test and CLI test companions when primary candidates lack executable
+//! witnesses.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

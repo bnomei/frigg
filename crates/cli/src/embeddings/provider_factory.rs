@@ -1,4 +1,7 @@
 //! Shared semantic embedding provider construction for indexing and query-time recall.
+//!
+//! Centralizes provider selection, credential loading, and process-wide local-model caching so
+//! indexer and searcher paths share one embedding backend per semantic runtime configuration.
 
 use std::collections::BTreeMap;
 #[cfg(feature = "local-embeddings")]

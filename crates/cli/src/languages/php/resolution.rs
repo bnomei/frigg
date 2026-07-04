@@ -1,4 +1,7 @@
 //! PHP namespace and use-alias resolution for class-like symbol names.
+//!
+//! Builds namespace and use-alias context so PHP declaration and graph edges reference
+//! canonical class-like names, not raw source tokens.
 
 use std::collections::{BTreeMap, BTreeSet};
 

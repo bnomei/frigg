@@ -1,4 +1,7 @@
 //! Tree-sitter structural queries, syntax-tree inspection, and generated follow-up suggestions.
+//!
+//! Runs capture-based structural searches and emits low-noise follow-up query hints that MCP
+//! structural tools and indexer diagnostics can replay without re-parsing sources.
 
 use super::*;
 use crate::domain::model::{

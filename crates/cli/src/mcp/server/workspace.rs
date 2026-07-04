@@ -1,4 +1,7 @@
 //! Workspace lifecycle tools: attach, detach, prepare, index, and index/precise readiness waits.
+//!
+//! Handles attach, detach, prepare, index, and readiness waits; adoption paths establish manifest
+//! snapshots before search serves.
 
 use super::*;
 

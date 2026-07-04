@@ -1,4 +1,7 @@
 //! Selection base stage: canonical match, runtime overlap, and build-flow excerpt anchors.
+//!
+//! First selection stage: canonical match, runtime overlap tiers, and build-flow excerpt anchors
+//! before witness-specific rules.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

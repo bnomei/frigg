@@ -1,4 +1,7 @@
 //! Repository index orchestration from plan execution through manifest and semantic writes.
+//!
+//! Wires plan building, dirty-path diffing, semantic executor selection, and progress callbacks
+//! into the public `index_repository` entry points used by CLI utilities and watch refresh.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

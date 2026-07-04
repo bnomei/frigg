@@ -1,4 +1,7 @@
 //! Shared auto-repair hooks for regenerable storage invariants.
+//!
+//! Repairs regenerable storage invariants when verification fails; invoked from startup gates and
+//! maintenance commands.
 
 use frigg::domain::FriggResult;
 use frigg::storage::Storage;

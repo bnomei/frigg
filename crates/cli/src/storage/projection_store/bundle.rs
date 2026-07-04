@@ -1,4 +1,7 @@
 //! Atomic retrieval projection bundle replace, load, and freshness checks.
+//!
+//! Replaces or loads the full projection family set atomically and verifies required families
+//! before search serves a snapshot.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{

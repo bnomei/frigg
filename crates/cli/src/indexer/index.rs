@@ -1,4 +1,7 @@
 //! Index orchestration: planning, phased execution, semantic refresh, and manifest persistence.
+//!
+//! Re-exports the index plan, execution, semantic, and store modules that turn repository changes
+//! into durable manifests, retrieval projections, and embedding chunks.
 
 mod execution;
 mod plan;

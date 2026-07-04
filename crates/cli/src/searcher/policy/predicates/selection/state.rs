@@ -1,4 +1,7 @@
 //! Selection predicates over rolling coverage counts and diversification state.
+//!
+//! Leaves over rolling coverage counts and diversification state so tail stages can repair sparse
+//! top-k results.
 
 use super::{PredicateLeaf, SelectionFacts};
 

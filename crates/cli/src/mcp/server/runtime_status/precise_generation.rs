@@ -1,4 +1,7 @@
 //! Precise-generation lifecycle summaries and background task coordination per `repository_id`.
+//!
+//! Summarizes per-repository precise-generation tasks and coordinates background refresh after
+//! index or attach.
 
 use super::*;
 use std::process::{Command, Stdio};

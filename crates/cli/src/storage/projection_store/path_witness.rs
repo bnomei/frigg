@@ -1,4 +1,7 @@
 //! Path witness projection replace and load for a manifest snapshot.
+//!
+//! Replace and load for path-witness rows indexed per manifest snapshot; feeds path-quality and
+//! witness-recall policy stages.
 
 use crate::domain::{FriggError, FriggResult, PathClass, SourceClass};
 use crate::storage::{

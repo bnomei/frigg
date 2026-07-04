@@ -1,4 +1,7 @@
 //! Workload attribution helpers retained for MCP responses.
+//!
+//! Derives workload attribution fields retained on MCP tool responses for tracing without
+//! mutating repository state.
 
 use super::*;
 use crate::domain::{

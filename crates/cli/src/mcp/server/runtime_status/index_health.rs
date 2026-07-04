@@ -1,4 +1,7 @@
 //! Index-health and repository-response freshness assembly for workspace status reporting.
+//!
+//! Builds index-health and freshness fields that gate response-cache reuse and workspace status
+//! reporting.
 
 use super::*;
 

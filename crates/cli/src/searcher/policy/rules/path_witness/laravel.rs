@@ -1,4 +1,6 @@
 //! Path-witness recall rules for Laravel UI, entrypoint, and form-action surfaces.
+//!
+//! Laravel UI, entrypoint, and form-action recall when Laravel surface predicates are active.
 
 use super::*;
 

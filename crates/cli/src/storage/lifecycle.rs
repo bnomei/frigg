@@ -1,4 +1,8 @@
 //! Storage initialization, verification, and vector-store lifecycle entry points.
+//!
+//! Coordinates schema init, vector extension readiness, verification, and auto-repair for
+//! `.frigg/storage.sqlite3`; callers treat failures here as bootstrap blockers rather than
+//! per-query errors.
 
 use std::time::Duration;
 

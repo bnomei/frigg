@@ -298,6 +298,7 @@ pub enum WorkspaceAttachAction {
     ReusedWorkspace,
 }
 
+/// Parameters for explicit workspace attach that may wait for precise generation readiness.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachParams {
     /// File or directory path to attach.

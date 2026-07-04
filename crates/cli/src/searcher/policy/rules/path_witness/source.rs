@@ -1,4 +1,6 @@
 //! Path-witness scoring for source-class overlap and exact query-term matches.
+//!
+//! Scores source-class overlap and exact query-term matches on witness candidates.
 
 use super::*;
 

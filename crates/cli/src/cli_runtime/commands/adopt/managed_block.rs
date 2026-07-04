@@ -1,4 +1,7 @@
 //! Managed markdown block insertion and removal for agent directive adoption targets.
+//!
+//! Inserts or removes Frigg-managed markdown blocks in agent directive files without touching
+//! sibling content.
 
 use frigg::agent_directive;
 

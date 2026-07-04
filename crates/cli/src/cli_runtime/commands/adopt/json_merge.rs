@@ -1,4 +1,7 @@
 //! JSON merge helpers for Frigg MCP server entries and Claude PreToolUse hooks in project settings.
+//!
+//! Merges Frigg MCP server entries and Claude PreToolUse hooks while preserving unrelated project
+//! JSON keys.
 
 use serde_json::{Map, Value, json};
 

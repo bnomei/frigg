@@ -1,4 +1,7 @@
 //! Selection rules for entrypoint runtime, build-flow, and Laravel bootstrap paths.
+//!
+//! Boosts entrypoint runtime, build-flow, and Laravel bootstrap paths during witness-heavy
+//! retrieval.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

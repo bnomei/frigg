@@ -1,4 +1,7 @@
 //! Manifest persistence adapter that maps indexer manifest operations onto storage tables.
+//!
+//! Translates repository manifest snapshots and file digests into storage writes so index
+//! execution can treat persistence as a narrow adapter instead of scattering SQL details.
 
 use std::path::{Path, PathBuf};
 

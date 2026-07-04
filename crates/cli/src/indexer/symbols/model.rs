@@ -1,4 +1,7 @@
 //! Shared symbol, structural-query, and heuristic-reference types for indexer outputs.
+//!
+//! Defines serde-stable symbol definitions, spans, and heuristic reference records exchanged
+//! between extraction, graph registration, and MCP structural delivery surfaces.
 
 use super::*;
 use crate::domain::model::GeneratedStructuralFollowUp;

@@ -1,4 +1,6 @@
 //! Playbook MCP tool handlers: run, replay, and citation composition over trace artifacts.
+//!
+//! Runs and replays trace-backed playbooks and composes citations from stored workload artifacts.
 
 use super::*;
 

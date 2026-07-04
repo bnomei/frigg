@@ -1,4 +1,7 @@
 //! Line-preserving scrubbing of leading HTML and metadata comment blocks.
+//!
+//! Replaces comment interiors with spaces while keeping newlines intact so lexical scans and
+//! path-witness excerpts ignore generator metadata without shifting line numbers.
 
 use std::borrow::Cow;
 

@@ -1,4 +1,7 @@
 //! Retrieval projection persistence split by projection family.
+//!
+//! One module per retrieval projection family; bundle replace keeps witness, relation, and
+//! surface tables snapshot-consistent.
 
 #[path = "projection_store/bundle.rs"]
 mod bundle;

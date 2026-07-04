@@ -1,4 +1,7 @@
 //! Hidden Claude Code hook handlers.
+//!
+//! Hidden Claude Code hook entrypoints that proxy into adopt and workspace workflows with stable
+//! event output.
 
 use std::io::{self, Read, Write};
 

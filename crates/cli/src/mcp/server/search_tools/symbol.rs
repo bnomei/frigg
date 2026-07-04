@@ -1,4 +1,7 @@
 //! `search_symbol` implementation over cached repository symbol corpora.
+//!
+//! Queries cached per-repository symbol corpora with manifest freshness bounds for
+//! navigation-oriented lookup.
 
 use super::*;
 

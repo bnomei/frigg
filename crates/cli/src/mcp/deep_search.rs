@@ -123,6 +123,7 @@ pub struct DeepSearchCitationPayload {
     pub citations: Vec<DeepSearchCitation>,
 }
 
+/// One answer claim linked to citation ids produced from a deep-search trace artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchClaim {
     pub claim_id: String,
@@ -130,6 +131,7 @@ pub struct DeepSearchClaim {
     pub citation_ids: Vec<String>,
 }
 
+/// Repository file span citation anchored to one traced MCP tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchCitation {
     pub citation_id: String,
@@ -140,6 +142,7 @@ pub struct DeepSearchCitation {
     pub span: DeepSearchFileSpan,
 }
 
+/// Inclusive line/column span within one cited repository file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeepSearchFileSpan {
     pub start_line: usize,

@@ -1,4 +1,7 @@
 //! Local embedding model artifact resolution and explicit preparation.
+//!
+//! Resolves Hugging Face model aliases, downloads artifacts into the Frigg cache, and surfaces
+//! preparation errors before fastembed-backed providers are constructed at runtime.
 
 #[cfg(feature = "local-embeddings")]
 mod enabled {

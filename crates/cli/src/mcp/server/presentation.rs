@@ -1,4 +1,7 @@
 //! Compact versus full response shaping, text-first read surfaces, and session `result_handle` allocation.
+//!
+//! Shapes compact versus full tool payloads and allocates session-local `result_handle` ids for
+//! deferred `read_match` follow-ups.
 
 use super::*;
 use crate::domain::model::TextMatch;

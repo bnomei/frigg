@@ -1,4 +1,7 @@
 //! PHP declaration relations and graph source analysis for symbol extraction.
+//!
+//! Extracts declaration relations from PHP AST nodes and feeds graph ingest alongside symbol
+//! corpora during indexing.
 
 use std::collections::BTreeMap;
 use std::fs;

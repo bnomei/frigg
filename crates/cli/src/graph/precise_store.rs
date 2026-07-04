@@ -1,4 +1,7 @@
 //! Precise SCIP record upsert, replace, and overlay bookkeeping for symbol graph storage.
+//!
+//! Maintains per-file occurrence indexes and reference counts so file-scoped replaces and overlay
+//! merges stay consistent while precise navigation queries remain bounded.
 
 use std::collections::BTreeSet;
 use std::time::Instant;

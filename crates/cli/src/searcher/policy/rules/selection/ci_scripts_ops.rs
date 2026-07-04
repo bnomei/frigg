@@ -1,4 +1,6 @@
 //! Selection rules for CI workflow and scripts/ops witness recall.
+//!
+//! Boosts CI workflow and scripts/ops witnesses when recall intent targets operational surfaces.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

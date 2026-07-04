@@ -1,4 +1,7 @@
 //! Path-quality rule pipeline: class and surface multipliers applied in fixed stage order.
+//!
+//! Applies class and surface multipliers in fixed stage order; later stages cannot undo earlier
+//! eligibility gates.
 
 use super::super::facts::PathQualityFacts;
 use super::super::kernel::PolicyProgram;

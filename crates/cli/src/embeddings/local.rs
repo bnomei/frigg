@@ -1,4 +1,7 @@
 //! Local fastembed-backed embedding provider.
+//!
+//! Runs prepared on-disk models through fastembed batching and rejects unsafe cache overrides so
+//! offline semantic indexing and recall stay reproducible across hosts.
 
 use std::path::PathBuf;
 use std::sync::Mutex;

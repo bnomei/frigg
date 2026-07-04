@@ -1,4 +1,7 @@
 //! Core path-witness recall bonuses: entrypoints, CI workflows, and overlap tiers.
+//!
+//! Core overlap, entrypoint, and CI workflow bonuses before Laravel and example rule families
+//! run.
 
 use super::*;
 

@@ -1,4 +1,7 @@
 //! Path-witness recall rules for runtime-config, Python, and Rust workspace artifacts.
+//!
+//! Recall rules for Python, Rust workspace, and generic runtime-config artifacts under config
+//! intent.
 
 use super::*;
 

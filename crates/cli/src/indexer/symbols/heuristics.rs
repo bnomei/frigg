@@ -1,4 +1,7 @@
 //! Lexical token and graph-relation heuristic references that extend precise symbol graphs.
+//!
+//! Resolves relation hints and token overlap into ranked heuristic references when SCIP coverage
+//! is sparse but tree-sitter symbols and graph edges are already available.
 
 use super::*;
 

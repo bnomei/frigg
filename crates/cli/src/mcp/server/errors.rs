@@ -1,4 +1,7 @@
 //! Maps internal `FriggError` values to MCP `ErrorData` and filters the tool router by surface profile.
+//!
+//! Maps `FriggError` codes to stable MCP transport errors and hides tools outside the active
+//! surface profile.
 
 use super::*;
 

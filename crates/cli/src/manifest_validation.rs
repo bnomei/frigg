@@ -1,4 +1,7 @@
 //! Manifest freshness validation and watch-time reuse of validated digest snapshots.
+//!
+//! Rebuilds lightweight metadata digests for candidate paths and caches validated snapshots so
+//! hybrid search can trust manifest-backed universes without repeating full content walks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

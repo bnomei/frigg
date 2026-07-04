@@ -1,4 +1,7 @@
 //! Selection rules for navigation-runtime and reference-doc fallback surfaces.
+//!
+//! Biases navigation-runtime and reference-doc fallback surfaces when precise navigation context
+//! is thin.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

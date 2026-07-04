@@ -1,4 +1,7 @@
 //! Subtree coverage projection load for navigation fallbacks.
+//!
+//! Loads subtree coverage witnesses used when navigation or retrieval needs directory-level
+//! fallbacks beyond exact path overlap.
 
 use crate::domain::{FriggError, FriggResult};
 use crate::storage::{Storage, SubtreeCoverageProjection, db_runtime::i64_to_u64};

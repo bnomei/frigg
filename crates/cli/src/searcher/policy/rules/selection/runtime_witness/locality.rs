@@ -1,4 +1,6 @@
 //! Runtime-witness locality rules: workspace subtree affinity and path-witness sourcing.
+//!
+//! Applies workspace subtree affinity and path-witness sourcing bias within runtime recall.
 
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;

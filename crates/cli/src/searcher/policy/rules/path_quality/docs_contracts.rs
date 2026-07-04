@@ -1,4 +1,7 @@
 //! Path-quality rules for docs, readme, onboarding, and contract/error-taxonomy intent.
+//!
+//! Multipliers for docs, readme, onboarding, and contract intent separate from runtime path
+//! boosts.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

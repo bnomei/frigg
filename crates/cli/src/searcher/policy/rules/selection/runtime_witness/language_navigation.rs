@@ -1,4 +1,6 @@
 //! Runtime-witness language and navigation bias for query-language alignment.
+//!
+//! Aligns runtime witnesses with query language and navigation-runtime intent signals.
 
 use super::super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet};
 use super::super::super::super::facts::SelectionFacts;

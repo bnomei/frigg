@@ -1,4 +1,7 @@
 //! Selection diversification rules keyed on coverage state and runtime-family overlap.
+//!
+//! Uses coverage-state and runtime-family overlap facts to spread top-k across complementary
+//! witnesses.
 
 use super::super::super::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use super::super::super::facts::SelectionFacts;

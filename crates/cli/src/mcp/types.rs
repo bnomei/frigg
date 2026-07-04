@@ -79,6 +79,7 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = &[
     "playbook_replay",
     "playbook_compose_citations",
 ];
+/// Public tools declared read-only at the MCP hint layer for builds without playbook tools.
 #[cfg(not(feature = "playbook"))]
 pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = &[
     "workspace",
@@ -176,6 +177,7 @@ impl JsonSchema for MetadataObject {
     }
 }
 
+/// JSON Schema helper for optional `metadata` fields on MCP read responses.
 pub fn metadata_object_field_schema(generator: &mut SchemaGenerator) -> Schema {
     MetadataObject::json_schema(generator)
 }
@@ -188,6 +190,7 @@ pub enum ResponseMode {
     Full,
 }
 
+/// Presentation contract for bounded file reads: plain MCP text bytes versus structured JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadPresentationMode {

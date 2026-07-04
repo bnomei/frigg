@@ -1,4 +1,6 @@
 //! Path-quality multipliers for runtime-config artifacts and workspace package surfaces.
+//!
+//! Targets package manifests, tsconfig, and other workspace config surfaces under config intent.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

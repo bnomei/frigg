@@ -1,4 +1,7 @@
 //! Path-quality boosts for entrypoint runtime paths and build-workflow witnesses.
+//!
+//! Boosts bootstrap and build-workflow witnesses without conflating them with generic runtime
+//! docs.
 
 use crate::searcher::policy::dsl::{Predicate, ScoreRule, ScoreRuleSet, apply_score_rule_sets};
 use crate::searcher::policy::facts::PathQualityFacts;

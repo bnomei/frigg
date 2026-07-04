@@ -1,4 +1,7 @@
 //! Path-witness predicates over recall intent, query terms, and witness candidate shape.
+//!
+//! Leaves gate witness-recall eligibility from query terms, recall intent, and candidate shape
+//! before overlap scoring runs.
 
 #![allow(dead_code)]
 

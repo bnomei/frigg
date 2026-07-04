@@ -1,4 +1,7 @@
 //! Repository and manifest snapshot persistence.
+//!
+//! Persists repository roots and manifest snapshot rows that anchor retrieval projections,
+//! semantic heads, and MCP freshness checks.
 
 use crate::context_efficiency::{
     ManifestMetadataCacheKey, ManifestMetadataSummary, cached_manifest_metadata_summary,

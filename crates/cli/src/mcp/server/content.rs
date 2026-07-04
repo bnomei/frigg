@@ -1,5 +1,8 @@
 //! `read_file`, `read_match`, and `explore` implementations with path containment and runtime
 //! file-content window reuse.
+//!
+//! Enforces workspace path containment on reads and reuses file-content windows within a tool
+//! execution scope to limit duplicate IO.
 
 use super::*;
 use crate::mcp::types::ContextEfficiencyMetadata;

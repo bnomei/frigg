@@ -1,4 +1,7 @@
 //! Adopt planning types: per-repository target classification and roll-up counts for pending changes.
+//!
+//! Classifies adopt targets per repository and rolls up pending managed-block and JSON merge
+//! changes for dry-run output.
 
 use std::path::PathBuf;
 

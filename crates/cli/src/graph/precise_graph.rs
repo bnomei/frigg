@@ -1,4 +1,7 @@
 //! Precise SCIP query surface for symbols, occurrences, and navigation selection.
+//!
+//! Exposes read-only lookups and navigation candidate selection over ingested SCIP records so MCP
+//! tools and graph-channel expansion can prefer precise anchors when they are available.
 
 use super::*;
 

@@ -1,4 +1,7 @@
 //! Semantic read APIs for heads, embeddings, vector search, and chunk payloads.
+//!
+//! Read-only semantic paths for hybrid search and MCP tools; membership probes and payload loads
+//! stay separate so callers can budget embedding IO.
 
 use std::collections::{BTreeMap, BTreeSet};
 

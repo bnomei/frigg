@@ -1,4 +1,7 @@
 //! OpenAI embeddings HTTP provider with retry and normalized response mapping.
+//!
+//! Shapes document and query batches for the OpenAI embeddings API and maps responses into the
+//! shared `EmbeddingVector` contract used by indexing and semantic recall.
 
 use std::sync::Arc;
 

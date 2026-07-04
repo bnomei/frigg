@@ -650,6 +650,7 @@ pub(crate) fn append_context_efficiency_log_row(
     Ok(())
 }
 
+/// Aggregates optional `.frigg/context.jsonl` rows across workspace roots for one date window.
 pub fn summarize_context_logs_for_roots(
     roots: &[PathBuf],
     window: &ContextSummaryWindow,

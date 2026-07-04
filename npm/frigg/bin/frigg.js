@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// npm distribution shim: downloads the platform release binary into a local cache and forwards argv.
 "use strict";
 
 const childProcess = require("child_process");
