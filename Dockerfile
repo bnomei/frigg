@@ -2,6 +2,7 @@
 
 ARG FRIGG_VERSION=0.6.0
 ARG FRIGG_REPOSITORY=bnomei/frigg
+ARG FRIGG_RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot
 
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS fetch
 ARG FRIGG_VERSION
@@ -27,7 +28,7 @@ RUN set -eux; \
   chmod 755 frigg; \
   mkdir -p /tmp/frigg-workspace/.cache
 
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM ${FRIGG_RUNTIME_IMAGE}
 ARG FRIGG_VERSION
 
 ENV HOME=/workspace \

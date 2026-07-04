@@ -9,6 +9,11 @@ Frigg's release assets are the source of truth for binary installers:
 
 The npm publish job is skipped unless the release environment provides `NPM_TOKEN`.
 
+The Docker image keeps using GNU/glibc Linux assets so the default local semantic
+provider remains available. Its runtime base must provide glibc/libstdc++
+compatible with the pinned Linux release runner; the default is
+`gcr.io/distroless/cc-debian13:nonroot`.
+
 Default Docker image assets:
 
 ```bash
