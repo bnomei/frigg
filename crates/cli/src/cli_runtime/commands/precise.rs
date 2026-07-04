@@ -262,6 +262,7 @@ fn emit_precise_generator(
         fields.push(field("next", recommended_action_label(recommended_action)));
     }
     if let Some(detail) = summary.detail.as_deref() {
+        push_precise_detail_fields(&mut fields, detail);
         fields.push(field("detail", detail));
     }
 
@@ -276,6 +277,73 @@ fn emit_precise_generator(
         &fields,
         Some(path),
     );
+}
+
+fn push_precise_detail_fields(fields: &mut Vec<OutputField>, detail: &str) {
+    for (key, value) in parse_detail_key_values(detail) {
+        if key == "version" {
+            fields.push(field("version", value));
+        }
+    }
+}
+
+fn parse_detail_key_values(detail: &str) -> Vec<(String, String)> {
+    let spans = detail_key_spans(detail);
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    let first_non_whitespace = detail
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    if spans
+        .first()
+        .is_some_and(|(key_start, _, _)| *key_start != first_non_whitespace)
+    {
+        return Vec::new();
+    }
+
+    spans
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_key_start, value_start, key))| {
+            let next_key_start = spans
+                .get(index + 1)
+                .map(|(next_key_start, _, _)| *next_key_start)
+                .unwrap_or(detail.len());
+            let value_end = detail[..next_key_start].trim_end().len();
+            let value = detail[*value_start..value_end].trim();
+            (!value.is_empty()).then(|| (key.clone(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn detail_key_spans(detail: &str) -> Vec<(usize, usize, String)> {
+    let bytes = detail.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let key_start = index;
+        while index < bytes.len() && is_detail_key_byte(bytes[index]) {
+            index += 1;
+        }
+        if index > key_start && index < bytes.len() && bytes[index] == b'=' {
+            let key = detail[key_start..index].to_owned();
+            spans.push((key_start, index + 1, key));
+            index += 1;
+        } else {
+            index = key_start.saturating_add(1);
+        }
+    }
+    spans
+}
+
+fn is_detail_key_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
 }
 
 fn generation_output_level(status: WorkspacePreciseGenerationStatus) -> OutputLevel {

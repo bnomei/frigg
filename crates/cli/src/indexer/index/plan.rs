@@ -124,6 +124,18 @@ impl SemanticRefreshMode {
             Self::ReuseExisting => "reuse_existing",
         }
     }
+
+    pub fn is_noop(self) -> bool {
+        matches!(self, Self::Disabled | Self::ReuseExisting)
+    }
+
+    pub fn is_rebuild_like(self) -> bool {
+        matches!(self, Self::FullRebuild | Self::FullRebuildFromChangedOnly)
+    }
+
+    pub fn shows_path_delta(self) -> bool {
+        matches!(self, Self::IncrementalAdvance)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

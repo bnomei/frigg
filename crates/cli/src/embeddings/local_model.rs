@@ -11,6 +11,7 @@ use hf_hub::api::sync::ApiBuilder;
 use indicatif::{HumanBytes, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use thiserror::Error;
 
+use crate::human_output::{HumanBlock, HumanRow};
 use crate::settings::SemanticRuntimeConfig;
 
 /// Environment variable override for the local semantic model cache root.
@@ -21,6 +22,8 @@ const HF_HOME_ENV: &str = "HF_HOME";
 const HF_ENDPOINT_ENV: &str = "HF_ENDPOINT";
 const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
 const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
+const DOWNLOAD_PROGRESS_WIDTH: usize = 80;
+const DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE: &str = "1;38;2;90;205;210";
 #[cfg(test)]
 const DOWNLOAD_PROGRESS_SEMANTIC_COLOR: &str = "\x1b[1;38;2;90;205;210m";
 const DOWNLOAD_PROGRESS_TEMPLATE: &str = "{msg}";
@@ -576,23 +579,27 @@ fn stable_download_progress_style() -> ProgressStyle {
 }
 
 fn render_download_progress_card(rows: &[StableDownloadProgressRow], color: bool) -> String {
-    let mut output =
-        colorize_download_progress(color, format!("╭─○ {DOWNLOAD_PROGRESS_TITLE}").as_str());
-    for (index, row) in rows.iter().enumerate() {
-        output.push('\n');
-        let row_prefix = if index + 1 == rows.len() {
-            "╰─╮ "
-        } else {
-            "│   "
-        };
-        output.push_str(&colorize_download_progress(color, row_prefix));
-        output.push_str(&format!(
-            "{:<DOWNLOAD_PROGRESS_LABEL_WIDTH$} {}",
-            row.label,
-            download_progress_value(row.loaded_bytes, row.total_bytes)
-        ));
-    }
-    output
+    let rows = rows
+        .iter()
+        .map(|row| {
+            HumanRow::kv(
+                row.label.clone(),
+                download_progress_value(row.loaded_bytes, row.total_bytes),
+            )
+        })
+        .collect::<Vec<_>>();
+    HumanBlock::new(
+        DOWNLOAD_PROGRESS_TITLE,
+        rows,
+        "○",
+        DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE,
+        DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE,
+    )
+    .render_with_min_label_width(
+        color,
+        DOWNLOAD_PROGRESS_WIDTH,
+        Some(DOWNLOAD_PROGRESS_LABEL_WIDTH),
+    )
 }
 
 fn download_progress_value(loaded_bytes: usize, total_bytes: usize) -> String {
@@ -601,14 +608,6 @@ fn download_progress_value(loaded_bytes: usize, total_bytes: usize) -> String {
         HumanBytes(loaded_bytes as u64),
         HumanBytes(total_bytes as u64)
     )
-}
-
-fn colorize_download_progress(color: bool, value: &str) -> String {
-    if color {
-        format!("\x1b[1;38;2;90;205;210m{value}\x1b[0m")
-    } else {
-        value.to_owned()
-    }
 }
 
 #[cfg(test)]

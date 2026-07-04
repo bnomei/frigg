@@ -20,6 +20,8 @@ pub mod embeddings;
 /// Symbol and relation graph primitives that power navigation-style retrieval on top of heuristic
 /// and precise artifact ingestion.
 pub mod graph;
+#[doc(hidden)]
+pub mod human_output;
 /// Repository artifact construction, including manifests, index planning, symbol extraction, and
 /// semantic chunk generation that feed the search and MCP layers.
 pub mod indexer;
