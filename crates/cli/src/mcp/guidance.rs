@@ -150,8 +150,8 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "extended_only_tools": extended_only_tool_names(),
         "guidance": [
             "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.",
-            "Use search_hybrid only for broad discovery-style repository questions; use search_text for direct literal or regex text matches and search_symbol for known identifiers.",
-            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs in the checked-out workspace.",
+            "Use search_hybrid only for broad discovery-style repository questions; use search_text for rg-shaped literal or safe-regex code scans, including grouped alternation and path_regex narrowing; use search_symbol for known identifiers.",
+            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs in the checked-out workspace; shell rg is also appropriate for live-disk correctness checks and ripgrep-specific behavior outside search_text.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
@@ -171,7 +171,7 @@ fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
         "# Shell vs Frigg\n\n\
 Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.\n\n\
 - symbol, definition, reference, implementation, or call navigation\n\
-- exact literal or regex code searches with repository scoping and result handles\n\
+- exact literal, safe-regex, grouped-alternation, or `rg`-shaped code searches with repository scoping and result handles\n\
 - bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
 - evidence-backed answers or replayable source references\n\
@@ -180,7 +180,8 @@ Use shell tools only as the exception when the task is a trivial local operation
 - non-code file reads or exact scans\n\
 - generic filesystem or git inspection\n\
 - trivial one-offs where repository-aware evidence and bounded source reads add no value\n\n\
-Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for direct literal or regex text matches, and use `search_symbol` for known identifiers.\n\n\
+Use shell `rg` for live-disk correctness checks, suspected Frigg index/watch drift, or ripgrep-specific flags outside `search_text`.\n\n\
+Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits, and file-containment probes. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers.\n\n\
 `read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
 Semantic retrieval remains an optional accelerator, not the grounding layer.\n\
@@ -260,8 +261,8 @@ pub(crate) fn read_guidance_prompt(
     text.push_str(
         "Routing policy:\n\
 1. Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads.\n\
-2. Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet; use `search_text` for direct literal or regex text matches and `search_symbol` for known identifiers.\n\
-3. Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs.\n\
+2. Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet; use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation and `path_regex`; use `search_symbol` for known identifiers.\n\
+3. Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs. Use shell `rg` for live-disk correctness checks, suspected Frigg index/watch drift, or ripgrep-specific flags outside `search_text`.\n\
 4. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
 5. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
 6. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\

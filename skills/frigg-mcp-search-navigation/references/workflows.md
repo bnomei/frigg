@@ -55,8 +55,8 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 
 ## Security Or Pattern Sweep
 
-1. Start with `search_text` for direct literal or regex code patterns when repository-backed results and follow-up matter
-2. Upgrade to regex only when the literal underfills
+1. Start with `search_text` for direct literal, safe-regex, or `rg`-shaped code patterns when repository-backed results and follow-up matter
+2. Upgrade to safe regex only when the literal underfills
 3. Use `search_text` with `path_regex` when you need repository scoping or canonical-path results
 4. Use `read_match` or `read_file` to validate true positives; shell slices are still fine for throwaway local checks
 5. `find_references` or call hierarchy to measure blast radius

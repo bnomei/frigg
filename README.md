@@ -18,7 +18,7 @@ For individuals, Frigg keeps coding agents grounded in local source instead of b
 
 For teams, Frigg standardizes how agents inspect a repository. `frigg adopt`, shared MCP config, CI-cacheable `.frigg/` state, local safety boundaries, and repeatable search/navigation tools give every agent session the same evidence layer and vocabulary across large or unfamiliar codebases.
 
-Frigg is the default for code discovery, navigation, exact code search, and bounded source reads. Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository. Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.
+Frigg is the default for code discovery, navigation, exact code search, and bounded source reads. Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository. Use shell tools for non-code files, git and filesystem inspection, trivial one-off checks, and live-disk correctness checks when you suspect Frigg's indexed view missed a checked-out file.
 
 ## What Frigg is not
 
@@ -31,7 +31,7 @@ The narrow promise is local code evidence for AI agents: repository-aware search
 - One local MCP service that can serve multiple adopted repositories.
 - Local state in `.frigg/storage.sqlite3`.
 - Tree-sitter-backed document symbols and structural search for Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim.
-- Direct literal or regex code search with `search_text`.
+- Direct literal, safe-regex, and `rg`-shaped code scans with `search_text`.
 - Broad discovery with `search_hybrid`, blending lexical, path, graph, witness, optional semantic, and code-aware ranking signals.
 - Known-identifier lookup with `search_symbol`.
 - Bounded source reads with `read_file` and `read_match`.
@@ -161,11 +161,33 @@ The normal MCP loop is:
 2. Call `workspace_attach` if the session is detached or if you want a specific session-default repository.
 3. Call `workspace_current` when you need repository health, index freshness, precise status, or runtime task state.
 4. Use `search_hybrid` for broad discovery when you do not have an exact string, symbol, or path anchor.
-5. Use `search_text` for literal or regex matches.
+5. Use `search_text` for literal, safe-regex, and `rg`-shaped matches.
 6. Use `search_symbol` for known identifiers.
 7. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
 8. Use `read_file` when you already know the canonical repository-relative path.
 9. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries.
+
+`search_text` is the Frigg surface for the same class of code scans agents often run with `rg`: known literals, safe regexes, grouped alternation, `path_regex` narrowing, context windows, per-file limits, and "which files contain this?" probes. Frigg may execute the lexical work with its native scanner or with its ripgrep accelerator; either path still returns repository-scoped matches, canonical paths, `result_handle`, and per-row `match_id` values.
+
+For example, this `rg` scan:
+
+```bash
+rg -n 'PathBuf::from\(&.*path\)|Path::new\(&.*path\)|current_dir\(' crates
+```
+
+maps to:
+
+```json
+{
+  "query": "PathBuf::from\\(&.*path\\)|Path::new\\(&.*path\\)|current_dir\\(",
+  "pattern_type": "regex",
+  "path_regex": "^crates/.*\\.rs$",
+  "context_lines": 1,
+  "limit": 100
+}
+```
+
+Use shell `rg` when you need a live filesystem correctness check, ripgrep-specific flags outside `search_text`, or a quick diagnosis of suspected index/watch drift. When `rg` finds relevant code, return to Frigg for `read_match`, `read_file`, symbols, or navigation when possible.
 
 Example prompts:
 

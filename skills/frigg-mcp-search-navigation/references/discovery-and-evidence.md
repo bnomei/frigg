@@ -2,7 +2,7 @@
 
 ## `search_hybrid`
 
-Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal or regex text, and use `search_symbol` for known identifiers.
+Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal, safe-regex, or `rg`-shaped text scans, and use `search_symbol` for known identifiers.
 
 Important inputs:
 - `query`
@@ -94,9 +94,20 @@ Use `search_text` when you need direct exact or regex search plus Frigg semantic
 - `path_regex` narrowing
 - easy pivoting into `read_file`, navigation, or other MCP-backed follow-up
 
+Use it for the same class of code scans agents often reach for `rg` to run:
+- known literals
+- safe regexes
+- grouped alternation
+- `path_regex` path narrowing
+- context windows with `context_lines`
+- per-file shaping with `max_matches_per_file` or `collapse_by_file`
+- "which files contain this?" probes
+
 Notes:
+- Frigg may use its native scanner, its ripgrep accelerator, or a mixed path depending on configuration and file content
 - on macOS and Linux, Frigg may use `rg` internally as a lexical accelerator when it is available
 - that does not change the public flow: Frigg still owns candidate scope, ordering, metadata, and fallback behavior
+- shell `rg` remains appropriate for live-disk correctness checks, ripgrep-specific flags outside `search_text`, and suspected index/watch drift
 - for review-style work, `search_text` is often the best first proof surface when the repo has stable narrative terms, API names, or deterministic contract phrases
 
 Important inputs:

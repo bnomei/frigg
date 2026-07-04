@@ -135,14 +135,14 @@ pub struct ExploreResponse {
 /// Parameters for `search_text`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
-    /// Text or regex pattern to search for. Leading and trailing whitespace is trimmed.
+    /// Text or safe-regex pattern to search for, including grouped alternation. Leading and trailing whitespace is trimmed.
     pub query: String,
-    /// Match mode for `query`. Omit for exact literal search or set `regex` for safe-regex search.
+    /// Match mode for `query`. Omit for exact literal search or set `regex` for rg-shaped safe-regex search.
     pub pattern_type: Option<SearchPatternType>,
     /// Optional repository scope from `list_repositories`.
     pub repository_id: Option<String>,
     /// Optional safe regex over canonical repository-relative paths.
-    /// Use this to narrow code, docs, or runtime slices.
+    /// Use this like rg path scoping to narrow code, docs, or runtime slices.
     pub path_regex: Option<String>,
     /// Optional max matches. Frigg clamps the effective limit to the server search budget.
     pub limit: Option<usize>,
@@ -252,7 +252,7 @@ pub struct SearchHybridChannelWeightsParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
     /// Discovery-style natural-language or subsystem query.
-    /// For direct exact strings or regexes use `search_text`; for known identifiers use `search_symbol`.
+    /// For direct exact strings or safe regexes use `search_text`; for known identifiers use `search_symbol`.
     pub query: String,
     /// Optional repository scope.
     pub repository_id: Option<String>,
