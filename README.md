@@ -12,7 +12,7 @@ It turns each repository into searchable, navigable context for Codex, Claude, C
 
 Frigg is local-first OSS. It builds a repository model under `.frigg/`, serves it over MCP, and keeps the useful parts plain: a CLI, a local SQLite store, explicit client adoption, cacheable runtime state, and source-backed answers.
 
-[![asciicast](https://asciinema.org/a/1260121.svg)](https://asciinema.org/a/1260121)
+[![asciicast](https://raw.githubusercontent.com/bnomei/frigg/main/frigg.gif)](https://asciinema.org/a/1260121)
 
 ## Why Frigg
 
