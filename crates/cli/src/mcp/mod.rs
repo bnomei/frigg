@@ -19,6 +19,7 @@ pub use advanced::deep_search::{
 };
 pub use server::{
     FriggMcpServer, FriggMcpService, PreciseGraphBenchmarkSummary, SymbolCorpusBenchmarkSummary,
+    ToolCallDisplayEvent, ToolCallDisplaySink, ToolCallDisplayStatus,
     benchmark_build_symbol_corpora, benchmark_build_symbol_corpora_for_server,
     benchmark_precise_graph_for_server,
 };

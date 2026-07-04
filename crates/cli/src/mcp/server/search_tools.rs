@@ -32,6 +32,7 @@ mod tests;
 pub(crate) use self::hybrid::SearchHybridWarningContext;
 
 impl FriggMcpServer {
+    #[cfg(test)]
     pub(super) fn context_efficiency_metadata_for_controls<T>(
         include_context_efficiency: Option<bool>,
         log_enabled: bool,
@@ -41,6 +42,32 @@ impl FriggMcpServer {
             build().map(Some)
         } else if log_enabled {
             Ok(build().ok())
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(super) fn context_efficiency_metadata_for_tool_observers(
+        &self,
+        execution_context: &ReadOnlyToolExecutionContext,
+        include_context_efficiency: Option<bool>,
+        log_enabled: bool,
+        build: impl FnOnce() -> Result<ContextEfficiencyMetadata, ErrorData>,
+    ) -> Result<Option<ContextEfficiencyMetadata>, ErrorData> {
+        let display_enabled = self.tool_call_display_enabled();
+        if include_context_efficiency == Some(true) {
+            let metadata = build()?;
+            execution_context
+                .set_display_context_saved_percent(metadata.corpus_context_saved_percent_estimate);
+            Ok(Some(metadata))
+        } else if log_enabled || display_enabled {
+            let metadata = build().ok();
+            if let Some(metadata) = metadata.as_ref() {
+                execution_context.set_display_context_saved_percent(
+                    metadata.corpus_context_saved_percent_estimate,
+                );
+            }
+            Ok(metadata)
         } else {
             Ok(None)
         }

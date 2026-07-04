@@ -262,22 +262,24 @@ impl FriggMcpServer {
                         },
                     );
                     match_anchors = Some(Self::search_hybrid_provenance_match_summary(&matches));
-                    let context_efficiency = Self::context_efficiency_metadata_for_controls(
-                        params_for_blocking.include_context_efficiency,
-                        context_efficiency_log_enabled,
-                        || {
-                            Self::search_hybrid_context_efficiency_metadata(
-                                &scoped_workspaces,
-                                &matches,
-                                stage_attribution.as_ref(),
-                            )
-                        },
-                    )?
-                    .map(|mut metadata| {
-                        metadata.query_duration_ms =
-                            Some(Self::context_efficiency_elapsed_ms(query_started_at));
-                        metadata
-                    });
+                    let context_efficiency = server
+                        .context_efficiency_metadata_for_tool_observers(
+                            &execution_context_for_blocking,
+                            params_for_blocking.include_context_efficiency,
+                            context_efficiency_log_enabled,
+                            || {
+                                Self::search_hybrid_context_efficiency_metadata(
+                                    &scoped_workspaces,
+                                    &matches,
+                                    stage_attribution.as_ref(),
+                                )
+                            },
+                        )?
+                        .map(|mut metadata| {
+                            metadata.query_duration_ms =
+                                Some(Self::context_efficiency_elapsed_ms(query_started_at));
+                            metadata
+                        });
                     if let Some(context_efficiency) = context_efficiency.as_ref() {
                         Self::append_context_efficiency_log_for_workspaces(
                             "search_hybrid",

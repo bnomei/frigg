@@ -76,7 +76,7 @@ impl FriggMcpServer {
                         crate::context_efficiency::need_context_efficiency_with_log_state(
                             params_for_blocking.include_context_efficiency,
                             context_efficiency_log_enabled,
-                        );
+                        ) || server.tool_call_display_enabled();
                     let requested_max_bytes = params_for_blocking
                         .max_bytes
                         .unwrap_or(server.config.max_file_bytes);
@@ -171,8 +171,9 @@ impl FriggMcpServer {
                             context_efficiency: None,
                         };
                         if need_context_efficiency {
-                            let context_efficiency =
-                                Self::context_efficiency_metadata_for_controls(
+                            let context_efficiency = server
+                                .context_efficiency_metadata_for_tool_observers(
+                                    &execution_context_for_blocking,
                                     params_for_blocking.include_context_efficiency,
                                     context_efficiency_log_enabled,
                                     || {
@@ -244,19 +245,21 @@ impl FriggMcpServer {
                         context_efficiency: None,
                     };
                     if need_context_efficiency {
-                        let context_efficiency = Self::context_efficiency_metadata_for_controls(
-                            params_for_blocking.include_context_efficiency,
-                            context_efficiency_log_enabled,
-                            || {
-                                server.read_surface_context_efficiency_metadata(
-                                    &response.repository_id,
-                                    &response.path,
-                                    response.bytes,
-                                    None,
-                                    Some(Self::context_efficiency_elapsed_ms(query_started_at)),
-                                )
-                            },
-                        )?;
+                        let context_efficiency = server
+                            .context_efficiency_metadata_for_tool_observers(
+                                &execution_context_for_blocking,
+                                params_for_blocking.include_context_efficiency,
+                                context_efficiency_log_enabled,
+                                || {
+                                    server.read_surface_context_efficiency_metadata(
+                                        &response.repository_id,
+                                        &response.path,
+                                        response.bytes,
+                                        None,
+                                        Some(Self::context_efficiency_elapsed_ms(query_started_at)),
+                                    )
+                                },
+                            )?;
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
                             Self::append_context_efficiency_log_for_workspaces(
                                 provenance_for_blocking.tool_name,
@@ -375,6 +378,7 @@ impl FriggMcpServer {
     ) -> Result<ExploreResponse, ErrorData> {
         let execution_context =
             self.read_only_tool_execution_context("explore", params.repository_id.clone());
+        let execution_context_for_blocking = execution_context.clone();
         let params_for_blocking = params.clone();
         let server = self.clone();
         let execution = self
@@ -396,7 +400,7 @@ impl FriggMcpServer {
                         crate::context_efficiency::need_context_efficiency_with_log_state(
                             params_for_blocking.include_context_efficiency,
                             context_efficiency_log_enabled,
-                        );
+                        ) || server.tool_call_display_enabled();
                     let requested_context_lines = params_for_blocking
                         .context_lines
                         .unwrap_or(DEFAULT_CONTEXT_LINES);
@@ -748,19 +752,21 @@ impl FriggMcpServer {
                                 .map(|matched| matched.window.bytes)
                                 .fold(0usize, usize::saturating_add)
                         };
-                        let context_efficiency = Self::context_efficiency_metadata_for_controls(
-                            params_for_blocking.include_context_efficiency,
-                            context_efficiency_log_enabled,
-                            || {
-                                server.read_surface_context_efficiency_metadata(
-                                    &repository_id,
-                                    &display_path,
-                                    returned_source_bytes_estimate,
-                                    Some(scan.total_matches),
-                                    Some(Self::context_efficiency_elapsed_ms(query_started_at)),
-                                )
-                            },
-                        )?;
+                        let context_efficiency = server
+                            .context_efficiency_metadata_for_tool_observers(
+                                &execution_context_for_blocking,
+                                params_for_blocking.include_context_efficiency,
+                                context_efficiency_log_enabled,
+                                || {
+                                    server.read_surface_context_efficiency_metadata(
+                                        &repository_id,
+                                        &display_path,
+                                        returned_source_bytes_estimate,
+                                        Some(scan.total_matches),
+                                        Some(Self::context_efficiency_elapsed_ms(query_started_at)),
+                                    )
+                                },
+                            )?;
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
                             Self::append_context_efficiency_log_for_workspaces(
                                 "explore",

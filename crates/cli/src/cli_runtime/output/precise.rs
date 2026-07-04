@@ -129,36 +129,30 @@ fn format_human_precise_generator_start_line(
 }
 
 fn push_precise_detail_rows(rows: &mut Vec<HumanRow>, fields: &[OutputField]) {
-    let mut pushed = false;
-    for key in [
-        "version",
-        "failure_class",
-        "expected_output_path",
-        "artifact_path",
-        "reason",
-    ] {
-        if let Some(value) =
-            field_value(fields, key).filter(|value| !value.is_empty() && *value != "-")
-        {
-            rows.push(HumanRow::kv(human_field_label(key), value));
-            pushed = true;
-        }
-    }
-    if pushed {
-        return;
+    let structured_version =
+        field_value(fields, "version").filter(|value| !value.is_empty() && *value != "-");
+    if let Some(version) = structured_version {
+        rows.push(HumanRow::kv("version", version));
     }
 
     let Some(detail) = field_value(fields, "detail") else {
         return;
     };
+    let mut parsed = false;
+    let mut pushed = false;
     for (key, value) in parse_detail_key_values(detail) {
-        if matches!(key.as_str(), "generator" | "tool") {
+        parsed = true;
+        if matches!(key.as_str(), "generator" | "tool")
+            || (key == "version" && structured_version.is_some())
+        {
             continue;
         }
         push_human_row(rows, &human_field_label(&key), Some(value));
         pushed = true;
     }
-    if !pushed {
+    if !parsed {
+        push_field_row(rows, fields, "detail", "detail");
+    } else if !pushed && structured_version.is_none() {
         push_field_row(rows, fields, "detail", "detail");
     }
 }

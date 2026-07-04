@@ -6,6 +6,22 @@ use rmcp::model::ProgressNotificationParam;
 use crate::domain::{NormalizedWorkloadMetadata, WorkloadPrecisionMode};
 
 impl ReadOnlyToolExecutionContext {
+    pub(super) fn set_display_context_saved_percent(&self, percent: Option<f64>) {
+        if let Some(percent) = percent {
+            *self
+                .display_context_saved_percent
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(percent);
+        }
+    }
+
+    fn display_context_saved_percent(&self) -> Option<f64> {
+        *self
+            .display_context_saved_percent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub(super) fn normalized_workload(
         &self,
         repository_ids: &[String],
@@ -76,6 +92,8 @@ impl FriggMcpServer {
         ReadOnlyToolExecutionContext {
             tool_name,
             repository_hint,
+            started_at: Instant::now(),
+            display_context_saved_percent: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -122,7 +140,13 @@ impl FriggMcpServer {
         result: Result<T, ErrorData>,
         provenance_result: Result<(), ErrorData>,
     ) -> Result<T, ErrorData> {
-        self.finalize_with_provenance(context.tool_name, result, provenance_result)
+        self.finalize_with_provenance_timed(
+            context.tool_name,
+            context.started_at,
+            result,
+            provenance_result,
+            context.display_context_saved_percent(),
+        )
     }
 
     pub(super) async fn run_blocking_task<T, F>(
@@ -150,6 +174,63 @@ impl FriggMcpServer {
         normalized_workload: Option<NormalizedWorkloadMetadata>,
     ) -> ToolExecutionFinalization {
         ToolExecutionFinalization::new(source_refs, normalized_workload)
+    }
+
+    pub fn set_tool_call_display_sink(&self, sink: Option<ToolCallDisplaySink>) {
+        *self
+            .runtime_state
+            .tool_call_display_sink
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = sink;
+    }
+
+    pub(super) fn tool_call_display_enabled(&self) -> bool {
+        self.runtime_state
+            .tool_call_display_sink
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    pub(super) fn finalize_with_provenance_timed<T>(
+        &self,
+        tool_name: &str,
+        started_at: Instant,
+        result: Result<T, ErrorData>,
+        provenance_result: Result<(), ErrorData>,
+        context_saved_percent: Option<f64>,
+    ) -> Result<T, ErrorData> {
+        let duration_ms = Self::context_efficiency_elapsed_ms(started_at);
+        self.emit_tool_call_display_event(tool_name, duration_ms, &result, context_saved_percent);
+        self.finalize_with_provenance(tool_name, result, provenance_result)
+    }
+
+    fn emit_tool_call_display_event<T>(
+        &self,
+        tool_name: &str,
+        duration_ms: u64,
+        result: &Result<T, ErrorData>,
+        context_saved_percent: Option<f64>,
+    ) {
+        let sink = self
+            .runtime_state
+            .tool_call_display_sink
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(sink) = sink else {
+            return;
+        };
+        sink(ToolCallDisplayEvent {
+            tool_name: tool_name.to_owned(),
+            duration_ms,
+            status: if result.is_ok() {
+                ToolCallDisplayStatus::Ok
+            } else {
+                ToolCallDisplayStatus::Failed
+            },
+            context_saved_percent,
+        });
     }
 }
 

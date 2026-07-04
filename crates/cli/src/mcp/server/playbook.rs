@@ -7,6 +7,7 @@ impl FriggMcpServer {
         &self,
         playbook: DeepSearchPlaybook,
     ) -> Result<Json<PlaybookRunResponse>, ErrorData> {
+        let started_at = Instant::now();
         let playbook_id = Self::bounded_text(&playbook.playbook_id);
         let step_count = playbook.steps.len();
         let step_tools = playbook
@@ -40,13 +41,20 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("playbook_run", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "playbook_run",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     pub(super) async fn playbook_replay_impl(
         &self,
         params: PlaybookReplayParams,
     ) -> Result<Json<PlaybookReplayResponse>, ErrorData> {
+        let started_at = Instant::now();
         let playbook_id = Self::bounded_text(&params.playbook.playbook_id);
         let step_count = params.playbook.steps.len();
         let step_tools = params
@@ -94,13 +102,20 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("playbook_replay", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "playbook_replay",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     pub(super) async fn playbook_compose_citations_impl(
         &self,
         params: PlaybookComposeCitationsParams,
     ) -> Result<Json<PlaybookComposeCitationsResponse>, ErrorData> {
+        let started_at = Instant::now();
         let playbook_id = Self::bounded_text(&params.trace_artifact.playbook_id);
         let trace_schema = Self::bounded_text(&params.trace_artifact.trace_schema);
         let step_count = params.trace_artifact.step_count;
@@ -144,7 +159,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("playbook_compose_citations", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "playbook_compose_citations",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     fn playbook_budget_metadata_from_trace(trace: &DeepSearchTraceArtifact) -> Value {

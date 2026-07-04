@@ -29,7 +29,7 @@ impl FriggMcpServer {
                         crate::context_efficiency::need_context_efficiency_with_log_state(
                             params_for_blocking.include_context_efficiency,
                             context_efficiency_log_enabled,
-                        );
+                        ) || server.tool_call_display_enabled();
                     let query = params_for_blocking.query.trim().to_owned();
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
@@ -160,22 +160,24 @@ impl FriggMcpServer {
                     let mut presented =
                         server.present_search_text_response(response, &params_for_blocking)?;
                     if need_context_efficiency {
-                        let context_efficiency = Self::context_efficiency_metadata_for_controls(
-                            params_for_blocking.include_context_efficiency,
-                            context_efficiency_log_enabled,
-                            || {
-                                Self::search_text_context_efficiency_metadata(
-                                    &scoped_workspaces,
-                                    &presented.matches,
-                                    presented.total_matches,
-                                )
-                            },
-                        )?
-                        .map(|mut metadata| {
-                            metadata.query_duration_ms =
-                                Some(Self::context_efficiency_elapsed_ms(query_started_at));
-                            metadata
-                        });
+                        let context_efficiency = server
+                            .context_efficiency_metadata_for_tool_observers(
+                                &execution_context_for_blocking,
+                                params_for_blocking.include_context_efficiency,
+                                context_efficiency_log_enabled,
+                                || {
+                                    Self::search_text_context_efficiency_metadata(
+                                        &scoped_workspaces,
+                                        &presented.matches,
+                                        presented.total_matches,
+                                    )
+                                },
+                            )?
+                            .map(|mut metadata| {
+                                metadata.query_duration_ms =
+                                    Some(Self::context_efficiency_elapsed_ms(query_started_at));
+                                metadata
+                            });
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
                             Self::append_context_efficiency_log_for_workspaces(
                                 "search_text",

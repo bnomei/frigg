@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::io;
 
 use frigg::human_output::HumanRow;
-use frigg::indexer::{IndexPlan, IndexProgressEvent, IndexProgressStatus, SemanticRefreshMode};
+use frigg::indexer::{
+    IndexPlan, IndexProgressEvent, IndexProgressPhase, IndexProgressStatus, SemanticRefreshMode,
+};
 
 use super::fields::FieldBag;
 use super::human_block::{
@@ -13,7 +15,7 @@ use super::human_block::{
     human_symbol_with_color, human_terminal_width, human_title_token, human_uses_detail_rail,
     push_field_row, push_human_row, push_human_separator, short_identifier, truncate_display,
 };
-use super::human_topic::human_title_accent_color;
+use super::human_topic::{HumanTopic, human_severity_accent_color, human_title_accent_color};
 use super::{CliOutput, OutputField, OutputLevel, field};
 
 const MAX_VERBOSE_PATH_LINES: usize = 50;
@@ -110,13 +112,7 @@ pub(crate) fn format_human_index_plan_component(
     push_human_row(&mut rows, "snapshot", snapshot);
 
     let semantic = field_value(fields, "semantic").map(|semantic| {
-        let mut parts = vec![
-            semantic_mode_label(
-                parse_semantic_refresh_mode(semantic)
-                    .unwrap_or(SemanticRefreshMode::IncrementalAdvance),
-            )
-            .to_owned(),
-        ];
+        let mut parts = vec![human_mode_label(semantic)];
         if let Some(provider) = field_value(fields, "provider").filter(|value| *value != "-") {
             parts.push(provider.to_owned());
         }
@@ -360,20 +356,316 @@ pub(crate) fn human_index_complete_rows(fields: &[OutputField]) -> Vec<HumanRow>
 
 pub(crate) fn format_human_index_progress_event(
     event: &IndexProgressEvent,
-    extra_fields: &[OutputField],
+    _extra_fields: &[OutputField],
     color: bool,
     width: usize,
 ) -> String {
-    let fields = index_progress_fields(event, extra_fields);
     let level = index_progress_level(event.status);
-    format_human_index_phase_row_with_semantic(
-        level,
-        &fields,
-        event.semantic_refresh_mode,
-        None,
-        color,
-        width,
-    )
+    let title = human_index_progress_title(event);
+    let accent = index_progress_accent(level, event);
+    let symbol = colorize(color, accent, index_progress_symbol(event.status));
+    let detail = human_index_progress_detail(event);
+    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
+    let title_budget = content_width.saturating_sub(2);
+    let detail_budget = detail
+        .as_ref()
+        .map(|detail| display_width(detail).min(content_width / 2))
+        .unwrap_or(0);
+    let title_budget = title_budget.saturating_sub(detail_budget);
+    let title = truncate_display(&title, title_budget);
+    let mut line = format!(
+        "{HUMAN_ACTIVITY_PREFIX}{symbol} {}",
+        colorize(color, accent, &title)
+    );
+    if let Some(detail) = detail {
+        let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
+        let remaining = width.saturating_sub(used_width + 2);
+        if remaining >= 8 {
+            line.push_str("  ");
+            line.push_str(&colorize(color, "2", truncate_display(&detail, remaining)));
+        }
+    }
+    line
+}
+
+fn index_progress_symbol(status: IndexProgressStatus) -> &'static str {
+    match status {
+        IndexProgressStatus::Starting => "│",
+        IndexProgressStatus::Ok => "●",
+        IndexProgressStatus::Skipped => "○",
+        IndexProgressStatus::Warning => "▲",
+    }
+}
+
+fn index_progress_accent(level: OutputLevel, event: &IndexProgressEvent) -> &'static str {
+    human_severity_accent_color(level, event.status.as_str())
+        .unwrap_or_else(|| index_progress_topic(event.phase).color())
+}
+
+fn index_progress_topic(phase: IndexProgressPhase) -> HumanTopic {
+    match phase {
+        IndexProgressPhase::InitializeStorage
+        | IndexProgressPhase::CheckpointWal
+        | IndexProgressPhase::PruneManifestSnapshots => HumanTopic::Storage,
+        IndexProgressPhase::SemanticRefresh => HumanTopic::Semantic,
+        IndexProgressPhase::LoadManifest
+        | IndexProgressPhase::BuildManifest
+        | IndexProgressPhase::BuildPlan
+        | IndexProgressPhase::PersistManifestSnapshot
+        | IndexProgressPhase::RefreshRetrievalProjections => HumanTopic::Index,
+    }
+}
+
+fn human_index_progress_title(event: &IndexProgressEvent) -> String {
+    if event.phase == IndexProgressPhase::SemanticRefresh {
+        return human_semantic_progress_title(event);
+    }
+    let title = match (event.phase, event.status) {
+        (IndexProgressPhase::InitializeStorage, IndexProgressStatus::Starting) => {
+            "Opening storage..."
+        }
+        (IndexProgressPhase::InitializeStorage, IndexProgressStatus::Ok) => "Storage open",
+        (IndexProgressPhase::InitializeStorage, IndexProgressStatus::Skipped) => {
+            "Storage already open"
+        }
+        (IndexProgressPhase::LoadManifest, IndexProgressStatus::Starting) => "Loading manifest...",
+        (IndexProgressPhase::LoadManifest, IndexProgressStatus::Ok) => "Manifest loaded",
+        (IndexProgressPhase::LoadManifest, IndexProgressStatus::Skipped) => "Manifest load skipped",
+        (IndexProgressPhase::BuildManifest, IndexProgressStatus::Starting) => "Walking files...",
+        (IndexProgressPhase::BuildManifest, IndexProgressStatus::Ok) => "Files scanned",
+        (IndexProgressPhase::BuildManifest, IndexProgressStatus::Skipped) => "File scan skipped",
+        (IndexProgressPhase::BuildPlan, IndexProgressStatus::Starting) => "Planning index...",
+        (IndexProgressPhase::BuildPlan, IndexProgressStatus::Ok) => "Index planned",
+        (IndexProgressPhase::BuildPlan, IndexProgressStatus::Skipped) => "Index plan skipped",
+        (IndexProgressPhase::PersistManifestSnapshot, IndexProgressStatus::Starting) => {
+            "Writing manifest..."
+        }
+        (IndexProgressPhase::PersistManifestSnapshot, IndexProgressStatus::Ok) => {
+            "Manifest written"
+        }
+        (IndexProgressPhase::PersistManifestSnapshot, IndexProgressStatus::Skipped) => {
+            "Manifest unchanged"
+        }
+        (IndexProgressPhase::RefreshRetrievalProjections, IndexProgressStatus::Starting) => {
+            "Refreshing search projections..."
+        }
+        (IndexProgressPhase::RefreshRetrievalProjections, IndexProgressStatus::Ok) => {
+            "Search projections updated"
+        }
+        (IndexProgressPhase::RefreshRetrievalProjections, IndexProgressStatus::Skipped) => {
+            "Search projections current"
+        }
+        (IndexProgressPhase::PruneManifestSnapshots, IndexProgressStatus::Starting) => {
+            "Pruning old snapshots..."
+        }
+        (IndexProgressPhase::PruneManifestSnapshots, IndexProgressStatus::Ok) => {
+            "Old snapshots pruned"
+        }
+        (IndexProgressPhase::PruneManifestSnapshots, IndexProgressStatus::Skipped) => {
+            "Snapshot retention unchanged"
+        }
+        (IndexProgressPhase::CheckpointWal, IndexProgressStatus::Starting) => {
+            "Saving storage checkpoint..."
+        }
+        (IndexProgressPhase::CheckpointWal, IndexProgressStatus::Ok) => "Storage checkpoint saved",
+        (IndexProgressPhase::CheckpointWal, IndexProgressStatus::Skipped) => {
+            "Storage checkpoint skipped"
+        }
+        (IndexProgressPhase::CheckpointWal, IndexProgressStatus::Warning) => {
+            "Storage checkpoint warning"
+        }
+        _ => return human_title_token(event.phase.as_str()),
+    };
+    title.to_owned()
+}
+
+fn human_index_progress_detail(event: &IndexProgressEvent) -> Option<String> {
+    let parts = match event.phase {
+        IndexProgressPhase::InitializeStorage => vec![progress_duration_detail(event)],
+        IndexProgressPhase::LoadManifest => vec![
+            event
+                .previous_snapshot_id
+                .as_deref()
+                .filter(|value| *value != "-")
+                .map(|snapshot| format!("previous {}", short_identifier(snapshot))),
+            event
+                .files_scanned
+                .filter(|files| *files != 0)
+                .map(|files| format!("{files} previous files")),
+            progress_duration_detail(event),
+        ],
+        IndexProgressPhase::BuildManifest => vec![
+            event.files_scanned.map(|files| format!("{files} scanned")),
+            event
+                .diagnostics
+                .filter(|diagnostics| *diagnostics != 0)
+                .map(|diagnostics| format!("{diagnostics} diagnostics")),
+            progress_duration_detail(event),
+        ],
+        IndexProgressPhase::BuildPlan => vec![
+            progress_delta_detail(event),
+            progress_semantic_records_detail(event),
+            progress_snapshot_detail(event),
+            progress_duration_detail(event),
+        ],
+        IndexProgressPhase::PersistManifestSnapshot
+        | IndexProgressPhase::RefreshRetrievalProjections => {
+            vec![
+                progress_snapshot_detail(event),
+                progress_duration_detail(event),
+            ]
+        }
+        IndexProgressPhase::CheckpointWal => {
+            vec![
+                progress_storage_checkpoint_detail(event),
+                progress_duration_detail(event),
+            ]
+        }
+        IndexProgressPhase::SemanticRefresh => vec![
+            progress_semantic_records_detail(event),
+            progress_semantic_mode_detail(event),
+            progress_semantic_path_delta(event),
+            progress_duration_detail(event),
+            progress_semantic_duration_per_doc_detail(event),
+        ],
+        IndexProgressPhase::PruneManifestSnapshots => vec![
+            event
+                .pruned_snapshots
+                .filter(|pruned| *pruned != 0)
+                .map(|pruned| format!("{pruned} removed")),
+            progress_duration_detail(event),
+        ],
+    };
+    let parts = parts.into_iter().flatten().collect::<Vec<_>>();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
+}
+
+fn human_semantic_progress_title(event: &IndexProgressEvent) -> String {
+    let title = match (event.status, event.semantic_refresh_mode) {
+        (IndexProgressStatus::Starting, Some(mode)) if mode.is_rebuild_like() => {
+            "Rebuilding semantic chunks..."
+        }
+        (IndexProgressStatus::Starting, Some(SemanticRefreshMode::IncrementalAdvance))
+            if progress_semantic_zero_delta(event) && progress_semantic_zero_records(event) =>
+        {
+            "Advancing semantic snapshot..."
+        }
+        (IndexProgressStatus::Starting, _) => "Embedding semantic chunks...",
+        (IndexProgressStatus::Ok, Some(mode)) if mode.is_rebuild_like() => {
+            "Semantic chunks rebuilt"
+        }
+        (IndexProgressStatus::Ok, Some(SemanticRefreshMode::IncrementalAdvance))
+            if progress_semantic_zero_delta(event) && progress_semantic_zero_records(event) =>
+        {
+            "Semantic snapshot advanced"
+        }
+        (IndexProgressStatus::Ok, _) => "Semantic chunks stored",
+        (IndexProgressStatus::Skipped, Some(SemanticRefreshMode::ReuseExisting)) => {
+            "Semantic snapshot current"
+        }
+        (IndexProgressStatus::Skipped, Some(SemanticRefreshMode::Disabled)) => {
+            "Semantic refresh disabled"
+        }
+        (IndexProgressStatus::Skipped, _) => "Semantic refresh skipped",
+        _ => "Semantic refresh",
+    };
+    title.to_owned()
+}
+
+fn progress_duration_detail(event: &IndexProgressEvent) -> Option<String> {
+    event.duration_ms.map(|duration| format!("{duration}ms"))
+}
+
+fn progress_delta_detail(event: &IndexProgressEvent) -> Option<String> {
+    Some(format!(
+        "{} changed · {} deleted",
+        event.files_changed?, event.files_deleted?
+    ))
+}
+
+fn progress_semantic_records_detail(event: &IndexProgressEvent) -> Option<String> {
+    event
+        .records
+        .filter(|records| *records != 0)
+        .map(|records| format!("{records} records"))
+}
+
+fn progress_semantic_mode_detail(event: &IndexProgressEvent) -> Option<String> {
+    match event.semantic_refresh_mode {
+        Some(SemanticRefreshMode::FullRebuild) => Some("full rebuild".to_owned()),
+        Some(SemanticRefreshMode::FullRebuildFromChangedOnly) => {
+            Some("changed-only rebuild".to_owned())
+        }
+        Some(SemanticRefreshMode::ReuseExisting)
+            if event.status != IndexProgressStatus::Skipped =>
+        {
+            Some("snapshot current".to_owned())
+        }
+        Some(SemanticRefreshMode::Disabled) if event.status != IndexProgressStatus::Skipped => {
+            Some("disabled".to_owned())
+        }
+        Some(SemanticRefreshMode::IncrementalAdvance)
+            if progress_semantic_zero_delta(event) && progress_semantic_zero_records(event) =>
+        {
+            Some("metadata advance".to_owned())
+        }
+        _ => None,
+    }
+}
+
+fn progress_semantic_path_delta(event: &IndexProgressEvent) -> Option<String> {
+    if event
+        .semantic_refresh_mode
+        .is_some_and(|mode| !mode.shows_path_delta())
+    {
+        return None;
+    }
+    match (event.changed_paths, event.deleted_paths) {
+        (Some(changed), Some(deleted)) => Some(format!("{changed} changed · {deleted} deleted")),
+        _ => progress_delta_detail(event),
+    }
+}
+
+fn progress_semantic_zero_delta(event: &IndexProgressEvent) -> bool {
+    let changed = event.changed_paths.or(event.files_changed);
+    let deleted = event.deleted_paths.or(event.files_deleted);
+    matches!((changed, deleted), (Some(0), Some(0)))
+}
+
+fn progress_semantic_zero_records(event: &IndexProgressEvent) -> bool {
+    matches!(event.records, None | Some(0))
+}
+
+fn progress_semantic_duration_per_doc_detail(event: &IndexProgressEvent) -> Option<String> {
+    let duration_ms = event.duration_ms?;
+    let records = event.records? as u128;
+    if records == 0 {
+        return None;
+    }
+    Some(format!(
+        "{}ms/doc",
+        super::human_block::format_per_doc_duration(duration_ms, records)
+    ))
+}
+
+fn progress_snapshot_detail(event: &IndexProgressEvent) -> Option<String> {
+    event
+        .snapshot_id
+        .as_deref()
+        .filter(|value| *value != "-")
+        .map(|snapshot| format!("manifest {}", short_identifier(snapshot)))
+}
+
+fn progress_storage_checkpoint_detail(event: &IndexProgressEvent) -> Option<String> {
+    event
+        .snapshot_id
+        .as_deref()
+        .filter(|value| *value != "-")
+        .map(|snapshot| format!("manifest checkpoint {}", short_identifier(snapshot)))
 }
 
 /// Emits one UI-agnostic index progress snapshot through the CLI output policy.
@@ -927,16 +1219,6 @@ fn storage_checkpoint_detail(fields: &[OutputField]) -> Option<String> {
     field_value(fields, "snapshot")
         .filter(|value| *value != "-")
         .map(|snapshot| format!("manifest checkpoint {}", short_identifier(snapshot)))
-}
-
-fn semantic_mode_label(mode: SemanticRefreshMode) -> &'static str {
-    match mode {
-        SemanticRefreshMode::Disabled => "disabled",
-        SemanticRefreshMode::FullRebuild => "full rebuild",
-        SemanticRefreshMode::FullRebuildFromChangedOnly => "changed-only rebuild",
-        SemanticRefreshMode::IncrementalAdvance => "incremental advance",
-        SemanticRefreshMode::ReuseExisting => "snapshot current",
-    }
 }
 
 fn parse_semantic_refresh_mode(value: &str) -> Option<SemanticRefreshMode> {

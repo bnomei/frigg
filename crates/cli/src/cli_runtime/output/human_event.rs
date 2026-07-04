@@ -3,7 +3,7 @@ use frigg::human_output::HumanRow;
 use super::human_block::{
     HumanMarkerKind, compact_human_fields, field_is, field_value, format_human_activity_line,
     format_human_card, format_human_component, format_human_continuation,
-    format_human_progress_component, human_event_title, human_file_counts,
+    format_human_progress_component, human_event_title, human_field_value, human_file_counts,
     human_init_complete_rows, human_precise_counts, human_prune_complete_rows,
     human_repair_complete_rows, human_rows_from_fields, human_title_token, human_uses_detail_rail,
     push_field_row, push_human_row, push_human_separator,
@@ -28,11 +28,15 @@ pub(crate) enum HumanEventKind {
     Watch,
     PreciseGenerator,
     StorageRepair,
+    ToolCall,
     Activity,
 }
 
 impl HumanEventKind {
     fn classify(level: OutputLevel, area: &str, event: &str, fields: &[OutputField]) -> Self {
+        if area == "tool" && event == "call" {
+            return Self::ToolCall;
+        }
         if level == OutputLevel::Error {
             return Self::Error;
         }
@@ -137,10 +141,37 @@ pub(crate) fn format_human_event_with_width(
         HumanEventKind::StorageRepair => {
             format_human_storage_repair_card(level, fields, path, color, width)
         }
+        HumanEventKind::ToolCall => format_human_tool_call_row(level, fields, color, width),
         HumanEventKind::Activity => {
             format_human_activity_row(level, area, event, fields, path, color, width)
         }
     }
+}
+
+fn format_human_tool_call_row(
+    level: OutputLevel,
+    fields: &[OutputField],
+    color: bool,
+    width: usize,
+) -> String {
+    let title = field_value(fields, "tool").unwrap_or("tool").to_owned();
+    let mut details = Vec::new();
+    if let Some(duration_ms) = field_value(fields, "duration_ms") {
+        details.push(human_field_value("duration_ms", &duration_ms));
+    }
+    if let Some(saved_percent) = field_value(fields, "context_saved_percent") {
+        details.push(format!("{saved_percent} saved"));
+    }
+    format_human_activity_line(
+        level,
+        fields,
+        title,
+        details.join(" · "),
+        HumanMarkerKind::Tool,
+        None,
+        color,
+        width,
+    )
 }
 
 fn format_human_start_card(

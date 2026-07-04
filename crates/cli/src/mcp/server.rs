@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, RwLock,
+    Arc, Mutex, RwLock,
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -184,6 +184,33 @@ pub struct PreciseGraphBenchmarkSummary {
     pub reused_cache: bool,
 }
 
+/// Completion status for a display-only MCP tool call event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallDisplayStatus {
+    Ok,
+    Failed,
+}
+
+impl ToolCallDisplayStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Display-only summary emitted when an MCP tool call completes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCallDisplayEvent {
+    pub tool_name: String,
+    pub duration_ms: u64,
+    pub status: ToolCallDisplayStatus,
+    pub context_saved_percent: Option<f64>,
+}
+
+pub type ToolCallDisplaySink = Arc<dyn Fn(ToolCallDisplayEvent) + Send + Sync + 'static>;
+
 #[doc(hidden)]
 pub fn benchmark_build_symbol_corpora_for_server(
     server: &FriggMcpServer,
@@ -338,6 +365,7 @@ struct FriggMcpRuntimeState {
     precise_generation_status_cache:
         Arc<RwLock<BTreeMap<String, CachedWorkspacePreciseGeneration>>>,
     precise_generation_pending_dirty_paths: PendingPreciseDirtyPathMap,
+    tool_call_display_sink: Arc<RwLock<Option<ToolCallDisplaySink>>>,
 }
 
 #[derive(Clone)]
@@ -384,10 +412,12 @@ struct FriggMcpCacheState {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct ReadOnlyToolExecutionContext {
     pub(super) tool_name: &'static str,
     pub(super) repository_hint: Option<String>,
+    pub(super) started_at: Instant,
+    display_context_saved_percent: Arc<Mutex<Option<f64>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -489,6 +519,7 @@ impl FriggMcpServer {
                 runtime_cache_telemetry: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generation_status_cache: Arc::new(RwLock::new(BTreeMap::new())),
                 precise_generation_pending_dirty_paths: Arc::new(RwLock::new(BTreeMap::new())),
+                tool_call_display_sink: Arc::new(RwLock::new(None)),
             },
             session_state: FriggMcpSessionState::new(workspace_registry, watch_runtime),
             cache_state: FriggMcpCacheState {
@@ -830,7 +861,13 @@ impl FriggMcpServer {
         if let Some(guard) = rollback_guard {
             guard.disarm();
         }
-        self.finalize_with_provenance("workspace_attach", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "workspace_attach",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     #[tool(
@@ -847,6 +884,7 @@ impl FriggMcpServer {
         params: Parameters<WorkspaceDetachParams>,
     ) -> Result<Json<WorkspaceDetachResponse>, ErrorData> {
         let params = params.0;
+        let started_at = Instant::now();
         let repository_id = params
             .repository_id
             .or_else(|| self.current_repository_id())
@@ -894,7 +932,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("workspace_detach", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "workspace_detach",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     #[tool(
@@ -1081,7 +1125,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("workspace_prepare", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "workspace_prepare",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     fn capped_workspace_index_paths(paths: &[String]) -> (Vec<String>, bool) {
@@ -1341,7 +1391,13 @@ impl FriggMcpServer {
                 &result,
             )
             .await;
-        self.finalize_with_provenance("workspace_index", result, provenance_result)
+        self.finalize_with_provenance_timed(
+            "workspace_index",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
     }
 
     #[tool(

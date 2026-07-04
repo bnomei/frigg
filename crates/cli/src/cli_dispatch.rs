@@ -168,6 +168,11 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
         Arc::clone(&runtime_task_registry),
         Arc::clone(&validated_manifest_candidate_cache),
     );
+    if cli_output.tui_enabled() {
+        server.set_tool_call_display_sink(Some(Arc::new(move |event| {
+            let _ = cli_output.tool_call_event(event);
+        })));
+    }
     // Watch supervisor starts only when the resolved transport enables incremental freshness.
     let watch_runtime = maybe_start_watch_runtime_with_reporter(
         &watch_runtime_config,

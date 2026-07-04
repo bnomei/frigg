@@ -35,6 +35,7 @@ pub(crate) enum HumanMarkerKind {
     Metadata,
     Progress,
     Checkpoint,
+    Tool,
 }
 
 pub(crate) fn format_human_component(
@@ -579,6 +580,9 @@ pub(crate) fn human_symbol(
     fields: FieldBag<'_>,
     marker_kind: HumanMarkerKind,
 ) -> &'static str {
+    if marker_kind == HumanMarkerKind::Tool {
+        return "◇";
+    }
     let status = fields.value("status").unwrap_or_default();
     match (level, status) {
         (OutputLevel::Error, _) | (_, "failed") | (_, "blocked") => "×",

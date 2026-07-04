@@ -1126,6 +1126,66 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
 }
 
 #[tokio::test]
+async fn core_search_text_emits_display_savings_without_response_opt_in() {
+    let workspace_root = temp_workspace_root("search-text-display-context-efficiency");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub fn display_context_efficiency_marker() {}\n",
+    )
+    .expect("failed to seed source");
+
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-001",
+        &["src/lib.rs"],
+    );
+    let events = Arc::new(Mutex::new(Vec::<ToolCallDisplayEvent>::new()));
+    let captured_events = Arc::clone(&events);
+    server.set_tool_call_display_sink(Some(Arc::new(move |event| {
+        captured_events
+            .lock()
+            .expect("display event mutex should not be poisoned")
+            .push(event);
+    })));
+
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "display_context_efficiency_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            response_mode: None,
+            include_context_efficiency: None,
+            ..Default::default()
+        }))
+        .await
+        .expect("compact search_text should succeed")
+        .0;
+
+    assert!(
+        response
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.context_efficiency.as_ref())
+            .is_none(),
+        "display-only context savings must not attach response metadata"
+    );
+    let events = events
+        .lock()
+        .expect("display event mutex should not be poisoned");
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.tool_name, "search_text");
+    assert_eq!(event.status, ToolCallDisplayStatus::Ok);
+    assert!(event.context_saved_percent.is_some());
+}
+
+#[tokio::test]
 async fn core_search_hybrid_compact_opt_in_keeps_context_efficiency_metadata() {
     let workspace_root = temp_workspace_root("search-hybrid-compact-context-efficiency");
     fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");

@@ -4,10 +4,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frigg::domain::model::{ReferenceMatchKind, stable_repository_id_for_root};
-use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     DocumentSymbolsParams, DocumentSymbolsResponse, ExploreAnchor, ExploreCursor, ExploreOperation,
     ExploreParams, FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
@@ -22,6 +22,7 @@ use frigg::mcp::types::{
     WorkspaceIndexComponentState, WorkspacePreciseState, WorkspaceResolveMode,
     WorkspaceStorageIndexState,
 };
+use frigg::mcp::{FriggMcpServer, ToolCallDisplayEvent, ToolCallDisplayStatus};
 use frigg::settings::{
     FriggConfig, RuntimeProfile, SemanticRuntimeConfig, SemanticRuntimeCredentials,
     SemanticRuntimeProvider,

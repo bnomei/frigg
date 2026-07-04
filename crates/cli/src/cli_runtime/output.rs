@@ -5,6 +5,8 @@ use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use frigg::mcp::{ToolCallDisplayEvent, ToolCallDisplayStatus};
+
 mod fields;
 mod human_block;
 mod human_event;
@@ -232,6 +234,46 @@ impl CliOutput {
     ) -> io::Result<()> {
         self.progress_event(level, area, event, fields, path)
     }
+
+    pub(crate) fn tool_call_event(self, event: ToolCallDisplayEvent) -> io::Result<()> {
+        if !self.tui_enabled() {
+            return Ok(());
+        }
+        let level = match event.status {
+            ToolCallDisplayStatus::Ok => OutputLevel::Ok,
+            ToolCallDisplayStatus::Failed => OutputLevel::Error,
+        };
+        let mut fields = vec![
+            field("status", event.status.as_str()),
+            field("tool", event.tool_name),
+            field("duration_ms", event.duration_ms),
+        ];
+        if let Some(percent) = format_context_saved_percent(event.context_saved_percent) {
+            fields.push(field("context_saved_percent", percent));
+        }
+        let color = human_color_enabled();
+        write_human_stderr_block(
+            &format_human_event(level, "tool", "call", &fields, None, color),
+            color,
+        )
+    }
+}
+
+fn format_context_saved_percent(percent: Option<f64>) -> Option<String> {
+    let percent = percent?;
+    if !percent.is_finite() {
+        return None;
+    }
+    let rounded = (percent * 100.0).round() / 100.0;
+    let mut value = format!("{rounded:.2}");
+    while value.contains('.') && value.ends_with('0') {
+        value.pop();
+    }
+    if value.ends_with('.') {
+        value.pop();
+    }
+    value.push('%');
+    Some(value)
 }
 
 pub(crate) fn format_output_event_line(
@@ -337,6 +379,7 @@ pub(crate) fn error_was_reported(error: &(dyn Error + 'static)) -> bool {
 mod tests {
     use frigg::human_output::HumanRow;
 
+    use super::format_context_saved_percent;
     use super::{
         HUMAN_COLOR_ACTION_CREATED, HUMAN_COLOR_ACTION_DELETED, HUMAN_COLOR_ACTION_MODIFIED,
         HUMAN_COLOR_TOPIC_INDEX, HUMAN_COLOR_TOPIC_PRECISE, HUMAN_COLOR_TOPIC_SEMANTIC,
@@ -762,6 +805,34 @@ mod tests {
     }
 
     #[test]
+    fn human_index_plan_preserves_semantic_mode_field_wording() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "plan",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("mode", "changed"),
+                field("snapshot_plan", "persist_new"),
+                field("previous", "snapshot-old"),
+                field("next", "snapshot-new"),
+                field("semantic", "full_rebuild_from_changed_only"),
+                field("provider", "local"),
+                field("semantic_records", 4),
+                field("changed", 3),
+                field("deleted", 0),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("full rebuild from changed only · local · 4 records"));
+        assert!(!output.contains("changed-only rebuild · local"));
+    }
+
+    #[test]
     fn human_index_phase_rows_describe_current_work_without_key_value_noise() {
         let output = format_human_event_with_width(
             OutputLevel::Info,
@@ -1154,6 +1225,37 @@ mod tests {
     }
 
     #[test]
+    fn human_precise_generator_failure_keeps_detail_with_failure_class() {
+        let output = format_human_event_with_width(
+            OutputLevel::Warn,
+            "precise",
+            "generator",
+            &[
+                field("status", "failed"),
+                field("repo", "repo-001"),
+                field("generator", "rust"),
+                field("language", "rust"),
+                field("tool", "rust-analyzer"),
+                field("artifacts", 0),
+                field("bytes", 0),
+                field("duration_ms", 0),
+                field("failure_class", "missing_tool"),
+                field("next", "install_tool"),
+                field(
+                    "detail",
+                    "precise generator tool 'rust-analyzer' is not installed",
+                ),
+            ],
+            Some("/repo/.frigg/scip/rust.scip"),
+            false,
+            120,
+        );
+
+        assert!(output.contains("precise generator tool 'rust-analyzer' is not installed"));
+        assert!(output.contains("next      install_tool"));
+    }
+
+    #[test]
     fn human_precise_generator_start_renders_progress_line_only() {
         let output = format_human_event_with_width(
             OutputLevel::Info,
@@ -1295,6 +1397,40 @@ mod tests {
         assert!(output.contains("1 generators · 1 ok"));
         assert!(!output.contains("diagnostics walk"));
         assert!(!output.contains("precise generators"));
+    }
+
+    #[test]
+    fn human_tool_call_uses_diamond_and_metadata_without_equals() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "tool",
+            "call",
+            &[
+                field("status", "ok"),
+                field("tool", "search_hybrid"),
+                field("duration_ms", 1008),
+                field("context_saved_percent", "100%"),
+            ],
+            None,
+            false,
+            72,
+        );
+
+        assert_eq!(output, "  ◇ search_hybrid  1008ms · 100% saved");
+        assert!(!output.contains('='));
+    }
+
+    #[test]
+    fn tool_call_context_saved_percent_trims_trailing_zeroes() {
+        assert_eq!(
+            format_context_saved_percent(Some(96.4)).as_deref(),
+            Some("96.4%")
+        );
+        assert_eq!(
+            format_context_saved_percent(Some(100.0)).as_deref(),
+            Some("100%")
+        );
+        assert_eq!(format_context_saved_percent(Some(f64::NAN)), None);
     }
 
     #[test]
