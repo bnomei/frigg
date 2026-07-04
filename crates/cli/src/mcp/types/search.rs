@@ -251,7 +251,7 @@ pub struct SearchHybridChannelWeightsParams {
 /// Parameters for `search_hybrid`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
-    /// Discovery-style natural-language or subsystem query.
+    /// Discovery-style natural-language, subsystem, or identifier-shaped query.
     /// For direct exact strings or safe regexes use `search_text`; for known identifiers use `search_symbol`.
     pub query: String,
     /// Optional repository scope.

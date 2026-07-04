@@ -888,10 +888,10 @@ impl FriggMcpServer {
 
     fn search_hybrid_should_run_exact_pivot_assistance(
         _matches: &[SearchHybridMatch],
-        lexical_only_mode: bool,
+        _lexical_only_mode: bool,
         query_shape: SearchHybridQueryShape,
     ) -> bool {
-        lexical_only_mode && query_shape == SearchHybridQueryShape::CodeShaped
+        query_shape == SearchHybridQueryShape::CodeShaped
     }
 
     fn search_hybrid_match_has_strong_lexical_anchor(matched: &SearchHybridMatch) -> bool {
@@ -1015,7 +1015,7 @@ impl FriggMcpServer {
                 .iter()
                 .any(|matched| matched.weak_witness_only);
 
-        if lexical_only_mode && boosted_match_count > 0 {
+        if boosted_match_count > 0 {
             guarded_matches.sort_by(|left, right| {
                 right
                     .exact_symbol_score
@@ -1365,6 +1365,24 @@ mod tests {
     }
 
     #[test]
+    fn search_hybrid_exact_pivot_assistance_runs_for_code_shaped_queries_with_semantic_enabled() {
+        assert!(
+            FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
+                &[],
+                false,
+                SearchHybridQueryShape::CodeShaped
+            )
+        );
+        assert!(
+            !FriggMcpServer::search_hybrid_should_run_exact_pivot_assistance(
+                &[],
+                false,
+                SearchHybridQueryShape::BroadNaturalLanguage
+            )
+        );
+    }
+
+    #[test]
     fn search_hybrid_apply_guardrails_prefers_exact_direct_matches_over_witnesses() {
         let mut matches = vec![
             hybrid_match_fixture(
@@ -1414,6 +1432,61 @@ mod tests {
         assert_eq!(
             matches[1].rank_reasons,
             vec![SearchHybridRankReason::WitnessOnlyFallback]
+        );
+    }
+
+    #[test]
+    fn search_hybrid_apply_guardrails_prefers_exact_direct_matches_with_semantic_enabled() {
+        let mut semantic_doc = hybrid_match_fixture(
+            "docs/capture.md",
+            1,
+            &["literal:docs/capture.md:1:1"],
+            "capture screen workflow guidance",
+        );
+        semantic_doc.source_class = Some(SourceClass::Documentation);
+        semantic_doc.semantic_score = 1.0;
+        semantic_doc.semantic_sources = vec!["semantic:docs/capture.md:1".to_owned()];
+        semantic_doc.blended_score = 1.4;
+
+        let mut exact_runtime = hybrid_match_fixture(
+            "src/lib.rs",
+            3,
+            &["literal:src/lib.rs:3:1"],
+            "pub fn capture_screen() {}",
+        );
+        exact_runtime.blended_score = 0.8;
+
+        let mut matches = vec![semantic_doc, exact_runtime];
+        let mut exact_pivot_assist = SearchHybridExactPivotAssistInternal {
+            applied: true,
+            ..Default::default()
+        };
+        exact_pivot_assist.text_hit_lines.insert(
+            ("repo-001".to_owned(), "src/lib.rs".to_owned()),
+            BTreeSet::from([3usize]),
+        );
+        exact_pivot_assist.exact_text_hit_count = 1;
+
+        let (boosted_match_count, witness_demotion_applied) =
+            FriggMcpServer::search_hybrid_apply_guardrails(
+                &mut matches,
+                false,
+                Some(&exact_pivot_assist),
+            );
+
+        assert_eq!(boosted_match_count, 1);
+        assert!(!witness_demotion_applied);
+        assert_eq!(matches[0].path, "src/lib.rs");
+        assert!(
+            matches[0]
+                .rank_reasons
+                .contains(&SearchHybridRankReason::ExactTextMatch)
+        );
+        assert_eq!(matches[1].path, "docs/capture.md");
+        assert!(
+            matches[1]
+                .rank_reasons
+                .contains(&SearchHybridRankReason::SemanticContribution)
         );
     }
 }

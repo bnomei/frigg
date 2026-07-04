@@ -1527,7 +1527,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Use Frigg for broad discovery-style code questions across attached repositories when you do not yet have an exact string, symbol, or path anchor. It returns candidate pivots, not clean direct-string matches; use search_text for literal or safe-regex text and search_symbol for known identifiers. If semantic is unavailable, treat ranking as weaker evidence and pivot sooner.",
+        description = "Use Frigg for broad discovery-style code questions across attached repositories when you do not yet have an exact string, symbol, or path anchor. It returns candidate pivots, not clean direct-string matches; use search_text for literal or safe-regex text and search_symbol for known identifiers. Identifier-shaped queries may surface matching code pivots when available.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
