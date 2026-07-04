@@ -12,6 +12,8 @@ It turns each repository into searchable, navigable context for Codex, Claude, C
 
 Frigg is local-first OSS. It builds a repository model under `.frigg/`, serves it over MCP, and keeps the useful parts plain: a CLI, a local SQLite store, explicit client adoption, cacheable runtime state, and source-backed answers.
 
+[![asciicast](https://asciinema.org/a/1260121.svg)](https://asciinema.org/a/1260121)
+
 ## Why Frigg
 
 AI coding agents need retrieval as much as generation: the right answer starts with the right repository evidence. [Code Context Engine](https://elara-labs.github.io/code-context-engine/) shows the local-index pattern for AI coding agents, where the agent searches through MCP instead of rereading whole files. [Sourcegraph Code Search](https://sourcegraph.com/docs/code-search) documents production code-intelligence primitives such as full-text search, regular expressions, symbol search, repository scoping, ranking, and code navigation. [turbopuffer Hybrid Search](https://turbopuffer.com/docs/hybrid) shows why lexical/BM25 and vector signals are often combined with rank fusion and re-ranking. Frigg brings that shape to a local OSS MCP service for source-backed agent context.
