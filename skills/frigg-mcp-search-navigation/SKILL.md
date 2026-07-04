@@ -20,7 +20,7 @@ Start with Frigg MCP tools when you need to find code, inspect symbols, follow r
 ## Default Loop
 
 1. Call `list_repositories`.
-2. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly. Use `workspace_current` when you need health, precise, or runtime task status.
+2. If no repo is attached, or you want omitted `repository_id` calls to stay local to one repo, call `workspace_attach` explicitly. Use `workspace_current` when you need the session default, adopted repositories, or runtime task status; use `workspace_attach` or `workspace_index` for index and precise lifecycle details.
 3. Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor.
 4. Use `search_symbol` when you know an API, type, or function name, or `search_text` when exact strings, safe regexes, grouped alternation, canonical paths, `path_regex` scoping, or MCP-backed follow-up matter.
 5. Frigg read-only tools default to compact responses. Ask for `response_mode=full` only when you need diagnostics, freshness detail, or selection notes.
@@ -52,7 +52,7 @@ For technical reviews or blog-style investigations, use this trust order:
 - References, definitions, implementations, callers, or callees: navigation tools
 - File outline, AST inspection, or syntax-shape fallback: `document_symbols`, `inspect_syntax_tree`, `search_structural`
 - Replayable AST-shaped follow-up probes after an anchored result: re-run the returned `follow_up_structural` suggestion via `search_structural`
-- Explicit setup, health, freshness, or precise-generator state: workspace lifecycle tools
+- Explicit setup, freshness, or precise-generator state: workspace lifecycle tools
 
 ## References
 

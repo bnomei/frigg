@@ -8,8 +8,7 @@
   - `root_path`
   - session adoption state
   - watcher state
-  - optional storage health
-  - optional index health
+  - optional storage state
 - `list_repositories` is global runtime state. `workspace_current.repositories` is session-local adoption state.
 - Omitted `repository_id` on repo-aware tools resolves to the session default first, then the remaining adopted repositories.
 
@@ -38,12 +37,11 @@ Important `workspace_attach` outputs:
 Use `workspace_current` when you need the session-local picture:
 - current default repository
 - all session-adopted repositories
-- top-level `precise` summary
 - runtime task status
 
 Use `workspace_detach` when you want to remove one adopted repository from the current session. Omitting `repository_id` detaches the current session default.
 
-Read the top-level `precise` block before assuming navigation should be precise. The compact fields are the ones to look at first:
+Read the top-level `precise` block returned by `workspace_attach` or `workspace_index` before assuming navigation should be precise. The compact fields are the ones to look at first:
 - `state`
 - `failure_tool`
 - `failure_class`
@@ -53,7 +51,7 @@ Read the top-level `precise` block before assuming navigation should be precise.
 
 ## Write Tools
 
-`workspace_prepare` and `workspace_reindex` are the write-style tools.
+`workspace_prepare` and `workspace_index` are the write-style tools.
 
 Shared rules:
 - both accept `path` or `repository_id`
@@ -63,7 +61,7 @@ Shared rules:
 
 Use `workspace_prepare` when the repo still needs Frigg state initialized or explicitly refreshed from the client.
 
-Use `workspace_reindex` when you want a full or changed refresh and care about the resulting counts:
+Use `workspace_index` when you want a full or changed refresh and care about the resulting counts:
 - `snapshot_id`
 - `files_scanned`
 - `files_changed`
@@ -72,7 +70,7 @@ Use `workspace_reindex` when you want a full or changed refresh and care about t
 
 ## Precise Generation
 
-Frigg now auto-detects and runs supported precise generators during attach/reindex when the tools are installed and the repo shape matches.
+Frigg auto-detects and runs supported precise generators during attach/index when the tools are installed and the repo shape matches.
 
 Current auto-generation families:
 - Rust
@@ -97,12 +95,12 @@ Repository-local precise config lives at `.frigg/precise.json`. Use it for:
 
 Semantic retrieval is optional and runtime-configured. When enabled, it participates in reindex and watch-driven refresh, so it can call the embedding provider automatically over time.
 
-Check repository health before assuming semantic help is available:
-- `health.semantic`
+Check lifecycle and runtime status before assuming semantic help is available:
+- `workspace_attach` / `workspace_index` lifecycle fields
 - `workspace_current.runtime`
 
 ## Practical Guidance
 
 - If the tool says “call `workspace_attach` first”, do that rather than retrying search tools blindly.
-- Use `workspace_current` before debugging poor nav quality; it will usually tell you whether you are missing lexical state, semantic state, or precise state.
-- Use `workspace_reindex` only intentionally. Normal freshness should come from watch mode.
+- Use `workspace_current` to see the session default and runtime tasks before debugging poor nav quality.
+- Use `workspace_index` only intentionally. Normal freshness should come from watch mode.

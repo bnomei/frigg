@@ -84,12 +84,12 @@ impl FriggMcpServer {
         }
     }
 
-    pub(in crate::mcp::server) fn repository_summary(
+    fn repository_summary_from_parts(
         &self,
         workspace: &AttachedWorkspace,
+        storage: WorkspaceStorageSummary,
+        health: Option<WorkspaceIndexHealthSummary>,
     ) -> RepositorySummary {
-        let storage = Self::workspace_storage_summary(workspace);
-        let health = self.workspace_index_health_summary(workspace, &storage);
         let session_adopted = self
             .session_state
             .inner
@@ -124,16 +124,24 @@ impl FriggMcpServer {
                 lease_count: watch.lease_count,
             },
             storage: Some(storage),
-            health: Some(health),
+            health,
         }
+    }
+
+    pub(in crate::mcp::server) fn repository_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> RepositorySummary {
+        let storage = Self::workspace_storage_summary(workspace);
+        let health = self.workspace_index_health_summary(workspace, &storage);
+        self.repository_summary_from_parts(workspace, storage, Some(health))
     }
 
     pub(in crate::mcp::server) fn public_repository_summary(
         &self,
         workspace: &AttachedWorkspace,
     ) -> RepositorySummary {
-        let mut summary = self.repository_summary(workspace);
-        summary.health = None;
-        summary
+        let storage = Self::workspace_storage_summary(workspace);
+        self.repository_summary_from_parts(workspace, storage, None)
     }
 }

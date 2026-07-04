@@ -878,13 +878,26 @@ impl FriggMcpServer {
                 WorkspaceIndexAction::Queued
             }
         };
-        let precise_generation_action = if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
-            WorkspacePreciseGenerationAction::NotApplicable
-        } else {
-            self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[])
-        };
-        let precise = self
-            .workspace_precise_summary_for_workspace(&workspace, Some(precise_generation_action));
+        let (precise_generation_action, precise) =
+            if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
+                (
+                    WorkspacePreciseGenerationAction::NotApplicable,
+                    WorkspacePreciseSummary {
+                        state: WorkspacePreciseState::Unavailable,
+                        failure_tool: None,
+                        failure_class: None,
+                        failure_summary: None,
+                        recommended_action: None,
+                        generation_action: Some(WorkspacePreciseGenerationAction::NotApplicable),
+                    },
+                )
+            } else {
+                let generation_action =
+                    self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
+                let precise = self
+                    .workspace_precise_summary_for_workspace(&workspace, Some(generation_action));
+                (generation_action, precise)
+            };
         let precise_lifecycle = self.workspace_precise_lifecycle_summary(
             &workspace,
             precise_generation_action,

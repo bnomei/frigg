@@ -11,7 +11,7 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 5. `find_references` or call hierarchy for impact
 6. Use compact responses first; only ask for `response_mode=full` when you need diagnostics or selection detail
 7. `read_match` on the strongest witnesses when a prior Frigg result already gave you `result_handle` plus `match_id`; otherwise `read_file` or a shell slice is still fine
-8. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace_current.precise` before assuming the code path is absent
+8. If call hierarchy or nav underfills, check `mode`, `availability`, and the precise lifecycle from `workspace_attach` or `workspace_index` before assuming the code path is absent
 
 ## Refactor Impact
 

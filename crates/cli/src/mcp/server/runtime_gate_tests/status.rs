@@ -152,6 +152,51 @@ fn workspace_lexical_summary_stays_ready_when_semantic_config_is_invalid() {
 }
 
 #[test]
+fn public_repository_summary_keeps_health_off_the_compact_path() {
+    let workspace_root = temp_workspace_root("public-repository-summary-compact");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct CompactSummary;\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new_with_runtime_options(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+        false,
+    );
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+
+    let compact = server.public_repository_summary(&workspace);
+    assert!(
+        compact.storage.is_some(),
+        "compact repository summaries should retain storage state"
+    );
+    assert!(
+        compact.health.is_none(),
+        "compact repository summaries must not expose full index health"
+    );
+
+    let full = server.repository_summary(&workspace);
+    assert!(
+        full.health.is_some(),
+        "full repository summaries should still compute index health"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn repository_summary_bypasses_cached_ready_lexical_health_for_dirty_roots() {
     let workspace_root = temp_workspace_root("repository-summary-dirty-root-bypass");
     fs::create_dir_all(workspace_root.join("src"))

@@ -1,4 +1,4 @@
-//! Runtime status summaries for `workspace_current`: repository health, precise generation, and tasks.
+//! Runtime status summaries for repository health, precise generation, and tasks.
 
 use super::*;
 use std::ffi::OsStr;

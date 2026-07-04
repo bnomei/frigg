@@ -159,7 +159,7 @@ The normal MCP loop is:
 
 1. Call `list_repositories`.
 2. Call `workspace_attach` if the session is detached or if you want a specific session-default repository.
-3. Call `workspace_current` when you need repository health, index freshness, precise status, or runtime task state.
+3. Call `workspace_current` when you need the session default, adopted repositories, or runtime task state.
 4. Use `search_hybrid` for broad discovery when you do not have an exact string, symbol, or path anchor.
 5. Use `search_text` for literal, safe-regex, and `rg`-shaped matches.
 6. Use `search_symbol` for known identifiers.
@@ -334,7 +334,7 @@ Optional repository-local precise configuration lives at `.frigg/precise.json`:
 }
 ```
 
-Use `workspace_current` to inspect precise state, generator availability, failures, and recommended actions.
+Use `workspace_attach` or `workspace_index` to trigger precise generation and inspect precise lifecycle, generator failures, and recommended actions.
 
 Useful SCIP starting points:
 
@@ -436,11 +436,10 @@ Treat `.frigg/` as cacheable runtime state, not as source and not as a secret st
 - Frigg honors root `.gitignore` and `.ignore` files and hard-excludes `.frigg`, `.git`, and `target`.
 - Put secrets and generated private artifacts in ignored paths before indexing. Frigg stores indexed source-derived state locally.
 - Normal indexing does not edit project source files.
-- `workspace_attach` defaults to `index_mode=ensure`, which may refresh stale or missing lexical and semantic state under `.frigg/` and waits up to the attach timeout.
-- `index_mode=skip` skips lexical and semantic refresh only; it still attaches the repository and can preserve precise-generation scheduling behavior.
+- `workspace_attach` may refresh stale or missing lexical and semantic state under `.frigg/` and waits up to the attach timeout.
 - MCP `workspace_prepare` and `workspace_index` are confirm-gated because they operate on ignored `.frigg/` state.
 - Optional OpenAI and Google semantic providers call external embedding APIs. The local provider does not require an API key.
-- Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace_current` for generator status and touch-risk details.
+- Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace_attach` or `workspace_index` for generator status and touch-risk details.
 - Non-loopback HTTP serving requires `--allow-remote-http` and `--mcp-http-auth-token`.
 
 Frigg's product boundary is intentionally narrow: local code evidence over MCP. It is not a full IDE, hosted code intelligence platform, or framework runtime.
@@ -506,12 +505,12 @@ No repositories appear in a client:
 1. Confirm `frigg serve` is running.
 2. Call `list_repositories`.
 3. Call `workspace_attach` with the repository path or repository id.
-4. Check `workspace_current` for the session default and repository health.
+4. Check `workspace_current` for the session default and adopted repositories.
 
 Search results look stale:
 
-1. Call `workspace_current` and inspect `index_lifecycle`.
-2. Reattach with `index_mode=ensure`, or run `workspace_index` with confirmation.
+1. Reattach the repository, or run `workspace_index` with confirmation.
+2. Inspect the returned index and precise lifecycle.
 3. If you use the CLI, run `frigg index --changed`.
 
 Semantic recall is unavailable or weak:

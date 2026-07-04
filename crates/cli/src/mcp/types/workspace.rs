@@ -185,7 +185,7 @@ pub struct WorkspacePreciseGeneratorSummary {
     pub reason: Option<String>,
 }
 
-/// Compact precise readiness summary returned by workspace attach and current-status tools.
+/// Compact precise readiness summary returned by workspace lifecycle tools.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePreciseSummary {
     pub state: WorkspacePreciseState,
@@ -419,7 +419,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct WorkspaceCurrentParams {}
 
-/// Response from `workspace_current` summarizing session adoption and runtime health.
+/// Compact response from `workspace_current` summarizing session adoption and runtime tasks.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceCurrentResponse {
     pub repository: Option<RepositorySummary>,
