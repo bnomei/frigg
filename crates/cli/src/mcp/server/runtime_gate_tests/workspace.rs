@@ -247,6 +247,43 @@ fn adopted_path_workspace_survives_pending_guard_drop() {
 }
 
 #[test]
+fn workspace_target_relative_path_falls_back_to_current_workspace_root() {
+    let workspace_root = temp_workspace_root("relative-path-current-workspace-root");
+    let nested_dir = workspace_root.join("crates/cli/src");
+    fs::create_dir_all(&nested_dir).expect("failed to create nested workspace fixture");
+    fs::write(nested_dir.join("lib.rs"), "pub struct RelativeAttach;\n")
+        .expect("failed to write nested workspace fixture");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+    let attach_response = server
+        .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::Direct)
+        .expect("absolute path attach should establish a session default");
+
+    let (workspace, resolved_from, resolution, _resolution_guard) = server
+        .resolve_workspace_target(
+            Some("crates/cli/src/lib.rs"),
+            None,
+            WorkspaceResolveMode::Direct,
+        )
+        .expect("relative path should resolve from the current workspace root");
+
+    assert_eq!(
+        workspace.repository_id,
+        attach_response.repository.repository_id
+    );
+    assert_eq!(resolution, Some(WorkspaceResolveMode::Direct));
+    let expected_resolved_from = nested_dir.canonicalize().unwrap().display().to_string();
+    assert_eq!(
+        resolved_from.as_deref(),
+        Some(expected_resolved_from.as_str())
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn workspace_attach_path_rollback_guard_releases_fresh_adoption_on_cancellation() {
     let first_workspace_root = temp_workspace_root("attach-rollback-preserves-default");
     let second_workspace_root = temp_workspace_root("attach-rollback-prunes-fresh-path");

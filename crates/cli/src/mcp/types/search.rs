@@ -646,7 +646,7 @@ mod tests {
             corpus_context_saved_percent_estimate: Some(83.33),
             corpus_narrowing_ratio_estimate: Some(6),
             query_duration_ms: Some(12),
-            narrowing_ratio_estimate: Some(6),
+            narrowing_ratio_estimate: Some(4),
             stage_attribution: None,
         })
         .expect("context-efficiency metadata should serialize");
@@ -666,7 +666,7 @@ mod tests {
                 "corpus_context_saved_percent_estimate": 83.33,
                 "corpus_narrowing_ratio_estimate": 6,
                 "query_duration_ms": 12,
-                "narrowing_ratio_estimate": 6
+                "narrowing_ratio_estimate": 4
             })
         );
     }

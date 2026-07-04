@@ -323,7 +323,120 @@ fn search_text_context_efficiency_metadata_uses_manifest_and_excerpts_without_st
     assert_eq!(metadata.corpus_context_saved_bytes_estimate, Some(131));
     assert_eq!(metadata.corpus_context_saved_percent_estimate, Some(93.57));
     assert_eq!(metadata.corpus_narrowing_ratio_estimate, Some(16));
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(11));
     assert_eq!(metadata.stage_attribution, None);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn search_text_context_efficiency_matches_absolute_manifest_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "frigg-text-context-efficiency-absolute-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".frigg")).expect("temp frigg directory should be writable");
+    let db_path = root.join(".frigg/storage.sqlite3");
+    let storage = Storage::new(&db_path);
+    storage.initialize().expect("storage should initialize");
+    let absolute_manifest_path = root.join("src/lib.rs");
+    storage
+        .upsert_manifest(
+            "repo-001",
+            "snapshot-001",
+            &[manifest_entry(
+                &absolute_manifest_path.to_string_lossy(),
+                100,
+                Some(10),
+            )],
+        )
+        .expect("manifest should be writable");
+
+    let workspace = AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: "fixture".to_owned(),
+        root: root.clone(),
+        db_path,
+    };
+    let matches = vec![TextMatch {
+        match_id: None,
+        repository_id: "repo-001".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line: 1,
+        column: 1,
+        excerpt: "alpha".to_owned(),
+        witness_score_hint_millis: None,
+        witness_provenance_ids: None,
+    }];
+
+    let metadata =
+        FriggMcpServer::search_text_context_efficiency_metadata(&[workspace], &matches, 1)
+            .expect("context-efficiency metadata should match absolute manifest paths");
+
+    assert_eq!(metadata.returned_unique_file_bytes, Some(100));
+    assert_eq!(metadata.returned_source_bytes_estimate, Some(5));
+    assert_eq!(metadata.matched_file_context_saved_bytes_estimate, Some(95));
+    assert_eq!(
+        metadata.matched_file_context_saved_percent_estimate,
+        Some(95.0)
+    );
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(20));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn search_text_context_efficiency_falls_back_to_returned_bytes_for_unindexed_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "frigg-text-context-efficiency-unindexed-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".frigg")).expect("temp frigg directory should be writable");
+    let db_path = root.join(".frigg/storage.sqlite3");
+    let storage = Storage::new(&db_path);
+    storage.initialize().expect("storage should initialize");
+    storage
+        .upsert_manifest(
+            "repo-001",
+            "snapshot-001",
+            &[manifest_entry("src/lib.rs", 100, Some(10))],
+        )
+        .expect("manifest should be writable");
+
+    let workspace = AttachedWorkspace {
+        repository_id: "repo-001".to_owned(),
+        runtime_repository_id: "repo-001".to_owned(),
+        display_name: "fixture".to_owned(),
+        root: root.clone(),
+        db_path,
+    };
+    let matches = vec![TextMatch {
+        match_id: None,
+        repository_id: "repo-001".to_owned(),
+        path: "generated/live_only.rs".to_owned(),
+        line: 1,
+        column: 1,
+        excerpt: "live".to_owned(),
+        witness_score_hint_millis: None,
+        witness_provenance_ids: None,
+    }];
+
+    let metadata =
+        FriggMcpServer::search_text_context_efficiency_metadata(&[workspace], &matches, 1)
+            .expect("context-efficiency metadata should build for unindexed paths");
+
+    assert_eq!(metadata.returned_unique_paths, Some(1));
+    assert_eq!(metadata.returned_unique_file_bytes, Some(4));
+    assert_eq!(metadata.returned_source_bytes_estimate, Some(4));
+    assert_eq!(metadata.matched_file_context_saved_bytes_estimate, Some(0));
+    assert_eq!(
+        metadata.matched_file_context_saved_percent_estimate,
+        Some(0.0)
+    );
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(1));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -582,7 +695,7 @@ fn search_hybrid_context_efficiency_metadata_uses_manifest_and_excerpts() {
     );
     assert_eq!(metadata.corpus_context_saved_bytes_estimate, Some(126));
     assert_eq!(metadata.corpus_narrowing_ratio_estimate, Some(10));
-    assert_eq!(metadata.narrowing_ratio_estimate, Some(10));
+    assert_eq!(metadata.narrowing_ratio_estimate, Some(7));
 
     let _ = std::fs::remove_dir_all(root);
 }

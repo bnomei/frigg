@@ -3,6 +3,7 @@
 use super::*;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Component;
 
 impl FriggMcpServer {
     fn php_helper_prefixes() -> &'static [(&'static str, NavigationPhpHelperKind)] {
@@ -21,12 +22,19 @@ impl FriggMcpServer {
     }
 
     pub(in crate::mcp::server) fn relative_display_path(root: &Path, path: &Path) -> String {
-        let normalized = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        normalized.trim_start_matches("./").to_owned()
+        match path.strip_prefix(root) {
+            Ok(relative_path) => {
+                Self::normalize_relative_input_path(&relative_path.to_string_lossy())
+            }
+            Err(_) if path.is_relative() => {
+                Self::normalize_relative_input_path(&path.to_string_lossy())
+            }
+            Err(_) => path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_owned(),
+        }
     }
 
     pub(in crate::mcp::server) fn symbol_name_match_rank(
@@ -368,10 +376,37 @@ impl FriggMcpServer {
     }
 
     fn normalize_relative_input_path(raw_path: &str) -> String {
-        raw_path
-            .replace('\\', "/")
-            .trim_start_matches("./")
-            .to_owned()
+        let normalized = raw_path.replace('\\', "/");
+        let path = Path::new(&normalized);
+        if path.is_absolute() {
+            return normalized.trim_start_matches("./").to_owned();
+        }
+
+        let mut components = Vec::<String>::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(part) => {
+                    components.push(part.to_string_lossy().into_owned());
+                }
+                Component::ParentDir => {
+                    if components.last().is_some_and(|part| part != "..") {
+                        components.pop();
+                    } else {
+                        components.push("..".to_owned());
+                    }
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return normalized.trim_start_matches("./").to_owned();
+                }
+            }
+        }
+
+        if components.is_empty() {
+            normalized.trim_start_matches("./").to_owned()
+        } else {
+            components.join("/")
+        }
     }
 
     pub(in crate::mcp::server) fn navigation_path_within_root(
@@ -391,12 +426,7 @@ impl FriggMcpServer {
         corpus: &RepositorySymbolCorpus,
         raw_path: &str,
     ) -> String {
-        let requested_path = PathBuf::from(raw_path);
-        if requested_path.is_absolute() {
-            Self::relative_display_path(&corpus.root, &requested_path)
-        } else {
-            Self::normalize_relative_input_path(raw_path)
-        }
+        Self::canonicalize_navigation_path(&corpus.root, raw_path)
     }
 
     fn navigation_symbol_context_ranks(
@@ -1036,6 +1066,38 @@ impl FriggMcpServer {
 mod tests {
     use super::{FriggMcpServer, NavigationPhpHelperKind};
     use crate::indexer::byte_offset_for_line_column;
+    use std::path::Path;
+
+    #[test]
+    fn navigation_relative_input_path_collapses_internal_parent_segments() {
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path(
+                r".\crates\cli\src\..\src\navigation_resolution.rs"
+            ),
+            "crates/cli/src/navigation_resolution.rs"
+        );
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path(
+                "./crates/cli/src/../src/navigation_resolution.rs"
+            ),
+            "crates/cli/src/navigation_resolution.rs"
+        );
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path("../frigg/src/lib.rs"),
+            "../frigg/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn relative_display_path_collapses_internal_parent_segments_under_root() {
+        let root = Path::new("/workspace/frigg");
+        let path = root.join("crates/cli/src/../src/navigation_resolution.rs");
+
+        assert_eq!(
+            FriggMcpServer::relative_display_path(root, &path),
+            "crates/cli/src/navigation_resolution.rs"
+        );
+    }
 
     #[test]
     fn php_helper_string_token_extracts_laravel_translation_literal() {

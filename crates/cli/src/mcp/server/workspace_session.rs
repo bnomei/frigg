@@ -91,7 +91,16 @@ impl FriggMcpServer {
                     ));
                 }
                 let path = Path::new(path);
-                let resolved_from = Self::effective_attach_directory(path)?;
+                let resolved_from = match Self::effective_attach_directory(path) {
+                    Ok(resolved_from) => resolved_from,
+                    Err(original_error) if path.is_relative() => {
+                        match self.effective_attach_directory_relative_to_session_root(path) {
+                            Some(resolved_from) => resolved_from,
+                            None => return Err(original_error),
+                        }
+                    }
+                    Err(err) => return Err(err),
+                };
                 let (root, resolution) = match resolve_mode {
                     WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
                         Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
@@ -146,6 +155,18 @@ impl FriggMcpServer {
                 None,
             )),
         }
+    }
+
+    fn effective_attach_directory_relative_to_session_root(&self, path: &Path) -> Option<PathBuf> {
+        let workspace = self.current_workspace().or_else(|| {
+            let attached_workspaces = self.attached_workspaces();
+            (attached_workspaces.len() == 1).then(|| attached_workspaces[0].clone())
+        });
+        let Some(workspace) = workspace else {
+            return None;
+        };
+
+        Self::effective_attach_directory(&workspace.root.join(path)).ok()
     }
 
     pub(super) fn workspace_by_repository_id(

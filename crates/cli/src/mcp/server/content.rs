@@ -963,10 +963,12 @@ impl FriggMcpServer {
         returned_match_count: Option<usize>,
         query_duration_ms: Option<u64>,
     ) -> Result<ContextEfficiencyMetadata, ErrorData> {
-        let summary = self
+        let workspace = self
             .attached_workspaces_for_repository(Some(repository_id))?
             .into_iter()
-            .find(|workspace| workspace.repository_id == repository_id)
+            .find(|workspace| workspace.repository_id == repository_id);
+        let summary = workspace
+            .as_ref()
             .map(|workspace| {
                 if !workspace.db_path.exists() {
                     return Ok(None);
@@ -988,11 +990,17 @@ impl FriggMcpServer {
             .unwrap_or(0);
         let indexed_min_mtime_ns = summary.as_ref().and_then(|summary| summary.min_mtime_ns);
         let indexed_max_mtime_ns = summary.as_ref().and_then(|summary| summary.max_mtime_ns);
-        let returned_unique_file_bytes = summary
-            .as_ref()
-            .and_then(|summary| summary.returned_unique_file_bytes_if_known([path]));
         let returned_source_bytes_estimate =
             u64::try_from(returned_source_bytes_estimate).unwrap_or(u64::MAX);
+        let returned_unique_file_bytes = summary
+            .as_ref()
+            .and_then(|summary| {
+                summary.file_size_bytes_for_path(
+                    workspace.as_ref().map(|workspace| workspace.root.as_path()),
+                    path,
+                )
+            })
+            .or(Some(returned_source_bytes_estimate));
 
         Ok(Self::finalize_context_efficiency_metadata(
             ContextEfficiencyMetadata {

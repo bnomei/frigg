@@ -92,9 +92,6 @@ impl FriggMcpServer {
                 .matched_file_context_saved_bytes_estimate,
             matched_file_context_saved_percent_estimate: metadata
                 .matched_file_context_saved_percent_estimate,
-            corpus_context_saved_bytes_estimate: metadata.corpus_context_saved_bytes_estimate,
-            corpus_context_saved_percent_estimate: metadata.corpus_context_saved_percent_estimate,
-            corpus_narrowing_ratio_estimate: metadata.corpus_narrowing_ratio_estimate,
             query_duration_ms: metadata.query_duration_ms,
             narrowing_ratio_estimate: metadata.narrowing_ratio_estimate,
         }
@@ -133,8 +130,13 @@ impl FriggMcpServer {
                 let saved =
                     Self::signed_byte_delta(returned_unique_file_bytes, returned_source_bytes);
                 metadata.matched_file_context_saved_bytes_estimate = Some(saved);
-                metadata.matched_file_context_saved_percent_estimate =
-                    Some(saved as f64 / returned_unique_file_bytes as f64 * 100.0);
+                metadata.matched_file_context_saved_percent_estimate = Some(Self::rounded_percent(
+                    saved as f64 / returned_unique_file_bytes as f64 * 100.0,
+                ));
+                metadata.narrowing_ratio_estimate = Some(Self::rounded_ratio_to_u64(
+                    returned_unique_file_bytes,
+                    returned_source_bytes,
+                ));
             }
 
             let corpus_saved =
@@ -148,7 +150,6 @@ impl FriggMcpServer {
             let corpus_ratio =
                 Self::rounded_ratio_to_u64(metadata.indexed_readable_bytes, returned_source_bytes);
             metadata.corpus_narrowing_ratio_estimate = Some(corpus_ratio);
-            metadata.narrowing_ratio_estimate = Some(corpus_ratio);
         }
 
         metadata
@@ -244,16 +245,26 @@ impl FriggMcpServer {
             .freshness_basis = Some(Self::response_freshness_basis_metadata(freshness_basis));
     }
 
-    fn returned_unique_file_bytes_if_known(
+    fn returned_unique_file_bytes_estimate(
+        workspaces: &BTreeMap<String, &AttachedWorkspace>,
         summaries: &BTreeMap<String, ManifestMetadataSummary>,
-        paths_by_repository: &BTreeMap<String, Vec<String>>,
+        returned_source_bytes_by_path: &BTreeMap<(String, String), u64>,
     ) -> Option<u64> {
+        if returned_source_bytes_by_path.is_empty() {
+            return Some(0);
+        }
+
         let mut total = 0_u64;
-        for (repository_id, paths) in paths_by_repository {
-            let summary = summaries.get(repository_id)?;
-            total = total.saturating_add(
-                summary.returned_unique_file_bytes_if_known(paths.iter().map(String::as_str))?,
-            );
+        for ((repository_id, path), returned_source_bytes) in returned_source_bytes_by_path {
+            let known_file_bytes = summaries.get(repository_id).and_then(|summary| {
+                summary.file_size_bytes_for_path(
+                    workspaces
+                        .get(repository_id)
+                        .map(|workspace| workspace.root.as_path()),
+                    path,
+                )
+            });
+            total = total.saturating_add(known_file_bytes.unwrap_or(*returned_source_bytes));
         }
         Some(total)
     }
@@ -263,6 +274,10 @@ impl FriggMcpServer {
         matches: &[TextMatch],
         total_matches: usize,
     ) -> Result<ContextEfficiencyMetadata, ErrorData> {
+        let workspaces_by_repository = workspaces
+            .iter()
+            .map(|workspace| (workspace.repository_id.clone(), workspace))
+            .collect::<BTreeMap<_, _>>();
         let mut summaries = BTreeMap::<String, ManifestMetadataSummary>::new();
         for workspace in workspaces {
             let storage = Storage::new(&workspace.db_path);
@@ -294,22 +309,23 @@ impl FriggMcpServer {
             .max();
 
         let mut returned_paths = BTreeSet::<(String, String)>::new();
+        let mut returned_source_bytes_by_path = BTreeMap::<(String, String), u64>::new();
         let mut returned_source_bytes_estimate = 0_u64;
         for matched in matches {
-            returned_paths.insert((matched.repository_id.clone(), matched.path.clone()));
-            returned_source_bytes_estimate = returned_source_bytes_estimate
-                .saturating_add(matched.excerpt.len().try_into().unwrap_or(u64::MAX));
+            let key = (matched.repository_id.clone(), matched.path.clone());
+            returned_paths.insert(key.clone());
+            let returned_bytes = matched.excerpt.len().try_into().unwrap_or(u64::MAX);
+            returned_source_bytes_estimate =
+                returned_source_bytes_estimate.saturating_add(returned_bytes);
+            let path_returned_bytes = returned_source_bytes_by_path.entry(key).or_default();
+            *path_returned_bytes = path_returned_bytes.saturating_add(returned_bytes);
         }
 
-        let mut paths_by_repository = BTreeMap::<String, Vec<String>>::new();
-        for (repository_id, path) in &returned_paths {
-            paths_by_repository
-                .entry(repository_id.clone())
-                .or_default()
-                .push(path.clone());
-        }
-        let returned_unique_file_bytes =
-            Self::returned_unique_file_bytes_if_known(&summaries, &paths_by_repository);
+        let returned_unique_file_bytes = Self::returned_unique_file_bytes_estimate(
+            &workspaces_by_repository,
+            &summaries,
+            &returned_source_bytes_by_path,
+        );
 
         Ok(Self::finalize_context_efficiency_metadata(
             ContextEfficiencyMetadata {
@@ -340,6 +356,10 @@ impl FriggMcpServer {
         matches: &[SearchHybridMatch],
         stage_attribution: Option<&crate::searcher::SearchStageAttribution>,
     ) -> Result<ContextEfficiencyMetadata, ErrorData> {
+        let workspaces_by_repository = workspaces
+            .iter()
+            .map(|workspace| (workspace.repository_id.clone(), workspace))
+            .collect::<BTreeMap<_, _>>();
         let mut summaries = BTreeMap::<String, ManifestMetadataSummary>::new();
         for workspace in workspaces {
             let storage = Storage::new(&workspace.db_path);
@@ -371,22 +391,23 @@ impl FriggMcpServer {
             .max();
 
         let mut returned_paths = BTreeSet::<(String, String)>::new();
+        let mut returned_source_bytes_by_path = BTreeMap::<(String, String), u64>::new();
         let mut returned_source_bytes_estimate = 0_u64;
         for matched in matches {
-            returned_paths.insert((matched.repository_id.clone(), matched.path.clone()));
-            returned_source_bytes_estimate = returned_source_bytes_estimate
-                .saturating_add(matched.excerpt.len().try_into().unwrap_or(u64::MAX));
+            let key = (matched.repository_id.clone(), matched.path.clone());
+            returned_paths.insert(key.clone());
+            let returned_bytes = matched.excerpt.len().try_into().unwrap_or(u64::MAX);
+            returned_source_bytes_estimate =
+                returned_source_bytes_estimate.saturating_add(returned_bytes);
+            let path_returned_bytes = returned_source_bytes_by_path.entry(key).or_default();
+            *path_returned_bytes = path_returned_bytes.saturating_add(returned_bytes);
         }
 
-        let mut paths_by_repository = BTreeMap::<String, Vec<String>>::new();
-        for (repository_id, path) in &returned_paths {
-            paths_by_repository
-                .entry(repository_id.clone())
-                .or_default()
-                .push(path.clone());
-        }
-        let returned_unique_file_bytes =
-            Self::returned_unique_file_bytes_if_known(&summaries, &paths_by_repository);
+        let returned_unique_file_bytes = Self::returned_unique_file_bytes_estimate(
+            &workspaces_by_repository,
+            &summaries,
+            &returned_source_bytes_by_path,
+        );
 
         let candidate_input_count =
             stage_attribution.map(|attribution| attribution.candidate_intake.input_count);

@@ -150,7 +150,8 @@ impl FriggMcpServer {
         root: &Path,
         raw_path: &str,
     ) -> String {
-        let path = PathBuf::from(raw_path);
+        let normalized_path = raw_path.replace('\\', "/");
+        let path = PathBuf::from(normalized_path);
         let absolute_path = if path.is_absolute() {
             path
         } else {

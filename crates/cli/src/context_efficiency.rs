@@ -1,7 +1,7 @@
 //! Shared context-efficiency helpers for optional response metadata and local summaries.
 //!
-//! Computes corpus, matched-file, and returned-source byte estimates for MCP responses and
-//! optional JSONL operator logs controlled by `FRIGG_CONTEXT_EFFICIENCY_LOG`.
+//! Computes affected-file and returned-source byte estimates for MCP responses and optional
+//! JSONL operator logs controlled by `FRIGG_CONTEXT_EFFICIENCY_LOG`.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -120,6 +120,32 @@ impl ManifestMetadataSummary {
         }
         Some(total)
     }
+
+    /// Returns the indexed byte size for either repository-relative or absolute path forms.
+    pub(crate) fn file_size_bytes_for_path(
+        &self,
+        workspace_root: Option<&Path>,
+        path: &str,
+    ) -> Option<u64> {
+        if let Some(size_bytes) = self.path_size_bytes.get(path).copied() {
+            return Some(size_bytes);
+        }
+
+        let workspace_root = workspace_root?;
+        let requested_path = Path::new(path);
+        if requested_path.is_relative() {
+            let absolute_path = workspace_root.join(requested_path);
+            return self
+                .path_size_bytes
+                .get(&absolute_path.to_string_lossy().into_owned())
+                .copied();
+        }
+
+        let relative_path = requested_path.strip_prefix(workspace_root).ok()?;
+        self.path_size_bytes
+            .get(&relative_path.to_string_lossy().into_owned())
+            .copied()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -200,7 +226,11 @@ pub(crate) fn need_context_efficiency_with_log_state(
     include_context_efficiency == Some(true) || context_efficiency_log_enabled
 }
 
-/// Compact context-efficiency metrics attached to MCP responses and JSONL rows.
+/// Compact context-efficiency metrics written to JSONL rows.
+///
+/// Saved byte and percent estimates are scoped to the affected files represented by the returned
+/// result, not to the full indexed corpus. Full-corpus byte totals remain available as inventory
+/// counters through `indexed_readable_*`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogMetrics {
     pub(crate) indexed_readable_files: usize,
@@ -225,16 +255,6 @@ pub(crate) struct ContextEfficiencyLogMetrics {
     pub(crate) matched_file_context_saved_bytes_estimate: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) matched_file_context_saved_percent_estimate: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) corpus_context_saved_bytes_estimate: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) corpus_context_saved_percent_estimate: Option<f64>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_u64_from_number"
-    )]
-    pub(crate) corpus_narrowing_ratio_estimate: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) query_duration_ms: Option<u64>,
     #[serde(
@@ -384,7 +404,6 @@ pub struct ContextLogAggregate {
     pub returned_unique_file_bytes: u64,
     pub returned_source_bytes_estimate: u64,
     pub matched_file_context_saved_bytes_estimate: i64,
-    pub corpus_context_saved_bytes_estimate: i64,
 }
 
 impl ContextLogAggregate {
@@ -429,12 +448,6 @@ impl ContextLogAggregate {
                     .matched_file_context_saved_bytes_estimate
                     .unwrap_or_default(),
             );
-        self.corpus_context_saved_bytes_estimate =
-            self.corpus_context_saved_bytes_estimate.saturating_add(
-                row.metrics
-                    .corpus_context_saved_bytes_estimate
-                    .unwrap_or_default(),
-            );
     }
 
     fn merge(&mut self, other: &Self) {
@@ -470,9 +483,6 @@ impl ContextLogAggregate {
         self.matched_file_context_saved_bytes_estimate = self
             .matched_file_context_saved_bytes_estimate
             .saturating_add(other.matched_file_context_saved_bytes_estimate);
-        self.corpus_context_saved_bytes_estimate = self
-            .corpus_context_saved_bytes_estimate
-            .saturating_add(other.corpus_context_saved_bytes_estimate);
     }
 }
 
@@ -896,11 +906,8 @@ mod tests {
                 returned_source_bytes_estimate: Some(5),
                 matched_file_context_saved_bytes_estimate: Some(15),
                 matched_file_context_saved_percent_estimate: Some(75.0),
-                corpus_context_saved_bytes_estimate: Some(85),
-                corpus_context_saved_percent_estimate: Some(94.44),
-                corpus_narrowing_ratio_estimate: Some(18),
                 query_duration_ms: Some(4),
-                narrowing_ratio_estimate: Some(18),
+                narrowing_ratio_estimate: Some(4),
             },
         );
 
@@ -935,11 +942,8 @@ mod tests {
                 returned_source_bytes_estimate: Some(9),
                 matched_file_context_saved_bytes_estimate: Some(91),
                 matched_file_context_saved_percent_estimate: Some(91.0),
-                corpus_context_saved_bytes_estimate: Some(131),
-                corpus_context_saved_percent_estimate: Some(93.57),
-                corpus_narrowing_ratio_estimate: Some(16),
                 query_duration_ms: Some(6),
-                narrowing_ratio_estimate: Some(16),
+                narrowing_ratio_estimate: Some(11),
             },
         );
 
@@ -957,9 +961,10 @@ mod tests {
         assert_eq!(value["query_duration_ms"], 6);
         assert_eq!(value["matched_file_context_saved_bytes_estimate"], 91);
         assert_eq!(value["matched_file_context_saved_percent_estimate"], 91.0);
-        assert_eq!(value["corpus_context_saved_bytes_estimate"], 131);
-        assert_eq!(value["corpus_context_saved_percent_estimate"], 93.57);
-        assert_eq!(value["corpus_narrowing_ratio_estimate"], 16);
+        assert_eq!(value["narrowing_ratio_estimate"], 11);
+        assert!(value.get("corpus_context_saved_bytes_estimate").is_none());
+        assert!(value.get("corpus_context_saved_percent_estimate").is_none());
+        assert!(value.get("corpus_narrowing_ratio_estimate").is_none());
         assert!(value.get("query").is_none());
         assert!(value.get("content").is_none());
         assert!(value.get("excerpt").is_none());
@@ -1069,11 +1074,8 @@ mod tests {
                     returned_source_bytes_estimate: Some(40),
                     matched_file_context_saved_bytes_estimate: Some(360),
                     matched_file_context_saved_percent_estimate: Some(90.0),
-                    corpus_context_saved_bytes_estimate: Some(960),
-                    corpus_context_saved_percent_estimate: Some(96.0),
-                    corpus_narrowing_ratio_estimate: Some(25),
                     query_duration_ms: Some(5),
-                    narrowing_ratio_estimate: Some(25),
+                    narrowing_ratio_estimate: Some(10),
                 },
             },
             ContextEfficiencyLogRow {
@@ -1094,11 +1096,8 @@ mod tests {
                     returned_source_bytes_estimate: Some(20),
                     matched_file_context_saved_bytes_estimate: Some(180),
                     matched_file_context_saved_percent_estimate: Some(90.0),
-                    corpus_context_saved_bytes_estimate: Some(1180),
-                    corpus_context_saved_percent_estimate: Some(98.33),
-                    corpus_narrowing_ratio_estimate: Some(60),
                     query_duration_ms: Some(7),
-                    narrowing_ratio_estimate: Some(60),
+                    narrowing_ratio_estimate: Some(10),
                 },
             },
             ContextEfficiencyLogRow {
@@ -1119,11 +1118,8 @@ mod tests {
                     returned_source_bytes_estimate: Some(12),
                     matched_file_context_saved_bytes_estimate: Some(68),
                     matched_file_context_saved_percent_estimate: Some(85.0),
-                    corpus_context_saved_bytes_estimate: Some(1188),
-                    corpus_context_saved_percent_estimate: Some(99.0),
-                    corpus_narrowing_ratio_estimate: Some(100),
                     query_duration_ms: Some(3),
-                    narrowing_ratio_estimate: Some(100),
+                    narrowing_ratio_estimate: Some(7),
                 },
             },
         ];
@@ -1153,7 +1149,6 @@ mod tests {
             summary.totals.matched_file_context_saved_bytes_estimate,
             248
         );
-        assert_eq!(summary.totals.corpus_context_saved_bytes_estimate, 2368);
         assert_eq!(summary.roots[0].repositories, vec!["repo-1".to_owned()]);
         assert_eq!(summary.roots[0].tools["search_text"], 1);
         assert_eq!(summary.roots[0].tools["read_file"], 1);
@@ -1197,9 +1192,6 @@ mod tests {
                 returned_source_bytes_estimate: Some(5),
                 matched_file_context_saved_bytes_estimate: Some(5),
                 matched_file_context_saved_percent_estimate: Some(50.0),
-                corpus_context_saved_bytes_estimate: Some(5),
-                corpus_context_saved_percent_estimate: Some(50.0),
-                corpus_narrowing_ratio_estimate: Some(2),
                 query_duration_ms: Some(1),
                 narrowing_ratio_estimate: Some(2),
             },

@@ -285,7 +285,7 @@ pub enum WorkspaceAttachAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachParams {
-    /// File or directory path to attach. Relative paths resolve against the Frigg server process cwd.
+    /// File or directory path to attach. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
@@ -335,7 +335,7 @@ pub struct WorkspaceDetachResponse {
 /// Parameters for `workspace_prepare`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePrepareParams {
-    /// File or directory path to prepare. Relative paths resolve against the Frigg server process cwd.
+    /// File or directory path to prepare. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
@@ -362,7 +362,7 @@ pub struct WorkspacePrepareResponse {
 /// Parameters for `workspace_index`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexParams {
-    /// File or directory path to index. Relative paths resolve against the Frigg server process cwd.
+    /// File or directory path to index. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,

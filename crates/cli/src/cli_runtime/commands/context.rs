@@ -33,7 +33,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".frigg")).expect("frigg dir should be created");
         std::fs::write(
             root.join(".frigg/context.jsonl"),
-            r#"{"timestamp":"2026-06-10T00:00:00Z","tool":"read_file","repository_id":"repo-1","snapshot_id":"snapshot-1","indexed_readable_files":2,"indexed_readable_bytes":200,"returned_unique_paths":1,"returned_unique_file_bytes":100,"returned_source_bytes_estimate":12,"narrowing_ratio_estimate":16.666666666666668}"#,
+            r#"{"timestamp":"2026-06-10T00:00:00Z","tool":"read_file","repository_id":"repo-1","snapshot_id":"snapshot-1","indexed_readable_files":2,"indexed_readable_bytes":200,"returned_unique_paths":1,"returned_unique_file_bytes":100,"returned_source_bytes_estimate":12,"matched_file_context_saved_bytes_estimate":88,"matched_file_context_saved_percent_estimate":88.0,"narrowing_ratio_estimate":8}"#,
         )
         .expect("context log should be written");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
