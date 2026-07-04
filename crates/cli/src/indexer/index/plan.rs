@@ -183,6 +183,7 @@ pub struct IndexProgressEvent {
     pub mode: IndexMode,
     pub phase: IndexProgressPhase,
     pub status: IndexProgressStatus,
+    pub semantic_refresh_mode: Option<SemanticRefreshMode>,
     pub snapshot_id: Option<String>,
     pub previous_snapshot_id: Option<String>,
     pub files_scanned: Option<usize>,
@@ -208,6 +209,7 @@ impl IndexProgressEvent {
             mode,
             phase,
             status,
+            semantic_refresh_mode: None,
             snapshot_id: None,
             previous_snapshot_id: None,
             files_scanned: None,
@@ -251,6 +253,11 @@ impl IndexProgressEvent {
 
     pub fn with_records(mut self, records: usize) -> Self {
         self.records = Some(records);
+        self
+    }
+
+    pub fn with_semantic_refresh_mode(mut self, mode: SemanticRefreshMode) -> Self {
+        self.semantic_refresh_mode = Some(mode);
         self
     }
 

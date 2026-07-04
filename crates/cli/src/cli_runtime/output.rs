@@ -579,7 +579,7 @@ fn format_human_index_semantic_component(
     push_human_separator(&mut rows);
     push_human_row(&mut rows, "model", human_provider_model(fields));
     push_field_row(&mut rows, fields, "records", "records");
-    push_human_row(&mut rows, "delta", human_delta(fields));
+    push_human_row(&mut rows, "work", semantic_scope_detail(fields));
     push_human_separator(&mut rows);
     push_field_row(&mut rows, fields, "source", "source");
     push_field_row(&mut rows, fields, "class", "class");
@@ -642,6 +642,9 @@ fn format_human_index_phase_row(
 
 fn human_index_phase_title(fields: &[OutputField]) -> String {
     let phase = field_value(fields, "phase").unwrap_or("work");
+    if phase == "semantic_refresh" {
+        return human_semantic_phase_title(fields);
+    }
     let status = field_value(fields, "status").unwrap_or("starting");
     let title = match (phase, status) {
         ("initialize_storage", "starting") => "Opening storage...",
@@ -662,9 +665,6 @@ fn human_index_phase_title(fields: &[OutputField]) -> String {
         ("refresh_retrieval_projections", "starting") => "Refreshing search projections...",
         ("refresh_retrieval_projections", "ok") => "Search projections updated",
         ("refresh_retrieval_projections", "skipped") => "Search projections current",
-        ("semantic_refresh", "starting") => "Embedding semantic chunks...",
-        ("semantic_refresh", "ok") => "Semantic chunks stored",
-        ("semantic_refresh", "skipped") => "Semantic refresh skipped",
         ("prune_manifest_snapshots", "starting") => "Pruning old snapshots...",
         ("prune_manifest_snapshots", "ok") => "Old snapshots pruned",
         ("prune_manifest_snapshots", "skipped") => "Snapshot retention unchanged",
@@ -709,6 +709,7 @@ fn human_index_phase_detail(fields: &[OutputField]) -> Option<String> {
         "checkpoint_wal" => vec![storage_checkpoint_detail(fields), duration_detail(fields)],
         "semantic_refresh" => vec![
             semantic_records_detail(fields),
+            semantic_mode_detail(fields),
             semantic_path_delta(fields),
             duration_detail(fields),
             semantic_duration_per_doc_detail(fields),
@@ -739,7 +740,70 @@ fn semantic_records_detail(fields: &[OutputField]) -> Option<String> {
         .map(|records| format!("{records} records"))
 }
 
+fn semantic_scope_detail(fields: &[OutputField]) -> Option<String> {
+    match field_value(fields, "mode") {
+        Some("full_rebuild") => Some("full rebuild".to_owned()),
+        Some("full_rebuild_from_changed_only") => Some("changed-only rebuild".to_owned()),
+        Some("reuse_existing") => Some("snapshot current".to_owned()),
+        Some("disabled") => Some("disabled".to_owned()),
+        Some("incremental_advance") => human_delta(fields),
+        _ => human_delta(fields),
+    }
+}
+
+fn semantic_mode_detail(fields: &[OutputField]) -> Option<String> {
+    let status = field_value(fields, "status");
+    match field_value(fields, "semantic") {
+        Some("full_rebuild") => Some("full rebuild".to_owned()),
+        Some("full_rebuild_from_changed_only") => Some("changed-only rebuild".to_owned()),
+        Some("reuse_existing") if status != Some("skipped") => Some("snapshot current".to_owned()),
+        Some("disabled") if status != Some("skipped") => Some("disabled".to_owned()),
+        Some("incremental_advance")
+            if semantic_zero_delta(fields) && semantic_zero_records(fields) =>
+        {
+            Some("metadata advance".to_owned())
+        }
+        _ => None,
+    }
+}
+
+fn human_semantic_phase_title(fields: &[OutputField]) -> String {
+    let status = field_value(fields, "status").unwrap_or("starting");
+    let semantic = field_value(fields, "semantic");
+    let title = match (status, semantic) {
+        ("starting", Some("full_rebuild" | "full_rebuild_from_changed_only")) => {
+            "Rebuilding semantic chunks..."
+        }
+        ("starting", Some("incremental_advance"))
+            if semantic_zero_delta(fields) && semantic_zero_records(fields) =>
+        {
+            "Advancing semantic snapshot..."
+        }
+        ("starting", _) => "Embedding semantic chunks...",
+        ("ok", Some("full_rebuild" | "full_rebuild_from_changed_only")) => {
+            "Semantic chunks rebuilt"
+        }
+        ("ok", Some("incremental_advance"))
+            if semantic_zero_delta(fields) && semantic_zero_records(fields) =>
+        {
+            "Semantic snapshot advanced"
+        }
+        ("ok", _) => "Semantic chunks stored",
+        ("skipped", Some("reuse_existing")) => "Semantic snapshot current",
+        ("skipped", Some("disabled")) => "Semantic refresh disabled",
+        ("skipped", _) => "Semantic refresh skipped",
+        _ => "Semantic refresh",
+    };
+    title.to_owned()
+}
+
 fn semantic_path_delta(fields: &[OutputField]) -> Option<String> {
+    if matches!(
+        field_value(fields, "semantic"),
+        Some("disabled" | "full_rebuild" | "full_rebuild_from_changed_only" | "reuse_existing")
+    ) {
+        return None;
+    }
     match (
         field_value(fields, "changed_paths"),
         field_value(fields, "deleted_paths"),
@@ -747,6 +811,16 @@ fn semantic_path_delta(fields: &[OutputField]) -> Option<String> {
         (Some(changed), Some(deleted)) => Some(format!("{changed} changed · {deleted} deleted")),
         _ => human_delta(fields),
     }
+}
+
+fn semantic_zero_delta(fields: &[OutputField]) -> bool {
+    let changed = field_value(fields, "changed_paths").or_else(|| field_value(fields, "changed"));
+    let deleted = field_value(fields, "deleted_paths").or_else(|| field_value(fields, "deleted"));
+    matches!((changed, deleted), (Some("0"), Some("0")))
+}
+
+fn semantic_zero_records(fields: &[OutputField]) -> bool {
+    matches!(field_value(fields, "records"), None | Some("0"))
 }
 
 fn duration_detail(fields: &[OutputField]) -> Option<String> {
@@ -2087,6 +2161,9 @@ pub(crate) fn emit_index_progress_event(
     if let Some(diagnostics) = event.diagnostics {
         fields.push(field("diagnostics", diagnostics));
     }
+    if let Some(semantic_refresh_mode) = event.semantic_refresh_mode {
+        fields.push(field("semantic", semantic_refresh_mode.as_str()));
+    }
     if let Some(records) = event.records {
         fields.push(field("records", records));
     }
@@ -2943,6 +3020,64 @@ mod tests {
         assert!(output.contains("1 records"));
         assert!(output.contains("1 changed · 0 deleted"));
         assert!(output.contains("8ms/doc"));
+    }
+
+    #[test]
+    fn human_semantic_phase_full_rebuild_omits_zero_path_delta() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "index",
+            "phase",
+            &[
+                field("status", "starting"),
+                field("repo", "repo-001"),
+                field("phase", "semantic_refresh"),
+                field("mode", "changed"),
+                field("semantic", "full_rebuild_from_changed_only"),
+                field("records", 477),
+                field("changed", 477),
+                field("deleted", 0),
+                field("changed_paths", 0),
+                field("deleted_paths", 0),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("│ Rebuilding semantic chunks"));
+        assert!(output.contains("477 records"));
+        assert!(output.contains("changed-only rebuild"));
+        assert!(!output.contains("0 changed · 0 deleted"));
+    }
+
+    #[test]
+    fn human_semantic_phase_reuse_existing_describes_current_snapshot() {
+        let output = format_human_event_with_width(
+            OutputLevel::Skip,
+            "index",
+            "phase",
+            &[
+                field("status", "skipped"),
+                field("repo", "repo-001"),
+                field("phase", "semantic_refresh"),
+                field("mode", "changed"),
+                field("semantic", "reuse_existing"),
+                field("records", 0),
+                field("changed", 0),
+                field("deleted", 0),
+                field("changed_paths", 0),
+                field("deleted_paths", 0),
+                field("duration_ms", 0),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("○ Semantic snapshot current"));
+        assert!(!output.contains("Semantic refresh skipped"));
+        assert!(!output.contains("0 changed · 0 deleted"));
     }
 
     #[test]

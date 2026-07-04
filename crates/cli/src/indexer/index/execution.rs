@@ -216,13 +216,18 @@ fn index_execution_progress_event(
     } else {
         plan.deleted_paths.len()
     };
-    IndexProgressEvent::new(&plan.repository_id, plan.mode, phase, status)
+    let event = IndexProgressEvent::new(&plan.repository_id, plan.mode, phase, status)
         .with_snapshot(plan.snapshot_plan.snapshot_id())
         .with_previous_snapshot(plan.previous_snapshot_id.as_deref())
         .with_file_counts(plan.files_scanned, plan.files_changed, plan.files_deleted)
         .with_diagnostics(plan.diagnostics.total_count())
         .with_records(plan.semantic_refresh.records_manifest.len())
-        .with_path_counts(changed_paths, deleted_paths)
+        .with_path_counts(changed_paths, deleted_paths);
+    if phase == IndexProgressPhase::SemanticRefresh {
+        event.with_semantic_refresh_mode(plan.semantic_refresh.mode)
+    } else {
+        event
+    }
 }
 
 fn execute_manifest_snapshot_phase(
