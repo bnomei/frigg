@@ -127,6 +127,10 @@ impl CliOutput {
         self.is_verbose() || (!self.is_quiet() && self.tui_enabled())
     }
 
+    fn wants_tool_call_events(self) -> bool {
+        self.wants_progress_events() && self.tui_enabled()
+    }
+
     pub(crate) fn result_event(
         self,
         level: OutputLevel,
@@ -236,7 +240,7 @@ impl CliOutput {
     }
 
     pub(crate) fn tool_call_event(self, event: ToolCallDisplayEvent) -> io::Result<()> {
-        if !self.tui_enabled() {
+        if !self.wants_tool_call_events() {
             return Ok(());
         }
         let level = match event.status {
@@ -381,11 +385,11 @@ mod tests {
 
     use super::format_context_saved_percent;
     use super::{
-        HUMAN_COLOR_ACTION_CREATED, HUMAN_COLOR_ACTION_DELETED, HUMAN_COLOR_ACTION_MODIFIED,
-        HUMAN_COLOR_TOPIC_INDEX, HUMAN_COLOR_TOPIC_PRECISE, HUMAN_COLOR_TOPIC_SEMANTIC,
-        HUMAN_COLOR_TOPIC_STORAGE, HUMAN_COLOR_TOPIC_WATCH, HUMAN_COLOR_WARN, OutputLevel,
-        OutputMode, field, format_event_line, format_human_event, format_human_event_with_width,
-        format_human_intro,
+        CliOutput, HUMAN_COLOR_ACTION_CREATED, HUMAN_COLOR_ACTION_DELETED,
+        HUMAN_COLOR_ACTION_MODIFIED, HUMAN_COLOR_NEUTRAL, HUMAN_COLOR_TOPIC_INDEX,
+        HUMAN_COLOR_TOPIC_PRECISE, HUMAN_COLOR_TOPIC_SEMANTIC, HUMAN_COLOR_TOPIC_STORAGE,
+        HUMAN_COLOR_TOPIC_WATCH, HUMAN_COLOR_WARN, OutputLevel, OutputMode, field,
+        format_event_line, format_human_event, format_human_event_with_width, format_human_intro,
     };
     use super::{human_block, human_topic};
 
@@ -1418,6 +1422,27 @@ mod tests {
 
         assert_eq!(output, "  ◇ search_hybrid  1008ms · 100% saved");
         assert!(!output.contains('='));
+
+        let colored = format_human_event_with_width(
+            OutputLevel::Ok,
+            "tool",
+            "call",
+            &[
+                field("status", "ok"),
+                field("tool", "search_hybrid"),
+                field("duration_ms", 1008),
+            ],
+            None,
+            true,
+            72,
+        );
+        assert!(colored.contains(&format!("\x1b[{HUMAN_COLOR_NEUTRAL}msearch_hybrid\x1b[0m")));
+        assert!(!colored.contains(HUMAN_COLOR_TOPIC_INDEX));
+    }
+
+    #[test]
+    fn tool_call_events_follow_quiet_progress_gate() {
+        assert!(!CliOutput::new(OutputMode::Quiet).wants_tool_call_events());
     }
 
     #[test]
