@@ -627,19 +627,13 @@ pub(crate) fn execute_semantic_refresh_plan(
                 executor,
                 Some(&*storage as &dyn SemanticIndexStorage),
             )?;
-            let retained_changed_paths = semantic_refresh
-                .changed_paths
-                .iter()
-                .filter(|path| !semantic_build.unreadable_paths.contains(path))
-                .cloned()
-                .collect::<Vec<_>>();
             storage.advance_semantic_embeddings_for_repository(
                 repository_id,
                 previous_snapshot_id,
                 snapshot_id,
                 provider,
                 model,
-                &retained_changed_paths,
+                &semantic_refresh.changed_paths,
                 &semantic_refresh.deleted_paths,
                 &semantic_build.records,
             )

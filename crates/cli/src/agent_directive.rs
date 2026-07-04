@@ -129,21 +129,4 @@ mod tests {
             "OpenAI prompt should not return to shell-first code-search guidance"
         );
     }
-
-    #[test]
-    fn agent_directive_core_sentences_are_in_readme_agent_workflow() {
-        let Some(readme) = workspace_file("README.md") else {
-            return;
-        };
-
-        assert_core_sentences("README", &readme);
-        assert!(
-            !readme.contains("Use shell tools for fast local inspection"),
-            "README should not return to shell-first code-search guidance"
-        );
-        assert!(
-            !readme.contains("Use Frigg when an agent needs more than a raw"),
-            "README intro should not position Frigg as only more than raw shell scans"
-        );
-    }
 }

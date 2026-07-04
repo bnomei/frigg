@@ -456,6 +456,14 @@ fn collect_step_evidence(
         "workspace" | "list_repositories" => Ok(Vec::new()),
         "read_file" => {
             let context = format!("tool {} step {}", step.tool_name, step.step_id);
+            let params =
+                serde_json::from_str::<ReadFileParams>(&step.params_json).map_err(|err| {
+                    FriggError::InvalidInput(format!(
+                        "failed to parse params_json for deep-search step {}: {err}",
+                        step.step_id
+                    ))
+                })?;
+            let start_line = params.start_line.unwrap_or(1).max(1);
             let repository_id = required_string_field(response, "repository_id", &context)?;
             let path = required_string_field(response, "path", &context)?;
             let content_line_count = response
@@ -463,6 +471,7 @@ fn collect_step_evidence(
                 .and_then(Value::as_str)
                 .map(|content| content.lines().count().max(1))
                 .unwrap_or(1);
+            let end_line = start_line + content_line_count.saturating_sub(1);
             Ok(vec![StepEvidence {
                 claim_text: format!(
                     "Read file evidence from tool call {} at {}:{}.",
@@ -471,9 +480,9 @@ fn collect_step_evidence(
                 repository_id,
                 path,
                 span: DeepSearchFileSpan {
-                    start_line: 1,
+                    start_line,
                     start_column: 1,
-                    end_line: content_line_count,
+                    end_line,
                     end_column: 1,
                 },
             }])

@@ -297,10 +297,7 @@ pub(super) fn build_semantic_embedding_records(
         FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
     })?;
     let model = model.as_str();
-    let SemanticChunkBuild {
-        candidates: chunks,
-        unreadable_paths,
-    } = build_semantic_chunk_candidates(
+    let SemanticChunkBuild { candidates: chunks } = build_semantic_chunk_candidates(
         repository_id,
         workspace_root,
         snapshot_id,
@@ -310,7 +307,6 @@ pub(super) fn build_semantic_embedding_records(
     if chunks.is_empty() {
         return Ok(SemanticEmbeddingBuild {
             records: Vec::new(),
-            unreadable_paths,
         });
     }
 
@@ -333,10 +329,7 @@ pub(super) fn build_semantic_embedding_records(
         )?);
     }
     sort_semantic_embedding_records(&mut records);
-    Ok(SemanticEmbeddingBuild {
-        records,
-        unreadable_paths,
-    })
+    Ok(SemanticEmbeddingBuild { records })
 }
 
 fn reuse_existing_semantic_embedding_records(
@@ -559,12 +552,10 @@ fn build_semantic_embedding_records_with_runtime(
 
 pub(crate) struct SemanticEmbeddingBuild {
     pub(crate) records: Vec<SemanticChunkEmbeddingRecord>,
-    pub(crate) unreadable_paths: Vec<String>,
 }
 
 pub(crate) struct SemanticChunkBuild {
     pub(crate) candidates: Vec<SemanticChunkCandidate>,
-    pub(crate) unreadable_paths: Vec<String>,
 }
 
 pub(crate) fn build_semantic_chunk_candidates(
@@ -573,16 +564,15 @@ pub(crate) fn build_semantic_chunk_candidates(
     snapshot_id: &str,
     current_manifest: &[FileDigest],
 ) -> FriggResult<SemanticChunkBuild> {
-    type ChunkBuildPartial = (Vec<SemanticChunkCandidate>, Vec<String>);
     let repository_id = Arc::<str>::from(repository_id);
     let snapshot_id = Arc::<str>::from(snapshot_id);
     let estimated_capacity =
         estimate_semantic_chunk_capacity(current_manifest).max(current_manifest.len());
-    let (mut output, mut unreadable_paths) = current_manifest
+    let mut output = current_manifest
         .par_iter()
         .map(|entry| {
             let Some(language) = semantic_chunk_language_for_path(&entry.path) else {
-                return Ok::<ChunkBuildPartial, FriggError>((Vec::new(), Vec::new()));
+                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
             };
             let repository_relative_path =
                 normalize_repository_relative_path(workspace_root, &entry.path)?;
@@ -596,10 +586,7 @@ pub(crate) fn build_semantic_chunk_candidates(
                         error = %err,
                         "skipping semantic chunking for file that failed to open"
                     );
-                    return Ok::<ChunkBuildPartial, FriggError>((
-                        Vec::new(),
-                        vec![repository_relative_path],
-                    ));
+                    return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
                 }
             };
             if let Err(err) = file.read_to_string(&mut source) {
@@ -609,10 +596,7 @@ pub(crate) fn build_semantic_chunk_candidates(
                     error = %err,
                     "skipping semantic chunking for file that failed to read"
                 );
-                return Ok::<ChunkBuildPartial, FriggError>((
-                    Vec::new(),
-                    vec![repository_relative_path],
-                ));
+                return Ok::<Vec<SemanticChunkCandidate>, FriggError>(Vec::new());
             }
 
             let mut chunks = Vec::new();
@@ -624,14 +608,13 @@ pub(crate) fn build_semantic_chunk_candidates(
                 language,
                 source.as_str(),
             );
-            Ok((chunks, Vec::new()))
+            Ok(chunks)
         })
         .try_reduce(
-            || (Vec::with_capacity(estimated_capacity), Vec::new()),
+            || Vec::with_capacity(estimated_capacity),
             |mut left, mut right| {
-                left.0.append(&mut right.0);
-                left.1.append(&mut right.1);
-                Ok::<ChunkBuildPartial, FriggError>(left)
+                left.append(&mut right);
+                Ok::<Vec<SemanticChunkCandidate>, FriggError>(left)
             },
         )?;
 
@@ -641,12 +624,7 @@ pub(crate) fn build_semantic_chunk_candidates(
             .then(left.chunk_index.cmp(&right.chunk_index))
             .then(left.chunk_id.as_bytes().cmp(right.chunk_id.as_bytes()))
     });
-    unreadable_paths.sort();
-    unreadable_paths.dedup();
-    Ok(SemanticChunkBuild {
-        candidates: output,
-        unreadable_paths,
-    })
+    Ok(SemanticChunkBuild { candidates: output })
 }
 
 pub(crate) fn build_file_semantic_chunks(
@@ -799,18 +777,19 @@ fn append_semantic_chunk_candidates(
     let output_start = output.len();
     if content_text.is_ascii() {
         let mut segment_start = 0usize;
-        let mut offset = 0usize;
+        let mut segment_offset = 0usize;
         while segment_start < content_text.len() {
             let segment_end = (segment_start + SEMANTIC_CHUNK_MAX_CHARS).min(content_text.len());
-            output.push(build_semantic_chunk_candidate(
+            push_nonblank_semantic_chunk_candidate(
+                output,
                 file_context,
-                chunk_index + offset,
+                chunk_index + segment_offset,
                 start_line,
                 end_line,
-                content_text[segment_start..segment_end].to_owned(),
-            ));
+                &content_text[segment_start..segment_end],
+            );
             segment_start = segment_end;
-            offset += 1;
+            segment_offset = output.len().saturating_sub(output_start);
         }
         return output_start..output.len();
     }
@@ -829,33 +808,55 @@ fn append_semantic_chunk_candidates(
 
     let mut segment_start = 0usize;
     let mut chars_in_segment = 0usize;
-    let mut offset = 0usize;
+    let mut segment_offset = 0usize;
     for (byte_index, _) in content_text.char_indices() {
         if chars_in_segment == SEMANTIC_CHUNK_MAX_CHARS {
-            output.push(build_semantic_chunk_candidate(
+            push_nonblank_semantic_chunk_candidate(
+                output,
                 file_context,
-                chunk_index + offset,
+                chunk_index + segment_offset,
                 start_line,
                 end_line,
-                content_text[segment_start..byte_index].to_owned(),
-            ));
+                &content_text[segment_start..byte_index],
+            );
             segment_start = byte_index;
             chars_in_segment = 0;
-            offset += 1;
+            segment_offset = output.len().saturating_sub(output_start);
         }
         chars_in_segment += 1;
     }
     if segment_start < content_text.len() {
-        output.push(build_semantic_chunk_candidate(
+        push_nonblank_semantic_chunk_candidate(
+            output,
             file_context,
-            chunk_index + offset,
+            chunk_index + segment_offset,
             start_line,
             end_line,
-            content_text[segment_start..].to_owned(),
-        ));
+            &content_text[segment_start..],
+        );
     }
 
     output_start..output.len()
+}
+
+fn push_nonblank_semantic_chunk_candidate(
+    output: &mut Vec<SemanticChunkCandidate>,
+    file_context: &SemanticChunkFileContext,
+    chunk_index: usize,
+    start_line: usize,
+    end_line: usize,
+    content_text: &str,
+) {
+    if content_text.trim().is_empty() {
+        return;
+    }
+    output.push(build_semantic_chunk_candidate(
+        file_context,
+        chunk_index,
+        start_line,
+        end_line,
+        content_text.to_owned(),
+    ));
 }
 
 fn build_semantic_chunk_candidate(

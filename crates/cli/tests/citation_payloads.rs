@@ -16,7 +16,7 @@ use frigg::mcp::{
 use frigg::settings::FriggConfig;
 #[cfg(feature = "playbook")]
 use rmcp::handler::server::wrapper::Parameters;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn fixture_trace_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/citation_payload_trace.json")
@@ -179,6 +179,39 @@ fn citation_payloads_fixture_completeness() {
         search_text_claim.contains("let _ = greeting();"),
         "search_text claim should include excerpt text fragment"
     );
+}
+
+#[test]
+fn citation_payloads_read_file_range_uses_source_line_offset() {
+    let mut trace = load_fixture_trace();
+    let step = trace
+        .steps
+        .iter_mut()
+        .find(|step| step.step_id == "tool-003")
+        .expect("expected read_file fixture step");
+    step.params_json =
+        "{\"path\":\"src/lib.rs\",\"repository_id\":\"repo-001\",\"start_line\":500,\"line_count\":2}"
+            .to_owned();
+    step.outcome = DeepSearchTraceOutcome::Ok {
+        response_json: serde_json::to_string(&json!({
+            "bytes": 18,
+            "content": "line 500\nline 501\n",
+            "path": "src/lib.rs",
+            "repository_id": "repo-001"
+        }))
+        .expect("failed to serialize ranged read response"),
+    };
+
+    let payload = DeepSearchHarness::compose_citation_payload(&trace, "answer")
+        .expect("citation payload composition should succeed");
+    let citation = payload
+        .citations
+        .iter()
+        .find(|citation| citation.tool_call_id == "tool-003")
+        .expect("expected read_file citation");
+
+    assert_eq!(citation.span.start_line, 500);
+    assert_eq!(citation.span.end_line, 501);
 }
 
 #[test]

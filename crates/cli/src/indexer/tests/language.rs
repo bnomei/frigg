@@ -540,6 +540,43 @@ fn php_source_evidence_extracts_canonical_type_target_and_literal_metadata() -> 
 }
 
 #[test]
+fn php_source_evidence_does_not_leak_named_class_scope_into_anonymous_class() -> FriggResult<()> {
+    let path = Path::new("src/Registry.php");
+    let source = r#"<?php
+namespace App;
+
+class Registry {
+    public function factory(): object {
+        return new class {
+            public function build(): self {
+                return new self();
+            }
+        };
+    }
+}
+"#;
+    let symbols = extract_symbols_from_source(SymbolLanguage::Php, path, source)?;
+    let evidence = extract_php_source_evidence_from_source(path, source, &symbols)?;
+
+    assert!(
+        !evidence.target_evidence.iter().any(|entry| {
+            entry.kind == PhpTargetEvidenceKind::Instantiation
+                && entry.target_canonical_name == "App\\Registry"
+        }),
+        "anonymous-class self/static must not resolve to the enclosing named class"
+    );
+    assert!(
+        !evidence
+            .canonical_names_by_stable_id
+            .values()
+            .any(|canonical_name| canonical_name == "App\\Registry::build"),
+        "anonymous-class methods must not be canonicalized under the enclosing named class"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn php_source_evidence_resolves_aliases_per_namespace_block() -> FriggResult<()> {
     let path = Path::new("src/MultiNamespace.php");
     let source = "<?php\n\

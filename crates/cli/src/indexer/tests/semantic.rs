@@ -748,10 +748,10 @@ fn semantic_changed_only_reuses_unchanged_chunks_inside_changed_file() -> FriggR
 }
 
 #[test]
-fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read() -> FriggResult<()>
+fn semantic_changed_only_deletes_rows_for_changed_file_that_fails_semantic_read() -> FriggResult<()>
 {
-    let db_path = temp_db_path("semantic-changed-only-unreadable-retains");
-    let workspace_root = temp_workspace_root("semantic-changed-only-unreadable-retains");
+    let db_path = temp_db_path("semantic-changed-only-unreadable-deletes");
+    let workspace_root = temp_workspace_root("semantic-changed-only-unreadable-deletes");
     prepare_workspace(
         &workspace_root,
         &[
@@ -801,10 +801,10 @@ fn semantic_changed_only_retains_rows_for_changed_file_that_fails_semantic_read(
     let semantic_rows = storage
         .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?;
     assert!(
-        semantic_rows
-            .iter()
-            .any(|record| record.path == "src/lib.rs" && record.content_text.contains("stable_lib")),
-        "existing semantic rows for a changed file that fails to read must be retained, not deleted"
+        semantic_rows.iter().all(
+            |record| record.path != "src/lib.rs" && !record.content_text.contains("stable_lib")
+        ),
+        "existing semantic rows for a changed file that fails to read must be deleted rather than retained as stale evidence"
     );
     assert!(
         semantic_rows
@@ -1144,6 +1144,23 @@ fn semantic_chunking_splits_oversized_single_line_inputs() {
 }
 
 #[test]
+fn semantic_chunking_skips_blank_oversized_segments() {
+    let source = format!("{}a", " ".repeat(SEMANTIC_CHUNK_MAX_CHARS));
+
+    let chunks = build_file_semantic_chunks(
+        "repo-001",
+        "snapshot-001",
+        "fixtures/mostly-blank.yaml",
+        "yaml",
+        &source,
+    );
+
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].chunk_index, 0);
+    assert_eq!(chunks[0].content_text, "a");
+}
+
+#[test]
 fn semantic_chunk_language_supports_blade_paths() {
     assert_eq!(
         semantic_chunk_language_for_path(Path::new("resources/views/welcome.blade.php")),
@@ -1324,6 +1341,70 @@ fn index_plan_changed_only_marks_incremental_semantic_refresh_for_deltas() -> Fr
         vec![PathBuf::from("src/main.rs")]
     );
     assert!(plan.semantic_refresh.deleted_paths.is_empty());
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
+fn incremental_semantic_advance_deletes_changed_unreadable_rows() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-advance-unreadable-changed-db");
+    let workspace_root = temp_workspace_root("semantic-advance-unreadable-changed-workspace");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/main.rs", "pub fn semantic_stale_v1() {}\n")],
+    )?;
+
+    let semantic_runtime = semantic_runtime_enabled_openai();
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+    let executor = FixtureSemanticEmbeddingExecutor;
+    let first = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+    let storage = Storage::new(&db_path);
+    let first_rows =
+        storage.load_semantic_embeddings_for_repository_snapshot("repo-001", &first.snapshot_id)?;
+    assert!(
+        first_rows
+            .iter()
+            .any(|record| record.content_text.contains("semantic_stale_v1")),
+        "full semantic pass should persist the original file content"
+    );
+
+    fs::write(workspace_root.join("src/main.rs"), [0xff, b'\n']).map_err(FriggError::Io)?;
+    let second = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::ChangedOnly,
+        &semantic_runtime,
+        &credentials,
+        &executor,
+    )?;
+
+    assert_ne!(second.snapshot_id, first.snapshot_id);
+    assert!(
+        storage
+            .load_semantic_embeddings_for_repository_snapshot("repo-001", &first.snapshot_id)?
+            .is_empty(),
+        "advance must delete old chunks for changed files that cannot be re-read"
+    );
+    assert!(
+        storage
+            .load_semantic_embeddings_for_repository_snapshot("repo-001", &second.snapshot_id)?
+            .is_empty(),
+        "unreadable changed file should not retain stale rows under the new snapshot"
+    );
 
     cleanup_workspace(&workspace_root);
     cleanup_db(&db_path);

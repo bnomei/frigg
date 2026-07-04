@@ -269,6 +269,119 @@ printf '%s' "fake-scip-rust"
 }
 
 #[test]
+fn precise_generation_handoff_does_not_strand_pending_paths_after_finish() {
+    let workspace_root = temp_workspace_root("precise-handoff-no-strand");
+    let bin_dir = temp_workspace_root("precise-handoff-no-strand-bin");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+
+    let _rust_analyzer = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "rust-analyzer",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "rust-analyzer 1.85.0"
+  exit 0
+fi
+printf '%s' "fake-scip-rust"
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        let active_task_id = server
+            .runtime_state
+            .runtime_task_registry
+            .write()
+            .expect("runtime task registry should not be poisoned")
+            .start_task(
+                RuntimeTaskKind::PreciseGenerate,
+                workspace.repository_id.clone(),
+                "precise_generation",
+                Some("active task".to_owned()),
+            );
+
+        let server_for_thread = server.clone();
+        let workspace_for_thread = workspace.clone();
+        let mut pending_guard = server
+            .runtime_state
+            .precise_generation_pending_dirty_paths
+            .write()
+            .expect("precise generation pending dirty paths should not be poisoned");
+        let handle = std::thread::spawn(move || {
+            server_for_thread.maybe_spawn_workspace_precise_generation(
+                &workspace_for_thread,
+                &[String::from("Cargo.toml")],
+                &[String::from("old/dropped.rs")],
+            )
+        });
+
+        server
+            .runtime_state
+            .runtime_task_registry
+            .write()
+            .expect("runtime task registry should not be poisoned")
+            .finish_task(
+                &active_task_id,
+                RuntimeTaskStatus::Succeeded,
+                Some("active task finished".to_owned()),
+            );
+        assert!(
+            pending_guard.remove(&workspace.repository_id).is_none(),
+            "finishing before the caller enters the handoff gate should find no pending paths"
+        );
+        drop(pending_guard);
+
+        let action = handle
+            .join()
+            .expect("precise generation handoff caller should not panic");
+        assert!(
+            matches!(
+                action,
+                crate::mcp::types::WorkspacePreciseGenerationAction::Triggered
+            ),
+            "caller released after finish should start generation instead of stranding pending paths, got {action:?}"
+        );
+        assert!(
+            server
+                .take_pending_precise_dirty_paths(&workspace.repository_id)
+                .is_none(),
+            "no pending dirty paths should remain without an active generation owner"
+        );
+
+        let expected_artifact = workspace.root.join(".frigg/scip/rust.scip");
+        for _ in 0..200 {
+            if expected_artifact.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            expected_artifact.is_file(),
+            "triggered precise generation should finish the fake artifact before cleanup"
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
 fn workspace_index_health_reports_php_precise_generation_prefers_repo_local_vendor_bin() {
     let workspace_root = temp_workspace_root("php-precise-generator-health");
     let bin_dir = temp_workspace_root("php-precise-generator-health-bin");

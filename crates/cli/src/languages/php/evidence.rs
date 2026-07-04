@@ -194,6 +194,10 @@ fn collect_source_evidence(
                 next_class_canonical_name = Some(canonical_name);
             }
         }
+        "anonymous_class" => {
+            next_class_canonical_name = None;
+            next_owner_symbol_id = None;
+        }
         "function_definition" => {
             if let Some((kind, name)) = symbol_from_node(source, node) {
                 let canonical_name = namespace_qualified_name(next_namespace.as_deref(), &name);

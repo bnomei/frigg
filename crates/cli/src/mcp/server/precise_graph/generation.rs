@@ -1537,20 +1537,25 @@ impl FriggMcpServer {
         })
     }
 
-    pub(in crate::mcp::server) fn record_pending_precise_dirty_paths(
+    #[cfg(test)]
+    pub(in crate::mcp::server) fn take_pending_precise_dirty_paths(
         &self,
         repository_id: &str,
-        changed_paths: &[String],
-        deleted_paths: &[String],
-    ) {
-        if changed_paths.is_empty() && deleted_paths.is_empty() {
-            return;
-        }
+    ) -> Option<(Vec<String>, Vec<String>)> {
         let mut pending = self
             .runtime_state
             .precise_generation_pending_dirty_paths
             .write()
             .expect("precise generation pending dirty paths poisoned");
+        Self::take_pending_precise_dirty_paths_locked(&mut pending, repository_id)
+    }
+
+    fn record_pending_precise_dirty_paths_locked(
+        pending: &mut BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>,
+        repository_id: &str,
+        changed_paths: &[String],
+        deleted_paths: &[String],
+    ) {
         let entry = pending.entry(repository_id.to_owned()).or_insert_with(|| {
             (
                 std::collections::BTreeSet::new(),
@@ -1561,15 +1566,10 @@ impl FriggMcpServer {
         entry.1.extend(deleted_paths.iter().cloned());
     }
 
-    pub(in crate::mcp::server) fn take_pending_precise_dirty_paths(
-        &self,
+    fn take_pending_precise_dirty_paths_locked(
+        pending: &mut BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>,
         repository_id: &str,
     ) -> Option<(Vec<String>, Vec<String>)> {
-        let mut pending = self
-            .runtime_state
-            .precise_generation_pending_dirty_paths
-            .write()
-            .expect("precise generation pending dirty paths poisoned");
         pending.remove(repository_id).map(|(changed, deleted)| {
             (
                 changed.into_iter().collect::<Vec<_>>(),
@@ -1607,38 +1607,6 @@ impl FriggMcpServer {
             return WorkspacePreciseGenerationAction::SkippedNoWork;
         }
 
-        let active_precise_generation = self
-            .runtime_state
-            .runtime_task_registry
-            .read()
-            .expect("runtime task registry poisoned")
-            .active_tasks()
-            .iter()
-            .any(|task| {
-                task.kind == crate::mcp::types::RuntimeTaskKind::PreciseGenerate
-                    && task.repository_id == workspace.repository_id
-            });
-        if active_precise_generation {
-            tracing::info!(
-                repository_id = %workspace.repository_id,
-                root = %workspace.root.display(),
-                changed_paths = changed_paths.len(),
-                deleted_paths = deleted_paths.len(),
-                generators = %selected
-                    .iter()
-                    .map(|spec| spec.generator_id)
-                    .collect::<Vec<_>>()
-                    .join(","),
-                "workspace precise generation skipped because a generation task is already active"
-            );
-            self.record_pending_precise_dirty_paths(
-                &workspace.repository_id,
-                changed_paths,
-                deleted_paths,
-            );
-            return WorkspacePreciseGenerationAction::SkippedActiveTask;
-        }
-
         let server = self.clone();
         let workspace = workspace.clone();
         let selected_generators = selected.to_vec();
@@ -1649,6 +1617,52 @@ impl FriggMcpServer {
             .map(|spec| spec.generator_id)
             .collect::<Vec<_>>()
             .join(",");
+        let task_guard = {
+            let mut pending = self
+                .runtime_state
+                .precise_generation_pending_dirty_paths
+                .write()
+                .expect("precise generation pending dirty paths poisoned");
+            let active_precise_generation = self
+                .runtime_state
+                .runtime_task_registry
+                .read()
+                .expect("runtime task registry poisoned")
+                .active_tasks()
+                .iter()
+                .any(|task| {
+                    task.kind == crate::mcp::types::RuntimeTaskKind::PreciseGenerate
+                        && task.repository_id == workspace.repository_id
+                });
+            if active_precise_generation {
+                tracing::info!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    changed_paths = changed_paths.len(),
+                    deleted_paths = deleted_paths.len(),
+                    generators = %selected_generator_ids,
+                    "workspace precise generation skipped because a generation task is already active"
+                );
+                Self::record_pending_precise_dirty_paths_locked(
+                    &mut pending,
+                    &workspace.repository_id,
+                    &changed_paths,
+                    &deleted_paths,
+                );
+                return WorkspacePreciseGenerationAction::SkippedActiveTask;
+            }
+            RuntimeTaskGuard::start(
+                Arc::clone(&self.runtime_state.runtime_task_registry),
+                crate::mcp::types::RuntimeTaskKind::PreciseGenerate,
+                workspace.repository_id.clone(),
+                "precise_generation",
+                Some(format!(
+                    "changed_paths={} deleted_paths={}",
+                    changed_paths.len(),
+                    deleted_paths.len()
+                )),
+            )
+        };
         tracing::info!(
             repository_id = %workspace.repository_id,
             root = %workspace.root.display(),
@@ -1656,17 +1670,6 @@ impl FriggMcpServer {
             deleted_paths = deleted_paths.len(),
             generators = %selected_generator_ids,
             "workspace precise generation started"
-        );
-        let task_guard = RuntimeTaskGuard::start(
-            Arc::clone(&self.runtime_state.runtime_task_registry),
-            crate::mcp::types::RuntimeTaskKind::PreciseGenerate,
-            workspace.repository_id.clone(),
-            "precise_generation",
-            Some(format!(
-                "changed_paths={} deleted_paths={}",
-                changed_paths.len(),
-                deleted_paths.len()
-            )),
         );
         let spawn_task_id = task_guard.task_id().to_owned();
         let spawn_repository_id = workspace.repository_id.clone();
@@ -1708,17 +1711,26 @@ impl FriggMcpServer {
                     "workspace precise generation finished"
                 );
                 let mut task_guard = task_guard;
-                task_guard.finish(
-                    if failed == 0 {
-                        crate::mcp::types::RuntimeTaskStatus::Succeeded
-                    } else {
-                        crate::mcp::types::RuntimeTaskStatus::Failed
-                    },
-                    detail,
-                );
-                if let Some((pending_changed, pending_deleted)) =
-                    server.take_pending_precise_dirty_paths(&workspace.repository_id)
-                {
+                let pending_after_finish = {
+                    let mut pending = server
+                        .runtime_state
+                        .precise_generation_pending_dirty_paths
+                        .write()
+                        .expect("precise generation pending dirty paths poisoned");
+                    task_guard.finish(
+                        if failed == 0 {
+                            crate::mcp::types::RuntimeTaskStatus::Succeeded
+                        } else {
+                            crate::mcp::types::RuntimeTaskStatus::Failed
+                        },
+                        detail,
+                    );
+                    Self::take_pending_precise_dirty_paths_locked(
+                        &mut pending,
+                        &workspace.repository_id,
+                    )
+                };
+                if let Some((pending_changed, pending_deleted)) = pending_after_finish {
                     server.maybe_spawn_workspace_precise_generation(
                         &workspace,
                         &pending_changed,

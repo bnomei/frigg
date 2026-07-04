@@ -36,8 +36,9 @@ fn bench_content_cache(c: &mut Criterion) {
                             path: "src/module_000.rs".to_owned(),
                             repository_id: Some(session.repository_id.clone()),
                             max_bytes: Some(2_048),
-                            line_start: Some(1),
-                            line_end: Some(8),
+                            start_line: Some(1),
+                            end_line: Some(8),
+                            line_count: None,
                             presentation_mode: Some(ReadPresentationMode::Json),
                             include_context_efficiency: None,
                         })))
@@ -59,8 +60,9 @@ fn bench_content_cache(c: &mut Criterion) {
                     path: "src/module_000.rs".to_owned(),
                     repository_id: Some(hot_session.repository_id.clone()),
                     max_bytes: Some(2_048),
-                    line_start: Some(1),
-                    line_end: Some(8),
+                    start_line: Some(1),
+                    end_line: Some(8),
+                    line_count: None,
                     presentation_mode: Some(ReadPresentationMode::Json),
                     include_context_efficiency: None,
                 })))

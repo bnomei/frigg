@@ -830,12 +830,13 @@ impl FriggMcpServer {
             }
         }
 
+        let text_hits_path_regex = Self::search_hybrid_exact_pivot_path_regex(&relevant_paths)?;
         let text_hits = searcher
             .search_literal_with_filters_diagnostics(
                 SearchTextQuery {
                     query: query.to_owned(),
-                    path_regex: None,
-                    limit: 32,
+                    path_regex: text_hits_path_regex,
+                    limit: usize::MAX,
                 },
                 SearchFilters {
                     repository_id: None,
@@ -859,6 +860,30 @@ impl FriggMcpServer {
         }
 
         Ok(Some(assistance))
+    }
+
+    fn search_hybrid_exact_pivot_path_regex(
+        relevant_paths: &BTreeSet<(String, String)>,
+    ) -> Result<Option<regex::Regex>, ErrorData> {
+        let paths = relevant_paths
+            .iter()
+            .map(|(_, path)| path.as_str())
+            .collect::<BTreeSet<_>>();
+        if paths.is_empty() {
+            return Ok(None);
+        }
+
+        let alternatives = paths
+            .into_iter()
+            .map(regex::escape)
+            .collect::<Vec<_>>()
+            .join("|");
+        let pattern = format!("^(?:{alternatives})$");
+        regex::Regex::new(&pattern).map(Some).map_err(|err| {
+            Self::map_frigg_error(crate::domain::FriggError::InvalidInput(format!(
+                "invalid exact-pivot path regex: {err}"
+            )))
+        })
     }
 
     fn search_hybrid_symbol_matches_language(
@@ -1336,6 +1361,121 @@ mod tests {
 
         let _ = fs::remove_dir_all(first_root);
         let _ = fs::remove_dir_all(second_root);
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_assistance_scores_late_text_candidate_beyond_global_cap() {
+        let workspace_root = temp_workspace_root("exact-pivot-late-candidate");
+        fs::create_dir_all(workspace_root.join("src")).expect("src directory should exist");
+        for index in 0..40 {
+            fs::write(
+                workspace_root.join(format!("src/aaa_noise_{index:02}.rs")),
+                "pub fn handler() {}\n",
+            )
+            .expect("noise source fixture should be writable");
+        }
+        fs::write(
+            workspace_root.join("src/zzz_worker.rs"),
+            "pub fn worker() { handler(); }\n",
+        )
+        .expect("late source fixture should be writable");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root should produce a config");
+        let server = FriggMcpServer::new_with_runtime_options(config, false);
+        let workspaces = server.known_workspaces();
+        for workspace in &workspaces {
+            server
+                .adopt_workspace(workspace, false)
+                .expect("test workspace should be adoptable");
+        }
+        let workspace = workspaces.first().expect("workspace should be registered");
+        let (scoped_config, runtime_repository_ids, repository_id_map) =
+            server.scoped_search_config(&workspaces);
+        let searcher =
+            server.runtime_text_searcher_with_repository_ids(scoped_config, runtime_repository_ids);
+        let matches = vec![hybrid_match_fixture_for_repository(
+            &workspace.repository_id,
+            "src/zzz_worker.rs",
+            1,
+            &["semantic:src/zzz_worker.rs:1:1"],
+            "pub fn worker() { handler(); }",
+        )];
+
+        let assistance = FriggMcpServer::search_hybrid_exact_pivot_assistance(
+            &server,
+            "handler",
+            None,
+            None,
+            &searcher,
+            &matches,
+            &repository_id_map,
+        )
+        .expect("exact pivot assistance should run")
+        .expect("exact pivot assistance should be returned");
+
+        assert_eq!(
+            assistance.score_text(&workspace.repository_id, "src/zzz_worker.rs", 1),
+            2,
+            "late-sorting candidate files should still receive exact text anchor boosts"
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn search_hybrid_exact_pivot_assistance_scores_anchor_after_many_same_file_hits() {
+        let workspace_root = temp_workspace_root("exact-pivot-same-file-cap");
+        fs::create_dir_all(workspace_root.join("src")).expect("src directory should exist");
+        let mut content = String::new();
+        for _ in 0..40 {
+            content.push_str("handler early\n");
+        }
+        content.push_str("handler target\n");
+        fs::write(workspace_root.join("src/worker.rs"), content)
+            .expect("source fixture should be writable");
+
+        let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root should produce a config");
+        let server = FriggMcpServer::new_with_runtime_options(config, false);
+        let workspaces = server.known_workspaces();
+        for workspace in &workspaces {
+            server
+                .adopt_workspace(workspace, false)
+                .expect("test workspace should be adoptable");
+        }
+        let workspace = workspaces.first().expect("workspace should be registered");
+        let (scoped_config, runtime_repository_ids, repository_id_map) =
+            server.scoped_search_config(&workspaces);
+        let searcher =
+            server.runtime_text_searcher_with_repository_ids(scoped_config, runtime_repository_ids);
+        let matches = vec![hybrid_match_fixture_for_repository(
+            &workspace.repository_id,
+            "src/worker.rs",
+            41,
+            &["semantic:src/worker.rs:41:1"],
+            "handler target",
+        )];
+
+        let assistance = FriggMcpServer::search_hybrid_exact_pivot_assistance(
+            &server,
+            "handler",
+            None,
+            None,
+            &searcher,
+            &matches,
+            &repository_id_map,
+        )
+        .expect("exact pivot assistance should run")
+        .expect("exact pivot assistance should be returned");
+
+        assert_eq!(
+            assistance.score_text(&workspace.repository_id, "src/worker.rs", 41),
+            2,
+            "anchor lines after many same-file literal hits should keep their exact text boost"
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 
     #[test]
