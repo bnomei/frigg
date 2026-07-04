@@ -1186,6 +1186,106 @@ async fn core_search_text_emits_display_savings_without_response_opt_in() {
 }
 
 #[tokio::test]
+async fn core_search_text_display_savings_uses_matched_file_percent() {
+    let workspace_root = temp_workspace_root("search-text-display-matched-file-efficiency");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");
+    let marker_line = "pub fn matched_file_display_context_marker() {}\n";
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        format!("{marker_line}{}\n", "x".repeat(2_000)),
+    )
+    .expect("failed to seed matched source");
+    fs::write(workspace_root.join("src/other.rs"), "y".repeat(4_000))
+        .expect("failed to seed corpus source");
+
+    let server = server_for_workspace_root(&workspace_root).await;
+    let repository_id = public_repository_id(&server).await;
+    seed_manifest_snapshot(
+        &workspace_root,
+        &repository_id,
+        "snapshot-001",
+        &["src/lib.rs", "src/other.rs"],
+    );
+    let events = Arc::new(Mutex::new(Vec::<ToolCallDisplayEvent>::new()));
+    let captured_events = Arc::clone(&events);
+    server.set_tool_call_display_sink(Some(Arc::new(move |event| {
+        captured_events
+            .lock()
+            .expect("display event mutex should not be poisoned")
+            .push(event);
+    })));
+
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "matched_file_display_context_marker".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id),
+            path_regex: Some(r"src/lib\.rs$".to_owned()),
+            limit: Some(10),
+            response_mode: None,
+            include_context_efficiency: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text with context efficiency should succeed")
+        .0;
+
+    let metadata = response
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.context_efficiency.as_ref())
+        .expect("response should include context-efficiency metadata");
+    assert_ne!(
+        metadata.matched_file_context_saved_percent_estimate,
+        metadata.corpus_context_saved_percent_estimate,
+        "test fixture must distinguish matched-file savings from corpus savings"
+    );
+    let events = events
+        .lock()
+        .expect("display event mutex should not be poisoned");
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].context_saved_percent,
+        metadata.matched_file_context_saved_percent_estimate
+    );
+}
+
+#[tokio::test]
+async fn core_read_match_invalid_handle_emits_failed_display_event() {
+    let server = server_for_fixture().await;
+    let events = Arc::new(Mutex::new(Vec::<ToolCallDisplayEvent>::new()));
+    let captured_events = Arc::clone(&events);
+    server.set_tool_call_display_sink(Some(Arc::new(move |event| {
+        captured_events
+            .lock()
+            .expect("display event mutex should not be poisoned")
+            .push(event);
+    })));
+
+    let error = server
+        .read_match(Parameters(ReadMatchParams {
+            result_handle: "missing-handle".to_owned(),
+            match_id: "missing-match".to_owned(),
+            before: None,
+            after: None,
+            presentation_mode: Some(ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        }))
+        .await
+        .expect_err("invalid read_match handle should fail");
+
+    assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    let events = events
+        .lock()
+        .expect("display event mutex should not be poisoned");
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.tool_name, "read_match");
+    assert_eq!(event.status, ToolCallDisplayStatus::Failed);
+    assert!(event.context_saved_percent.is_none());
+}
+
+#[tokio::test]
 async fn core_search_hybrid_compact_opt_in_keeps_context_efficiency_metadata() {
     let workspace_root = temp_workspace_root("search-hybrid-compact-context-efficiency");
     fs::create_dir_all(workspace_root.join("src")).expect("failed to create source dir");

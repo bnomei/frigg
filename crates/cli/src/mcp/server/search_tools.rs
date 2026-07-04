@@ -57,14 +57,15 @@ impl FriggMcpServer {
         let display_enabled = self.tool_call_display_enabled();
         if include_context_efficiency == Some(true) {
             let metadata = build()?;
-            execution_context
-                .set_display_context_saved_percent(metadata.corpus_context_saved_percent_estimate);
+            execution_context.set_display_context_saved_percent(
+                metadata.matched_file_context_saved_percent_estimate,
+            );
             Ok(Some(metadata))
         } else if log_enabled || display_enabled {
             let metadata = build().ok();
             if let Some(metadata) = metadata.as_ref() {
                 execution_context.set_display_context_saved_percent(
-                    metadata.corpus_context_saved_percent_estimate,
+                    metadata.matched_file_context_saved_percent_estimate,
                 );
             }
             Ok(metadata)

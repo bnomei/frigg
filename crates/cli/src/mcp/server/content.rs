@@ -329,17 +329,27 @@ impl FriggMcpServer {
         &self,
         params: ReadMatchParams,
     ) -> Result<ReadMatchResponse, ErrorData> {
-        let anchor = self
-            .session_result_handle_match(&params.result_handle, &params.match_id)
-            .ok_or_else(|| {
-                Self::resource_not_found(
+        let started_at = Instant::now();
+        let anchor = match self.session_result_handle_match(&params.result_handle, &params.match_id)
+        {
+            Some(anchor) => anchor,
+            None => {
+                let result: Result<ReadMatchResponse, ErrorData> = Err(Self::resource_not_found(
                     "result_handle or match_id not found",
                     Some(json!({
                         "result_handle": params.result_handle,
                         "match_id": params.match_id,
                     })),
-                )
-            })?;
+                ));
+                return self.finalize_with_provenance_timed(
+                    "read_match",
+                    started_at,
+                    result,
+                    Ok(()),
+                    None,
+                );
+            }
+        };
         let before = params.before.unwrap_or(10).min(MAX_CONTEXT_LINES);
         let after = params.after.unwrap_or(10).min(MAX_CONTEXT_LINES);
         let line_start = anchor.line.saturating_sub(before).max(1);
