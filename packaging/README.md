@@ -34,3 +34,12 @@ VERSION=0.6.0 TARGET=aarch64-unknown-linux-musl scripts/smoke-release.sh
 ```
 
 Use `cross` for these targets unless the matching musl C toolchain is installed on the host.
+
+The Intel macOS release asset also omits the default local ONNX/FastEmbed provider because
+`ort-sys` does not provide prebuilt ONNX Runtime binaries for `x86_64-apple-darwin`:
+
+```bash
+VERSION=0.6.0 TARGET=x86_64-apple-darwin scripts/build-release.sh
+VERSION=0.6.0 TARGET=x86_64-apple-darwin scripts/package-release.sh
+VERSION=0.6.0 TARGET=x86_64-apple-darwin scripts/smoke-release.sh
+```

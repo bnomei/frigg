@@ -5,7 +5,15 @@ set -euo pipefail
 PACKAGE_NAME="${PACKAGE_NAME:-frigg}"
 
 BUILD_ARGS=(build --locked --release -p "$PACKAGE_NAME" --target "$TARGET")
-if [[ "${NO_DEFAULT_FEATURES:-}" == "1" || "$TARGET" == *"musl"* ]]; then
+
+target_omits_default_features() {
+  case "$TARGET" in
+    *musl* | x86_64-apple-darwin) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [[ "${NO_DEFAULT_FEATURES:-}" == "1" ]] || target_omits_default_features; then
   BUILD_ARGS+=(--no-default-features)
 fi
 if [[ -n "${FEATURES:-}" ]]; then
