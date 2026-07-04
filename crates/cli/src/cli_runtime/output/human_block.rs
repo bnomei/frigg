@@ -476,11 +476,17 @@ pub(crate) fn compact_human_fields(
     skip_keys: &[&str],
     limit: usize,
 ) -> String {
-    FieldBag::new(fields)
+    let mut fields = FieldBag::new(fields)
         .iter()
-        .filter(|field| !skip_keys.contains(&field.key))
+        .enumerate()
+        .filter(|(_, field)| !skip_keys.contains(&field.key))
+        .collect::<Vec<_>>();
+    fields.sort_by_key(|(index, field)| (compact_human_field_order(field.key), *index));
+
+    fields
+        .into_iter()
         .take(limit)
-        .map(|field| {
+        .map(|(_, field)| {
             format!(
                 "{}={}",
                 compact_human_field_key(field.key),
@@ -489,6 +495,10 @@ pub(crate) fn compact_human_fields(
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn compact_human_field_order(key: &str) -> u8 {
+    if key.ends_with("_ms") { 0 } else { 1 }
 }
 
 pub(crate) fn human_field_label(key: &str) -> String {

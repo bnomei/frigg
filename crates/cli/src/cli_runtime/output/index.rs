@@ -483,6 +483,7 @@ fn human_index_progress_detail(event: &IndexProgressEvent) -> Option<String> {
     let parts = match event.phase {
         IndexProgressPhase::InitializeStorage => vec![progress_duration_detail(event)],
         IndexProgressPhase::LoadManifest => vec![
+            progress_duration_detail(event),
             event
                 .previous_snapshot_id
                 .as_deref()
@@ -492,48 +493,47 @@ fn human_index_progress_detail(event: &IndexProgressEvent) -> Option<String> {
                 .files_scanned
                 .filter(|files| *files != 0)
                 .map(|files| format!("{files} previous files")),
-            progress_duration_detail(event),
         ],
         IndexProgressPhase::BuildManifest => vec![
+            progress_duration_detail(event),
             event.files_scanned.map(|files| format!("{files} scanned")),
             event
                 .diagnostics
                 .filter(|diagnostics| *diagnostics != 0)
                 .map(|diagnostics| format!("{diagnostics} diagnostics")),
-            progress_duration_detail(event),
         ],
         IndexProgressPhase::BuildPlan => vec![
+            progress_duration_detail(event),
             progress_delta_detail(event),
             progress_semantic_records_detail(event),
             progress_snapshot_detail(event),
-            progress_duration_detail(event),
         ],
         IndexProgressPhase::PersistManifestSnapshot
         | IndexProgressPhase::RefreshRetrievalProjections => {
             vec![
-                progress_snapshot_detail(event),
                 progress_duration_detail(event),
+                progress_snapshot_detail(event),
             ]
         }
         IndexProgressPhase::CheckpointWal => {
             vec![
-                progress_storage_checkpoint_detail(event),
                 progress_duration_detail(event),
+                progress_storage_checkpoint_detail(event),
             ]
         }
         IndexProgressPhase::SemanticRefresh => vec![
+            progress_duration_detail(event),
             progress_semantic_records_detail(event),
             progress_semantic_mode_detail(event),
             progress_semantic_path_delta(event),
-            progress_duration_detail(event),
             progress_semantic_duration_per_doc_detail(event),
         ],
         IndexProgressPhase::PruneManifestSnapshots => vec![
+            progress_duration_detail(event),
             event
                 .pruned_snapshots
                 .filter(|pruned| *pruned != 0)
                 .map(|pruned| format!("{pruned} removed")),
-            progress_duration_detail(event),
         ],
     };
     let parts = parts.into_iter().flatten().collect::<Vec<_>>();
@@ -1036,48 +1036,48 @@ fn human_index_phase_detail(
     let parts = match phase {
         "initialize_storage" => vec![duration_detail(fields)],
         "load_manifest" => vec![
+            duration_detail(fields),
             field_value(fields, "previous")
                 .filter(|value| *value != "-")
                 .map(|snapshot| format!("previous {}", short_identifier(snapshot))),
             field_value(fields, "scanned")
                 .filter(|value| *value != "0")
                 .map(|files| format!("{files} previous files")),
-            duration_detail(fields),
         ],
         "build_manifest" => vec![
+            duration_detail(fields),
             field_value(fields, "scanned").map(|files| format!("{files} scanned")),
             field_value(fields, "diagnostics")
                 .filter(|value| *value != "0")
                 .map(|diagnostics| format!("{diagnostics} diagnostics")),
-            duration_detail(fields),
         ],
         "build_plan" => vec![
+            duration_detail(fields),
             human_delta(fields),
             semantic_records_detail(fields),
             snapshot_detail(fields),
-            duration_detail(fields),
         ],
         "persist_manifest_snapshot" | "refresh_retrieval_projections" => {
-            vec![snapshot_detail(fields), duration_detail(fields)]
+            vec![duration_detail(fields), snapshot_detail(fields)]
         }
-        "checkpoint_wal" => vec![storage_checkpoint_detail(fields), duration_detail(fields)],
+        "checkpoint_wal" => vec![duration_detail(fields), storage_checkpoint_detail(fields)],
         "semantic_refresh" => vec![
+            duration_detail(fields),
             semantic_records_detail(fields),
             semantic_mode_detail(fields, semantic_mode),
             semantic_path_delta(fields, semantic_mode),
-            duration_detail(fields),
             semantic_duration_per_doc_detail(fields),
         ],
         "prune_manifest_snapshots" => vec![
+            duration_detail(fields),
             field_value(fields, "pruned_snapshots")
                 .filter(|value| *value != "0")
                 .map(|pruned| format!("{pruned} removed")),
-            duration_detail(fields),
         ],
         _ => vec![
+            duration_detail(fields),
             human_file_counts(fields),
             snapshot_detail(fields),
-            duration_detail(fields),
         ],
     };
     let parts = parts.into_iter().flatten().collect::<Vec<_>>();

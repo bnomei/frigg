@@ -383,6 +383,9 @@ pub(crate) fn error_was_reported(error: &(dyn Error + 'static)) -> bool {
 #[cfg(test)]
 mod tests {
     use frigg::human_output::HumanRow;
+    use frigg::indexer::{
+        IndexMode, IndexProgressEvent, IndexProgressPhase, IndexProgressStatus, SemanticRefreshMode,
+    };
 
     use super::format_context_saved_percent;
     use super::{
@@ -909,10 +912,29 @@ mod tests {
         );
 
         assert!(output.contains("● Semantic chunks stored"));
+        assert!(output.contains("Semantic chunks stored  42ms · 4 records"));
         assert!(output.contains("4 records"));
         assert!(output.contains("42ms"));
         assert!(output.contains("10.5ms/doc"));
         assert!(!output.contains("phase="));
+    }
+
+    #[test]
+    fn human_index_progress_event_starts_gray_detail_with_duration() {
+        let event = IndexProgressEvent::new(
+            "repo-001",
+            IndexMode::ChangedOnly,
+            IndexProgressPhase::SemanticRefresh,
+            IndexProgressStatus::Ok,
+        )
+        .with_semantic_refresh_mode(SemanticRefreshMode::IncrementalAdvance)
+        .with_records(4)
+        .with_path_counts(4, 0)
+        .with_duration_ms(42);
+        let output = super::index::format_human_index_progress_event(&event, &[], false, 100);
+
+        assert!(output.contains("Semantic chunks stored  42ms · 4 records"));
+        assert!(output.contains("10.5ms/doc"));
     }
 
     #[test]
@@ -1439,6 +1461,27 @@ mod tests {
         );
         assert!(colored.contains(&format!("\x1b[{HUMAN_COLOR_NEUTRAL}msearch_hybrid\x1b[0m")));
         assert!(!colored.contains(HUMAN_COLOR_TOPIC_INDEX));
+    }
+
+    #[test]
+    fn human_compact_activity_details_promote_ms_fields() {
+        let output = format_human_event_with_width(
+            OutputLevel::Info,
+            "custom",
+            "checkpoint",
+            &[
+                field("status", "ok"),
+                field("repo", "repo-001"),
+                field("records", 2),
+                field("duration_ms", 7),
+                field("class", "fast"),
+            ],
+            None,
+            false,
+            100,
+        );
+
+        assert!(output.contains("Custom Checkpoint  duration=7ms repo=repo-001 records=2"));
     }
 
     #[test]
