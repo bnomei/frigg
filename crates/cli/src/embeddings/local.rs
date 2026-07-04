@@ -329,7 +329,9 @@ fn normalize_local_model(model: String) -> String {
     if trimmed.is_empty() {
         DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned()
     } else {
-        trimmed.to_owned()
+        resolve_model_alias(trimmed)
+            .map(|alias| alias.semantic_model.to_owned())
+            .unwrap_or_else(|_| trimmed.to_owned())
     }
 }
 

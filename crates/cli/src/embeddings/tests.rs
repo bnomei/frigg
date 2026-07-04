@@ -1087,7 +1087,7 @@ async fn local_embedding_provider_preserves_order_indices_and_selected_model() {
 }
 
 #[tokio::test]
-async fn local_embedding_provider_preserves_supported_alias_model_identity() {
+async fn local_embedding_provider_canonicalizes_supported_alias_model_identity() {
     let selected_alias = "AllMiniLML6V2";
     let provider = LocalEmbeddingProvider::with_backend_for_test(
         selected_alias,
@@ -1110,7 +1110,7 @@ async fn local_embedding_provider_preserves_supported_alias_model_identity() {
         .expect("supported local alias should be accepted by provider validation");
 
     assert_eq!(response.provider, EmbeddingProviderKind::Local);
-    assert_eq!(response.model, selected_alias);
+    assert_eq!(response.model, local_model::DEFAULT_LOCAL_EMBEDDING_MODEL);
     assert_eq!(response.vectors[0].index, 0);
     assert_eq!(response.vectors[0].values, vec![0.1, 0.2, 0.3]);
 }

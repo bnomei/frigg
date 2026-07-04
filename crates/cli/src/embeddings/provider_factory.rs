@@ -48,7 +48,7 @@ static SEMANTIC_EMBEDDING_PROVIDER_BUILD_LOCKS: OnceLock<
 > = OnceLock::new();
 
 /// Builds the active semantic embedding provider from runtime configuration and credentials.
-pub fn build_semantic_embedding_provider(
+pub(crate) fn build_semantic_embedding_provider(
     config: SemanticEmbeddingProviderFactoryConfig<'_>,
 ) -> EmbeddingResult<Arc<dyn EmbeddingProvider>> {
     let model = config.model.trim();
@@ -154,14 +154,22 @@ fn lock_provider_cache(
 fn provider_cache_key(
     config: &SemanticEmbeddingProviderFactoryConfig<'_>,
 ) -> EmbeddingResult<SemanticEmbeddingProviderCacheKey> {
-    let local_artifact_identity = match config.provider {
-        SemanticRuntimeProvider::Local => Some(resolve_local_artifact_identity(config.model)?),
-        SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => None,
+    let (model, local_artifact_identity) = match config.provider {
+        SemanticRuntimeProvider::Local => {
+            let artifact = resolve_local_model_artifact(config.model)
+                .map_err(local_model_error_to_embedding_error)?;
+            reject_hf_home_override_for_provider(&artifact, hf_home_from_process_env())?;
+            let model = artifact.semantic_model.clone();
+            (model, Some(local_artifact_cache_identity(&artifact)))
+        }
+        SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
+            (config.model.trim().to_owned(), None)
+        }
     };
 
     Ok(SemanticEmbeddingProviderCacheKey {
         provider: config.provider.as_str(),
-        model: config.model.trim().to_owned(),
+        model,
         credential_fingerprint: config
             .credentials
             .api_key_for(config.provider)
@@ -190,13 +198,6 @@ fn validate_local_artifacts_for_policy(
         require_prepared_local_model(model).map_err(local_model_error_to_embedding_error)?;
     reject_hf_home_override_for_provider(&artifact, hf_home_from_process_env())?;
     Ok(artifact)
-}
-
-fn resolve_local_artifact_identity(model: &str) -> EmbeddingResult<String> {
-    let artifact =
-        resolve_local_model_artifact(model).map_err(local_model_error_to_embedding_error)?;
-    reject_hf_home_override_for_provider(&artifact, hf_home_from_process_env())?;
-    Ok(local_artifact_cache_identity(&artifact))
 }
 
 fn local_artifact_cache_identity(artifact: &LocalModelArtifact) -> String {
@@ -344,6 +345,36 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.contains("cache_root=/tmp/frigg-cache-a"));
         assert!(second.contains("cache_root=/tmp/frigg-cache-b"));
+    }
+
+    #[test]
+    fn local_provider_cache_key_canonicalizes_supported_aliases() {
+        let credentials = SemanticRuntimeCredentials::default();
+        let canonical = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
+            provider: SemanticRuntimeProvider::Local,
+            model: "all-MiniLM-L6-v2",
+            credentials: &credentials,
+            local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        })
+        .expect("canonical local model key should build");
+        let fastembed_alias = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
+            provider: SemanticRuntimeProvider::Local,
+            model: "AllMiniLML6V2",
+            credentials: &credentials,
+            local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        })
+        .expect("fastembed local model alias key should build");
+        let repository_alias = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
+            provider: SemanticRuntimeProvider::Local,
+            model: "Qdrant/all-MiniLM-L6-v2-onnx",
+            credentials: &credentials,
+            local_artifact_policy: LocalArtifactPolicy::RequirePrepared,
+        })
+        .expect("repository local model alias key should build");
+
+        assert_eq!(canonical, fastembed_alias);
+        assert_eq!(canonical, repository_alias);
+        assert_eq!(canonical.model, "all-MiniLM-L6-v2");
     }
 
     #[test]
