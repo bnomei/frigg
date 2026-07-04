@@ -244,11 +244,13 @@ pub(crate) struct ResolvedNavigationTarget {
     pub resolution_source: &'static str,
 }
 
+/// Result bundle for `read_file`, including best-effort provenance attribution.
 pub(crate) struct ReadFileExecution {
     pub result: Result<ReadFileResponse, ErrorData>,
     pub provenance_result: Result<(), ErrorData>,
 }
 
+/// Execution summary for `search_text` used to emit diagnostics and tool-call telemetry.
 #[allow(dead_code)]
 pub(crate) struct SearchTextExecution {
     pub result: Result<Json<SearchTextResponse>, ErrorData>,
@@ -262,6 +264,7 @@ pub(crate) struct SearchTextExecution {
     pub read_diagnostics_count: usize,
 }
 
+/// Execution summary for `explore`, including resolved scope and pagination metadata.
 pub(crate) struct ExploreExecution {
     pub result: Result<ExploreResponse, ErrorData>,
     pub resolved_repository_id: Option<String>,
@@ -274,6 +277,7 @@ pub(crate) struct ExploreExecution {
     pub truncated: bool,
 }
 
+/// Execution summary for `search_hybrid`, including channel health and optional result anchors.
 #[allow(dead_code)]
 pub(crate) struct SearchHybridExecution {
     pub result: Result<Json<SearchHybridResponse>, ErrorData>,
@@ -298,9 +302,9 @@ pub(crate) struct SearchHybridExecution {
 
 const RUNTIME_TASK_RECENT_LIMIT: usize = 16;
 
-#[derive(Debug, Default)]
 /// Tracks in-flight and recently completed runtime work so long-lived servers can coordinate
 /// background activity without duplicating the same repository task.
+#[derive(Debug, Default)]
 pub struct RuntimeTaskRegistry {
     next_sequence: u64,
     active: BTreeMap<String, RuntimeTaskSummary>,
@@ -308,10 +312,12 @@ pub struct RuntimeTaskRegistry {
 }
 
 impl RuntimeTaskRegistry {
+    /// Creates an empty runtime task registry with no active or recent work.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Records one repository-scoped runtime task and returns its stable task id.
     pub fn start_task(
         &mut self,
         kind: RuntimeTaskKind,
@@ -350,6 +356,7 @@ impl RuntimeTaskRegistry {
         task_id
     }
 
+    /// Starts a task only when none of the supplied repository aliases already has conflicting work.
     pub fn start_task_if_no_active_for_any_repository(
         &mut self,
         conflict_kinds: &[RuntimeTaskKind],
@@ -367,6 +374,7 @@ impl RuntimeTaskRegistry {
         Ok(self.start_task(kind, repository_id, phase, detail))
     }
 
+    /// Moves an active task into the bounded recent-task history with its final status.
     pub fn finish_task(
         &mut self,
         task_id: &str,
@@ -398,6 +406,7 @@ impl RuntimeTaskRegistry {
         self.push_recent(summary);
     }
 
+    /// Returns active tasks in deterministic creation order for status responses.
     pub fn active_tasks(&self) -> Vec<RuntimeTaskSummary> {
         let mut tasks = self.active.values().cloned().collect::<Vec<_>>();
         tasks.sort_by(|left, right| {
@@ -408,12 +417,14 @@ impl RuntimeTaskRegistry {
         tasks
     }
 
+    /// Checks for exact task-kind, repository-id, and phase activity.
     pub fn has_active_task(&self, kind: RuntimeTaskKind, repository_id: &str, phase: &str) -> bool {
         self.active.values().any(|task| {
             task.kind == kind && task.repository_id == repository_id && task.phase == phase
         })
     }
 
+    /// Checks whether one repository already has active work of the requested kind.
     pub fn has_active_task_for_repository(
         &self,
         kind: RuntimeTaskKind,
@@ -424,6 +435,7 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && task.repository_id == repository_id)
     }
 
+    /// Checks active work across stable and runtime repository-id aliases.
     pub fn has_active_task_for_any_repository(
         &self,
         kind: RuntimeTaskKind,
@@ -434,6 +446,7 @@ impl RuntimeTaskRegistry {
             .any(|task| task.kind == kind && repository_ids.contains(&task.repository_id.as_str()))
     }
 
+    /// Returns conflicting active tasks for a set of kinds and repository aliases.
     pub fn active_tasks_for_kinds_and_any_repository(
         &self,
         kinds: &[RuntimeTaskKind],
@@ -455,10 +468,12 @@ impl RuntimeTaskRegistry {
         tasks
     }
 
+    /// Returns recently completed tasks newest-first for runtime status payloads.
     pub fn recent_tasks(&self) -> Vec<RuntimeTaskSummary> {
         self.recent.iter().rev().cloned().collect::<Vec<_>>()
     }
 
+    /// Updates task detail in active or recent history when late error context becomes available.
     pub fn update_task_detail(&mut self, task_id: &str, detail: Option<String>) -> bool {
         if let Some(task) = self.active.get_mut(task_id) {
             task.detail = detail;
@@ -486,6 +501,7 @@ pub struct RuntimeTaskGuard {
 }
 
 impl RuntimeTaskGuard {
+    /// Starts a registry task and ensures unfinished work is marked failed when the guard drops.
     pub fn start(
         registry: Arc<RwLock<RuntimeTaskRegistry>>,
         kind: RuntimeTaskKind,
@@ -503,6 +519,7 @@ impl RuntimeTaskGuard {
         }
     }
 
+    /// Starts a guarded task only when no conflicting task exists for any repository alias.
     pub fn try_start_if_no_active_for_any_repository(
         registry: Arc<RwLock<RuntimeTaskRegistry>>,
         conflict_kinds: &[RuntimeTaskKind],
@@ -529,12 +546,14 @@ impl RuntimeTaskGuard {
         })
     }
 
+    /// Returns the registry task id while the guard still owns the active task.
     pub fn task_id(&self) -> &str {
         self.task_id
             .as_deref()
             .expect("runtime task guard should hold an active task id")
     }
 
+    /// Completes the guarded task exactly once and removes the drop-time failure fallback.
     pub fn finish(&mut self, status: RuntimeTaskStatus, detail: Option<String>) {
         self.finish_inner(status, detail);
     }
@@ -877,6 +896,7 @@ mod tests {
     }
 }
 
+/// Execution summary for `search_symbol`, including corpus diagnostics and effective limit.
 pub(crate) struct SearchSymbolExecution {
     pub result: Result<Json<SearchSymbolResponse>, ErrorData>,
     pub scoped_repository_ids: Vec<String>,
@@ -887,6 +907,7 @@ pub(crate) struct SearchSymbolExecution {
     pub effective_limit: Option<usize>,
 }
 
+/// Symbol match after navigation-aware rank, path-class rank, and context rank are assigned.
 #[derive(Debug, Clone)]
 pub(crate) struct RankedSymbolMatch {
     pub rank: u8,
@@ -895,6 +916,7 @@ pub(crate) struct RankedSymbolMatch {
     pub matched: SymbolMatch,
 }
 
+/// Execution summary for `find_references`, including precise and source fallback budgets.
 #[allow(dead_code)]
 pub(crate) struct FindReferencesExecution {
     pub result: Result<Json<FindReferencesResponse>, ErrorData>,
@@ -923,6 +945,7 @@ pub(crate) struct FindReferencesExecution {
     pub effective_limit: Option<usize>,
 }
 
+/// One failed precise-artifact candidate retained for user-facing ingest diagnostics.
 #[derive(Debug, Clone)]
 pub(crate) struct PreciseArtifactFailureSample {
     pub artifact_label: String,
@@ -944,6 +967,7 @@ pub(crate) struct PreciseIngestStats {
     pub failed_artifacts: Vec<PreciseArtifactFailureSample>,
 }
 
+/// Resource ceilings that keep reference search bounded across SCIP artifacts and source fallback.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FindReferencesResourceBudgets {
     pub scip_max_artifacts: usize,
@@ -993,6 +1017,7 @@ impl PreciseCoverageMode {
     }
 }
 
+/// Stable file metadata digest for a discovered SCIP artifact candidate.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ScipArtifactDigest {
     pub path: PathBuf,
@@ -1009,6 +1034,7 @@ pub(crate) struct ScipArtifactDiscovery {
     pub artifact_digests: Vec<ScipArtifactDigest>,
 }
 
+/// Stable existence and freshness digest for a directory probed during SCIP discovery.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ScipCandidateDirectoryDigest {
     pub path: PathBuf,
@@ -1016,6 +1042,7 @@ pub(crate) struct ScipCandidateDirectoryDigest {
     pub mtime_ns: Option<u64>,
 }
 
+/// On-disk encoding supported for SCIP precise-artifact ingest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ScipArtifactFormat {
     Json,
@@ -1039,6 +1066,7 @@ impl ScipArtifactFormat {
     }
 }
 
+/// Small deterministic FNV-style hasher used for cache signatures that must not vary by process.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DeterministicSignatureHasher {
     state: u64,

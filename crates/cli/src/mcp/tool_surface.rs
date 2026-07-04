@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::mcp::types::PUBLIC_TOOL_NAMES;
 
+/// Environment variable selecting the registered MCP tool subset for this process.
 pub const TOOL_SURFACE_PROFILE_ENV: &str = "FRIGG_MCP_TOOL_SURFACE_PROFILE";
 
 /// Registered MCP tool subset exposed by the running server process.
@@ -74,6 +75,7 @@ fn profile_tool_names(profile: ToolSurfaceProfile) -> Vec<String> {
     names
 }
 
+/// Builds the expected sorted tool-name manifest for one runtime profile.
 pub fn manifest_for_tool_surface_profile(profile: ToolSurfaceProfile) -> ToolSurfaceManifest {
     ToolSurfaceManifest {
         profile,
@@ -81,6 +83,7 @@ pub fn manifest_for_tool_surface_profile(profile: ToolSurfaceProfile) -> ToolSur
     }
 }
 
+/// Returns manifests for every supported tool-surface profile.
 pub fn tool_surface_profile_manifests() -> [ToolSurfaceManifest; 2] {
     [
         manifest_for_tool_surface_profile(ToolSurfaceProfile::Core),
@@ -102,6 +105,7 @@ impl ToolSurfaceParityDiff {
     }
 }
 
+/// Compares a registered tool router against the manifest for a target profile.
 pub fn diff_runtime_against_profile_manifest(
     profile: ToolSurfaceProfile,
     runtime_registered_tool_names: &[String],

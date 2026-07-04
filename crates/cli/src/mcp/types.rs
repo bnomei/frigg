@@ -9,6 +9,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Full public MCP tool manifest when playbook tools are compiled in.
 #[cfg(feature = "playbook")]
 pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "workspace",
@@ -32,6 +33,7 @@ pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "playbook_replay",
     "playbook_compose_citations",
 ];
+/// Full public MCP tool manifest for the default build without playbook tools.
 #[cfg(not(feature = "playbook"))]
 pub const PUBLIC_TOOL_NAMES: &[&str] = &[
     "workspace",
@@ -101,7 +103,9 @@ pub const PUBLIC_READ_ONLY_TOOL_NAMES: &[&str] = &[
 pub const PUBLIC_SESSION_STATEFUL_TOOL_NAMES: [&str; 1] = ["workspace"];
 /// Public tools that can change ignored `.frigg/` maintenance state and therefore require confirmation.
 pub const PUBLIC_WRITE_TOOL_NAMES: [&str; 0] = [];
+/// Request parameter name used by write-capable tools to require explicit confirmation.
 pub const WRITE_CONFIRM_PARAM: &str = "confirm";
+/// Stable MCP error code returned when a write-capable tool lacks required confirmation.
 pub const WRITE_CONFIRMATION_REQUIRED_ERROR_CODE: &str = "confirmation_required";
 
 /// Object-only metadata payload used by several MCP read responses.

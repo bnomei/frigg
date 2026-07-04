@@ -212,6 +212,7 @@ pub struct ToolCallDisplayEvent {
     pub session_id: String,
 }
 
+/// Callback used by CLI transports to mirror completed MCP tool calls in human progress output.
 pub type ToolCallDisplaySink = Arc<dyn Fn(ToolCallDisplayEvent) + Send + Sync + 'static>;
 
 #[doc(hidden)]

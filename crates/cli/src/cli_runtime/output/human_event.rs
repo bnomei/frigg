@@ -1,3 +1,8 @@
+//! Human event router that classifies structured CLI events into display components.
+//!
+//! This layer keeps event semantics decoupled from terminal layout choices, so new CLI events can
+//! reuse the same stdout/stderr contract while gaining an appropriate TTY presentation.
+
 use frigg::human_output::HumanRow;
 
 use super::human_block::{
@@ -33,6 +38,7 @@ pub(crate) enum HumanEventKind {
 }
 
 impl HumanEventKind {
+    /// Maps stable area/event fields into one human renderer branch without changing CLI output data.
     fn classify(level: OutputLevel, area: &str, event: &str, fields: &[OutputField]) -> Self {
         if area == "tool" && event == "call" {
             return Self::ToolCall;

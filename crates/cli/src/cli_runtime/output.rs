@@ -1,4 +1,7 @@
-//! Small CLI output policy layer for stable stdout results and stderr diagnostics.
+//! CLI output policy for stable machine lines and human terminal diagnostics.
+//!
+//! Non-interactive callers receive one-line structured events on stdout or stderr, while TTY
+//! sessions receive richer human blocks on stderr without changing the underlying event fields.
 
 use std::error::Error;
 use std::fmt::Display;

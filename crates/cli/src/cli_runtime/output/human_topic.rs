@@ -1,3 +1,8 @@
+//! Topic and severity color policy for human CLI output.
+//!
+//! The mapping keeps color decisions tied to event meaning, status, and command area instead of
+//! scattering ANSI choices across index, watch, storage, and precise formatters.
+
 use super::OutputLevel;
 use super::fields::FieldBag;
 

@@ -1,3 +1,8 @@
+//! Human formatting for precise-artifact plan, run, and generator progress events.
+//!
+//! These helpers translate stable structured fields into terminal rows without changing the
+//! machine-readable event vocabulary emitted by index and workspace commands.
+
 use frigg::human_output::HumanRow;
 
 use super::human_block::{

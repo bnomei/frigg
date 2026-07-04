@@ -24,6 +24,10 @@ impl FriggMcpServer {
         }
     }
 
+    /// Builds the watch-runtime callback that invalidates all repository-scoped MCP cache families.
+    ///
+    /// The callback accepts either stable or runtime repository ids, normalizes to the canonical
+    /// `repository_id`, and also clears runtime-id projection entries when both ids differ.
     pub fn repository_cache_invalidation_callback(
         &self,
     ) -> crate::watch::RepositoryCacheInvalidationCallback {
@@ -68,6 +72,11 @@ impl FriggMcpServer {
         *state = watch_runtime;
     }
 
+    /// Resolves a workspace target from either a path or repository id and installs rollback guards.
+    ///
+    /// Relative paths may be resolved against the current session root, while path-based resolution
+    /// creates a pending workspace guard so failed attach attempts do not leave ephemeral roots
+    /// incorrectly pruned or adopted.
     pub(super) fn resolve_workspace_target(
         &self,
         path: Option<&str>,

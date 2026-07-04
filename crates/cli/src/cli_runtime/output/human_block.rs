@@ -1,3 +1,8 @@
+//! Low-level terminal block rendering for Frigg's human CLI output.
+//!
+//! Width budgeting, color accents, badges, continuation lines, and row cleanup live here so
+//! command-specific formatters can pass semantic rows instead of terminal layout details.
+
 use std::fmt::Display;
 
 use frigg::human_output::{

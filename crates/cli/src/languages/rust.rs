@@ -11,6 +11,7 @@ use crate::indexer::{SymbolDefinition, SymbolKind, byte_offset_for_line_column};
 
 use super::registry::{SymbolLanguage, node_field_text, node_name_text, parser_for_path};
 
+/// Candidate implementation relation found without SCIP precise coverage.
 #[derive(Debug, Clone)]
 pub(crate) struct RustImplementationMatchCandidate<'a> {
     pub(crate) source_symbol: &'a SymbolDefinition,
@@ -19,6 +20,7 @@ pub(crate) struct RustImplementationMatchCandidate<'a> {
     pub(crate) fallback_reason: &'static str,
 }
 
+/// Parsed Rust query context used to bias navigation toward same-file methods and modules.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RustNavigationQueryHint {
     pub(crate) symbol_query: String,
@@ -29,6 +31,7 @@ pub(crate) struct RustNavigationQueryHint {
     pub(crate) enclosing_impl_type: Option<String>,
 }
 
+/// Enclosing trait and impl metadata for one Rust query anchor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RustEnclosingSymbolContext {
     pub(crate) trait_name: Option<String>,
@@ -36,6 +39,7 @@ pub(crate) struct RustEnclosingSymbolContext {
     pub(crate) impl_trait: Option<String>,
 }
 
+/// Test-context flags used to keep navigation and implementation heuristics from over-selecting tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RustSymbolContext {
     pub(crate) inside_test_module: bool,
@@ -49,6 +53,7 @@ impl RustSymbolContext {
     }
 }
 
+/// Kind of Rust implementation relation inferred from an `impl` block signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RustImplementationKind {
     ConcreteTrait,
@@ -56,6 +61,7 @@ pub(crate) enum RustImplementationKind {
     Inherent,
 }
 
+/// Indexed Rust impl-block fact used by heuristic implementation and reference fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RustImplementationFact {
     pub(crate) source_symbol_index: usize,
@@ -64,6 +70,7 @@ pub(crate) struct RustImplementationFact {
     pub(crate) kind: RustImplementationKind,
 }
 
+/// Rust source analysis attached to indexed symbols for navigation fallback.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RustIndexedSourceAnalysis {
     pub(crate) symbol_contexts_by_index: Vec<(usize, RustSymbolContext)>,

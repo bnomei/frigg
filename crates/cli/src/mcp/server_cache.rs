@@ -74,18 +74,26 @@ pub(crate) enum RuntimeCacheResidency {
 /// Reuse semantics for one runtime cache family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheReuseClass {
+    /// Reusable across requests only when the repository snapshot freshness key still matches.
     SnapshotScopedReusable,
+    /// Process metadata keyed by repository id or exact input rather than a manifest snapshot.
     ProcessMetadata,
+    /// Scoped to one tool execution and never eligible for cross-request reuse.
     RequestLocalOnly,
+    /// Process-wide storage is declared, but reuse is deferred until read-only freshness is proven.
     DeferredUntilReadOnly,
 }
 
 /// Freshness inputs required before a cached value may be reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeCacheFreshnessContract {
+    /// Cache key must include the current validated repository manifest snapshot.
     RepositorySnapshot,
+    /// Cache key is stable for a repository identity and invalidated by repository events.
     RepositoryId,
+    /// Cache key is the exact caller input and independent of repository freshness.
     ExactInput,
+    /// Cache value cannot outlive the current request-local execution scope.
     RequestLocal,
 }
 

@@ -1,5 +1,11 @@
+//! Shared field lookup and quoting rules for CLI structured events.
+//!
+//! `FieldBag` lets human formatters inspect emitted fields without cloning them, while
+//! `format_field_value` preserves the one-line machine event grammar for shell consumers.
+
 use super::OutputField;
 
+/// Borrowed view over structured event fields used by human output classifiers.
 #[derive(Clone, Copy)]
 pub(crate) struct FieldBag<'a> {
     fields: &'a [OutputField],
@@ -27,6 +33,7 @@ impl<'a> FieldBag<'a> {
     }
 }
 
+/// Formats one structured event value for the stable `key=value` CLI line protocol.
 pub(crate) fn format_field_value(value: &str) -> String {
     if value.is_empty() {
         return "\"\"".to_owned();

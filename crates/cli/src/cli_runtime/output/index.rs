@@ -1,3 +1,8 @@
+//! Human formatting for index, semantic refresh, and path-level progress events.
+//!
+//! This module preserves the structured event contract while grouping repository, snapshot,
+//! semantic, and file-delta fields into compact terminal rows.
+
 use std::collections::HashSet;
 use std::io;
 

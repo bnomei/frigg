@@ -114,6 +114,7 @@ impl WorkspaceRegistry {
         (workspace, !already_known)
     }
 
+    /// Marks a resolved workspace as pending while attach/index setup decides whether to adopt it.
     pub(crate) fn mark_workspace_pending(&mut self, repository_id: &str) -> usize {
         let count = self
             .pending_workspace_counts
@@ -123,6 +124,7 @@ impl WorkspaceRegistry {
         *count
     }
 
+    /// Releases a pending workspace guard after attach succeeds, rolls back, or errors.
     pub(crate) fn mark_workspace_pending_released(&mut self, repository_id: &str) -> usize {
         let Some(count) = self.pending_workspace_counts.get_mut(repository_id) else {
             return 0;
@@ -135,6 +137,7 @@ impl WorkspaceRegistry {
         remaining
     }
 
+    /// Pending guard count used to keep ephemeral workspaces alive until resolution finishes.
     pub(crate) fn pending_workspace_count(&self, repository_id: &str) -> usize {
         self.pending_workspace_counts
             .get(repository_id)
@@ -165,6 +168,7 @@ impl WorkspaceRegistry {
         remaining
     }
 
+    /// Removes an ephemeral workspace only after no startup, pending, or adopted session references remain.
     pub(crate) fn prune_inactive_ephemeral_workspace(
         &mut self,
         repository_id: &str,
