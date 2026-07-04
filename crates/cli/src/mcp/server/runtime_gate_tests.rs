@@ -39,8 +39,7 @@ use scip::types::{
 use serde_json::Value;
 
 use super::{
-    FriggMcpServer, PreciseCoverageMode, PreciseIngestStats, ReadOnlyToolExecutionContext,
-    RepositoryResponseCacheFreshnessMode,
+    FriggMcpServer, PreciseCoverageMode, PreciseIngestStats, RepositoryResponseCacheFreshnessMode,
 };
 
 static TEST_PATH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

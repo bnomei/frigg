@@ -40,13 +40,8 @@ fn read_only_tool_execution_context_scopes_session_repository_with_manifest_fres
         )
         .expect("tool execution context should resolve current repository");
 
-    assert_eq!(
-        context.base,
-        ReadOnlyToolExecutionContext {
-            tool_name: "search_text",
-            repository_hint: None,
-        }
-    );
+    assert_eq!(context.base.tool_name, "search_text");
+    assert_eq!(context.base.repository_hint, None);
     assert_eq!(context.scoped_repository_ids, vec![repository_id]);
     assert_eq!(context.scoped_workspaces.len(), 1);
     assert!(
