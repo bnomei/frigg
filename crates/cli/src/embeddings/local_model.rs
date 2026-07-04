@@ -25,8 +25,8 @@ const DOWNLOAD_PROGRESS_SEMANTIC_COLOR: &str = "\x1b[1;38;2;90;205;210m";
 #[cfg(test)]
 const DOWNLOAD_PROGRESS_COLOR_RESET: &str = "\x1b[0m";
 const DOWNLOAD_PROGRESS_TEMPLATE_PLAIN: &str =
-    "╭─○ Loading semantic model\n╰─  {msg:28} {bytes}/{total_bytes}";
-const DOWNLOAD_PROGRESS_TEMPLATE_COLOR: &str = "\x1b[1;38;2;90;205;210m╭─○ Loading semantic model\x1b[0m\n\x1b[1;38;2;90;205;210m╰─  \x1b[0m{msg:28} {bytes}/{total_bytes}";
+    "╭─○ Loading semantic model\n╰─╮ {msg:28} {bytes}/{total_bytes}";
+const DOWNLOAD_PROGRESS_TEMPLATE_COLOR: &str = "\x1b[1;38;2;90;205;210m╭─○ Loading semantic model\x1b[0m\n\x1b[1;38;2;90;205;210m╰─╮ \x1b[0m{msg:28} {bytes}/{total_bytes}";
 
 /// Mapping between a semantic runtime model name and its fastembed artifact metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -470,10 +470,10 @@ fn stable_download_progress_preview(
     let label_width = DOWNLOAD_PROGRESS_LABEL_WIDTH;
     if color {
         format!(
-            "{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╭─○ Loading semantic model{DOWNLOAD_PROGRESS_COLOR_RESET}\n{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╰─  {DOWNLOAD_PROGRESS_COLOR_RESET}{label:<label_width$} {loaded}/{total}",
+            "{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╭─○ Loading semantic model{DOWNLOAD_PROGRESS_COLOR_RESET}\n{DOWNLOAD_PROGRESS_SEMANTIC_COLOR}╰─╮ {DOWNLOAD_PROGRESS_COLOR_RESET}{label:<label_width$} {loaded}/{total}",
         )
     } else {
-        format!("╭─○ Loading semantic model\n╰─  {label:<label_width$} {loaded}/{total}",)
+        format!("╭─○ Loading semantic model\n╰─╮ {label:<label_width$} {loaded}/{total}",)
     }
 }
 
@@ -681,9 +681,9 @@ mod tests {
         let color_template = stable_download_progress_template_for_color(true);
 
         assert!(plain_template.starts_with("╭─○ Loading semantic model"));
-        assert!(plain_template.contains("╰─  {msg:28} {bytes}/{total_bytes}"));
+        assert!(plain_template.contains("╰─╮ {msg:28} {bytes}/{total_bytes}"));
         assert!(color_template.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
-        assert!(color_template.contains("╰─  \u{1b}[0m{msg:28} {bytes}/{total_bytes}"));
+        assert!(color_template.contains("╰─╮ \u{1b}[0m{msg:28} {bytes}/{total_bytes}"));
         for template in [plain_template, color_template] {
             assert!(!template.contains("bytes_per_sec"));
             assert!(!template.contains("eta"));
@@ -700,7 +700,7 @@ mod tests {
 
         assert_eq!(
             preview,
-            "╭─○ Loading semantic model\n╰─  model.onnx                   19.53 MiB/86.20 MiB"
+            "╭─○ Loading semantic model\n╰─╮ model.onnx                   19.53 MiB/86.20 MiB"
         );
         assert!(colored.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
         assert!(colored.contains("model.onnx"));

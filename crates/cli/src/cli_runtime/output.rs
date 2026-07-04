@@ -15,7 +15,7 @@ const HUMAN_TEXT_COLUMN: usize = 4;
 const HUMAN_CARD_MAX_LABEL_WIDTH: usize = 28;
 const HUMAN_CARD_TITLE_PREFIX: &str = "╭─";
 const HUMAN_CARD_ROW_PREFIX: &str = "│   ";
-const HUMAN_CARD_FOOTER_PREFIX: &str = "╰─  ";
+const HUMAN_CARD_FOOTER_PREFIX: &str = "╰─╮ ";
 const HUMAN_ACTIVITY_PREFIX: &str = "  ";
 const HUMAN_DETAIL_PREFIX: &str = "    ";
 const HUMAN_DETAIL_RAIL_PREFIX: &str = "  │ ";
@@ -1298,8 +1298,18 @@ fn format_human_kv_block(
     width: usize,
 ) -> String {
     let accent = human_title_accent_color(level, fields, title);
+    let rail_accent = human_sidecar_line_color(fields, title, accent);
     let marker = human_symbol(level, fields, marker_style);
-    format_human_kv_block_with_marker(title, rows, notes, marker, accent, color, width)
+    format_human_kv_block_with_marker(
+        title,
+        rows,
+        notes,
+        marker,
+        accent,
+        rail_accent,
+        color,
+        width,
+    )
 }
 
 fn format_human_kv_block_with_marker(
@@ -1308,6 +1318,7 @@ fn format_human_kv_block_with_marker(
     notes: Vec<String>,
     marker: &str,
     accent: &str,
+    rail_accent: &str,
     color: bool,
     width: usize,
 ) -> String {
@@ -1345,7 +1356,7 @@ fn format_human_kv_block_with_marker(
             &value,
             label_width,
             row_prefix,
-            accent,
+            rail_accent,
             color,
             width,
         ));
@@ -1359,7 +1370,11 @@ fn format_human_kv_block_with_marker(
         };
         output.push('\n');
         output.push_str(&format_human_kv_note(
-            &note, row_prefix, accent, color, width,
+            &note,
+            row_prefix,
+            rail_accent,
+            color,
+            width,
         ));
     }
     output
@@ -1429,12 +1444,14 @@ fn format_human_card(
 ) -> String {
     trim_human_separators(&mut rows);
     let accent = human_title_accent_color(level, &[], title);
+    let rail_accent = human_sidecar_line_color(&[], title, accent);
     format_human_kv_block_with_marker(
         title,
         rows,
         Vec::new(),
         human_card_marker(level),
         accent,
+        rail_accent,
         color,
         width,
     )
@@ -1890,6 +1907,16 @@ fn human_title_accent_color(
         return color;
     }
     human_state_fallback_accent_color(level, status).unwrap_or_else(|| title_color(level))
+}
+
+fn human_sidecar_line_color(
+    fields: &[OutputField],
+    title: &str,
+    fallback: &'static str,
+) -> &'static str {
+    human_field_topic_color(fields, title)
+        .or_else(|| human_title_topic_color(title))
+        .unwrap_or(fallback)
 }
 
 fn human_severity_accent_color(level: OutputLevel, status: &str) -> Option<&'static str> {
@@ -2438,8 +2465,9 @@ mod tests {
     use super::{
         HUMAN_COLOR_ACTION_CREATED, HUMAN_COLOR_ACTION_DELETED, HUMAN_COLOR_ACTION_MODIFIED,
         HUMAN_COLOR_TOPIC_INDEX, HUMAN_COLOR_TOPIC_PRECISE, HUMAN_COLOR_TOPIC_SEMANTIC,
-        HUMAN_COLOR_TOPIC_STORAGE, HUMAN_COLOR_TOPIC_WATCH, OutputLevel, OutputMode, field,
-        format_event_line, format_human_event, format_human_event_with_width, format_human_intro,
+        HUMAN_COLOR_TOPIC_STORAGE, HUMAN_COLOR_TOPIC_WATCH, HUMAN_COLOR_WARN, OutputLevel,
+        OutputMode, field, format_event_line, format_human_event, format_human_event_with_width,
+        format_human_intro,
     };
 
     #[test]
@@ -2533,7 +2561,7 @@ mod tests {
         assert!(output.contains("╭─● Index complete"));
         assert!(output.contains("repos"));
         assert!(output.contains("42ms"));
-        assert!(output.contains("╰─  duration"));
+        assert!(output.contains("╰─╮ duration"));
         assert!(!output.contains("╰ Index complete"));
     }
 
@@ -2603,7 +2631,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("/repo/src/main.rs"))
             .expect("watch path should render as a kv row");
-        assert!(path_line.starts_with("╰─  "));
+        assert!(path_line.starts_with("╰─╮ "));
         assert_eq!(char_column(path_line, "path"), Some(4));
         assert!(!output.contains("└─ path: /repo/src/main.rs"));
     }
@@ -2675,7 +2703,7 @@ mod tests {
                 .filter(|line| !line.is_empty())
                 .all(|line| matches!(line.chars().next(), Some('╭' | '│' | '╰')))
         );
-        assert!(lines.last().is_some_and(|line| line.starts_with("╰─  ")));
+        assert!(lines.last().is_some_and(|line| line.starts_with("╰─╮ ")));
         assert!(!output.contains("\n\n"));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
@@ -2701,10 +2729,36 @@ mod tests {
 
         assert!(lines[0].starts_with("╭─○ Semantic model"));
         assert!(lines[1].starts_with("│   provider"));
-        assert!(lines[2].starts_with("╰─  model"));
+        assert!(lines[2].starts_with("╰─╮ model"));
         assert_eq!(char_column(lines[0], "○"), Some(2));
+        assert_eq!(char_column(lines[2], "╮"), Some(2));
         assert_eq!(char_column(lines[0], "Semantic model"), Some(4));
         assert_eq!(char_column(lines[1], "provider"), Some(4));
+    }
+
+    #[test]
+    fn human_card_corner_keeps_topic_color_under_warning_status() {
+        let output = format_human_event_with_width(
+            OutputLevel::Warn,
+            "startup",
+            "semantic_model",
+            &[
+                field("status", "retry"),
+                field("provider", "local"),
+                field("model", "all-MiniLM-L6-v2"),
+            ],
+            None,
+            true,
+            80,
+        );
+
+        assert!(output.starts_with(&format!(
+            "\u{1b}[{HUMAN_COLOR_WARN}m╭─▲ Semantic model\u{1b}[0m"
+        )));
+        assert!(output.contains(&format!(
+            "\u{1b}[{HUMAN_COLOR_TOPIC_SEMANTIC}m╰─╮ \u{1b}[0m"
+        )));
+        assert!(!output.contains(&format!("\u{1b}[{HUMAN_COLOR_WARN}m╰─╮ \u{1b}[0m")));
     }
 
     #[test]
@@ -3130,7 +3184,7 @@ mod tests {
         assert_eq!(char_column(lines[0], "○"), Some(2));
         assert_eq!(char_column(lines[0], "Serve starting"), Some(4));
         assert_eq!(char_column(lines[1], "transport"), Some(4));
-        assert!(lines[1].starts_with("╰─  "));
+        assert!(lines[1].starts_with("╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
@@ -3156,7 +3210,7 @@ mod tests {
         assert_eq!(char_column(lines[1], "changed"), Some(10));
         assert_eq!(char_column(lines[2], "repos"), Some(4));
         assert_eq!(char_column(lines[2], "1"), Some(10));
-        assert!(lines[2].starts_with("╰─  "));
+        assert!(lines[2].starts_with("╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
@@ -3188,7 +3242,7 @@ mod tests {
         assert_eq!(repos_value_column, generators_value_column);
         assert_eq!(repos_value_column, missing_tool_value_column);
         assert_eq!(repos_value_column, skipped_value_column);
-        assert!(lines[4].starts_with("╰─  "));
+        assert!(lines[4].starts_with("╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
