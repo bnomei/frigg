@@ -832,50 +832,6 @@ async fn search_text_recomputes_stale_manifest_scoped_results_after_edit() {
     assert_eq!(second.total_matches, 1);
     assert_eq!(second.matches[0].path, "src/lib.rs");
     assert!(second.matches[0].excerpt.contains("beta_beta"));
-    assert_eq!(
-        second
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.freshness_basis.as_ref())
-            .map(|freshness| freshness.cacheable),
-        Some(false),
-        "stale manifest-backed text search should surface non-cacheable freshness metadata until a fresh snapshot exists"
-    );
-    let text_repository_freshness = second
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.freshness_basis.as_ref())
-        .and_then(|freshness| freshness.repositories.first())
-        .expect("search_text freshness metadata should include repository details");
-    assert!(
-        !text_repository_freshness.candidate_source.is_empty(),
-        "search_text freshness metadata should include candidate_source"
-    );
-    assert!(
-        !text_repository_freshness
-            .recommended_client_behavior
-            .is_empty(),
-        "search_text freshness metadata should include recommended_client_behavior"
-    );
-    assert!(
-        text_repository_freshness.active_index_tasks.is_empty(),
-        "search_text freshness metadata should expose empty active_index_tasks"
-    );
-    let text_freshness_value = serde_json::to_value(
-        second
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.freshness_basis.as_ref())
-            .expect("search_text freshness metadata should be present"),
-    )
-    .expect("search_text freshness metadata should serialize");
-    assert!(
-        text_freshness_value["repositories"][0]
-            .get("active_index_tasks")
-            .and_then(|value| value.as_array())
-            .is_some(),
-        "typed search_text freshness serialization should keep active_index_tasks when empty"
-    );
 
     let stale = server
         .search_text(Parameters(SearchTextParams {
@@ -949,11 +905,11 @@ async fn search_hybrid_recomputes_stale_manifest_scoped_results_after_edit() {
             .as_ref()
             .map(|metadata| serde_json::to_value(metadata).expect("metadata should serialize"))
             .as_ref()
-            .and_then(|metadata| metadata.get("freshness_basis"))
+            .and_then(|metadata| metadata.get("cache_debug"))
             .and_then(|value| value.get("cacheable"))
             .and_then(|value| value.as_bool()),
         Some(false),
-        "stale manifest-backed queries should surface non-cacheable freshness metadata until a fresh snapshot exists"
+        "full search_hybrid diagnostics should surface non-cacheable cache_debug metadata until repository data is refreshed"
     );
 
     let stale = server

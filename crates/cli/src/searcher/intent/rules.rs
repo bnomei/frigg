@@ -539,6 +539,7 @@ fn apply_ci_workflow_witness_terms(
     builder: &mut SearchIntentBuilder,
 ) -> bool {
     let explicit_ci_workflow_signal = context.has_any(&[
+        "build pipeline",
         "github workflow",
         "github action",
         "github actions",

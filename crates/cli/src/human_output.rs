@@ -6,6 +6,9 @@ const HUMAN_CARD_TITLE_PREFIX: &str = "╭─";
 const HUMAN_CARD_ROW_PREFIX: &str = "│   ";
 const HUMAN_CARD_FOOTER_PREFIX: &str = "╰─╮ ";
 const HUMAN_CARD_MAX_LABEL_WIDTH: usize = 28;
+const HUMAN_BADGE_STYLE: &str = "1;97;48;5;240";
+const HUMAN_BADGE_WIDTH: usize = 3;
+const HUMAN_BADGE_SEPARATOR_WIDTH: usize = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HumanRow {
@@ -55,6 +58,16 @@ pub struct HumanBlock {
     marker: String,
     accent: String,
     rail_accent: String,
+    badge: Option<String>,
+    badge_mode: HumanBadgeMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HumanBadgeMode {
+    None,
+    FirstLine,
+    TextThenEmpty,
+    EmptyColumn,
 }
 
 impl HumanBlock {
@@ -71,7 +84,33 @@ impl HumanBlock {
             marker: marker.into(),
             accent: accent.into(),
             rail_accent: rail_accent.into(),
+            badge: None,
+            badge_mode: HumanBadgeMode::None,
         }
+    }
+
+    pub fn with_badge(mut self, badge: impl Into<String>) -> Self {
+        let badge = badge.into();
+        if !badge.trim().is_empty() {
+            self.badge = Some(badge);
+            self.badge_mode = HumanBadgeMode::FirstLine;
+        }
+        self
+    }
+
+    pub fn with_badge_column(mut self, badge: impl Into<String>) -> Self {
+        let badge = badge.into();
+        if !badge.trim().is_empty() {
+            self.badge = Some(badge);
+            self.badge_mode = HumanBadgeMode::TextThenEmpty;
+        }
+        self
+    }
+
+    pub fn with_empty_badge_column(mut self) -> Self {
+        self.badge = None;
+        self.badge_mode = HumanBadgeMode::EmptyColumn;
+        self
     }
 
     pub fn render(self, color: bool, width: usize) -> String {
@@ -90,17 +129,29 @@ impl HumanBlock {
             .into_iter()
             .filter_map(HumanRow::into_render_row)
             .collect::<Vec<_>>();
-        let title = truncate_display(&self.title, width.saturating_sub(4));
-        let mut output = colorize(
+        let title_badge = match self.badge_mode {
+            HumanBadgeMode::None => None,
+            HumanBadgeMode::FirstLine | HumanBadgeMode::TextThenEmpty => self.badge.as_deref(),
+            HumanBadgeMode::EmptyColumn => Some(""),
+        };
+        let badge_prefix_width = human_badge_prefix_width(title_badge);
+        let title = truncate_display(&self.title, width.saturating_sub(4 + badge_prefix_width));
+        let title_line = colorize(
             color,
             &self.accent,
             format!("{HUMAN_CARD_TITLE_PREFIX}{} {title}", self.marker),
         );
+        let mut output = format_human_badged_line(title_badge, title_line, color);
         if rows.is_empty() {
             return output;
         }
 
-        let label_width = human_card_label_width(&rows, width, min_label_width);
+        let row_badge = match self.badge_mode {
+            HumanBadgeMode::TextThenEmpty | HumanBadgeMode::EmptyColumn => Some(""),
+            HumanBadgeMode::None | HumanBadgeMode::FirstLine => None,
+        };
+        let row_width = width.saturating_sub(human_badge_prefix_width(row_badge));
+        let label_width = human_card_label_width(&rows, row_width, min_label_width);
         let content_count = rows.len();
         for (index, row) in rows.into_iter().enumerate() {
             let row_prefix = if index + 1 == content_count {
@@ -109,27 +160,51 @@ impl HumanBlock {
                 HUMAN_CARD_ROW_PREFIX
             };
             output.push('\n');
-            match row {
-                RenderRow::Kv { label, value } => output.push_str(&format_human_kv_row(
+            let row_line = match row {
+                RenderRow::Kv { label, value } => format_human_kv_row(
                     &label,
                     &value,
                     label_width,
                     row_prefix,
                     &self.rail_accent,
                     color,
-                    width,
-                )),
-                RenderRow::Note(note) => output.push_str(&format_human_kv_note(
-                    &note,
-                    row_prefix,
-                    &self.rail_accent,
-                    color,
-                    width,
-                )),
-            }
+                    row_width,
+                ),
+                RenderRow::Note(note) => {
+                    format_human_kv_note(&note, row_prefix, &self.rail_accent, color, row_width)
+                }
+            };
+            output.push_str(&format_human_badged_line(row_badge, row_line, color));
         }
         output
     }
+}
+
+pub fn human_badge_prefix_width(badge: Option<&str>) -> usize {
+    if badge.is_some() {
+        HUMAN_BADGE_WIDTH + HUMAN_BADGE_SEPARATOR_WIDTH
+    } else {
+        0
+    }
+}
+
+pub fn format_human_badged_line(
+    badge: Option<&str>,
+    line: impl Into<String>,
+    color: bool,
+) -> String {
+    let line = line.into();
+    let Some(badge) = badge else {
+        return line;
+    };
+    let badge = truncate_display(badge.trim(), 3);
+    let badge = format!("{badge:<HUMAN_BADGE_WIDTH$}");
+    let badge = if color {
+        colorize(color, HUMAN_BADGE_STYLE, badge)
+    } else {
+        badge
+    };
+    format!("{badge} {line}")
 }
 
 enum RenderRow {

@@ -114,61 +114,75 @@ impl FriggMcpServer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_dirty_root(&root);
+        let can_trust_validated_manifest_cache = !dirty_root
+            && self.repository_has_active_watch_lease(&repository_id)
+            && !self.repository_has_active_runtime_work(&repository_id);
         let can_reuse_dirty_live_corpus =
             dirty_root && self.repository_has_active_watch_lease(&repository_id);
-        let (file_digests, manifest_token) =
-            match Self::load_latest_validated_manifest_snapshot_shared(
+        let trusted_snapshot = can_trust_validated_manifest_cache
+            .then(|| {
+                Self::load_latest_cached_validated_manifest_snapshot_shared(
+                    &root,
+                    &runtime_repository_id,
+                    &self.runtime_state.validated_manifest_candidate_cache,
+                )
+            })
+            .flatten();
+        let validated_snapshot = trusted_snapshot.or_else(|| {
+            Self::load_latest_validated_manifest_snapshot_shared(
                 &root,
                 &runtime_repository_id,
                 Some(&self.runtime_state.validated_manifest_candidate_cache),
-            ) {
-                Some(snapshot) => {
-                    let snapshot_source_paths =
-                        Self::manifest_source_paths_for_digests(snapshot.digests.as_ref());
-                    source_paths = Some(snapshot_source_paths);
-                    (
-                        snapshot.digests,
-                        format!("snapshot:{}", snapshot.snapshot_id),
-                    )
-                }
-                None => {
-                    if can_reuse_dirty_live_corpus {
-                        let live_cache_key = SymbolCorpusCacheKey {
-                            repository_id: repository_id.clone(),
-                            manifest_token: "live:dirty_root".to_owned(),
-                        };
-                        if let Some(cached) = self
-                            .cache_state
-                            .symbol_corpus_cache
-                            .read()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .get(&live_cache_key)
-                            .cloned()
-                        {
-                            return Ok(cached);
-                        }
+            )
+        });
+        let (file_digests, manifest_token) = match validated_snapshot {
+            Some(snapshot) => {
+                let snapshot_source_paths =
+                    Self::manifest_source_paths_for_digests(snapshot.digests.as_ref());
+                source_paths = Some(snapshot_source_paths);
+                (
+                    snapshot.digests,
+                    format!("snapshot:{}", snapshot.snapshot_id),
+                )
+            }
+            None => {
+                if can_reuse_dirty_live_corpus {
+                    let live_cache_key = SymbolCorpusCacheKey {
+                        repository_id: repository_id.clone(),
+                        manifest_token: "live:dirty_root".to_owned(),
+                    };
+                    if let Some(cached) = self
+                        .cache_state
+                        .symbol_corpus_cache
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get(&live_cache_key)
+                        .cloned()
+                    {
+                        return Ok(cached);
                     }
-                    let live_output = ManifestBuilder::default()
-                        .build_metadata_with_diagnostics(&root)
-                        .map_err(Self::map_frigg_error)?;
-                    let live_signature = Self::root_signature(&live_output.entries);
-                    manifest_output = Some(live_output);
-                    (
-                        Arc::new(
-                            manifest_output
-                                .as_ref()
-                                .expect("live manifest output just assigned")
-                                .entries
-                                .clone(),
-                        ),
-                        if can_reuse_dirty_live_corpus {
-                            "live:dirty_root".to_owned()
-                        } else {
-                            format!("live:{live_signature}")
-                        },
-                    )
                 }
-            };
+                let live_output = ManifestBuilder::default()
+                    .build_metadata_with_diagnostics(&root)
+                    .map_err(Self::map_frigg_error)?;
+                let live_signature = Self::root_signature(&live_output.entries);
+                manifest_output = Some(live_output);
+                (
+                    Arc::new(
+                        manifest_output
+                            .as_ref()
+                            .expect("live manifest output just assigned")
+                            .entries
+                            .clone(),
+                    ),
+                    if can_reuse_dirty_live_corpus {
+                        "live:dirty_root".to_owned()
+                    } else {
+                        format!("live:{live_signature}")
+                    },
+                )
+            }
+        };
         if let Some(manifest_output) = &manifest_output {
             for manifest_diagnostic in &manifest_output.diagnostics {
                 match manifest_diagnostic.kind {
@@ -345,6 +359,26 @@ impl FriggMcpServer {
         }
         let storage = Storage::new(db_path);
         crate::manifest_validation::latest_validated_manifest_snapshot_shared(
+            &storage,
+            repository_id,
+            root,
+            cache,
+        )
+    }
+
+    fn load_latest_cached_validated_manifest_snapshot_shared(
+        root: &Path,
+        repository_id: &str,
+        cache: &std::sync::Arc<
+            std::sync::RwLock<crate::manifest_validation::ValidatedManifestCandidateCache>,
+        >,
+    ) -> Option<crate::manifest_validation::SharedValidatedManifestSnapshot> {
+        let db_path = resolve_provenance_db_path(root).ok()?;
+        if !db_path.exists() {
+            return None;
+        }
+        let storage = Storage::new(db_path);
+        crate::manifest_validation::latest_cached_validated_manifest_snapshot_shared(
             &storage,
             repository_id,
             root,

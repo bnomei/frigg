@@ -230,6 +230,7 @@ impl FriggMcpServer {
                 ToolCallDisplayStatus::Failed
             },
             context_saved_percent,
+            session_id: self.session_state.display_session_id(),
         });
     }
 }

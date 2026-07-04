@@ -348,6 +348,7 @@ impl FriggMcpServer {
 
                             if let Some((response, repository_id, precise_symbol, precision)) =
                                 server.try_precise_definition_fast_path(
+                                    &corpora,
                                     params_for_blocking.repository_id.as_deref(),
                                     path,
                                     line,

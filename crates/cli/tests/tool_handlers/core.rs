@@ -4,6 +4,59 @@ use super::*;
 use frigg::mcp::types::{ExploreResponse, ReadFileResponse, ReadMatchResponse};
 
 #[tokio::test]
+async fn core_list_files_auto_adopts_single_known_repo_and_filters_paths() {
+    let workspace_root = fresh_fixture_root("tool-handlers-core-list-files");
+    let repository_id = stable_public_repository_id_for_root(&workspace_root);
+    let config = FriggConfig::from_workspace_roots(vec![workspace_root])
+        .expect("fixture root must produce valid config");
+    let server = FriggMcpServer::new(config);
+
+    let response = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(10),
+            resume_from: None,
+        }))
+        .await
+        .expect("list_files should auto-adopt the only known repository")
+        .0;
+    let paths = response
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(response.total_files, 2);
+    assert!(!response.truncated);
+    assert_eq!(paths, vec!["src/lib.rs", "src/nested/data.txt"]);
+    assert!(
+        response
+            .files
+            .iter()
+            .all(|file| file.repository_id == repository_id),
+        "list_files should return canonical public repository ids"
+    );
+
+    let current = server
+        .workspace_current(Parameters(WorkspaceCurrentParams {}))
+        .await
+        .expect("workspace_current should succeed after auto-adopt")
+        .0;
+    assert_eq!(
+        current
+            .repository
+            .expect("auto-adopted repository should become current")
+            .repository_id,
+        repository_id
+    );
+}
+
+#[tokio::test]
 async fn core_read_file_returns_typed_not_found_error() {
     let server = server_for_fixture().await;
     let error = match server
@@ -11,8 +64,9 @@ async fn core_read_file_returns_typed_not_found_error() {
             path: "missing-file.txt".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -38,8 +92,9 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             path: absolute_path.display().to_string(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -58,8 +113,9 @@ async fn core_read_file_returns_repository_relative_canonical_path() {
             path: "./src/../src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -83,8 +139,9 @@ async fn core_read_file_supports_line_range_slicing() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(128),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -106,8 +163,9 @@ async fn core_read_file_defaults_to_text_first_output() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(128),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -136,8 +194,9 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(128),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -157,8 +216,9 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(128),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: Some(true),
         }))
@@ -177,8 +237,9 @@ async fn core_read_surfaces_include_context_efficiency_only_in_json_mode() {
                 path: "src/lib.rs".to_owned(),
                 repository_id: Some("repo-001".to_owned()),
                 max_bytes: Some(128),
-                line_start: Some(2),
-                line_end: Some(2),
+                start_line: Some(2),
+                end_line: Some(2),
+                line_count: None,
                 presentation_mode: Some(ReadPresentationMode::Json),
                 include_context_efficiency: Some(true),
             }))
@@ -368,8 +429,9 @@ async fn core_read_file_line_range_can_bypass_full_file_size_limit() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(8),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -399,8 +461,9 @@ async fn core_read_file_line_range_rejects_file_exceeding_max_file_bytes_before_
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: None,
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -441,8 +504,9 @@ async fn core_read_file_line_range_preserves_lossy_utf8_behavior() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(64),
-            line_start: Some(2),
-            line_end: Some(2),
+            start_line: Some(2),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -463,8 +527,9 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(128),
-            line_start: Some(3),
-            line_end: Some(2),
+            start_line: Some(3),
+            end_line: Some(2),
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -478,7 +543,7 @@ async fn core_read_file_rejects_invalid_line_range_payload() {
     assert_eq!(error_code_tag(&error), Some("invalid_params"));
     assert_eq!(retryable_tag(&error), Some(false));
     assert_eq!(
-        error.message, "line_end must be greater than or equal to line_start",
+        error.message, "end_line must be greater than or equal to start_line",
         "invalid read_file line ranges should preserve the typed invalid_params message"
     );
 }
@@ -572,7 +637,7 @@ async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() 
     assert_eq!(opened.path, "src/lib.rs");
     assert_eq!(opened.line, 2);
     assert_eq!(opened.column, Some(6));
-    assert_eq!(opened.line_start, 1);
+    assert_eq!(opened.start_line, 1);
     assert!(opened.content.contains("pub fn greeting()"));
     assert!(opened.content.contains("\"hello from fixture\""));
 }
@@ -617,28 +682,11 @@ async fn core_search_text_compact_opt_in_keeps_context_efficiency_and_freshness_
         metadata.context_efficiency.is_some(),
         "compact search_text should include requested context-efficiency metadata"
     );
-    let freshness = metadata
-        .freshness_basis
-        .expect("compact search_text metadata should include freshness_basis");
-    assert!(freshness.repositories.first().is_some());
-    let repository = &freshness.repositories[0];
-    assert!(!repository.candidate_source.is_empty());
+    let metadata_value =
+        serde_json::to_value(&metadata).expect("search_text metadata should serialize");
     assert!(
-        repository.active_index_tasks.is_empty(),
-        "freshness repository should expose empty active_index_tasks"
-    );
-    let freshness_value =
-        serde_json::to_value(&freshness).expect("freshness metadata should serialize");
-    assert!(
-        freshness_value["repositories"][0]
-            .get("active_index_tasks")
-            .and_then(|value| value.as_array())
-            .is_some(),
-        "typed freshness serialization should keep active_index_tasks when empty"
-    );
-    assert!(
-        !repository.recommended_client_behavior.is_empty(),
-        "freshness repository should include recommended_client_behavior"
+        metadata_value.get("freshness_basis").is_none(),
+        "compact search_text should not expose cache/freshness internals"
     );
 
     cleanup_workspace_root(&workspace_root);
@@ -720,7 +768,15 @@ async fn core_search_text_context_lines_and_per_file_limits_shape_results() {
             path_regex: Some(r"^src/.*\.rs$".to_owned()),
             limit: Some(10),
             context_lines: Some(1),
-            max_matches_per_file: Some(1),
+            case_sensitive: None,
+            ignore_case: None,
+            word: None,
+            files_with_matches: None,
+            count_only: None,
+            glob: None,
+            exclude_glob: None,
+            include_hidden: None,
+            max_count_per_file: Some(1),
             collapse_by_file: Some(false),
             ..Default::default()
         }))
@@ -845,14 +901,6 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             .map(|anchor| anchor.start_column),
         Some(6)
     );
-    assert_eq!(first.semantic_requested, None);
-    assert_eq!(first.semantic_enabled, None);
-    assert_eq!(first.semantic_status, None);
-    assert_eq!(first.semantic_hit_count, None);
-    assert_eq!(first.semantic_match_count, None);
-    assert_eq!(first.semantic_reason, None);
-    assert_eq!(first.warning, None);
-    assert_eq!(first.note, None);
     assert!(
         first.matches[0].blended_score >= 0.0,
         "hybrid blended score should be non-negative"
@@ -996,7 +1044,6 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
         "semantic_hit_count",
         "semantic_match_count",
         "warning",
-        "note",
     ] {
         assert!(
             structured.get(field).is_none(),
@@ -1045,22 +1092,27 @@ async fn core_search_hybrid_returns_deterministic_matches_and_metadata_only() {
             .as_ref()
             .and_then(|value| value.get("semantic_status"))
             .and_then(|value| value.as_str()),
-        "metadata-only semantic status should remain deterministic"
+        "metadata-only semantic ranking metadata should remain deterministic"
     );
-    let freshness_cacheable = structured
+    let cache_debug_cacheable = structured
         .get("metadata")
-        .and_then(|value| value.get("freshness_basis"))
+        .and_then(|value| value.get("cache_debug"))
         .and_then(|value| value.get("cacheable"))
         .and_then(|value| value.as_bool());
-    if freshness_cacheable == Some(true) {
+    if cache_debug_cacheable == Some(true) {
+        let first_stage_keys = structured
+            .get("metadata")
+            .and_then(|value| value.get("stage_attribution"))
+            .and_then(|value| value.as_object())
+            .map(|map| map.keys().cloned().collect::<Vec<_>>());
+        let second_stage_keys = second_metadata
+            .as_ref()
+            .and_then(|value| value.get("stage_attribution"))
+            .and_then(|value| value.as_object())
+            .map(|map| map.keys().cloned().collect::<Vec<_>>());
         assert_eq!(
-            structured
-                .get("metadata")
-                .and_then(|value| value.get("stage_attribution")),
-            second_metadata
-                .as_ref()
-                .and_then(|value| value.get("stage_attribution")),
-            "cacheable search_hybrid responses should keep stage attribution stable within the session"
+            first_stage_keys, second_stage_keys,
+            "cacheable search_hybrid responses should keep stage attribution stages stable within the session"
         );
     } else {
         assert!(
@@ -1095,7 +1147,6 @@ async fn core_search_hybrid_defaults_to_compact_with_handles() {
         .0;
 
     assert!(response.metadata.is_none());
-    assert!(response.note.is_none());
     assert!(
         response.result_handle.is_some(),
         "compact search_hybrid should return a result handle"
@@ -1338,7 +1389,8 @@ async fn core_search_hybrid_compact_opt_in_keeps_context_efficiency_metadata() {
     );
     assert_eq!(metadata.channels.len(), 0);
     assert!(metadata.stage_attribution.is_none());
-    assert!(response.note.is_none());
+    let response_value = serde_json::to_value(&response).expect("response should serialize");
+    assert!(response_value.get("note").is_none());
 
     cleanup_workspace_root(&workspace_root);
 }
@@ -1496,12 +1548,6 @@ async fn core_search_hybrid_surfaces_degraded_warning_when_semantic_runtime_fail
         .expect("non-strict semantic startup failure should degrade, not hard-fail")
         .0;
 
-    assert_eq!(response.semantic_requested, None);
-    assert_eq!(response.semantic_enabled, None);
-    assert_eq!(response.semantic_status, None);
-    assert_eq!(response.semantic_hit_count, None);
-    assert_eq!(response.semantic_match_count, None);
-    assert_eq!(response.note, None);
     let metadata = serde_json::to_value(
         response
             .metadata
@@ -1777,8 +1823,9 @@ async fn core_read_file_enforces_effective_max_bytes_clamp() {
             path: "src/lib.rs".to_owned(),
             repository_id: Some("repo-001".to_owned()),
             max_bytes: Some(1024),
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))

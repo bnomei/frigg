@@ -2,15 +2,21 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-07-04
+
+- Added a canonical Frigg-first directive and aligned the README, MCP guidance, and bundled skill guidance around it.
+- Added a GitHub Release installer with SHA-256 verification and install-cache CI support.
 - Added `frigg adopt` for managed agent docs, MCP config entries, and Claude PreToolUse hook setup.
 - Added local semantic embeddings with optional FastEmbed support and automatic local model preparation.
 - Added context-efficiency telemetry for MCP search/read surfaces and a `frigg context` summary command.
 - Renamed `reindex` / `workspace_reindex` to `index` / `workspace_index`; `frigg reindex` remains as a CLI compatibility alias.
-- Standardized CLI output modes, quiet/verbose behavior, terminal progress, and watch/semantic refresh status reporting.
-- Hardened workspace write/path handling, marked MCP workspace tools read-only, and fixed text-mode reads to return source bytes only.
+- Improved hybrid search exact pivots, compact context savings, and freshness metadata across MCP search/navigation responses.
+- Improved runtime performance with bounded MCP caches, semantic provider reuse, incremental semantic refreshes, tuned SQLite index passes, and watch refresh backoff/concurrency controls.
+- Standardized CLI/TUI output modes, quiet/verbose behavior, timing details, tool-call completion events, terminal progress, and watch/semantic refresh status reporting.
+- Hardened workspace write/path handling, manifest snapshot validation, read-only MCP workspace tools, leaner workspace responses, and text-mode reads.
 - Renamed the internal trace MCP tools to feature-gated `playbook_*` tools so they are not exposed in default builds.
 - Removed legacy Cursor `.cursorrules` adoption support, the manual `prepare-semantic-model` command, and SQLite provenance event storage.
-- Updated dependencies and trimmed unused feature/dependency surface.
+- Raised the Rust MSRV, upgraded `rmcp`, updated dependencies, and trimmed unused feature/dependency surface.
 
 ## 0.5.0 - 2026-06-29
 

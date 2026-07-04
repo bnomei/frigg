@@ -9,6 +9,276 @@ use crate::mcp::types::{
 };
 
 #[tokio::test]
+async fn list_files_auto_adopts_single_known_repository_without_repository_id() {
+    let workspace_root = temp_workspace_root("list-files-auto-adopt-single-repo");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("README.md"), "# List Files\n")
+        .expect("failed to write README fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Listed;\n")
+        .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+
+    assert!(server.attached_workspaces().is_empty());
+
+    let response = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: None,
+            language: None,
+            path_class: None,
+            include_hidden: None,
+            limit: Some(10),
+            resume_from: None,
+        }))
+        .await
+        .expect("list_files should auto-adopt the only known repository")
+        .0;
+
+    assert_eq!(response.total_files, 1);
+    assert!(!response.truncated);
+    assert_eq!(response.files[0].repository_id, workspace.repository_id);
+    assert_eq!(response.files[0].path, "src/lib.rs");
+    assert_eq!(
+        server.current_repository_id().as_deref(),
+        Some(workspace.repository_id.as_str())
+    );
+    assert_eq!(server.attached_workspaces().len(), 1);
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn list_files_supports_rg_aligned_filters_and_resume_from() {
+    let workspace_root = temp_workspace_root("list-files-rg-filters");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::create_dir_all(workspace_root.join("tests")).expect("failed to create tests fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct Lib;\n")
+        .expect("failed to write lib fixture");
+    fs::write(workspace_root.join("src/main.rs"), "fn main() {}\n")
+        .expect("failed to write main fixture");
+    fs::write(
+        workspace_root.join("src/.hidden.rs"),
+        "pub struct Hidden;\n",
+    )
+    .expect("failed to write hidden fixture");
+    fs::write(
+        workspace_root.join("tests/lib_test.rs"),
+        "#[test] fn test_it() {}\n",
+    )
+    .expect("failed to write test fixture");
+    fs::write(workspace_root.join("README.md"), "# fixture\n")
+        .expect("failed to write readme fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+
+    let first_page = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: Some("*.rs".to_owned()),
+            language: Some("rust".to_owned()),
+            path_class: Some(crate::mcp::types::SearchSymbolPathClass::Runtime),
+            include_hidden: Some(false),
+            limit: Some(1),
+            resume_from: None,
+        }))
+        .await
+        .expect("list_files should support rg-shaped filters")
+        .0;
+
+    assert_eq!(first_page.total_files, 2);
+    assert!(first_page.truncated);
+    assert_eq!(first_page.files.len(), 1);
+    assert_eq!(first_page.files[0].path, "src/lib.rs");
+    assert_eq!(first_page.resume_from.as_deref(), Some("1"));
+
+    let second_page = server
+        .list_files(Parameters(ListFilesParams {
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            glob: Some("*.rs".to_owned()),
+            language: Some("rust".to_owned()),
+            path_class: Some(crate::mcp::types::SearchSymbolPathClass::Runtime),
+            include_hidden: Some(false),
+            limit: Some(10),
+            resume_from: first_page.resume_from,
+        }))
+        .await
+        .expect("list_files should resume from returned cursor")
+        .0;
+
+    assert_eq!(second_page.total_files, 2);
+    assert!(!second_page.truncated);
+    assert_eq!(second_page.resume_from, None);
+    assert_eq!(second_page.files.len(), 1);
+    assert_eq!(second_page.files[0].path, "src/main.rs");
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn search_text_supports_rg_aligned_options() {
+    let workspace_root = temp_workspace_root("search-text-rg-options");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "Alpha beta\nalpha_beta\nALPHA beta\n",
+    )
+    .expect("failed to write lib fixture");
+    fs::write(workspace_root.join("src/other.rs"), "Alpha beta\n")
+        .expect("failed to write other fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let files_with_matches = server
+        .search_text_impl(crate::mcp::types::SearchTextParams {
+            query: "alpha".to_owned(),
+            pattern_type: None,
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            limit: Some(10),
+            context_lines: None,
+            case_sensitive: None,
+            ignore_case: Some(true),
+            word: Some(true),
+            files_with_matches: Some(true),
+            count_only: None,
+            glob: Some("*.rs".to_owned()),
+            exclude_glob: Some("*other.rs".to_owned()),
+            include_hidden: Some(false),
+            max_count_per_file: None,
+            collapse_by_file: None,
+            response_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("search_text should support rg-shaped flags")
+        .0;
+
+    assert_eq!(files_with_matches.total_matches, 2);
+    assert_eq!(files_with_matches.matches.len(), 1);
+    assert_eq!(files_with_matches.matches[0].path, "src/lib.rs");
+    assert_eq!(files_with_matches.matches[0].line, 1);
+    assert!(files_with_matches.result_handle.is_some());
+
+    let count_only = server
+        .search_text_impl(crate::mcp::types::SearchTextParams {
+            query: "alpha".to_owned(),
+            pattern_type: None,
+            repository_id: None,
+            path_regex: Some("^src/".to_owned()),
+            limit: Some(10),
+            context_lines: None,
+            case_sensitive: None,
+            ignore_case: Some(true),
+            word: Some(true),
+            files_with_matches: None,
+            count_only: Some(true),
+            glob: Some("*.rs".to_owned()),
+            exclude_glob: Some("*other.rs".to_owned()),
+            include_hidden: Some(false),
+            max_count_per_file: None,
+            collapse_by_file: None,
+            response_mode: None,
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("search_text should support count_only")
+        .0;
+
+    assert_eq!(count_only.total_matches, 2);
+    assert!(count_only.matches.is_empty());
+    assert!(count_only.result_handle.is_none());
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
+async fn read_file_uses_start_end_and_line_count_names() {
+    let workspace_root = temp_workspace_root("read-file-rg-line-names");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create src fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "line one\nline two\nline three\nline four\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+
+    let response = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: None,
+            max_bytes: None,
+            start_line: Some(2),
+            end_line: None,
+            line_count: Some(2),
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("read_file should accept line_count");
+
+    assert_eq!(response.content, "line two\nline three");
+
+    let error = server
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/lib.rs".to_owned(),
+            repository_id: None,
+            max_bytes: None,
+            start_line: Some(2),
+            end_line: Some(3),
+            line_count: Some(2),
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect_err("end_line and line_count must be mutually exclusive");
+    assert_eq!(
+        error.message,
+        "end_line and line_count are mutually exclusive"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[tokio::test]
 async fn workspace_attach_can_adopt_known_repository_id_for_new_session() {
     let workspace_root = temp_workspace_root("attach-known-repository-id");
     fs::create_dir_all(workspace_root.join("src"))
@@ -237,9 +507,9 @@ fn adopted_path_workspace_survives_pending_guard_drop() {
 }
 
 #[test]
-fn workspace_target_relative_path_falls_back_to_current_workspace_root() {
+fn workspace_target_relative_path_falls_back_to_current_workspace_before_direct_resolution() {
     let workspace_root = temp_workspace_root("relative-path-current-workspace-root");
-    let nested_dir = workspace_root.join("crates/cli/src");
+    let nested_dir = workspace_root.join("fallback-only/src");
     fs::create_dir_all(&nested_dir).expect("failed to create nested workspace fixture");
     fs::write(nested_dir.join("lib.rs"), "pub struct RelativeAttach;\n")
         .expect("failed to write nested workspace fixture");
@@ -253,15 +523,15 @@ fn workspace_target_relative_path_falls_back_to_current_workspace_root() {
 
     let (workspace, resolved_from, resolution, _resolution_guard) = server
         .resolve_workspace_target(
-            Some("crates/cli/src/lib.rs"),
+            Some("fallback-only/src/lib.rs"),
             None,
             WorkspaceResolveMode::Direct,
         )
         .expect("relative path should resolve from the current workspace root");
 
-    assert_eq!(
-        workspace.repository_id,
-        attach_response.repository.repository_id
+    assert_ne!(
+        workspace.repository_id, attach_response.repository.repository_id,
+        "direct resolution should attach the resolved file parent as its own workspace"
     );
     assert_eq!(resolution, Some(WorkspaceResolveMode::Direct));
     let expected_resolved_from = nested_dir.canonicalize().unwrap().display().to_string();
@@ -269,6 +539,7 @@ fn workspace_target_relative_path_falls_back_to_current_workspace_root() {
         resolved_from.as_deref(),
         Some(expected_resolved_from.as_str())
     );
+    assert_eq!(workspace.root, nested_dir.canonicalize().unwrap());
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -1055,7 +1326,7 @@ fn repository_runtime_task_atomic_start_rejects_alias_conflict() {
 }
 
 #[tokio::test]
-async fn read_file_rejects_non_adopted_repository_for_detached_session() {
+async fn read_file_auto_adopts_explicit_known_repository_but_rejects_unadopted_absolute_path() {
     let workspace_root_a = temp_workspace_root("adoption-gate-repo-a");
     let workspace_root_b = temp_workspace_root("adoption-gate-repo-b");
     fs::create_dir_all(workspace_root_a.join("src")).expect("failed to create repo A fixture root");
@@ -1107,22 +1378,6 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
         .adopt_workspace(&workspace_a, true)
         .expect("session should adopt repo A");
 
-    let explicit = session
-        .read_file_impl(crate::mcp::types::ReadFileParams {
-            path: "src/secret.rs".to_owned(),
-            repository_id: Some(workspace_b.repository_id.clone()),
-            max_bytes: None,
-            line_start: None,
-            line_end: None,
-            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
-            include_context_efficiency: None,
-        })
-        .await;
-    assert!(
-        explicit.is_err(),
-        "detached session must not read a non-adopted repository by explicit repository_id"
-    );
-
     let absolute_secret = workspace_root_b
         .join("src/secret.rs")
         .to_string_lossy()
@@ -1132,16 +1387,32 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
             path: absolute_secret,
             repository_id: None,
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
             include_context_efficiency: None,
         })
         .await;
     assert!(
         absolute.is_err(),
-        "detached session must not read a non-adopted repository by absolute path"
+        "session scoped to repo A must not read repo B by absolute path before repo B is explicitly adopted"
     );
+
+    let explicit = session
+        .read_file_impl(crate::mcp::types::ReadFileParams {
+            path: "src/secret.rs".to_owned(),
+            repository_id: Some(workspace_b.repository_id.clone()),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
+            include_context_efficiency: None,
+        })
+        .await
+        .expect("explicit known repository_id should auto-adopt repo B");
+    assert!(explicit.content.contains("pub struct Secret"));
 
     let absolute_a = workspace_root_a
         .join("src/lib.rs")
@@ -1152,8 +1423,9 @@ async fn read_file_rejects_non_adopted_repository_for_detached_session() {
             path: absolute_a,
             repository_id: None,
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: Some(crate::mcp::types::ReadPresentationMode::Json),
             include_context_efficiency: None,
         })

@@ -34,32 +34,43 @@ impl FriggMcpServer {
                     if query.is_empty() {
                         return Err(Self::invalid_params("query must not be empty", None));
                     }
-                    if params_for_blocking.max_matches_per_file == Some(0) {
+                    if params_for_blocking.max_count_per_file == Some(0) {
                         return Err(Self::invalid_params(
-                            "max_matches_per_file must be greater than zero when provided",
+                            "max_count_per_file must be greater than zero when provided",
+                            None,
+                        ));
+                    }
+                    if params_for_blocking.files_with_matches == Some(true)
+                        && params_for_blocking.count_only == Some(true)
+                    {
+                        return Err(Self::invalid_params(
+                            "files_with_matches and count_only are mutually exclusive",
                             None,
                         ));
                     }
 
-                    let path_regex = match params_for_blocking.path_regex.clone() {
-                        Some(raw) => {
-                            Some(server.compile_cached_safe_regex(&raw).map_err(|err| {
-                                Self::invalid_params(
-                                    format!("invalid path_regex: {err}"),
-                                    Some(serde_json::json!({
-                                        "path_regex": raw,
-                                        "regex_error_code": err.code(),
-                                    })),
-                                )
-                            })?)
-                        }
-                        None => None,
-                    };
+                    let (query, pattern_type) =
+                        Self::normalize_search_text_rg_pattern(&params_for_blocking, query)?;
 
-                    let pattern_type = params_for_blocking
-                        .pattern_type
-                        .clone()
-                        .unwrap_or(SearchPatternType::Literal);
+                    let explicit_path_regex =
+                        Self::compile_optional_path_regex(&server, &params_for_blocking)?;
+                    let glob_regex = Self::compile_optional_path_glob(
+                        &server,
+                        "glob",
+                        &params_for_blocking.glob,
+                    )?;
+                    let exclude_glob_regex = Self::compile_optional_path_glob(
+                        &server,
+                        "exclude_glob",
+                        &params_for_blocking.exclude_glob,
+                    )?;
+                    let include_hidden = params_for_blocking.include_hidden.unwrap_or(false);
+                    let search_path_regex =
+                        explicit_path_regex.clone().or_else(|| glob_regex.clone());
+                    let needs_post_path_filter = (explicit_path_regex.is_some()
+                        && glob_regex.is_some())
+                        || exclude_glob_regex.is_some()
+                        || !include_hidden;
                     effective_pattern_type = Some(pattern_type.clone());
 
                     let requested_limit = params_for_blocking
@@ -67,8 +78,11 @@ impl FriggMcpServer {
                         .unwrap_or(server.config.max_search_results)
                         .min(server.config.max_search_results.max(1));
                     let limit = if params_for_blocking.context_lines.unwrap_or(0) > 0
-                        || params_for_blocking.max_matches_per_file.is_some()
+                        || params_for_blocking.max_count_per_file.is_some()
                         || params_for_blocking.collapse_by_file == Some(true)
+                        || params_for_blocking.files_with_matches == Some(true)
+                        || params_for_blocking.count_only == Some(true)
+                        || needs_post_path_filter
                     {
                         server.config.max_search_results.max(requested_limit)
                     } else {
@@ -96,7 +110,7 @@ impl FriggMcpServer {
                             .search_literal_with_filters_diagnostics(
                                 SearchTextQuery {
                                     query,
-                                    path_regex,
+                                    path_regex: search_path_regex.clone(),
                                     limit,
                                 },
                                 SearchFilters::default(),
@@ -104,7 +118,7 @@ impl FriggMcpServer {
                         SearchPatternType::Regex => searcher.search_regex_with_filters_diagnostics(
                             SearchTextQuery {
                                 query,
-                                path_regex,
+                                path_regex: search_path_regex,
                                 limit,
                             },
                             SearchFilters::default(),
@@ -119,12 +133,25 @@ impl FriggMcpServer {
                         .diagnostics
                         .count_by_kind(SearchDiagnosticKind::Read);
                     let mut matches = search_output.matches;
-                    let total_matches = search_output.total_matches;
-                    let mut metadata = Self::search_text_metadata(
+                    if needs_post_path_filter {
+                        matches.retain(|matched| {
+                            Self::search_text_path_filter_allows(
+                                &matched.path,
+                                glob_regex.as_ref(),
+                                exclude_glob_regex.as_ref(),
+                                include_hidden,
+                            )
+                        });
+                    }
+                    let total_matches = if needs_post_path_filter {
+                        matches.len()
+                    } else {
+                        search_output.total_matches
+                    };
+                    let metadata = Self::search_text_metadata(
                         search_output.lexical_backend,
                         search_output.lexical_backend_note.clone(),
                     );
-                    Self::attach_search_text_freshness_basis(&mut metadata, &cache_freshness.basis);
                     for found in &mut matches {
                         if let Some(actual_repository_id) =
                             repository_id_map.get(&found.repository_id)
@@ -138,6 +165,7 @@ impl FriggMcpServer {
                         result_handle: None,
                         metadata,
                     };
+                    let compact_metadata_seed = response.metadata.clone();
                     response_source_refs = json!({
                         "scoped_repository_ids": scoped_repository_ids.clone(),
                         "freshness_basis": cache_freshness.basis.clone(),
@@ -179,21 +207,22 @@ impl FriggMcpServer {
                                 metadata
                             });
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
-                            Self::append_context_efficiency_log_for_workspaces(
+                            server.append_context_efficiency_log_for_workspaces(
                                 "search_text",
                                 &scoped_workspaces,
                                 context_efficiency,
                             );
                         }
                         if params_for_blocking.include_context_efficiency == Some(true) {
-                            Self::attach_search_text_freshness_basis(
-                                &mut presented.metadata,
-                                &cache_freshness.basis,
-                            );
                             presented
                                 .metadata
-                                .as_mut()
-                                .expect("search_text metadata should be present")
+                                .get_or_insert_with(|| {
+                                    compact_metadata_seed.clone().unwrap_or(SearchTextMetadata {
+                                        lexical_backend: None,
+                                        lexical_backend_note: None,
+                                        context_efficiency: None,
+                                    })
+                                })
                                 .context_efficiency = context_efficiency;
                         }
                     }
@@ -236,6 +265,21 @@ impl FriggMcpServer {
                             .map(|raw| Self::bounded_text(raw)),
                         "limit": params_for_blocking.limit,
                         "effective_limit": effective_limit,
+                        "case_sensitive": params_for_blocking.case_sensitive,
+                        "ignore_case": params_for_blocking.ignore_case,
+                        "word": params_for_blocking.word,
+                        "files_with_matches": params_for_blocking.files_with_matches,
+                        "count_only": params_for_blocking.count_only,
+                        "glob": params_for_blocking
+                            .glob
+                            .as_ref()
+                            .map(|raw| Self::bounded_text(raw)),
+                        "exclude_glob": params_for_blocking
+                            .exclude_glob
+                            .as_ref()
+                            .map(|raw| Self::bounded_text(raw)),
+                        "include_hidden": params_for_blocking.include_hidden,
+                        "max_count_per_file": params_for_blocking.max_count_per_file,
                     }),
                     finalization.source_refs,
                     Self::provenance_outcome(&result),
@@ -258,5 +302,150 @@ impl FriggMcpServer {
 
         let result = execution.result;
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
+    }
+
+    fn normalize_search_text_rg_pattern(
+        params: &SearchTextParams,
+        query: String,
+    ) -> Result<(String, SearchPatternType), ErrorData> {
+        match (params.case_sensitive, params.ignore_case) {
+            (Some(true), Some(true)) => {
+                return Err(Self::invalid_params(
+                    "case_sensitive=true conflicts with ignore_case=true",
+                    None,
+                ));
+            }
+            (Some(false), Some(false)) => {
+                return Err(Self::invalid_params(
+                    "case_sensitive=false conflicts with ignore_case=false",
+                    None,
+                ));
+            }
+            _ => {}
+        }
+
+        let pattern_type = params
+            .pattern_type
+            .clone()
+            .unwrap_or(SearchPatternType::Literal);
+        let ignore_case = params.ignore_case == Some(true) || params.case_sensitive == Some(false);
+        let word = params.word == Some(true);
+        if !ignore_case && !word {
+            return Ok((query, pattern_type));
+        }
+
+        let mut pattern = match pattern_type {
+            SearchPatternType::Literal => regex::escape(&query),
+            SearchPatternType::Regex => query,
+        };
+        if word {
+            pattern = format!(r"\b(?:{pattern})\b");
+        }
+        if ignore_case {
+            pattern = format!("(?i:{pattern})");
+        }
+        Ok((pattern, SearchPatternType::Regex))
+    }
+
+    fn compile_optional_path_regex(
+        server: &FriggMcpServer,
+        params: &SearchTextParams,
+    ) -> Result<Option<regex::Regex>, ErrorData> {
+        match params.path_regex.clone() {
+            Some(raw) => Ok(Some(server.compile_cached_safe_regex(&raw).map_err(
+                |err| {
+                    Self::invalid_params(
+                        format!("invalid path_regex: {err}"),
+                        Some(serde_json::json!({
+                            "path_regex": raw,
+                            "regex_error_code": err.code(),
+                        })),
+                    )
+                },
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(super) fn compile_optional_path_glob(
+        server: &FriggMcpServer,
+        field: &'static str,
+        glob: &Option<String>,
+    ) -> Result<Option<regex::Regex>, ErrorData> {
+        let Some(raw) = glob else {
+            return Ok(None);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(Self::invalid_params(
+                format!("{field} must not be empty when provided"),
+                None,
+            ));
+        }
+        let regex_source = Self::repository_glob_to_regex(trimmed);
+        server
+            .compile_cached_safe_regex(&regex_source)
+            .map(Some)
+            .map_err(|err| {
+                Self::invalid_params(
+                    format!("invalid {field}: {err}"),
+                    Some(serde_json::json!({
+                        field: raw,
+                        "regex_error_code": err.code(),
+                    })),
+                )
+            })
+    }
+
+    fn search_text_path_filter_allows(
+        path: &str,
+        glob_regex: Option<&regex::Regex>,
+        exclude_glob_regex: Option<&regex::Regex>,
+        include_hidden: bool,
+    ) -> bool {
+        if !include_hidden && Self::repository_path_is_hidden(path) {
+            return false;
+        }
+        if glob_regex.is_some_and(|regex| !regex.is_match(path)) {
+            return false;
+        }
+        if exclude_glob_regex.is_some_and(|regex| regex.is_match(path)) {
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn repository_path_is_hidden(path: &str) -> bool {
+        path.split('/')
+            .filter(|component| !component.is_empty())
+            .any(|component| component.starts_with('.'))
+    }
+
+    pub(super) fn repository_glob_to_regex(glob: &str) -> String {
+        let mut regex = String::new();
+        if glob.contains('/') {
+            regex.push('^');
+        } else {
+            regex.push_str(r"(?:^|.*/)");
+        }
+
+        let mut chars = glob.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '*' => {
+                    if chars.peek() == Some(&'*') {
+                        let _ = chars.next();
+                        regex.push_str(".*");
+                    } else {
+                        regex.push_str("[^/]*");
+                    }
+                }
+                '?' => regex.push_str("[^/]"),
+                '/' => regex.push('/'),
+                _ => regex.push_str(&regex::escape(&ch.to_string())),
+            }
+        }
+        regex.push('$');
+        regex
     }
 }

@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use frigg::context_efficiency::{
     ContextLogAggregate, ContextLogSummary, ContextSummaryWindow, summarize_context_logs_for_roots,
 };
@@ -32,8 +32,9 @@ fn format_context_summary_line(summary: &ContextLogSummary) -> String {
     let saved_percent = estimated_saved_output_percent(&summary.totals).unwrap_or(0.0);
     let saved_percent =
         format_context_saved_percent(Some(saved_percent)).unwrap_or_else(|| "0%".to_owned());
+    let day_range = format_context_day_range(summary);
     format!(
-        "{saved_percent} saved, {} {}",
+        "{saved_percent} saved, {} {}, {day_range}",
         summary.totals.events,
         tool_call_label(summary.totals.events)
     )
@@ -55,6 +56,44 @@ fn tool_call_label(count: usize) -> &'static str {
     } else {
         "tool calls"
     }
+}
+
+fn format_context_day_range(summary: &ContextLogSummary) -> String {
+    let Some(days) = context_day_range(summary) else {
+        return "0 days".to_owned();
+    };
+    let day_label = if days == "1" { "day" } else { "days" };
+    format!("{days} {day_label}")
+}
+
+fn context_day_range(summary: &ContextLogSummary) -> Option<String> {
+    const MILLIS_PER_DAY: i64 = 86_400_000;
+
+    let since = DateTime::parse_from_rfc3339(&summary.date_since).ok()?;
+    let until = DateTime::parse_from_rfc3339(&summary.date_until).ok()?;
+    let millis = until.signed_duration_since(since).num_milliseconds();
+    if millis < 0 {
+        return None;
+    }
+    if millis % MILLIS_PER_DAY == 0 {
+        return Some((millis / MILLIS_PER_DAY).to_string());
+    }
+
+    Some(format_trimmed_decimal(
+        millis as f64 / MILLIS_PER_DAY as f64,
+    ))
+}
+
+fn format_trimmed_decimal(value: f64) -> String {
+    let rounded = (value * 100.0).round() / 100.0;
+    let mut value = format!("{rounded:.2}");
+    while value.contains('.') && value.ends_with('0') {
+        value.pop();
+    }
+    if value.ends_with('.') {
+        value.pop();
+    }
+    value
 }
 
 #[cfg(test)]
@@ -114,7 +153,28 @@ mod tests {
 
         assert_eq!(
             format_context_summary_line(&summary),
-            "88.57% saved, 2 tool calls"
+            "88.57% saved, 2 tool calls, 30 days"
+        );
+    }
+
+    #[test]
+    fn cli_context_command_formats_fractional_day_range() {
+        let summary = ContextLogSummary {
+            date_since: "2026-06-01T00:00:00+00:00".to_owned(),
+            date_until: "2026-06-05T16:33:36+00:00".to_owned(),
+            roots: Vec::new(),
+            totals: ContextLogAggregate {
+                events: 390,
+                returned_unique_file_bytes: 400_000,
+                returned_source_bytes_estimate: 9_800,
+                matched_file_context_saved_bytes_estimate: 390_200,
+                ..ContextLogAggregate::default()
+            },
+        };
+
+        assert_eq!(
+            format_context_summary_line(&summary),
+            "97.55% saved, 390 tool calls, 4.69 days"
         );
     }
 
@@ -129,7 +189,7 @@ mod tests {
 
         assert_eq!(
             format_context_summary_line(&summary),
-            "0% saved, 0 tool calls"
+            "0% saved, 0 tool calls, 30 days"
         );
     }
 }

@@ -15,9 +15,9 @@ use crate::mcp::server_cache::{
 };
 use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_profile};
 use crate::mcp::types::{
-    InspectSyntaxTreeParams, RuntimeTaskKind, RuntimeTaskStatus, SearchStructuralParams,
-    WorkspaceAttachParams, WorkspaceDetachParams, WorkspaceIndexComponentState,
-    WorkspacePreciseGeneratorState, WorkspaceResolveMode,
+    InspectSyntaxTreeParams, ListFilesParams, RuntimeTaskKind, RuntimeTaskStatus,
+    SearchStructuralParams, WorkspaceAttachParams, WorkspaceDetachParams,
+    WorkspaceIndexComponentState, WorkspacePreciseGeneratorState, WorkspaceResolveMode,
 };
 use crate::mcp::{RuntimeTaskGuard, RuntimeTaskRegistry};
 use crate::searcher::ValidatedManifestCandidateCache;

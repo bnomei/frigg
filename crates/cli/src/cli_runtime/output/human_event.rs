@@ -211,6 +211,7 @@ fn format_human_ready_card(fields: &[OutputField], color: bool, width: usize) ->
         "Frigg serve",
         rows,
         Some("ready for MCP connections"),
+        fields,
         color,
         width,
     )
@@ -235,7 +236,7 @@ fn format_human_complete_card(
         rows.push(HumanRow::path(path));
     }
     let title = format!("{} complete", human_title_token(area));
-    format_human_card(level, &title, rows, Some(&title), color, width)
+    format_human_card(level, &title, rows, Some(&title), fields, color, width)
 }
 
 fn format_human_error_card(
@@ -259,6 +260,7 @@ fn format_human_error_card(
         "Frigg error",
         rows,
         Some("command stopped"),
+        fields,
         color,
         width,
     )

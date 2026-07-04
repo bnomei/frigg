@@ -5,7 +5,7 @@ This runbook describes the runtime states operators are most likely to see while
 ## First checks
 
 1. Confirm the client is connected to the expected Frigg service.
-2. Call `workspace_current` to inspect session-local adoption, the session default repository, compact precise status, repository health, and runtime status.
+2. Call `workspace_current` to inspect session-local adoption, the session default repository, compact precise status, compact precise status, and runtime status.
 3. If the repository is not adopted in the current session, call `workspace_attach` with the intended repository and review its `index_lifecycle` and `precise_lifecycle` fields before debugging search quality.
 4. Use `list_repositories` when you need the global known-repository catalog. `workspace_current.repositories` is session-local and can be empty even when `list_repositories` knows about repositories.
 
@@ -49,7 +49,7 @@ A degraded semantic state means Frigg remains usable, but natural-language recal
 
 Precise navigation comes from optional SCIP artifacts and best-effort automatic generators. Frigg keeps working without precise data by using Tree-sitter, source-backed heuristics, lexical search, and structural tools.
 
-`workspace_current.precise`, `workspace_attach.precise`, and `workspace_attach.precise_lifecycle` are the compact operator surfaces. Repository health also exposes lower-level `health.scip`, `health.precise_ingest`, and `health.precise_generators` details. The generator scorecard includes discovery state, tool/version, expected artifact path, repo-local writes/executions/patch risk, last generation duration, artifact counts/bytes, failure class, and recommended action.
+`workspace_current.precise`, `workspace_attach.precise`, and `workspace_attach.precise_lifecycle` are the compact operator surfaces. Explicit diagnostics expose lower-level `health.scip`, `health.precise_ingest`, and `health.precise_generators` details. The generator scorecard includes discovery state, tool/version, expected artifact path, repo-local writes/executions/patch risk, last generation duration, artifact counts/bytes, failure class, and recommended action.
 
 | Precise state | Meaning | Operator action |
 | --- | --- | --- |

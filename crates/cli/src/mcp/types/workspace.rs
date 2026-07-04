@@ -300,19 +300,43 @@ pub enum WorkspaceAttachAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachParams {
-    /// File or directory path to attach. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
+    /// File or directory path to attach.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the attached repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
-    /// Workspace resolution strategy. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    /// Workspace resolution strategy.
     pub resolve_mode: Option<WorkspaceResolveMode>,
     /// Whether to wait for triggered or active precise generation before returning. Omit to default to `true`.
     pub wait_for_precise: Option<bool>,
 }
 
-/// Response from `workspace_attach` with storage, index, and precise lifecycle state.
+/// Parameters for `workspace`, Frigg's compact workspace status and auto-adoption entrypoint.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct WorkspaceParams {
+    /// File or directory path to adopt before returning status.
+    pub path: Option<String>,
+    /// Known repository id to adopt before returning status.
+    pub repository_id: Option<String>,
+    /// When adopting, make the repository the session default. Defaults true.
+    pub set_default: Option<bool>,
+    /// Path resolution for `path`. Defaults to the enclosing Git root.
+    pub resolve_mode: Option<WorkspaceResolveMode>,
+}
+
+/// Response from `workspace` with current session status and the known repository list.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WorkspaceResponse {
+    pub repository: Option<RepositorySummary>,
+    pub session_default: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<RepositorySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeStatusSummary>,
+}
+
+/// Response from `workspace_attach` with storage and precise lifecycle state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceAttachResponse {
     pub repository: RepositorySummary,
@@ -346,13 +370,13 @@ pub struct WorkspaceDetachResponse {
 /// Parameters for `workspace_prepare`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspacePrepareParams {
-    /// File or directory path to prepare. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
+    /// File or directory path to prepare.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the prepared repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
-    /// Workspace resolution strategy when using `path`. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    /// Workspace resolution strategy.
     pub resolve_mode: Option<WorkspaceResolveMode>,
     /// Explicit confirmation required before Frigg writes `.frigg/` state or updates storage.
     pub confirm: Option<bool>,
@@ -373,13 +397,13 @@ pub struct WorkspacePrepareResponse {
 /// Parameters for `workspace_index`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceIndexParams {
-    /// File or directory path to index. Relative paths resolve against the Frigg server process cwd, then the current attached workspace root when available.
+    /// File or directory path to index.
     pub path: Option<String>,
     /// Known repository identifier from `list_repositories`.
     pub repository_id: Option<String>,
     /// Whether to make the indexed repository the session default. Omit to default to `true`.
     pub set_default: Option<bool>,
-    /// Workspace resolution strategy when using `path`. Omit to prefer the enclosing Git root before falling back to the direct directory.
+    /// Workspace resolution strategy.
     pub resolve_mode: Option<WorkspaceResolveMode>,
     /// Explicit confirmation required before Frigg updates storage.
     pub confirm: Option<bool>,
@@ -437,15 +461,20 @@ pub struct WorkspaceCurrentResponse {
 /// Parameters for `read_file`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileParams {
+    /// Canonical repository-relative path.
     pub path: String,
+    /// Optional repository scope.
     pub repository_id: Option<String>,
     pub max_bytes: Option<usize>,
-    pub line_start: Option<usize>,
-    pub line_end: Option<usize>,
-    /// Omit or set `text` to return only the selected file content; set `json` when callers need
-    /// path, byte, context-efficiency, or a machine-readable `content` field.
+    /// First 1-based line to return.
+    pub start_line: Option<usize>,
+    /// Last 1-based line to return.
+    pub end_line: Option<usize>,
+    /// Number of lines to return from `start_line`.
+    pub line_count: Option<usize>,
+    /// Use `text` for source bytes only, or `json` for metadata and content fields.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Requires `presentation_mode=json`.
+    /// Include context-efficiency metadata; requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
 }
 
@@ -467,10 +496,9 @@ pub struct ReadMatchParams {
     pub match_id: String,
     pub before: Option<usize>,
     pub after: Option<usize>,
-    /// Omit or set `text` to return only the selected file content; set `json` when callers need
-    /// path, byte, context-efficiency, or a machine-readable `content` field.
+    /// Use `text` for source bytes only, or `json` for metadata and content fields.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Requires `presentation_mode=json`.
+    /// Include context-efficiency metadata; requires `presentation_mode=json`.
     pub include_context_efficiency: Option<bool>,
 }
 
@@ -482,8 +510,8 @@ pub struct ReadMatchResponse {
     pub line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
-    pub line_start: usize,
-    pub line_end: usize,
+    pub start_line: usize,
+    pub end_line: usize,
     pub bytes: usize,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -592,8 +620,8 @@ mod tests {
             path: "src/lib.rs".to_owned(),
             line: 1,
             column: None,
-            line_start: 1,
-            line_end: 1,
+            start_line: 1,
+            end_line: 1,
             bytes: 12,
             content: "hello world\n".to_owned(),
             context_efficiency: None,

@@ -13,13 +13,13 @@ use frigg::mcp::types::{
     ExploreParams, FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
     FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
     GoToDefinitionParams, GoToDefinitionResponse, IncomingCallsParams, IncomingCallsResponse,
-    InspectSyntaxTreeResponse, ListRepositoriesParams, NavigationMode, OutgoingCallsParams,
-    OutgoingCallsResponse, ReadFileParams, ReadMatchParams, ReadPresentationMode, ResponseMode,
-    SearchHybridParams, SearchHybridQueryShape, SearchHybridRankReason, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, StructuralResultMode, SyntaxTreeNodeItem,
-    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams, WorkspaceCurrentParams,
-    WorkspaceIndexComponentState, WorkspacePreciseState, WorkspaceResolveMode,
+    InspectSyntaxTreeResponse, ListFilesParams, ListRepositoriesParams, NavigationMode,
+    OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadMatchParams,
+    ReadPresentationMode, ResponseMode, SearchHybridParams, SearchHybridQueryShape,
+    SearchHybridRankReason, SearchPatternType, SearchStructuralParams, SearchStructuralResponse,
+    SearchSymbolParams, SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams,
+    StructuralResultMode, SyntaxTreeNodeItem, WorkspaceAttachAction, WorkspaceAttachParams,
+    WorkspaceCurrentParams, WorkspaceParams, WorkspacePreciseState, WorkspaceResolveMode,
     WorkspaceStorageIndexState,
 };
 use frigg::mcp::{FriggMcpServer, ToolCallDisplayEvent, ToolCallDisplayStatus};
@@ -97,9 +97,6 @@ async fn attach_session_repositories(server: &FriggMcpServer) {
                 set_default: Some(true),
                 resolve_mode: None,
                 wait_for_precise: Some(false),
-                index_mode: Some(WorkspaceAttachIndexMode::Skip),
-                wait_for_index: Some(false),
-                index_timeout_ms: None,
             }))
             .await;
     }

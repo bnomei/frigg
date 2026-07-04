@@ -1,10 +1,11 @@
-//! Regression tests for manifest-snapshot preference when discovering lexical and hybrid search candidates.
+//! Regression tests for validated manifest snapshots and live candidate fallback.
 
 use super::*;
 
 #[test]
-fn candidate_discovery_prefers_manifest_snapshot_across_search_modes() -> FriggResult<()> {
-    let root = temp_workspace_root("candidate-discovery-prefers-manifest");
+fn candidate_discovery_uses_live_walk_when_manifest_snapshot_is_not_validated_across_search_modes()
+-> FriggResult<()> {
+    let root = temp_workspace_root("candidate-discovery-live-fallback");
     prepare_workspace(
         &root,
         &[
@@ -27,13 +28,10 @@ fn candidate_discovery_prefers_manifest_snapshot_across_search_modes() -> FriggR
     )?;
     assert_eq!(
         literal,
-        vec![text_match(
-            "repo-001",
-            "src/indexed.rs",
-            1,
-            1,
-            "needle indexed"
-        )]
+        vec![
+            text_match("repo-001", "src/indexed.rs", 1, 1, "needle indexed"),
+            text_match("repo-001", "src/live_only.rs", 1, 1, "needle live-only"),
+        ]
     );
 
     let regex = searcher.search_regex_with_filters(
@@ -46,13 +44,10 @@ fn candidate_discovery_prefers_manifest_snapshot_across_search_modes() -> FriggR
     )?;
     assert_eq!(
         regex,
-        vec![text_match(
-            "repo-001",
-            "src/indexed.rs",
-            1,
-            1,
-            "needle indexed"
-        )]
+        vec![
+            text_match("repo-001", "src/indexed.rs", 1, 1, "needle indexed"),
+            text_match("repo-001", "src/live_only.rs", 1, 1, "needle live-only"),
+        ]
     );
 
     let hybrid = searcher.search_hybrid_with_filters_using_executor(
@@ -67,8 +62,13 @@ fn candidate_discovery_prefers_manifest_snapshot_across_search_modes() -> FriggR
         &PanicSemanticQueryEmbeddingExecutor,
     )?;
     assert_eq!(hybrid.note.semantic_status, HybridSemanticStatus::Disabled);
-    assert_eq!(hybrid.matches.len(), 1);
-    assert_eq!(hybrid.matches[0].document.path, "src/indexed.rs");
+    let hybrid_paths = hybrid
+        .matches
+        .iter()
+        .map(|entry| entry.document.path.as_str())
+        .collect::<Vec<_>>();
+    assert!(hybrid_paths.contains(&"src/indexed.rs"));
+    assert!(hybrid_paths.contains(&"src/live_only.rs"));
 
     cleanup_workspace(&root);
     Ok(())
@@ -134,7 +134,8 @@ fn candidate_discovery_manifest_snapshot_respects_root_ignore_file() -> FriggRes
 }
 
 #[test]
-fn candidate_discovery_rebuilds_after_stale_manifest_snapshot() -> FriggResult<()> {
+fn candidate_discovery_live_fallback_reflects_edits_after_invalid_manifest_snapshot()
+-> FriggResult<()> {
     let root = temp_workspace_root("candidate-discovery-stale-manifest");
     prepare_workspace(
         &root,
@@ -158,13 +159,10 @@ fn candidate_discovery_rebuilds_after_stale_manifest_snapshot() -> FriggResult<(
     )?;
     assert_eq!(
         first,
-        vec![text_match(
-            "repo-001",
-            "src/indexed.rs",
-            1,
-            1,
-            "needle indexed"
-        )]
+        vec![
+            text_match("repo-001", "src/indexed.rs", 1, 1, "needle indexed"),
+            text_match("repo-001", "src/live_only.rs", 1, 1, "needle live-only"),
+        ]
     );
 
     rewrite_file_with_new_mtime(&root.join("src/indexed.rs"), "changed\n")?;

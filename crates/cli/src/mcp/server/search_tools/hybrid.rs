@@ -281,7 +281,7 @@ impl FriggMcpServer {
                             metadata
                         });
                     if let Some(context_efficiency) = context_efficiency.as_ref() {
-                        Self::append_context_efficiency_log_for_workspaces(
+                        server.append_context_efficiency_log_for_workspaces(
                             "search_hybrid",
                             &scoped_workspaces,
                             context_efficiency,
@@ -321,23 +321,15 @@ impl FriggMcpServer {
                             .include_context_efficiency
                             .filter(|include| *include)
                             .and(context_efficiency),
-                        freshness_basis: Self::response_freshness_basis_metadata(
+                        cache_debug: Some(Self::response_freshness_basis_metadata(
                             &cache_freshness.basis,
-                        ),
+                        )),
                     });
 
                     let response = SearchHybridResponse {
                         matches,
                         result_handle: None,
-                        semantic_requested: None,
-                        semantic_enabled: None,
-                        semantic_status: None,
-                        semantic_reason: None,
-                        semantic_hit_count: None,
-                        semantic_match_count: None,
-                        warning: None,
                         metadata,
-                        note: None,
                     };
                     let mut response_source_refs_value = serde_json::to_value(
                         response

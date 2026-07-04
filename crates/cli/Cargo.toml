@@ -24,8 +24,8 @@ axum.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
-fastembed.workspace = true
-hf-hub.workspace = true
+fastembed = { workspace = true, optional = true }
+hf-hub = { workspace = true, optional = true }
 ignore.workspace = true
 indicatif.workspace = true
 memchr.workspace = true
@@ -59,8 +59,18 @@ uuid.workspace = true
 walkdir.workspace = true
 
 [features]
-default = []
+default = ["local-embeddings"]
+local-embeddings = ["dep:fastembed", "dep:hf-hub"]
 playbook = []
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/frigg-v{ version }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/frigg-v{ version }-{ target }.zip"
+pkg-fmt = "zip"
 
 [build-dependencies]
 cc = "1.1"

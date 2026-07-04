@@ -96,6 +96,7 @@ impl WorkloadToolClass {
             "playbook_run" => Self::PlaybookRun,
             "playbook_replay" => Self::PlaybookReplay,
             "playbook_compose_citations" => Self::PlaybookComposeCitations,
+            "workspace" => Self::WorkspaceMetadata,
             "list_repositories" => Self::WorkspaceMetadata,
             "workspace_attach" => Self::WorkspaceMetadata,
             "workspace_detach" => Self::WorkspaceMetadata,

@@ -3,7 +3,8 @@
 use super::*;
 
 #[test]
-fn literal_search_ripgrep_backend_filters_hits_to_manifest_candidate_universe() -> FriggResult<()> {
+fn literal_search_ripgrep_backend_filters_hits_to_validated_candidate_universe() -> FriggResult<()>
+{
     clear_ripgrep_availability_cache();
     let root = temp_workspace_root("literal-search-ripgrep-manifest");
     prepare_workspace(
@@ -37,13 +38,10 @@ fn literal_search_ripgrep_backend_filters_hits_to_manifest_candidate_universe() 
     assert_eq!(output.lexical_backend, Some(SearchLexicalBackend::Ripgrep));
     assert_eq!(
         output.matches,
-        vec![text_match(
-            "repo-001",
-            "src/indexed.rs",
-            1,
-            1,
-            "needle indexed"
-        )]
+        vec![
+            text_match("repo-001", "src/indexed.rs", 1, 1, "needle indexed"),
+            text_match("repo-001", "src/out_scope.rs", 1, 1, "needle out"),
+        ]
     );
 
     cleanup_workspace(&root);

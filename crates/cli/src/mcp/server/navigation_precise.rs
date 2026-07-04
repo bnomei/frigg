@@ -37,6 +37,7 @@ impl FriggMcpServer {
     #[allow(clippy::type_complexity)]
     pub(in crate::mcp::server) fn try_precise_definition_fast_path(
         &self,
+        corpora: &[Arc<RepositorySymbolCorpus>],
         repository_id_hint: Option<&str>,
         raw_path: &str,
         line: usize,
@@ -45,26 +46,33 @@ impl FriggMcpServer {
         limit: usize,
         freshness_basis: &Value,
     ) -> Result<Option<(Json<GoToDefinitionResponse>, String, String, String)>, ErrorData> {
-        let scoped_roots = self.roots_for_repository(repository_id_hint)?;
-        if repository_id_hint.is_none() && scoped_roots.len() != 1 {
+        if repository_id_hint.is_none() && corpora.len() != 1 {
             return Ok(None);
         }
 
-        let mut scoped_roots = scoped_roots;
-        scoped_roots.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut corpora = corpora.iter().collect::<Vec<_>>();
+        corpora.sort_by(|left, right| {
+            left.repository_id
+                .cmp(&right.repository_id)
+                .then(left.root.cmp(&right.root))
+        });
 
-        for (repository_id, root) in scoped_roots {
-            let Ok(cached_precise_graph) = self.precise_graph_for_repository_root(
-                &repository_id,
-                &root,
-                self.find_references_resource_budgets(),
-            ) else {
+        for corpus in corpora {
+            if let Some(repository_id_hint) = repository_id_hint
+                && corpus.repository_id != repository_id_hint
+                && corpus.runtime_repository_id != repository_id_hint
+            {
+                continue;
+            }
+            let Ok(cached_precise_graph) = self
+                .precise_graph_for_corpus(corpus.as_ref(), self.find_references_resource_budgets())
+            else {
                 continue;
             };
-            let relative_path = Self::canonicalize_navigation_path(&root, raw_path);
+            let relative_path = Self::canonicalize_navigation_path(&corpus.root, raw_path);
             let graph = cached_precise_graph.graph;
             let Some(precise_target) = graph.select_precise_symbol_for_location(
-                &repository_id,
+                &corpus.repository_id,
                 &relative_path,
                 line,
                 column,
@@ -73,7 +81,7 @@ impl FriggMcpServer {
             };
 
             let mut precise_matches = graph
-                .precise_occurrences_for_symbol(&repository_id, &precise_target.symbol)
+                .precise_occurrences_for_symbol(&corpus.repository_id, &precise_target.symbol)
                 .into_iter()
                 .filter(|occurrence| occurrence.is_definition())
                 .map(|occurrence| NavigationLocation {
@@ -84,8 +92,8 @@ impl FriggMcpServer {
                     } else {
                         precise_target.display_name.clone()
                     },
-                    repository_id: repository_id.clone(),
-                    path: Self::canonicalize_navigation_path(&root, &occurrence.path),
+                    repository_id: corpus.repository_id.clone(),
+                    path: Self::canonicalize_navigation_path(&corpus.root, &occurrence.path),
                     line: occurrence.range.start_line,
                     column: occurrence.range.start_column,
                     kind: Self::display_symbol_kind(&precise_target.kind),
@@ -107,7 +115,7 @@ impl FriggMcpServer {
             }
             if include_follow_up_structural {
                 Self::populate_navigation_location_follow_up_structural(
-                    &root,
+                    &corpus.root,
                     &mut precise_matches,
                 );
             }
@@ -137,7 +145,7 @@ impl FriggMcpServer {
                     metadata,
                     note,
                 }),
-                repository_id,
+                corpus.repository_id.clone(),
                 precise_target.symbol,
                 precision,
             )));

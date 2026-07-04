@@ -11,8 +11,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::mcp::types::{
-    FindReferencesParams, ListRepositoriesParams, ReadFileParams, ReadPresentationMode,
-    SearchSymbolParams, SearchTextParams,
+    FindReferencesParams, ReadFileParams, ReadPresentationMode, SearchSymbolParams,
+    SearchTextParams, WorkspaceParams,
 };
 
 use super::*;
@@ -203,10 +203,10 @@ impl DeepSearchHarness {
         step: &ResolvedDeepSearchPlaybookStep<'_>,
     ) -> DeepSearchTraceOutcome {
         let result = match step.tool {
-            DeepSearchStepTool::ListRepositories => {
-                let params = decode_params::<ListRepositoriesParams>(&step.step.params);
+            DeepSearchStepTool::Workspace => {
+                let params = decode_params::<WorkspaceParams>(&step.step.params);
                 match params {
-                    Ok(params) => match self.server.list_repositories(Parameters(params)).await {
+                    Ok(params) => match self.server.workspace(Parameters(params)).await {
                         Ok(response) => serde_json::to_value(response.0).map_err(map_json_error),
                         Err(error) => Err(map_error_data(error)),
                     },
@@ -291,7 +291,7 @@ impl DeepSearchHarness {
 
 pub(super) fn normalize_trace_response_for_tool(tool_name: &str, response: Value) -> Value {
     match tool_name {
-        "list_repositories" => normalize_list_repositories_response(response),
+        "workspace" | "list_repositories" => normalize_workspace_response(response),
         "read_file" => normalize_read_file_response(response),
         "search_text" => normalize_matches_response(
             response,
@@ -315,7 +315,7 @@ pub(super) fn normalize_trace_response_for_tool(tool_name: &str, response: Value
     }
 }
 
-fn normalize_list_repositories_response(response: Value) -> Value {
+fn normalize_workspace_response(response: Value) -> Value {
     let Some(repositories) = response.get("repositories").and_then(Value::as_array) else {
         return response;
     };
@@ -453,7 +453,7 @@ fn collect_step_evidence(
     response: &Value,
 ) -> FriggResult<Vec<StepEvidence>> {
     match step.tool_name.as_str() {
-        "list_repositories" => Ok(Vec::new()),
+        "workspace" | "list_repositories" => Ok(Vec::new()),
         "read_file" => {
             let context = format!("tool {} step {}", step.tool_name, step.step_id);
             let repository_id = required_string_field(response, "repository_id", &context)?;

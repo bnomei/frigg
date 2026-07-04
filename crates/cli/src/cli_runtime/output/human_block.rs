@@ -1,10 +1,12 @@
 use std::fmt::Display;
 
-use frigg::human_output::{HumanBlock, HumanRow};
+use frigg::human_output::{
+    HumanBlock, HumanRow, format_human_badged_line, human_badge_prefix_width,
+};
 
 use super::fields::FieldBag;
 use super::human_topic::{
-    HUMAN_COLOR_NEUTRAL, HumanTopic, action_color, human_severity_accent_color,
+    HUMAN_COLOR_DIM, HUMAN_COLOR_NEUTRAL, HumanTopic, action_color, human_severity_accent_color,
     human_sidecar_line_color, human_title_accent_color,
 };
 use super::{OutputField, OutputLevel};
@@ -16,20 +18,10 @@ pub(crate) const HUMAN_ACTIVITY_PREFIX: &str = "  ";
 const HUMAN_DETAIL_PREFIX: &str = "    ";
 const HUMAN_DETAIL_RAIL_PREFIX: &str = "  │ ";
 const HUMAN_CONTINUATION_MARKER: &str = "└─ ";
-const HUMAN_INTRO_LOGO_LINES: &[&str] = &[
-    "█████ ████  ███  ███   ███",
-    "█     █   █  █  █     █",
-    "████  ████   █  █  ██ █  ██",
-    "█     █  █   █  █   █ █   █",
-    "█     █   █ ███  ███   ███",
-];
-const HUMAN_INTRO_COLOR_CODES: &[&str] = &[
-    "1;38;2;238;240;242",
-    "1;38;2;238;240;242",
-    "1;38;2;214;238;234",
-    "1;38;2;125;199;190",
-    "1;38;2;125;199;190",
-];
+const HUMAN_SESSION_FIELD: &str = "session";
+const HUMAN_SERVER_BADGE: &str = "SRV";
+const HUMAN_INTRO_MARKER: &str = "◆";
+const HUMAN_INTRO_TAGLINE: &str = "Local, source-backed code search and navigation for AI agents.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HumanMarkerKind {
@@ -159,9 +151,19 @@ pub(crate) fn format_human_kv_block(
     let accent = human_title_accent_color(level, fields, topic, title);
     let rail_accent = human_sidecar_line_color(fields, topic, title, accent);
     let marker = human_symbol(level, fields, marker_kind);
-    format_human_kv_block_with_marker(title, rows, marker, accent, rail_accent, color, width)
+    format_human_kv_block_with_marker_and_badge(
+        title,
+        rows,
+        marker,
+        accent,
+        rail_accent,
+        human_session_badge(fields),
+        color,
+        width,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn format_human_kv_block_with_marker(
     title: &str,
     rows: Vec<HumanRow>,
@@ -171,7 +173,38 @@ pub(crate) fn format_human_kv_block_with_marker(
     color: bool,
     width: usize,
 ) -> String {
-    HumanBlock::new(title, rows, marker, accent, rail_accent).render(color, width)
+    format_human_kv_block_with_marker_and_badge(
+        title,
+        rows,
+        marker,
+        accent,
+        rail_accent,
+        None,
+        color,
+        width,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn format_human_kv_block_with_marker_and_badge(
+    title: &str,
+    rows: Vec<HumanRow>,
+    marker: &str,
+    accent: &str,
+    rail_accent: &str,
+    badge: Option<String>,
+    color: bool,
+    width: usize,
+) -> String {
+    let mut block = HumanBlock::new(title, rows, marker, accent, rail_accent);
+    if let Some(badge) = badge {
+        block = if badge == HUMAN_SERVER_BADGE {
+            block.with_badge_column(badge)
+        } else {
+            block.with_badge(badge)
+        };
+    }
+    block.render(color, width)
 }
 
 pub(crate) fn format_human_card(
@@ -179,19 +212,21 @@ pub(crate) fn format_human_card(
     title: &str,
     mut rows: Vec<HumanRow>,
     _footer: Option<&str>,
+    fields: &[OutputField],
     color: bool,
     width: usize,
 ) -> String {
     trim_human_separators(&mut rows);
-    let fields = FieldBag::new(&[]);
+    let fields = FieldBag::new(fields);
     let accent = human_title_accent_color(level, fields, None, title);
     let rail_accent = human_sidecar_line_color(fields, None, title, accent);
-    format_human_kv_block_with_marker(
+    format_human_kv_block_with_marker_and_badge(
         title,
         rows,
         human_card_marker(level),
         accent,
         rail_accent,
+        human_session_badge(fields),
         color,
         width,
     )
@@ -223,14 +258,16 @@ pub(crate) fn format_human_activity_line(
     } else {
         human_title_accent_color(level, fields, topic, &title)
     };
+    let badge = human_session_badge(fields);
+    let badge_prefix_width = human_badge_prefix_width(badge.as_deref());
     let symbol = human_symbol_with_color(level, fields, marker_kind, color, accent);
-    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
+    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN + badge_prefix_width);
     let title = truncate_display(&title, content_width);
     let mut line = format!(
         "{HUMAN_ACTIVITY_PREFIX}{symbol} {}",
         colorize(color, accent, &title)
     );
-    let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
+    let used_width = badge_prefix_width + HUMAN_TEXT_COLUMN + display_width(&title);
     let detail_budget = width.saturating_sub(used_width + 2);
     if !details.is_empty() && detail_budget >= 8 {
         line.push_str("  ");
@@ -240,7 +277,7 @@ pub(crate) fn format_human_activity_line(
             truncate_display(&details, detail_budget),
         ));
     }
-    line
+    format_human_badged_line(badge.as_deref(), line, color)
 }
 
 pub(crate) fn format_human_continuation(
@@ -322,7 +359,7 @@ pub(crate) fn trim_human_separators(rows: &mut Vec<HumanRow>) {
 pub(crate) fn human_rows_from_fields(fields: &[OutputField], skip_keys: &[&str]) -> Vec<HumanRow> {
     FieldBag::new(fields)
         .iter()
-        .filter(|field| !skip_keys.contains(&field.key))
+        .filter(|field| !human_metadata_field_skipped(field.key, skip_keys))
         .map(|field| {
             HumanRow::kv(
                 human_field_label(field.key),
@@ -479,7 +516,7 @@ pub(crate) fn compact_human_fields(
     let mut fields = FieldBag::new(fields)
         .iter()
         .enumerate()
-        .filter(|(_, field)| !skip_keys.contains(&field.key))
+        .filter(|(_, field)| !human_metadata_field_skipped(field.key, skip_keys))
         .collect::<Vec<_>>();
     fields.sort_by_key(|(index, field)| (compact_human_field_order(field.key), *index));
 
@@ -497,8 +534,29 @@ pub(crate) fn compact_human_fields(
         .join(" ")
 }
 
+fn human_metadata_field_skipped(key: &str, skip_keys: &[&str]) -> bool {
+    key == HUMAN_SESSION_FIELD || skip_keys.contains(&key)
+}
+
 fn compact_human_field_order(key: &str) -> u8 {
     if key.ends_with("_ms") { 0 } else { 1 }
+}
+
+pub(crate) fn human_session_badge(fields: FieldBag<'_>) -> Option<String> {
+    fields
+        .value(HUMAN_SESSION_FIELD)
+        .and_then(human_session_badge_label)
+        .or_else(|| Some(HUMAN_SERVER_BADGE.to_owned()))
+}
+
+pub(crate) fn human_session_badge_label(session_id: &str) -> Option<String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() || session_id == "-" {
+        return None;
+    }
+    let mut chars = session_id.chars().rev().take(3).collect::<Vec<_>>();
+    chars.reverse();
+    Some(chars.into_iter().collect::<String>())
 }
 
 pub(crate) fn human_field_label(key: &str) -> String {
@@ -677,15 +735,15 @@ pub(crate) fn human_color_enabled() -> bool {
 }
 
 pub(crate) fn format_human_intro(color: bool) -> String {
-    let mut output = String::new();
-    output.push('\n');
-    for (line, color_code) in HUMAN_INTRO_LOGO_LINES
-        .iter()
-        .zip(HUMAN_INTRO_COLOR_CODES.iter().copied())
-    {
-        output.push_str(&colorize(color, color_code, line));
-        output.push('\n');
-    }
+    let mut output = HumanBlock::new(
+        "Frigg",
+        vec![HumanRow::note(HUMAN_INTRO_TAGLINE)],
+        HUMAN_INTRO_MARKER,
+        HUMAN_COLOR_NEUTRAL,
+        HUMAN_COLOR_DIM,
+    )
+    .with_empty_badge_column()
+    .render(color, HUMAN_DEFAULT_WIDTH);
     output.push('\n');
     output
 }

@@ -320,6 +320,12 @@ impl FriggMcpServer {
         let mut repositories = Vec::with_capacity(workspaces.len());
 
         for workspace in workspaces {
+            let dirty_root_before_store = self
+                .runtime_state
+                .validated_manifest_candidate_cache
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_dirty_root(&workspace.root);
             let status = self
                 .workspace_repository_freshness_status(workspace, &semantic_runtime)
                 .map_err(|err| {
@@ -331,6 +337,22 @@ impl FriggMcpServer {
                         None,
                     )
                 })?;
+            if !dirty_root_before_store
+                && let (Some(snapshot_id), Some(validated_digests)) = (
+                    status.snapshot_id.as_deref(),
+                    status.validated_manifest_digests.as_ref(),
+                )
+            {
+                self.runtime_state
+                    .validated_manifest_candidate_cache
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .store_validated_shared(
+                        &workspace.root,
+                        snapshot_id,
+                        std::sync::Arc::new(validated_digests.clone()),
+                    );
+            }
             let dirty_root = self
                 .runtime_state
                 .validated_manifest_candidate_cache

@@ -13,6 +13,8 @@ use crate::mcp::tool_surface::{ToolSurfaceProfile, manifest_for_tool_surface_pro
 
 pub(crate) const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
 pub(crate) const TOOL_SURFACE_RESOURCE_URI: &str = "frigg://policy/tool-surface.json";
+pub(crate) const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str =
+    "frigg://policy/shell-replacement-map.json";
 pub(crate) const SHELL_GUIDANCE_RESOURCE_URI: &str = "frigg://guidance/shell-vs-frigg.md";
 pub(crate) const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 
@@ -70,6 +72,86 @@ fn support_matrix_json() -> String {
         "languages": languages
     }))
     .expect("support matrix JSON should serialize")
+}
+
+fn shell_replacement_map_json() -> String {
+    serde_json::to_string_pretty(&json!({
+        "schema_id": "frigg.policy.shell_replacement_map.v1",
+        "product": "frigg",
+        "default_for": [
+            "source-code discovery",
+            "exact text search",
+            "symbol lookup",
+            "repository-relative source reads",
+            "code navigation"
+        ],
+        "fallback_only_for": [
+            "git state and diffs",
+            "non-code files or workspace metadata",
+            "build/test output",
+            "generated or unindexed files",
+            "explicit live-disk verification",
+            "Frigg unavailable"
+        ],
+        "replacements": [
+            {
+                "shell": "rg --files",
+                "tool": "list_files",
+                "params": ["path_regex", "glob", "language", "path_class", "include_hidden", "limit", "resume_from"]
+            },
+            {
+                "shell": "rg -n PATTERN",
+                "tool": "search_text",
+                "params": ["query", "pattern_type", "case_sensitive", "ignore_case", "word", "context_lines", "limit"]
+            },
+            {
+                "shell": "rg -n 'foo|bar'",
+                "tool": "search_text",
+                "params": ["query", "pattern_type=regex"]
+            },
+            {
+                "shell": "rg -n PATTERN path/",
+                "tool": "search_text",
+                "params": ["query", "path_regex"]
+            },
+            {
+                "shell": "rg -n -g GLOB PATTERN",
+                "tool": "search_text",
+                "params": ["query", "glob", "exclude_glob"]
+            },
+            {
+                "shell": "rg -l PATTERN",
+                "tool": "search_text",
+                "params": ["query", "files_with_matches=true"]
+            },
+            {
+                "shell": "rg -c PATTERN",
+                "tool": "search_text",
+                "params": ["query", "count_only=true"]
+            },
+            {
+                "shell": "identifier/API/type/class/function lookup",
+                "tool": "search_symbol",
+                "params": ["query", "path_regex", "path_class", "limit"]
+            },
+            {
+                "shell": "cat path",
+                "tool": "read_file",
+                "params": ["path"]
+            },
+            {
+                "shell": "sed -n '10,80p' path",
+                "tool": "read_file",
+                "params": ["path", "start_line", "end_line", "line_count"]
+            },
+            {
+                "shell": "follow definitions/references/calls",
+                "tool": "navigation tools",
+                "params": ["go_to_definition", "find_references", "find_implementations", "incoming_calls", "outgoing_calls"]
+            }
+        ]
+    }))
+    .expect("shell replacement map JSON should serialize")
 }
 
 fn support_matrix_language_id(language: SymbolLanguage) -> &'static str {
@@ -149,9 +231,11 @@ fn tool_surface_json(active_profile: ToolSurfaceProfile) -> String {
         "core_tools": core.tool_names,
         "extended_only_tools": extended_only_tool_names(),
         "guidance": [
-            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.",
-            "Use search_hybrid only for broad discovery-style repository questions; use search_text for rg-shaped literal or safe-regex code scans, including grouped alternation and path_regex narrowing; use search_symbol for known identifiers.",
-            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs in the checked-out workspace; shell rg is also appropriate for live-disk correctness checks and ripgrep-specific behavior outside search_text.",
+            "Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.",
+            "Use workspace for compact workspace status or to adopt a target path/repository; repo-aware tools auto-adopt sensible defaults when possible.",
+            "Before shell rg/grep/find/fd/cat/sed for code exploration, use list_files, search_text, search_symbol, read_file, read_match, or navigation tools.",
+            "Use search_hybrid only for broad discovery-style repository questions; use search_text for rg-shaped literal or safe-regex code scans, including grouped alternation and path_regex narrowing; use search_symbol for known identifiers; use list_files for rg --files-shaped listing.",
+            "Use shell tools as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.",
             "Use Frigg when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.",
             "Read surfaces are text-first by default: read_file, read_match, and explore(operation=zoom). Request presentation_mode=json when a downstream consumer needs the structured compatibility payload.",
             "Use include_follow_up_structural=true when you want replayable search_structural follow-ups from inspect_syntax_tree, search_structural, or anchored navigation and outline results.",
@@ -169,23 +253,29 @@ fn shell_vs_frigg_markdown(active_profile: ToolSurfaceProfile) -> String {
     };
     format!(
         "# Shell vs Frigg\n\n\
-Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads.\n\n\
+Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads.\n\n\
+- repository-aware file listing through `list_files` instead of `rg --files`, `find`, or `fd`\n\
 - symbol, definition, reference, implementation, or call navigation\n\
 - exact literal, safe-regex, grouped-alternation, or `rg`-shaped code searches with repository scoping and result handles\n\
 - bounded source reads through `read_file`, `read_match`, or `explore(operation=zoom)`\n\
 - mixed doc/runtime questions where lexical, graph, witness, and semantic channels may all matter\n\
 - evidence-backed answers or replayable source references\n\
 - attached multi-repo context instead of one current shell directory\n\n\
-Use shell tools only as the exception when the task is a trivial local operation in the checked-out workspace.\n\n\
-- non-code file reads or exact scans\n\
-- generic filesystem or git inspection\n\
-- trivial one-offs where repository-aware evidence and bounded source reads add no value\n\n\
-Use shell `rg` for live-disk correctness checks, suspected Frigg index/watch drift, or ripgrep-specific flags outside `search_text`.\n\n\
-Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits, and file-containment probes. Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers.\n\n\
+Use shell tools only as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results.\n\n\
+Use shell `rg` for explicit live-disk verification, ripgrep-specific flags outside `search_text`, or generated/unindexed files.\n\n\
+Shell replacement map:\n\
+- `rg --files` -> `list_files`\n\
+- `rg -n \"text\"` -> `search_text`\n\
+- `rg -n \"foo|bar\"` -> `search_text` with regex mode\n\
+- `rg -n \"text\" path/` -> `search_text` with `path_regex`\n\
+- identifier/API/type/class/function lookup -> `search_symbol`\n\
+- `cat path` -> `read_file`\n\
+- `sed -n '10,80p' path` -> `read_file` with `start_line`, `end_line`, or `line_count`\n\
+- follow definitions/references/calls -> navigation tools\n\n\
+Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet. Use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and file-containment probes (`files_with_matches`). Frigg may execute those scans with its native scanner, its ripgrep accelerator, or a mixed path while preserving repository-scoped results and result handles. Use `search_symbol` for known identifiers.\n\n\
 `read_file` and `read_match` default to text-first output. Ask for `presentation_mode=json` when a caller needs the structured compatibility payload with explicit `content`, and apply the same rule to `explore(operation=zoom)` in the extended profile.\n\n\
 Structural follow-up suggestions are opt-in. Use `include_follow_up_structural=true` on `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline tools when you want replayable `search_structural` follow-ups derived from the resolved AST focus.\n\n\
-Semantic retrieval remains an optional accelerator, not the grounding layer.\n\
-If semantic status is disabled, degraded, or unavailable, treat the answer as lexical/graph/witness-only.\n\n\
+Semantic retrieval remains an optional accelerator, not the grounding layer.\n\n\
 {explore_guidance}\n"
     )
 }
@@ -198,6 +288,12 @@ pub(crate) fn policy_resources() -> Vec<Resource> {
         Resource::new(TOOL_SURFACE_RESOURCE_URI, "FRIGG Tool Surface Policy")
             .with_description("Machine-readable core vs extended tool-surface policy.")
             .with_mime_type("application/json"),
+        Resource::new(
+            SHELL_REPLACEMENT_MAP_RESOURCE_URI,
+            "FRIGG Shell Replacement Map",
+        )
+        .with_description("Machine-readable shell-to-Frigg replacement table.")
+        .with_mime_type("application/json"),
         Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance")
             .with_description(
                 "Guidance for when to use shell tools versus repo-aware Frigg surfaces.",
@@ -213,6 +309,7 @@ pub(crate) fn read_policy_resource(
     let (content, mime_type) = match uri {
         SUPPORT_MATRIX_RESOURCE_URI => (support_matrix_json(), "application/json"),
         TOOL_SURFACE_RESOURCE_URI => (tool_surface_json(active_profile), "application/json"),
+        SHELL_REPLACEMENT_MAP_RESOURCE_URI => (shell_replacement_map_json(), "application/json"),
         SHELL_GUIDANCE_RESOURCE_URI => (shell_vs_frigg_markdown(active_profile), "text/markdown"),
         _ => return None,
     };
@@ -262,9 +359,9 @@ pub(crate) fn read_guidance_prompt(
         "Routing policy:\n\
 1. Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads.\n\
 2. Use `search_hybrid` only for broad discovery-style repository questions when there is no stable string, symbol, or path anchor yet; use `search_text` for `rg`-shaped literal or safe-regex scans, including grouped alternation and `path_regex`; use `search_symbol` for known identifiers.\n\
-3. Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs. Use shell `rg` for live-disk correctness checks, suspected Frigg index/watch drift, or ripgrep-specific flags outside `search_text`.\n\
+3. Use shell tools as the exception for non-code files, git/filesystem inspection, explicit live-disk verification, trivial one-offs, or ripgrep-specific flags outside `search_text`.\n\
 4. Prefer Frigg core tools when repository-aware evidence, symbols, navigation, provenance, or multi-repo context matter.\n\
-5. Treat semantic retrieval as optional acceleration only; degraded or unavailable semantic status means lexical/graph/witness evidence is carrying the answer.\n\
+5. Treat semantic retrieval as optional acceleration only. When broad discovery is weak, pivot to lexical, graph, and source-witness evidence instead of diagnosing runtime state by default.\n\
 6. Treat the current supported-language set as one public list: Rust, PHP, Blade, TypeScript / TSX, Python, Go, Kotlin / KTS, Java, Lua, Roc, and Nim. Describe differences in concrete capability terms, not first-class or baseline badges.\n\
 7. `read_file` and `read_match` default to text-first output; request `presentation_mode=json` only when the caller truly needs the structured compatibility payload. In the extended profile, `explore(operation=zoom)` follows the same text-first default, while `probe` and `refine` stay structured.\n\
 8. Use `include_follow_up_structural=true` when you want replayable `search_structural` follow-ups from `inspect_syntax_tree`, `search_structural`, or anchored navigation and outline results.\n\
@@ -285,6 +382,13 @@ pub(crate) fn read_guidance_prompt(
             ),
             PromptMessage::new_resource_link(
                 Role::Assistant,
+                Resource::new(
+                    SHELL_REPLACEMENT_MAP_RESOURCE_URI,
+                    "FRIGG Shell Replacement Map",
+                ),
+            ),
+            PromptMessage::new_resource_link(
+                Role::Assistant,
                 Resource::new(SHELL_GUIDANCE_RESOURCE_URI, "Shell vs Frigg Guidance"),
             ),
         ])
@@ -295,8 +399,9 @@ pub(crate) fn read_guidance_prompt(
 #[cfg(test)]
 mod tests {
     use super::{
-        ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
-        TOOL_SURFACE_RESOURCE_URI, read_guidance_prompt, read_policy_resource,
+        ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI,
+        SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI, read_guidance_prompt,
+        read_policy_resource,
     };
     use crate::languages::{LanguageSupportCapability, SymbolLanguage};
     use crate::mcp::tool_surface::ToolSurfaceProfile;
@@ -510,6 +615,52 @@ mod tests {
     }
 
     #[test]
+    fn shell_replacement_map_is_machine_readable() {
+        let json = resource_text(SHELL_REPLACEMENT_MAP_RESOURCE_URI, ToolSurfaceProfile::Core);
+        let parsed =
+            serde_json::from_str::<Value>(&json).expect("shell replacement map JSON should parse");
+        assert_eq!(
+            parsed["schema_id"],
+            json!("frigg.policy.shell_replacement_map.v1")
+        );
+        assert!(
+            parsed["replacements"]
+                .as_array()
+                .expect("replacements should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["shell"] == json!("sed -n '10,80p' path")
+                        && entry["tool"] == json!("read_file")
+                        && entry["params"]
+                            .as_array()
+                            .expect("params should be an array")
+                            .iter()
+                            .any(|param| param == "start_line")
+                        && entry["params"]
+                            .as_array()
+                            .expect("params should be an array")
+                            .iter()
+                            .any(|param| param == "line_count")
+                })
+        );
+        assert!(
+            parsed["replacements"]
+                .as_array()
+                .expect("replacements should be an array")
+                .iter()
+                .any(|entry| {
+                    entry["shell"] == json!("rg -l PATTERN")
+                        && entry["tool"] == json!("search_text")
+                        && entry["params"]
+                            .as_array()
+                            .expect("params should be an array")
+                            .iter()
+                            .any(|param| param == "files_with_matches=true")
+                })
+        );
+    }
+
+    #[test]
     fn routing_prompt_links_policy_resources() {
         let prompt = read_guidance_prompt(
             ROUTING_GUIDE_PROMPT_NAME,
@@ -520,7 +671,7 @@ mod tests {
             ToolSurfaceProfile::Extended,
         )
         .expect("routing prompt should exist");
-        assert_eq!(prompt.messages.len(), 4);
+        assert_eq!(prompt.messages.len(), 5);
     }
 
     #[test]
@@ -539,10 +690,10 @@ mod tests {
         let prompt_debug = format!("{prompt:?}");
 
         assert!(shell_guidance.contains(
-            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads."
+            "Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads."
         ));
         assert!(tool_surface.contains(
-            "Use Frigg as the default for code discovery, navigation, exact code search, and bounded source reads."
+            "Use Frigg as the default for code discovery, file listing, navigation, exact code search, and bounded source reads."
         ));
         assert!(
             shell_guidance.contains(
@@ -562,13 +713,13 @@ mod tests {
             "Prefer Frigg for code discovery, navigation, exact code search, and bounded source reads."
         ));
         assert!(shell_guidance.contains(
-            "Use shell tools only as the exception when the task is a trivial local operation in the checked-out workspace."
+            "Use shell tools only as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results."
         ));
         assert!(tool_surface.contains(
-            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs"
+            "Use shell tools as the exception for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, and unavailable Frigg results."
         ));
         assert!(prompt_debug.contains(
-            "Use shell tools as the exception for non-code files, git/filesystem inspection, and trivial one-offs."
+            "Use shell tools as the exception for non-code files, git/filesystem inspection, explicit live-disk verification, trivial one-offs, or ripgrep-specific flags outside `search_text`."
         ));
     }
 }

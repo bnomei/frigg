@@ -21,8 +21,9 @@ impl FriggMcpServer {
                     path: params_for_blocking.path.clone(),
                     repository_id: params_for_blocking.repository_id.clone(),
                     max_bytes: None,
-                    line_start: None,
-                    line_end: None,
+                    start_line: None,
+                    end_line: None,
+                    line_count: None,
                     presentation_mode: None,
                     include_context_efficiency: None,
                 };

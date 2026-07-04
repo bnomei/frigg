@@ -9,6 +9,7 @@ impl FriggMcpSessionState {
     ) -> Self {
         Self {
             inner: Arc::new(FriggMcpSessionStateInner {
+                display_session_id: Uuid::now_v7().simple().to_string(),
                 workspace_registry,
                 watch_runtime,
                 adopted_repository_ids: RwLock::new(BTreeSet::new()),
@@ -17,6 +18,10 @@ impl FriggMcpSessionState {
                 result_handles: RwLock::new(SessionResultHandleCache::default()),
             }),
         }
+    }
+
+    pub(super) fn display_session_id(&self) -> String {
+        self.inner.display_session_id.clone()
     }
 }
 
@@ -461,12 +466,18 @@ impl FriggMcpServer {
     }
 
     pub(super) fn no_attached_workspaces_error(action: &str) -> ErrorData {
+        let attach_path = std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<repo root or any file inside it>".to_owned());
         Self::resource_not_found(
             "no repositories are adopted for this session",
             Some(json!({
                 "attached_repositories": [],
                 "action": action,
-                "hint": "call workspace_attach first or choose a repository_id from list_repositories",
+                "hint": "Call workspace with next_params.path, then retry.",
+                "next_tool": "workspace",
+                "next_params": { "path": attach_path },
             })),
         )
     }
@@ -475,11 +486,6 @@ impl FriggMcpServer {
         &self,
         repository_id: Option<&str>,
     ) -> Result<Vec<AttachedWorkspace>, ErrorData> {
-        let registry = self
-            .runtime_state
-            .workspace_registry
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let adopted_repository_ids = self
             .session_state
             .inner
@@ -490,37 +496,92 @@ impl FriggMcpServer {
             .cloned()
             .collect::<Vec<_>>();
 
-        if let Some(repository_id) = repository_id
-            .map(str::to_owned)
-            .or_else(|| self.current_repository_id())
-        {
+        if let Some(repository_id) = repository_id.map(str::to_owned) {
+            let workspace = {
+                let registry = self
+                    .runtime_state
+                    .workspace_registry
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                registry.workspace_by_repository_id(&repository_id)
+            };
+            let Some(workspace) = workspace else {
+                return Err(Self::resource_not_found(
+                    "repository_id not found",
+                    Some(json!({ "repository_id": repository_id })),
+                ));
+            };
+
+            let is_adopted = adopted_repository_ids
+                .iter()
+                .any(|id| id == &workspace.repository_id);
+            if is_adopted {
+                return Ok(vec![workspace]);
+            }
+            self.adopt_workspace(&workspace, true)?;
+            return Ok(vec![workspace]);
+        }
+
+        if let Some(repository_id) = self.current_repository_id() {
+            let registry = self
+                .runtime_state
+                .workspace_registry
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let Some(workspace) = registry.workspace_by_repository_id(&repository_id) else {
                 return Err(Self::resource_not_found(
                     "repository_id not found",
                     Some(json!({ "repository_id": repository_id })),
                 ));
             };
-            if !adopted_repository_ids
+            if adopted_repository_ids
                 .iter()
                 .any(|id| id == &workspace.repository_id)
             {
-                return Err(Self::resource_not_found(
-                    "repository_id is not adopted for this session",
-                    Some(json!({
-                        "repository_id": repository_id,
-                        "hint": "call workspace_attach for this repository_id first",
-                    })),
-                ));
+                return Ok(vec![workspace]);
             }
-            return Ok(vec![workspace]);
+            return Err(Self::resource_not_found(
+                "current repository is not adopted for this session",
+                Some(json!({
+                    "repository_id": repository_id,
+                    "attached_repositories": adopted_repository_ids,
+                    "hint": "Call workspace with next_params, then retry.",
+                    "next_tool": "workspace",
+                    "next_params": { "repository_id": repository_id },
+                })),
+            ));
         }
 
+        if adopted_repository_ids.is_empty() {
+            let known_workspaces = self.known_workspaces();
+            if let [workspace] = known_workspaces.as_slice() {
+                self.adopt_workspace(workspace, true)?;
+                return Ok(vec![workspace.clone()]);
+            }
+            if let Ok(current_dir) = std::env::current_dir() {
+                let current_dir = current_dir.display().to_string();
+                if let Ok((workspace, _, _, _)) = self.resolve_workspace_target(
+                    Some(&current_dir),
+                    None,
+                    WorkspaceResolveMode::GitRoot,
+                ) {
+                    self.adopt_workspace(&workspace, true)?;
+                    return Ok(vec![workspace]);
+                }
+            }
+        }
+
+        let registry = self
+            .runtime_state
+            .workspace_registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let workspaces = adopted_repository_ids
             .into_iter()
             .filter_map(|repository_id| registry.workspace_by_repository_id(&repository_id))
             .collect::<Vec<_>>();
         if workspaces.is_empty() {
-            return Err(Self::no_attached_workspaces_error("workspace_attach"));
+            return Err(Self::no_attached_workspaces_error("workspace"));
         }
 
         Ok(workspaces)

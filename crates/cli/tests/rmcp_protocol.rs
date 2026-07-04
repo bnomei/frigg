@@ -14,8 +14,11 @@ use rmcp::{
 use serde_json::Value;
 
 const SUPPORT_MATRIX_RESOURCE_URI: &str = "frigg://policy/support-matrix.json";
+const SHELL_REPLACEMENT_MAP_RESOURCE_URI: &str = "frigg://policy/shell-replacement-map.json";
 const ROUTING_GUIDE_PROMPT_NAME: &str = "frigg-routing-guide";
 const MISSING_POLICY_RESOURCE_URI: &str = "frigg://policy/missing.json";
+const MAX_TOOL_DESCRIPTION_CHARS: usize = 140;
+const MAX_SCHEMA_DESCRIPTION_CHARS: usize = 180;
 
 #[derive(Debug, Clone)]
 struct VersionedClient {
@@ -57,6 +60,8 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
         .list_tools(None)
         .await
         .expect("tools/list should route through RMCP");
+    assert_tools_list_descriptions_are_concise(&tools.tools);
+
     let read_file = tool_named(&tools.tools, "read_file");
     let read_file_annotations = read_file
         .annotations
@@ -67,14 +72,15 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
     assert_eq!(read_file_annotations.idempotent_hint, Some(true));
     assert_schema_object(&read_file.input_schema, "read_file inputSchema");
 
-    let workspace_prepare = tool_named(&tools.tools, "workspace_prepare");
-    let workspace_prepare_annotations = workspace_prepare
+    let workspace = tool_named(&tools.tools, "workspace");
+    let workspace_annotations = workspace
         .annotations
         .as_ref()
-        .expect("workspace_prepare should publish annotations");
-    assert_eq!(workspace_prepare_annotations.read_only_hint, Some(true));
-    assert_eq!(workspace_prepare_annotations.destructive_hint, Some(false));
-    assert_eq!(workspace_prepare_annotations.idempotent_hint, Some(false));
+        .expect("workspace should publish annotations");
+    assert_eq!(workspace_annotations.read_only_hint, Some(true));
+    assert_eq!(workspace_annotations.destructive_hint, Some(false));
+    assert_eq!(workspace_annotations.idempotent_hint, Some(false));
+    assert_schema_object(&workspace.input_schema, "workspace inputSchema");
 
     let document_symbols = tool_named(&tools.tools, "document_symbols");
     let output_schema = document_symbols
@@ -104,6 +110,13 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
             .any(|resource| resource.uri == SUPPORT_MATRIX_RESOURCE_URI),
         "resources/list should expose the support matrix resource"
     );
+    assert!(
+        resources
+            .resources
+            .iter()
+            .any(|resource| resource.uri == SHELL_REPLACEMENT_MAP_RESOURCE_URI),
+        "resources/list should expose the shell replacement map resource"
+    );
 
     let support_matrix = client
         .read_resource(ReadResourceRequestParams::new(SUPPORT_MATRIX_RESOURCE_URI))
@@ -117,6 +130,22 @@ async fn rmcp_service_routes_policy_resources_and_prompts() {
     assert!(
         text.contains("\"schema_id\": \"frigg.policy.support_matrix.v4\""),
         "support matrix should contain the expected policy schema"
+    );
+
+    let replacement_map = client
+        .read_resource(ReadResourceRequestParams::new(
+            SHELL_REPLACEMENT_MAP_RESOURCE_URI,
+        ))
+        .await
+        .expect("resources/read should route shell replacement map through RMCP");
+    let ResourceContents::TextResourceContents { uri, text, .. } = &replacement_map.contents[0]
+    else {
+        panic!("shell replacement map should be returned as text resource contents");
+    };
+    assert_eq!(uri, SHELL_REPLACEMENT_MAP_RESOURCE_URI);
+    assert!(
+        text.contains("\"schema_id\": \"frigg.policy.shell_replacement_map.v1\""),
+        "shell replacement map should contain the expected policy schema"
     );
 
     let prompts = client
@@ -218,6 +247,50 @@ fn assert_schema_object(schema: &serde_json::Map<String, Value>, label: &str) {
         Some(&Value::String("object".to_owned())),
         "{label} should be an object schema"
     );
+}
+
+fn assert_tools_list_descriptions_are_concise(tools: &[Tool]) {
+    for tool in tools {
+        let description = tool.description.as_deref().unwrap_or("");
+        assert!(
+            description.chars().count() <= MAX_TOOL_DESCRIPTION_CHARS,
+            "tool `{}` description is too long: {description}",
+            tool.name
+        );
+
+        assert_schema_descriptions_are_concise(
+            &Value::Object(tool.input_schema.as_ref().clone()),
+            &format!("{} inputSchema", tool.name),
+        );
+        if let Some(output_schema) = &tool.output_schema {
+            assert_schema_descriptions_are_concise(
+                &Value::Object(output_schema.as_ref().clone()),
+                &format!("{} outputSchema", tool.name),
+            );
+        }
+    }
+}
+
+fn assert_schema_descriptions_are_concise(value: &Value, label: &str) {
+    match value {
+        Value::Object(map) => {
+            if let Some(description) = map.get("description").and_then(Value::as_str) {
+                assert!(
+                    description.chars().count() <= MAX_SCHEMA_DESCRIPTION_CHARS,
+                    "{label} has an overlong schema description: {description}"
+                );
+            }
+            for (key, child) in map {
+                assert_schema_descriptions_are_concise(child, &format!("{label}.{key}"));
+            }
+        }
+        Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                assert_schema_descriptions_are_concise(child, &format!("{label}[{index}]"));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn structured_error_code(error: &ErrorData) -> Option<&str> {

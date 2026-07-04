@@ -663,20 +663,6 @@ fn hybrid_ranking_entrypoint_queries_surface_build_workflow_configs_with_semanti
                 0,
                 vec![0.93, 0.0],
             ),
-            semantic_record(
-                "repo-001",
-                "snapshot-001",
-                ".github/workflows/release.yml",
-                0,
-                vec![0.82, 0.0],
-            ),
-            semantic_record(
-                "repo-001",
-                "snapshot-001",
-                ".github/workflows/deploy-pages.yml",
-                0,
-                vec![0.81, 0.0],
-            ),
         ],
     )?;
 

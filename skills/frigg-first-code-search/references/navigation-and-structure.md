@@ -17,6 +17,7 @@ Compact-first rule:
 - compact mode keeps the important top-level contract fields such as `mode`, `availability`, and the result rows themselves
 - ask for `response_mode=full` only when you need `metadata` or `note`
 - compact responses still return `result_handle` plus per-row `match_id` values so you can reopen one hit with `read_match`
+- `inspect_syntax_tree` and `search_structural` are always structured; they do not currently accept `response_mode`
 
 `include_follow_up_structural=true` is an opt-in across the structure-aware surfaces below. When enabled, Frigg attaches typed `follow_up_structural` suggestions that replay into `search_structural`. These are best-effort AST follow-ups, not echoes of the original query. Phase 1 is `inspect_syntax_tree` plus `search_structural`; phase 2 is `document_symbols`, `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, and `outgoing_calls`. `search_hybrid` and `search_symbol` do not expose this payload.
 

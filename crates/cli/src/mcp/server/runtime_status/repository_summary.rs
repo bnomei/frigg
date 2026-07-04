@@ -128,6 +128,7 @@ impl FriggMcpServer {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::mcp::server) fn repository_summary(
         &self,
         workspace: &AttachedWorkspace,

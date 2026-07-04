@@ -66,6 +66,7 @@ use scip::types::symbol_information::Kind as ScipSymbolKind;
 use serde_json::{Value, json};
 use tokio::task;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::agent_directive;
 #[cfg(feature = "playbook")]
@@ -78,9 +79,9 @@ use crate::mcp::explorer::{
     validate_cursor,
 };
 use crate::mcp::guidance::{
-    ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SUPPORT_MATRIX_RESOURCE_URI,
-    TOOL_SURFACE_RESOURCE_URI, guidance_prompts, policy_resources, read_guidance_prompt,
-    read_policy_resource,
+    ROUTING_GUIDE_PROMPT_NAME, SHELL_GUIDANCE_RESOURCE_URI, SHELL_REPLACEMENT_MAP_RESOURCE_URI,
+    SUPPORT_MATRIX_RESOURCE_URI, TOOL_SURFACE_RESOURCE_URI, guidance_prompts, policy_resources,
+    read_guidance_prompt, read_policy_resource,
 };
 use crate::mcp::server_cache::{
     CachedHeuristicReferences, CachedPreciseGeneratorProbe, CachedRepositoryResponseFreshness,
@@ -111,29 +112,29 @@ use crate::mcp::types::{
     FindDeclarationsParams, FindDeclarationsResponse, FindImplementationsParams,
     FindImplementationsResponse, FindReferencesParams, FindReferencesResponse,
     GoToDefinitionParams, GoToDefinitionResponse, ImplementationMatch, IncomingCallsParams,
-    IncomingCallsResponse, InspectSyntaxTreeParams, InspectSyntaxTreeResponse,
-    ListRepositoriesParams, ListRepositoriesResponse, NavigationAvailability, NavigationLocation,
-    NavigationMode, NavigationTargetSelectionStatus, NavigationTargetSelectionSummary,
-    OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams, ReadFileResponse, ReadMatchParams,
-    ReadMatchResponse, ReadPresentationMode, RepositorySummary, ResponseMode, RuntimeStatusSummary,
-    RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary, SearchHybridChannelWeightsParams,
-    SearchHybridMatch, SearchHybridParams, SearchHybridResponse, SearchPatternType,
-    SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams, SearchSymbolPathClass,
-    SearchSymbolResponse, SearchTextParams, SearchTextResponse, SyntaxTreeNodeItem,
-    WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE, WorkspaceAttachAction,
-    WorkspaceAttachIndexMode, WorkspaceAttachParams, WorkspaceAttachResponse,
-    WorkspaceCurrentParams, WorkspaceCurrentResponse, WorkspaceDetachParams,
-    WorkspaceDetachResponse, WorkspaceIndexAction, WorkspaceIndexComponentState,
-    WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary, WorkspaceIndexLifecyclePhase,
-    WorkspaceIndexLifecycleSummary, WorkspaceIndexParams, WorkspaceIndexResponse,
-    WorkspacePreciseArtifactFailureSummary, WorkspacePreciseCoverageMode,
-    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
-    WorkspacePreciseGenerationSummary, WorkspacePreciseGeneratorState,
-    WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState, WorkspacePreciseIngestSummary,
-    WorkspacePreciseLifecyclePhase, WorkspacePreciseLifecycleSummary, WorkspacePreciseState,
-    WorkspacePreciseSummary, WorkspacePrepareParams, WorkspacePrepareResponse,
-    WorkspaceRecommendedAction, WorkspaceResolveMode, WorkspaceStorageIndexState,
-    WorkspaceStorageSummary,
+    IncomingCallsResponse, InspectSyntaxTreeParams, InspectSyntaxTreeResponse, ListFilesParams,
+    ListFilesResponse, ListRepositoriesParams, ListRepositoriesResponse, NavigationAvailability,
+    NavigationLocation, NavigationMode, NavigationTargetSelectionStatus,
+    NavigationTargetSelectionSummary, OutgoingCallsParams, OutgoingCallsResponse, ReadFileParams,
+    ReadFileResponse, ReadMatchParams, ReadMatchResponse, ReadPresentationMode, RepositorySummary,
+    ResponseMode, RuntimeStatusSummary, RuntimeTaskKind, RuntimeTaskStatus, RuntimeTaskSummary,
+    SearchHybridChannelWeightsParams, SearchHybridMatch, SearchHybridParams, SearchHybridResponse,
+    SearchPatternType, SearchStructuralParams, SearchStructuralResponse, SearchSymbolParams,
+    SearchSymbolPathClass, SearchSymbolResponse, SearchTextParams, SearchTextResponse,
+    SyntaxTreeNodeItem, WRITE_CONFIRM_PARAM, WRITE_CONFIRMATION_REQUIRED_ERROR_CODE,
+    WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceAttachParams,
+    WorkspaceAttachResponse, WorkspaceCurrentParams, WorkspaceCurrentResponse,
+    WorkspaceDetachParams, WorkspaceDetachResponse, WorkspaceIndexAction,
+    WorkspaceIndexComponentState, WorkspaceIndexComponentSummary, WorkspaceIndexHealthSummary,
+    WorkspaceIndexLifecyclePhase, WorkspaceIndexLifecycleSummary, WorkspaceIndexParams,
+    WorkspaceIndexResponse, WorkspaceParams, WorkspacePreciseArtifactFailureSummary,
+    WorkspacePreciseCoverageMode, WorkspacePreciseGenerationAction,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseGenerationSummary,
+    WorkspacePreciseGeneratorState, WorkspacePreciseGeneratorSummary, WorkspacePreciseIngestState,
+    WorkspacePreciseIngestSummary, WorkspacePreciseLifecyclePhase,
+    WorkspacePreciseLifecycleSummary, WorkspacePreciseState, WorkspacePreciseSummary,
+    WorkspacePrepareParams, WorkspacePrepareResponse, WorkspaceRecommendedAction,
+    WorkspaceResolveMode, WorkspaceResponse, WorkspaceStorageIndexState, WorkspaceStorageSummary,
 };
 #[cfg(feature = "playbook")]
 use crate::mcp::types::{
@@ -208,6 +209,7 @@ pub struct ToolCallDisplayEvent {
     pub duration_ms: u64,
     pub status: ToolCallDisplayStatus,
     pub context_saved_percent: Option<f64>,
+    pub session_id: String,
 }
 
 pub type ToolCallDisplaySink = Arc<dyn Fn(ToolCallDisplayEvent) + Send + Sync + 'static>;
@@ -341,7 +343,7 @@ type PendingPreciseDirtyPathMap = Arc<RwLock<BTreeMap<String, PendingPreciseDirt
 
 #[derive(Clone)]
 /// Orchestrates Frigg's public MCP tool surface over shared config, caches, session state,
-/// provenance, and optional watch-backed freshness.
+/// provenance, and optional watch-backed refresh state.
 pub struct FriggMcpServer {
     config: Arc<FriggConfig>,
     tool_router: ToolRouter<Self>,
@@ -377,6 +379,7 @@ struct FriggMcpSessionState {
 // Session adoption boundary: per-transport session tracks adopted repository_ids separately
 // from the process-wide workspace registry and watch lease refcounts.
 struct FriggMcpSessionStateInner {
+    display_session_id: String,
     workspace_registry: Arc<RwLock<WorkspaceRegistry>>,
     watch_runtime: Arc<RwLock<Option<Arc<crate::watch::WatchRuntime>>>>,
     adopted_repository_ids: RwLock<BTreeSet<String>>,
@@ -587,10 +590,211 @@ impl FriggMcpServer {
             config,
         )
     }
+
+    fn workspace_response(&self) -> WorkspaceResponse {
+        let current_workspace = self.current_workspace();
+        let repository = current_workspace
+            .as_ref()
+            .map(|workspace| self.public_repository_summary(workspace));
+        let repositories = self
+            .known_workspaces()
+            .into_iter()
+            .map(|workspace| self.public_repository_summary(&workspace))
+            .collect::<Vec<_>>();
+
+        WorkspaceResponse {
+            repository,
+            session_default: current_workspace.is_some(),
+            repositories,
+            runtime: Some(self.runtime_status_summary()),
+        }
+    }
+
+    async fn ensure_workspace_for_status(&self, params: &WorkspaceParams) -> Result<(), ErrorData> {
+        let set_default = params.set_default.unwrap_or(true);
+        let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
+        let target_path = params.path.as_deref();
+        let target_repository_id = params.repository_id.as_deref();
+
+        if target_path.is_some() || target_repository_id.is_some() {
+            let outcome = self.attach_workspace_target_internal(
+                target_path,
+                target_repository_id,
+                set_default,
+                resolve_mode,
+                WorkspaceAttachIndexMode::Ensure,
+            )?;
+            let repository_id = outcome.response.repository.repository_id.clone();
+            if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
+                let (index_lifecycle, index_summary) = self
+                    .ensure_workspace_index_for_attach(
+                        &workspace,
+                        true,
+                        Duration::from_millis(30_000),
+                    )
+                    .await;
+                if matches!(index_lifecycle.phase, WorkspaceIndexLifecyclePhase::Ready) {
+                    match index_summary.as_ref() {
+                        Some(summary) => {
+                            self.maybe_spawn_workspace_precise_generation_for_paths(
+                                &workspace,
+                                &summary.changed_paths,
+                                &summary.deleted_paths,
+                            );
+                        }
+                        None => {
+                            self.maybe_spawn_workspace_precise_generation_for_paths(
+                                &workspace,
+                                &[],
+                                &[],
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(guard) = outcome.rollback_guard {
+                guard.disarm();
+            }
+            return Ok(());
+        }
+
+        if self.current_repository_id().is_some() || !self.attached_workspaces().is_empty() {
+            return Ok(());
+        }
+
+        let known_workspaces = self.known_workspaces();
+        if let [workspace] = known_workspaces.as_slice() {
+            self.adopt_workspace(workspace, true)?;
+            return Ok(());
+        }
+
+        if let Ok(current_dir) = std::env::current_dir() {
+            let current_dir = current_dir.display().to_string();
+            let outcome = self.attach_workspace_target_internal(
+                Some(&current_dir),
+                None,
+                true,
+                WorkspaceResolveMode::GitRoot,
+                WorkspaceAttachIndexMode::Ensure,
+            )?;
+            let repository_id = outcome.response.repository.repository_id.clone();
+            if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
+                let (index_lifecycle, index_summary) = self
+                    .ensure_workspace_index_for_attach(
+                        &workspace,
+                        true,
+                        Duration::from_millis(30_000),
+                    )
+                    .await;
+                if matches!(index_lifecycle.phase, WorkspaceIndexLifecyclePhase::Ready) {
+                    match index_summary.as_ref() {
+                        Some(summary) => {
+                            self.maybe_spawn_workspace_precise_generation_for_paths(
+                                &workspace,
+                                &summary.changed_paths,
+                                &summary.deleted_paths,
+                            );
+                        }
+                        None => {
+                            self.maybe_spawn_workspace_precise_generation_for_paths(
+                                &workspace,
+                                &[],
+                                &[],
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(guard) = outcome.rollback_guard {
+                guard.disarm();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[tool_router(router = tool_router)]
 impl FriggMcpServer {
+    #[tool(
+        name = "workspace",
+        description = "Show workspace status; adopt path/repository_id or auto-adopt a default when detached.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    pub async fn workspace(
+        &self,
+        params: Parameters<WorkspaceParams>,
+    ) -> Result<Json<WorkspaceResponse>, ErrorData> {
+        let params = params.0;
+        let repository_hint = params.repository_id.clone();
+        let started_at = Instant::now();
+        self.ensure_workspace_for_status(&params).await?;
+        let response = self.workspace_response();
+        let repository_ids = response
+            .repositories
+            .iter()
+            .map(|repository| repository.repository_id.clone())
+            .collect::<Vec<_>>();
+        let current_repository_id = response
+            .repository
+            .as_ref()
+            .map(|repository| repository.repository_id.clone());
+        let finalization = self.tool_execution_finalization(
+            json!({
+                "repository_id": current_repository_id,
+                "repository_ids": repository_ids.clone(),
+                "session_default": response.session_default,
+                "runtime_profile": response
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.profile.as_str().to_owned()),
+                "watch_active": response.runtime.as_ref().map(|runtime| runtime.watch_active),
+                "active_task_count": response
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.active_tasks.len()),
+                "recent_task_count": response
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.recent_tasks.len()),
+            }),
+            Some(FriggMcpServer::provenance_normalized_workload_metadata(
+                "workspace",
+                &repository_ids,
+                WorkloadPrecisionMode::Exact,
+                None,
+                None,
+                None,
+            )),
+        );
+        let result = Ok(Json(response));
+        let provenance_result = self
+            .record_provenance_blocking(
+                "workspace",
+                repository_hint.as_deref(),
+                json!({
+                    "path": params.path.as_deref().map(Self::bounded_text),
+                    "repository_id": params.repository_id,
+                    "set_default": params.set_default,
+                    "resolve_mode": params.resolve_mode,
+                }),
+                finalization.source_refs,
+                &result,
+            )
+            .await;
+        self.finalize_with_provenance_timed(
+            "workspace",
+            started_at,
+            result,
+            provenance_result,
+            None,
+        )
+    }
+
     #[tool(
         name = "list_repositories",
         description = "List globally known repositories with compact session, watch, and storage state.",
@@ -648,6 +852,22 @@ impl FriggMcpServer {
             })
             .await?;
         self.finalize_read_only_tool(&execution_context, result, provenance_result)
+    }
+
+    #[tool(
+        name = "list_files",
+        description = "List repository files with optional path, glob, language, class, hidden-file, and pagination filters.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    pub async fn list_files(
+        &self,
+        params: Parameters<ListFilesParams>,
+    ) -> Result<Json<ListFilesResponse>, ErrorData> {
+        self.list_files_impl(params.0).await
     }
 
     #[tool(
@@ -923,7 +1143,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_prepare",
-        description = "Initialize and validate Frigg state for a repository, then adopt it into this session. Requires confirmation.",
+        description = "Initialize Frigg repository state and adopt it into this session; requires confirmation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1128,7 +1348,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_index",
-        description = "Refresh indexed state for a repository, then adopt it into this session. Requires confirmation.",
+        description = "Refresh Frigg index state for a repository and adopt it; requires confirmation.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1382,7 +1602,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_current",
-        description = "Inspect the session default, adopted repositories, and runtime tasks without computing index health.",
+        description = "Inspect the session default, adopted repositories, and runtime tasks without computing detailed index diagnostics.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1457,7 +1677,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_file",
-        description = "Use Frigg to read a bounded slice of a repository source file when you already know the canonical path. Keep shell reads for non-code files, git/filesystem inspection, or trivial one-offs; use read_match to reopen a prior search or navigation hit by handle.",
+        description = "Read a bounded repository-relative source file or line window.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1475,7 +1695,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "read_match",
-        description = "Use Frigg to open a bounded source window around a prior search or navigation hit using its session result_handle and match_id. Prefer this over shell reads for code evidence; keep shell for non-code, git/filesystem inspection, or trivial one-offs.",
+        description = "Read a bounded source window for a prior result_handle and match_id.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1493,7 +1713,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "explore",
-        description = "Probe, zoom, or refine within one repository file after discovery.",
+        description = "Search or read a bounded window inside one repository file.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1511,7 +1731,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Use Frigg for rg-shaped direct literal or safe-regex code search when you already know the text. Supports grouped alternation, path_regex narrowing, context/per-file shaping, result handles, and bounded follow-up reads. Frigg may use native or ripgrep internally; keep shell rg for live-disk checks and ripgrep-specific behavior.",
+        description = "Search repository source text with literal or regex matching and optional path filters.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1527,7 +1747,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Use Frigg for broad discovery-style code questions across attached repositories when you do not yet have an exact string, symbol, or path anchor. It returns candidate pivots, not clean direct-string matches; use search_text for literal or safe-regex text and search_symbol for known identifiers. Identifier-shaped queries may surface matching code pivots when available.",
+        description = "Find discovery pivots for broad code questions without a known string, symbol, or path.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1543,7 +1763,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_symbol",
-        description = "Use Frigg when you know the symbol name and need repository-aware code lookup, navigation anchors, result handles, or bounded source reads. Add path_class or path_regex to reduce overload noise.",
+        description = "Find indexed symbols by API, type, function, class, method, or identifier name.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1559,7 +1779,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_references",
-        description = "Find usage sites for a symbol or cursor location. Check mode and match_kind; set include_definition=false to hide the defining row, or include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find definition and usage rows for a symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1575,7 +1795,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "go_to_definition",
-        description = "Jump from a symbol or cursor location to likely definitions. Check mode before treating the result as precise; set include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find likely definitions for a symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1591,7 +1811,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_declarations",
-        description = "Find declaration anchors for a symbol or cursor location. Check mode before treating the result as precise; set include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find declaration anchors for a symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1607,7 +1827,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "find_implementations",
-        description = "Find implementing types or members for a symbol or cursor location. Check mode and per-match precision hints when results underfill; set include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find implementations for a symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1623,7 +1843,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "incoming_calls",
-        description = "Find callers for a callable symbol or cursor location. Check availability before treating empty results as meaningful; set include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find callers for a callable symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1639,7 +1859,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "outgoing_calls",
-        description = "Find callees for a callable symbol or cursor location. Check availability before treating empty results as meaningful; set include_follow_up_structural=true for replayable structural follow-ups on anchored matches.",
+        description = "Find callees for a callable symbol or cursor location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1655,7 +1875,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "document_symbols",
-        description = "Return a symbol outline for one supported source file. Use top_level_only=true for a cheap first pass, or include_follow_up_structural=true for replayable structural follow-ups on anchored symbols.",
+        description = "Return a symbol outline for one supported source file.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1671,7 +1891,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "inspect_syntax_tree",
-        description = "Inspect the AST around a source location before writing or debugging a search_structural query. Set include_follow_up_structural=true for replayable structural follow-ups derived from the resolved AST focus.",
+        description = "Return AST focus, ancestor, and child nodes around a source location.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1687,7 +1907,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_structural",
-        description = "Run Tree-sitter queries when syntax shape matters more than text or symbols. Grouped match rows are the default; use inspect_syntax_tree first when the node shape is unclear, use primary_capture to choose the visible anchor, and use result_mode=captures for raw capture debugging.",
+        description = "Run a bounded Tree-sitter query and return structural matches.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1798,7 +2018,7 @@ impl ServerHandler for FriggMcpServer {
                     .with_description("Local-first code search + navigation MCP server"),
             )
             .with_instructions(agent_directive::mcp_instructions(&format!(
-                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for the adopted repository list and runtime task status. Use workspace_attach or workspace_index when you need index or precise lifecycle work. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid only for broad discovery-style repository questions when you do not yet have an exact string, symbol, or path anchor; for direct literal/safe-regex matches call search_text, including rg-shaped grouped alternation, path_regex narrowing, context windows, and per-file shaping; for known identifiers call search_symbol. Frigg may use its native scanner or ripgrep internally for search_text. Use shell rg for live-disk correctness checks, suspected index/watch drift, or ripgrep-specific behavior. Then use navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and pivot to exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file.{playbook_guidance} {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                "Runtime profile: `{runtime_profile}`. Tool surface: `{tool_surface_profile}`. Omit repository_id in normal single-repo work; call workspace for compact status or to adopt a target path/repository. Repo-aware tools auto-adopt sensible defaults when possible. Detailed routing lives in `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, `{SHELL_REPLACEMENT_MAP_RESOURCE_URI}`, `{SHELL_GUIDANCE_RESOURCE_URI}`, and prompt `{ROUTING_GUIDE_PROMPT_NAME}`.{playbook_guidance} {tool_surface_note}"
             )))
     }
 

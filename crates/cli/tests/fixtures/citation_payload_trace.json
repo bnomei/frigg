@@ -6,7 +6,7 @@
     {
       "step_index": 0,
       "step_id": "tool-001",
-      "tool_name": "list_repositories",
+      "tool_name": "workspace",
       "params_json": "{}",
       "outcome": {
         "status": "ok",

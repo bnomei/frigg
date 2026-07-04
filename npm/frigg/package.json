@@ -1,0 +1,20 @@
+{
+  "name": "@bnomei/frigg",
+  "version": "0.6.0",
+  "description": "Frigg gives AI agents local, source-backed code search and navigation without sending whole repositories through every prompt.",
+  "homepage": "https://github.com/bnomei/frigg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bnomei/frigg.git"
+  },
+  "license": "MIT AND MPL-2.0",
+  "bin": {
+    "frigg": "bin/frigg.js"
+  },
+  "files": [
+    "bin/frigg.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

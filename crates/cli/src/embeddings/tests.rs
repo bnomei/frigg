@@ -79,10 +79,12 @@ impl HttpExecutor for MockHttpExecutor {
     }
 }
 
+#[cfg(feature = "local-embeddings")]
 struct MockLocalEmbeddingBackend {
     embeddings: Vec<Vec<f32>>,
 }
 
+#[cfg(feature = "local-embeddings")]
 impl local::LocalEmbeddingBackend for MockLocalEmbeddingBackend {
     fn embed(&mut self, input: &[String]) -> Result<Vec<Vec<f32>>, String> {
         assert_eq!(
@@ -1045,6 +1047,7 @@ fn provider_trait_sqlite_vec_readiness_propagates_storage_failures() {
 }
 
 #[tokio::test]
+#[cfg(feature = "local-embeddings")]
 async fn local_embedding_provider_preserves_order_indices_and_selected_model() {
     let provider = LocalEmbeddingProvider::with_backend_for_test(
         local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
@@ -1087,6 +1090,7 @@ async fn local_embedding_provider_preserves_order_indices_and_selected_model() {
 }
 
 #[tokio::test]
+#[cfg(feature = "local-embeddings")]
 async fn local_embedding_provider_canonicalizes_supported_alias_model_identity() {
     let selected_alias = "AllMiniLML6V2";
     let provider = LocalEmbeddingProvider::with_backend_for_test(
@@ -1116,6 +1120,7 @@ async fn local_embedding_provider_canonicalizes_supported_alias_model_identity()
 }
 
 #[tokio::test]
+#[cfg(feature = "local-embeddings")]
 async fn local_embedding_provider_rejects_incoherent_dimension_requests() {
     let provider = LocalEmbeddingProvider::with_backend_for_test(
         local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
@@ -1145,6 +1150,7 @@ async fn local_embedding_provider_rejects_incoherent_dimension_requests() {
 }
 
 #[tokio::test]
+#[cfg(feature = "local-embeddings")]
 async fn local_embedding_provider_rejects_empty_and_non_finite_vectors() {
     let provider = LocalEmbeddingProvider::with_backend_for_test(
         local_model::DEFAULT_LOCAL_EMBEDDING_MODEL,
@@ -1210,6 +1216,7 @@ async fn local_embedding_provider_rejects_empty_and_non_finite_vectors() {
 }
 
 #[test]
+#[cfg(feature = "local-embeddings")]
 fn local_embedding_provider_rejects_hf_home_cache_override_before_fastembed_load() {
     let artifact = local_model::LocalModelArtifact {
         semantic_model: local_model::DEFAULT_LOCAL_EMBEDDING_MODEL.to_owned(),
@@ -1241,6 +1248,7 @@ fn local_embedding_provider_rejects_hf_home_cache_override_before_fastembed_load
 }
 
 #[test]
+#[cfg(feature = "local-embeddings")]
 fn local_embedding_missing_and_corrupt_artifacts_map_to_provider_errors() {
     let missing =
         local::local_model_error_to_embedding_error(local_model::LocalModelError::Missing {

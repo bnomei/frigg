@@ -66,8 +66,8 @@ impl FriggMcpServer {
                 let mut resolved_path: Option<String> = None;
                 let mut resolved_absolute_path: Option<String> = None;
                 let mut effective_max_bytes: Option<usize> = None;
-                let mut effective_line_start: Option<usize> = None;
-                let mut effective_line_end: Option<usize> = None;
+                let mut effective_start_line: Option<usize> = None;
+                let mut effective_end_line: Option<usize> = None;
                 let result = (|| -> Result<ReadFileResponse, ErrorData> {
                     let query_started_at = std::time::Instant::now();
                     let context_efficiency_log_enabled =
@@ -89,29 +89,44 @@ impl FriggMcpServer {
 
                     let max_bytes = requested_max_bytes.min(server.config.max_file_bytes);
                     effective_max_bytes = Some(max_bytes);
-                    let has_line_range = params_for_blocking.line_start.is_some()
-                        || params_for_blocking.line_end.is_some();
-                    if params_for_blocking.line_start == Some(0) {
+                    let has_line_range = params_for_blocking.start_line.is_some()
+                        || params_for_blocking.end_line.is_some()
+                        || params_for_blocking.line_count.is_some();
+                    if params_for_blocking.start_line == Some(0) {
                         return Err(Self::invalid_params(
-                            "line_start must be greater than zero when provided",
+                            "start_line must be greater than zero when provided",
                             None,
                         ));
                     }
-                    if params_for_blocking.line_end == Some(0) {
+                    if params_for_blocking.end_line == Some(0) {
                         return Err(Self::invalid_params(
-                            "line_end must be greater than zero when provided",
+                            "end_line must be greater than zero when provided",
                             None,
                         ));
                     }
-                    if let (Some(line_start), Some(line_end)) =
-                        (params_for_blocking.line_start, params_for_blocking.line_end)
-                        && line_end < line_start
+                    if params_for_blocking.line_count == Some(0) {
+                        return Err(Self::invalid_params(
+                            "line_count must be greater than zero when provided",
+                            None,
+                        ));
+                    }
+                    if params_for_blocking.end_line.is_some()
+                        && params_for_blocking.line_count.is_some()
                     {
                         return Err(Self::invalid_params(
-                            "line_end must be greater than or equal to line_start",
+                            "end_line and line_count are mutually exclusive",
+                            None,
+                        ));
+                    }
+                    if let (Some(start_line), Some(end_line)) =
+                        (params_for_blocking.start_line, params_for_blocking.end_line)
+                        && end_line < start_line
+                    {
+                        return Err(Self::invalid_params(
+                            "end_line must be greater than or equal to start_line",
                             Some(json!({
-                                "line_start": line_start,
-                                "line_end": line_end,
+                                "start_line": start_line,
+                                "end_line": end_line,
                             })),
                         ));
                     }
@@ -189,7 +204,7 @@ impl FriggMcpServer {
                                     },
                                 )?;
                             if let Some(context_efficiency) = context_efficiency.as_ref() {
-                                Self::append_context_efficiency_log_for_workspaces(
+                                server.append_context_efficiency_log_for_workspaces(
                                     provenance_for_blocking.tool_name,
                                     std::slice::from_ref(&workspace),
                                     context_efficiency,
@@ -202,14 +217,19 @@ impl FriggMcpServer {
                         return Ok(response);
                     }
 
-                    let line_start = params_for_blocking.line_start.unwrap_or(1);
-                    let requested_line_end = params_for_blocking.line_end;
+                    let start_line = params_for_blocking.start_line.unwrap_or(1);
+                    let requested_line_end = match params_for_blocking.end_line {
+                        Some(end_line) => Some(end_line),
+                        None => params_for_blocking.line_count.map(|line_count| {
+                            start_line.saturating_add(line_count.saturating_sub(1))
+                        }),
+                    };
                     let effective_end_hint = requested_line_end;
-                    effective_line_start = Some(line_start);
-                    effective_line_end = Some(effective_end_hint.unwrap_or(1));
+                    effective_start_line = Some(start_line);
+                    effective_end_line = Some(effective_end_hint.unwrap_or(1));
 
                     let line_slice = snapshot
-                        .read_line_slice_lossy(line_start, requested_line_end, max_bytes)
+                        .read_line_slice_lossy(start_line, requested_line_end, max_bytes)
                         .map_err(|err| Self::map_lossy_line_slice_error(&path, err))?;
                     let sliced_content = line_slice.content;
                     let sliced_bytes = line_slice.bytes;
@@ -217,7 +237,7 @@ impl FriggMcpServer {
                     let effective_end = requested_line_end
                         .unwrap_or(total_lines.max(1))
                         .min(total_lines.max(1));
-                    effective_line_end = Some(effective_end);
+                    effective_end_line = Some(effective_end);
 
                     if sliced_bytes > max_bytes {
                         let suggested_max_bytes = sliced_bytes.min(server.config.max_file_bytes);
@@ -230,8 +250,8 @@ impl FriggMcpServer {
                                 "requested_max_bytes": requested_max_bytes,
                                 "config_max_file_bytes": server.config.max_file_bytes,
                                 "suggested_max_bytes": suggested_max_bytes,
-                                "line_start": line_start,
-                                "line_end": effective_end,
+                                "start_line": start_line,
+                                "end_line": effective_end,
                                 "total_lines": total_lines,
                             })),
                         ));
@@ -261,7 +281,7 @@ impl FriggMcpServer {
                                 },
                             )?;
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
-                            Self::append_context_efficiency_log_for_workspaces(
+                            server.append_context_efficiency_log_for_workspaces(
                                 provenance_for_blocking.tool_name,
                                 std::slice::from_ref(&workspace),
                                 context_efficiency,
@@ -298,11 +318,12 @@ impl FriggMcpServer {
                     "repository_id": execution_context_for_blocking.repository_hint,
                     "path": Self::bounded_text(&params_for_blocking.path),
                     "max_bytes": params_for_blocking.max_bytes,
-                    "line_start": params_for_blocking.line_start,
-                    "line_end": params_for_blocking.line_end,
+                    "start_line": params_for_blocking.start_line,
+                    "end_line": params_for_blocking.end_line,
+                    "line_count": params_for_blocking.line_count,
                     "effective_max_bytes": effective_max_bytes,
-                    "effective_line_start": effective_line_start,
-                    "effective_line_end": effective_line_end,
+                    "effective_start_line": effective_start_line,
+                    "effective_end_line": effective_end_line,
                 });
                 provenance_for_blocking.merge_extra_params(&mut provenance_params);
                 let provenance_result = server.record_provenance_with_outcome_and_metadata(
@@ -358,8 +379,9 @@ impl FriggMcpServer {
             path: anchor.path.clone(),
             repository_id: Some(anchor.repository_id.clone()),
             max_bytes: None,
-            line_start: Some(line_start),
-            line_end: Some(line_end),
+            start_line: Some(line_start),
+            end_line: Some(line_end),
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: params.include_context_efficiency,
         };
@@ -374,8 +396,8 @@ impl FriggMcpServer {
             path: read.path,
             line: anchor.line,
             column: anchor.column,
-            line_start,
-            line_end,
+            start_line: line_start,
+            end_line: line_end,
             bytes: read.bytes,
             content: read.content,
             context_efficiency: read.context_efficiency,
@@ -627,8 +649,9 @@ impl FriggMcpServer {
                         path: params_for_blocking.path.clone(),
                         repository_id: params_for_blocking.repository_id.clone(),
                         max_bytes: None,
-                        line_start: None,
-                        line_end: None,
+                        start_line: None,
+                        end_line: None,
+                        line_count: None,
                         presentation_mode: Some(ReadPresentationMode::Json),
                         include_context_efficiency: None,
                     };
@@ -778,7 +801,7 @@ impl FriggMcpServer {
                                 },
                             )?;
                         if let Some(context_efficiency) = context_efficiency.as_ref() {
-                            Self::append_context_efficiency_log_for_workspaces(
+                            server.append_context_efficiency_log_for_workspaces(
                                 "explore",
                                 std::slice::from_ref(&workspace),
                                 context_efficiency,
@@ -1070,10 +1093,10 @@ impl FriggMcpServer {
                 line_end,
                 total_lines,
             } => Self::invalid_params(
-                "line_start is outside file bounds",
+                "start_line is outside file bounds",
                 Some(json!({
-                    "line_start": line_start,
-                    "line_end": line_end,
+                    "start_line": line_start,
+                    "end_line": line_end,
                     "total_lines": total_lines,
                 })),
             ),
@@ -1095,8 +1118,8 @@ impl FriggMcpServer {
                 "bytes": bytes,
                 "max_bytes": max_bytes,
                 "config_max_file_bytes": max_bytes,
-                "line_start": line_start,
-                "line_end": line_end,
+                "start_line": line_start,
+                "end_line": line_end,
                 "total_lines": total_lines,
             })),
         )

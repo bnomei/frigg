@@ -318,11 +318,21 @@ impl FriggMcpServer {
             }
         }
 
-        let per_file_limit = if params.collapse_by_file == Some(true) {
-            1usize
-        } else {
-            params.max_matches_per_file.unwrap_or(usize::MAX)
-        };
+        if params.count_only == Some(true) {
+            response.matches.clear();
+            response.result_handle = None;
+            if !Self::should_return_full_response(params.response_mode) {
+                response.metadata = None;
+            }
+            return Ok(response);
+        }
+
+        let per_file_limit =
+            if params.files_with_matches == Some(true) || params.collapse_by_file == Some(true) {
+                1usize
+            } else {
+                params.max_count_per_file.unwrap_or(usize::MAX)
+            };
         if per_file_limit != usize::MAX {
             let mut retained = Vec::with_capacity(response.matches.len());
             let mut counts = BTreeMap::<(String, String), usize>::new();
@@ -387,10 +397,9 @@ impl FriggMcpServer {
                     semantic_capability: None,
                     utility: None,
                     context_efficiency: Some(context_efficiency),
-                    freshness_basis: metadata.freshness_basis,
+                    cache_debug: None,
                 })
             });
-            response.note = None;
         }
         response
     }

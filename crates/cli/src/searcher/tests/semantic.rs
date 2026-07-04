@@ -702,6 +702,7 @@ fn hybrid_ranking_semantic_channel_falls_back_to_older_snapshot_when_latest_mani
             ),
         ],
     )?;
+    fs::remove_file(root.join("src/deleted.rs")).map_err(FriggError::Io)?;
     seed_manifest_snapshot(&root, "repo-001", "snapshot-002", &["src/current.rs"])?;
 
     let mut config = FriggConfig::from_workspace_roots(vec![root.clone()])?;

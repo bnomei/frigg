@@ -3,6 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::search::SearchSymbolPathClass;
 use super::workspace::WorkspacePreciseGeneratorSummary;
 
 /// Per-session workspace adoption state for one known repository.
@@ -44,6 +45,47 @@ pub struct ListRepositoriesResponse {
 /// Empty parameter object for `list_repositories`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ListRepositoriesParams {}
+
+/// Parameters for `list_files`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ListFilesParams {
+    /// Optional. Omit to use the current session default repository, auto-adopt the only known
+    /// startup repository, or list across adopted repositories. Set only for multi-repo searches.
+    pub repository_id: Option<String>,
+    /// Repository-relative path filter replacing `rg --files path/`, `find path/`, or `fd`.
+    /// Example: `^crates/cli/src/`.
+    pub path_regex: Option<String>,
+    /// Repository-relative glob replacing `rg --files -g`.
+    pub glob: Option<String>,
+    /// Optional source-language filter such as `rust`, `php`, `typescript`, or `python`.
+    pub language: Option<String>,
+    /// Optional path class filter: `runtime`, `support`, or `project`.
+    pub path_class: Option<SearchSymbolPathClass>,
+    /// Equivalent to `rg --hidden` when true. Defaults to false for rg-shaped behavior.
+    pub include_hidden: Option<bool>,
+    /// Optional max returned files. Omit for the default bounded listing.
+    pub limit: Option<usize>,
+    /// Continuation cursor returned as `resume_from` when a file listing is truncated.
+    pub resume_from: Option<String>,
+}
+
+/// One repository-relative file row returned by `list_files`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListFilesEntry {
+    pub repository_id: String,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+/// Response from `list_files`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListFilesResponse {
+    pub total_files: usize,
+    pub files: Vec<ListFilesEntry>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<String>,
+}
 
 /// How workspace attach resolves an input path to a repository root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -7,7 +7,7 @@ use crate::mcp::server::FriggMcpServer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeepSearchStepTool {
-    ListRepositories,
+    Workspace,
     ReadFile,
     SearchText,
     SearchSymbol,
@@ -16,7 +16,7 @@ pub(crate) enum DeepSearchStepTool {
 
 impl DeepSearchStepTool {
     const ALL: [Self; 5] = [
-        Self::ListRepositories,
+        Self::Workspace,
         Self::ReadFile,
         Self::SearchText,
         Self::SearchSymbol,
@@ -25,7 +25,7 @@ impl DeepSearchStepTool {
 
     fn from_tool_name(tool_name: &str) -> Option<Self> {
         match tool_name {
-            "list_repositories" => Some(Self::ListRepositories),
+            "workspace" => Some(Self::Workspace),
             "read_file" => Some(Self::ReadFile),
             "search_text" => Some(Self::SearchText),
             "search_symbol" => Some(Self::SearchSymbol),
@@ -36,7 +36,7 @@ impl DeepSearchStepTool {
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::ListRepositories => "list_repositories",
+            Self::Workspace => "workspace",
             Self::ReadFile => "read_file",
             Self::SearchText => "search_text",
             Self::SearchSymbol => "search_symbol",

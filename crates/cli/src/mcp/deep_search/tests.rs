@@ -340,9 +340,9 @@ fn playbook_suite_compose_citation_payload_requires_numeric_fields() {
 }
 
 #[test]
-fn playbook_suite_normalizes_list_repositories_to_stable_identity_fields() {
+fn playbook_suite_normalizes_workspace_to_stable_identity_fields() {
     let normalized = normalize_trace_response_for_tool(
-        "list_repositories",
+        "workspace",
         json!({
             "repositories": [{
                 "repository_id": "repo-001",

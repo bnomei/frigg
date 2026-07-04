@@ -13,7 +13,7 @@ resolver = "2"
 [workspace.package]
 authors = ["Frigg Contributors"]
 categories = ["command-line-utilities", "development-tools"]
-description = "Local-first MCP server for code understanding."
+description = "Frigg gives AI agents local, source-backed code search and navigation without sending whole repositories through every prompt."
 documentation = "https://docs.rs/frigg"
 edition = "2024"
 homepage = "https://github.com/bnomei/frigg"
@@ -22,7 +22,7 @@ license = "MIT AND MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/bnomei/frigg"
 rust-version = "1.88"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"

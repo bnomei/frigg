@@ -86,27 +86,27 @@ pub struct ExploreMetadata {
 /// Parameters for the extended `explore` tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreParams {
-    /// Artifact path using the same canonical repository-relative semantics as `read_file`.
+    /// Canonical repository-relative path.
     pub path: String,
-    /// Optional repository scope from `list_repositories`.
+    /// Optional repository scope.
     pub repository_id: Option<String>,
-    /// Explorer mode: `probe` scans an artifact, `zoom` returns a bounded window, and `refine` searches only inside an anchor-derived window.
+    /// Explorer mode.
     pub operation: ExploreOperation,
-    /// Search query for `probe` or `refine`. Leading and trailing whitespace is trimmed.
+    /// Search query for `probe` or `refine`.
     pub query: Option<String>,
-    /// Match mode for `query`. Omit for exact literal search or set `regex` for safe-regex search.
+    /// Match mode for `query`.
     pub pattern_type: Option<SearchPatternType>,
-    /// Explicit anchor used by `zoom` and `refine`.
+    /// Anchor used by `zoom` and `refine`.
     pub anchor: Option<ExploreAnchor>,
-    /// Context lines to include around anchors and match windows. Omit to use the explorer default.
+    /// Context lines around anchors and matches.
     pub context_lines: Option<usize>,
-    /// Max match rows to return. Omit to use the explorer default.
+    /// Max match rows to return.
     pub max_matches: Option<usize>,
-    /// Explicit continuation cursor for `probe` or `refine`.
+    /// Continuation cursor for `probe` or `refine`.
     pub resume_from: Option<ExploreCursor>,
-    /// Read-surface presentation mode. Zoom defaults to raw text content; probe/refine default to JSON.
+    /// Read-surface presentation mode.
     pub presentation_mode: Option<ReadPresentationMode>,
-    /// Include bounded context-efficiency metadata in the response. Requires JSON presentation.
+    /// Include context-efficiency metadata; requires JSON presentation.
     pub include_context_efficiency: Option<bool>,
 }
 
@@ -135,26 +135,41 @@ pub struct ExploreResponse {
 /// Parameters for `search_text`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
-    /// Text or safe-regex pattern to search for, including grouped alternation. Leading and trailing whitespace is trimmed.
+    /// Pattern to match. Literal by default.
     pub query: String,
-    /// Match mode for `query`. Omit for exact literal search or set `regex` for rg-shaped safe-regex search.
+    /// Match mode for `query`.
     pub pattern_type: Option<SearchPatternType>,
-    /// Optional repository scope from `list_repositories`.
+    /// Optional repository scope.
     pub repository_id: Option<String>,
-    /// Optional safe regex over canonical repository-relative paths.
-    /// Use this like rg path scoping to narrow code, docs, or runtime slices.
+    /// Repository-relative path regex filter.
     pub path_regex: Option<String>,
-    /// Optional max matches. Frigg clamps the effective limit to the server search budget.
+    /// Max returned matches.
     pub limit: Option<usize>,
-    /// Optional inline excerpt window expansion for simple review flows. Omit to keep one-line excerpts.
+    /// Context lines around matches.
     pub context_lines: Option<usize>,
-    /// Optional bound on returned hits per file after lexical matching.
-    pub max_matches_per_file: Option<usize>,
-    /// Optional repeated-path collapse mode for noisy lexical result sets.
+    /// Force case-sensitive matching.
+    pub case_sensitive: Option<bool>,
+    /// Force case-insensitive matching.
+    pub ignore_case: Option<bool>,
+    /// Match whole words.
+    pub word: Option<bool>,
+    /// Return at most one hit row per file.
+    pub files_with_matches: Option<bool>,
+    /// Return counts and omit match rows.
+    pub count_only: Option<bool>,
+    /// Repository-relative include glob.
+    pub glob: Option<String>,
+    /// Repository-relative exclude glob.
+    pub exclude_glob: Option<String>,
+    /// Include hidden path segments.
+    pub include_hidden: Option<bool>,
+    /// Max returned hits per file.
+    pub max_count_per_file: Option<usize>,
+    /// Collapse repeated paths.
     pub collapse_by_file: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
-    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    /// Include context-efficiency metadata.
     pub include_context_efficiency: Option<bool>,
 }
 
@@ -187,14 +202,9 @@ pub struct SearchTextMetadata {
     pub lexical_backend_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub freshness_basis: Option<ResponseFreshnessBasisMetadata>,
 }
 
-/// Bounded context-efficiency metadata returned by read and search tools when requested.
-///
-/// Estimates compare indexed corpus size against returned match and source bytes so callers
-/// can judge how much repository context a tool response avoided loading.
+/// Context-efficiency metadata returned when requested.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContextEfficiencyMetadata {
     pub indexed_readable_files: usize,
@@ -251,12 +261,11 @@ pub struct SearchHybridChannelWeightsParams {
 /// Parameters for `search_hybrid`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridParams {
-    /// Discovery-style natural-language, subsystem, or identifier-shaped query.
-    /// For direct exact strings or safe regexes use `search_text`; for known identifiers use `search_symbol`.
+    /// Discovery query.
     pub query: String,
     /// Optional repository scope.
     pub repository_id: Option<String>,
-    /// Optional language filter for source-backed follow-up.
+    /// Optional language filter.
     pub language: Option<String>,
     /// Optional max matches.
     pub limit: Option<usize>,
@@ -266,7 +275,7 @@ pub struct SearchHybridParams {
     pub semantic: Option<bool>,
     /// Response detail profile. Omit to default to `compact`.
     pub response_mode: Option<ResponseMode>,
-    /// Include bounded context-efficiency metadata in the response. Defaults to false.
+    /// Include context-efficiency metadata.
     pub include_context_efficiency: Option<bool>,
 }
 
@@ -289,19 +298,19 @@ pub struct SearchHybridMatch {
     pub lexical_sources: Vec<String>,
     pub graph_sources: Vec<String>,
     pub semantic_sources: Vec<String>,
-    /// Generic path-class hint for choosing a first navigation pivot.
+    /// Path-class hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_class: Option<PathClass>,
-    /// Generic source-class hint from shared runtime/support/project classification.
+    /// Source-class hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_class: Option<SourceClass>,
-    /// Generic surface-family hints such as `runtime`, `tests`, or `entrypoint`.
+    /// Surface-family hints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surface_families: Vec<String>,
-    /// Live-navigation hint describing whether this match is a good follow-up pivot.
+    /// Live-navigation hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub navigation_hint: Option<SearchHybridNavigationHint>,
-    /// Concise explanation of the strongest signals that lifted this match.
+    /// Strongest rank signals.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rank_reasons: Vec<SearchHybridRankReason>,
 }
@@ -329,21 +338,21 @@ pub struct SearchHybridNavigationHint {
     pub go_to_definition: bool,
 }
 
-/// Utility summary for turning hybrid discovery results into live navigation pivots.
+/// Discovery-to-navigation summary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridUtilitySummary {
-    /// Count of returned matches that look like useful live-navigation pivots.
+    /// Count of useful live-navigation pivots.
     pub pivotable_match_count: usize,
-    /// One-based rank of the best generic pivot inside the returned result set.
+    /// One-based rank of the best pivot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_pivot_rank: Option<usize>,
-    /// Canonical path of the best generic pivot inside the returned result set.
+    /// Canonical path of the best pivot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_pivot_path: Option<String>,
-    /// Repository id for the best generic pivot when cross-repository search is used.
+    /// Repository id for the best pivot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_pivot_repository_id: Option<String>,
-    /// True when the returned set contains at least one pivot that likely supports symbol follow-up.
+    /// True when symbol follow-up is likely useful.
     pub symbol_navigation_ready: bool,
 }
 
@@ -376,7 +385,7 @@ pub struct SearchHybridDiagnosticsSummary {
     pub total: usize,
 }
 
-/// Timing and candidate counts for one hybrid-search pipeline stage.
+/// Timing and candidate counts for one stage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridStageSample {
     pub elapsed_us: u64,
@@ -394,7 +403,7 @@ impl From<&crate::searcher::SearchStageSample> for SearchHybridStageSample {
     }
 }
 
-/// Stage-by-stage attribution for one hybrid-search execution.
+/// Stage-by-stage execution counters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridStageAttribution {
     pub candidate_intake: SearchHybridStageSample,
@@ -424,7 +433,7 @@ impl From<&crate::searcher::SearchStageAttribution> for SearchHybridStageAttribu
     }
 }
 
-/// Per-repository freshness inputs recorded in search response metadata.
+/// Per-repository freshness metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResponseFreshnessRepositoryMetadata {
     pub repository_id: String,
@@ -447,7 +456,7 @@ pub struct ResponseFreshnessRepositoryMetadata {
     pub model: Option<String>,
 }
 
-/// Freshness basis describing whether a search response is safe to reuse from the runtime cache.
+/// Runtime cache freshness basis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResponseFreshnessBasisMetadata {
     pub mode: String,
@@ -458,7 +467,7 @@ pub struct ResponseFreshnessBasisMetadata {
     pub runtime_cache_contract: Option<Value>,
 }
 
-/// Semantic accelerator tier and health reported for hybrid search.
+/// Semantic accelerator health.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridSemanticAcceleratorMetadata {
     pub tier: String,
@@ -469,7 +478,7 @@ pub struct SearchHybridSemanticAcceleratorMetadata {
     pub reason: Option<String>,
 }
 
-/// Language-specific semantic capabilities consulted during hybrid search.
+/// Language-specific semantic capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridLanguageCapabilityMetadata {
     pub requested_language: String,
@@ -481,7 +490,7 @@ pub struct SearchHybridLanguageCapabilityMetadata {
     pub capabilities: BTreeMap<String, String>,
 }
 
-/// Classified query shape used to tune hybrid channel weighting.
+/// Classified query shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchHybridQueryShape {
@@ -490,7 +499,7 @@ pub enum SearchHybridQueryShape {
     Neutral,
 }
 
-/// Exact symbol or text pivot assistance applied during hybrid ranking.
+/// Exact symbol or text pivot assistance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridExactPivotAssistance {
     pub applied: bool,
@@ -499,7 +508,7 @@ pub struct SearchHybridExactPivotAssistance {
     pub boosted_match_count: usize,
 }
 
-/// Structured diagnostics and freshness metadata for `search_hybrid`.
+/// Diagnostics and optional telemetry for `search_hybrid`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridMetadata {
     pub channels: BTreeMap<String, SearchHybridChannelMetadata>,
@@ -537,52 +546,36 @@ pub struct SearchHybridMetadata {
     pub stage_attribution: Option<SearchHybridStageAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_capability: Option<SearchHybridLanguageCapabilityMetadata>,
-    /// Utility summary for discovery-to-navigation workflows.
+    /// Discovery-to-navigation summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utility: Option<SearchHybridUtilitySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_efficiency: Option<ContextEfficiencyMetadata>,
-    pub freshness_basis: ResponseFreshnessBasisMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_debug: Option<ResponseFreshnessBasisMetadata>,
 }
 
-/// Response from `search_hybrid` including channel health and navigation hints.
+/// Response from `search_hybrid`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHybridResponse {
     pub matches: Vec<SearchHybridMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_handle: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_requested: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_status: Option<ChannelHealthStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_hit_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub semantic_match_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
-    /// Structured diagnostics payload for live responses.
+    /// Diagnostics metadata; compact mode omits it unless context-efficiency is requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SearchHybridMetadata>,
-    /// Human-readable summary note.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
 }
 
 /// Parameters for `search_symbol`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchSymbolParams {
-    /// API, type, or function name to search in indexed symbols.
+    /// Symbol name to search.
     pub query: String,
     /// Optional repository scope.
     pub repository_id: Option<String>,
-    /// Optional path class filter: `runtime`, `support`, or `project`.
+    /// Optional path class filter.
     pub path_class: Option<SearchSymbolPathClass>,
-    /// Optional safe regex over canonical repository-relative symbol paths.
+    /// Repository-relative path regex filter.
     pub path_regex: Option<String>,
     /// Optional max matches.
     pub limit: Option<usize>,

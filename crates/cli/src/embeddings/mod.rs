@@ -450,11 +450,13 @@ mod transport;
 use transport::*;
 
 mod google;
+#[cfg(feature = "local-embeddings")]
 mod local;
 pub mod local_model;
 mod openai;
 pub mod provider_factory;
 pub use google::GoogleEmbeddingProvider;
+#[cfg(feature = "local-embeddings")]
 pub use local::LocalEmbeddingProvider;
 pub use openai::OpenAiEmbeddingProvider;
 pub use provider_factory::{

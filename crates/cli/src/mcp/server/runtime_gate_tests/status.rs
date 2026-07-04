@@ -1,6 +1,6 @@
 #![allow(clippy::panic)]
 
-//! Regression tests for `workspace_current` and repository summary precise/index status fields.
+//! Regression tests for workspace status and repository summary precise/index status fields.
 
 use super::*;
 use crate::agent_directive::FRIGG_FIRST_DIRECTIVE;
@@ -20,7 +20,7 @@ fn extended_only_tools_are_hidden_by_default_runtime_options() {
         );
     }
     assert!(
-        names.contains("list_repositories"),
+        names.contains("workspace"),
         "core tools should remain registered when extended-only tools are disabled"
     );
 }
@@ -80,9 +80,12 @@ fn server_info_enables_resources_and_prompts() {
         .instructions
         .expect("server info should publish MCP usage instructions");
     assert!(instructions.starts_with(FRIGG_FIRST_DIRECTIVE.trim()));
-    assert!(instructions.contains("call workspace_attach explicitly"));
-    assert!(instructions.contains("Use workspace_current for the adopted repository list"));
-    assert!(instructions.contains("Use shell tools for non-code files"));
+    assert!(instructions.contains("Omit repository_id in normal single-repo work"));
+    assert!(instructions.contains("call workspace for compact status"));
+    assert!(
+        instructions.contains("Before using shell `rg`, `grep`, `find`, `fd`, `cat`, or `sed`")
+    );
+    assert!(instructions.contains("Shell tools are fallback only"));
     assert!(instructions.contains("restricted core tool surface"));
     assert!(instructions.contains("Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`"));
 }

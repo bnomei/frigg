@@ -13,7 +13,7 @@ pub const MANAGED_BLOCK_START: &str = "<!-- frigg-directive:start version=2026-0
 pub const MANAGED_BLOCK_END: &str = "<!-- frigg-directive:end -->";
 
 /// Short nudge text suitable for hook output.
-pub const HOOK_NUDGE: &str = "Frigg is the default for code discovery, navigation, exact code search, and bounded source reads.";
+pub const HOOK_NUDGE: &str = "Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads.";
 
 /// Renders the canonical directive inside stable managed-block markers.
 pub fn render_managed_block() -> String {
@@ -41,9 +41,9 @@ mod tests {
     use std::path::PathBuf;
 
     const CORE_SENTENCES: [&str; 3] = [
-        "Frigg is the default for code discovery, navigation, exact code search, and bounded source reads.",
-        "Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository.",
-        "Use shell tools for non-code files, git and filesystem inspection, and trivial one-off checks where a direct command is faster and does not replace code discovery or bounded source reads.",
+        "Frigg is the default for code discovery, file listing, navigation, exact code search, and bounded source reads.",
+        "Before using shell `rg`, `grep`, `find`, `fd`, `cat`, or `sed` for code exploration, use the matching Frigg MCP tool in attached or attachable code repositories.",
+        "Shell tools are fallback only for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, or when Frigg is unavailable.",
     ];
 
     fn assert_core_sentences(surface_name: &str, text: &str) {
@@ -107,8 +107,8 @@ mod tests {
 
     #[test]
     fn agent_directive_core_sentences_are_in_skill_and_openai_prompt() {
-        let skill = workspace_file("skills/frigg-mcp-search-navigation/SKILL.md");
-        let openai_prompt = workspace_file("skills/frigg-mcp-search-navigation/agents/openai.yaml");
+        let skill = workspace_file("skills/frigg-first-code-search/SKILL.md");
+        let openai_prompt = workspace_file("skills/frigg-first-code-search/agents/openai.yaml");
         let (Some(skill), Some(openai_prompt)) = (skill.as_deref(), openai_prompt.as_deref())
         else {
             assert!(

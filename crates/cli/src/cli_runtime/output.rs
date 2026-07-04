@@ -28,7 +28,7 @@ use human_topic::{
 };
 pub(crate) use index::{emit_index_plan_events, emit_index_progress_event};
 
-const HUMAN_INTRO_ENABLED: bool = false;
+const HUMAN_INTRO_ENABLED: bool = true;
 static HUMAN_INTRO_EMITTED: AtomicBool = AtomicBool::new(false);
 
 /// Quiet, normal, or verbose CLI output policy selected from global flags.
@@ -250,6 +250,7 @@ impl CliOutput {
         };
         let mut fields = vec![
             field("status", event.status.as_str()),
+            field("session", event.session_id),
             field("tool", event.tool_name),
             field("duration_ms", event.duration_ms),
         ];
@@ -493,22 +494,30 @@ mod tests {
     }
 
     #[test]
-    fn human_intro_renders_unicode_logo_with_blank_padding() {
+    fn human_intro_renders_line_ui_card_without_blank_tail() {
         let output = format_human_intro(false);
+        let lines = output.lines().collect::<Vec<_>>();
 
-        assert!(output.starts_with('\n'));
-        assert!(output.ends_with("\n\n"));
-        assert_eq!(output.lines().filter(|line| !line.is_empty()).count(), 5);
-        assert!(output.contains("█████ ████  ███  ███   ███"));
-        assert!(output.contains("█     █   █ ███  ███   ███"));
+        assert!(!output.starts_with('\n'));
+        assert!(output.ends_with('\n'));
+        assert!(!output.ends_with("\n\n"));
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "    ╭─◆ Frigg");
+        assert_eq!(
+            lines[1],
+            "    ╰─╮ Local, source-backed code search and navigation for AI agents."
+        );
     }
 
     #[test]
     fn human_intro_uses_theme_color_when_enabled() {
         let output = format_human_intro(true);
 
-        assert!(output.contains("\u{1b}[1;38;2;238;240;242m"));
-        assert!(output.contains("\u{1b}[1;38;2;125;199;190m"));
+        assert!(output.contains(&format!("\u{1b}[{HUMAN_COLOR_NEUTRAL}m╭─◆ Frigg\u{1b}[0m")));
+        assert!(output.contains("\u{1b}[2m╰─╮ \u{1b}[0m"));
+        assert!(output.contains(
+            "\u{1b}[2mLocal, source-backed code search and navigation for AI agents.\u{1b}[0m"
+        ));
         assert!(output.contains("\u{1b}[0m"));
     }
 
@@ -605,8 +614,8 @@ mod tests {
             .lines()
             .find(|line| line.contains("/repo/src/main.rs"))
             .expect("watch path should render as a kv row");
-        assert!(path_line.starts_with("╰─╮ "));
-        assert_eq!(char_column(path_line, "path"), Some(4));
+        assert!(path_line.starts_with("    ╰─╮ "));
+        assert_eq!(char_column(path_line, "path"), Some(8));
         assert!(!output.contains("└─ path: /repo/src/main.rs"));
     }
 
@@ -667,17 +676,26 @@ mod tests {
         );
         let lines = output.lines().collect::<Vec<_>>();
 
-        assert!(lines[0].starts_with("╭─○ Semantic paths"));
-        assert_eq!(char_column(lines[0], "○"), Some(2));
-        assert_eq!(char_column(lines[0], "Semantic paths"), Some(4));
-        assert!(lines[1].starts_with("│   repo"));
+        assert!(lines[0].starts_with("SRV ╭─○ Semantic paths"));
+        assert_eq!(char_column(lines[0], "○"), Some(6));
+        assert_eq!(char_column(lines[0], "Semantic paths"), Some(8));
+        assert!(lines[1].starts_with("    │   repo"));
         assert!(
             lines
                 .iter()
-                .filter(|line| !line.is_empty())
-                .all(|line| matches!(line.chars().next(), Some('╭' | '│' | '╰')))
+                .enumerate()
+                .filter(|(_, line)| !line.is_empty())
+                .all(|(index, line)| if index == 0 {
+                    line.starts_with("SRV ")
+                } else {
+                    line.starts_with("    ")
+                })
         );
-        assert!(lines.last().is_some_and(|line| line.starts_with("╰─╮ ")));
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.starts_with("    ╰─╮ "))
+        );
         assert!(!output.contains("\n\n"));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
@@ -701,13 +719,13 @@ mod tests {
         );
         let lines = output.lines().collect::<Vec<_>>();
 
-        assert!(lines[0].starts_with("╭─○ Semantic model"));
-        assert!(lines[1].starts_with("│   provider"));
-        assert!(lines[2].starts_with("╰─╮ model"));
-        assert_eq!(char_column(lines[0], "○"), Some(2));
-        assert_eq!(char_column(lines[2], "╮"), Some(2));
-        assert_eq!(char_column(lines[0], "Semantic model"), Some(4));
-        assert_eq!(char_column(lines[1], "provider"), Some(4));
+        assert!(lines[0].starts_with("SRV ╭─○ Semantic model"));
+        assert!(lines[1].starts_with("    │   provider"));
+        assert!(lines[2].starts_with("    ╰─╮ model"));
+        assert_eq!(char_column(lines[0], "○"), Some(6));
+        assert_eq!(char_column(lines[2], "╮"), Some(6));
+        assert_eq!(char_column(lines[0], "Semantic model"), Some(8));
+        assert_eq!(char_column(lines[1], "provider"), Some(8));
     }
 
     #[test]
@@ -726,7 +744,8 @@ mod tests {
             80,
         );
 
-        assert!(output.starts_with(&format!(
+        assert!(output.starts_with("\u{1b}[1;97;48;5;240mSRV\u{1b}[0m "));
+        assert!(output.contains(&format!(
             "\u{1b}[{HUMAN_COLOR_WARN}m╭─▲ Semantic model\u{1b}[0m"
         )));
         assert!(output.contains(&format!(
@@ -805,7 +824,7 @@ mod tests {
             100,
         );
 
-        assert!(output.starts_with("╭─○ Semantic refresh"));
+        assert!(output.starts_with("SRV ╭─○ Semantic refresh"));
         assert!(output.contains("incremental advance"));
         assert!(output.contains("local · all-MiniLM-L6-v2"));
         assert!(output.contains("2 changed · 0 deleted"));
@@ -860,7 +879,7 @@ mod tests {
             80,
         );
 
-        assert!(output.contains("│ Walking files..."));
+        assert!(output.starts_with("SRV   │ Walking files..."));
         assert!(output.contains("477 scanned"));
         assert!(!output.contains("477 changed · 2 deleted"));
         assert!(!output.contains("phase="));
@@ -933,6 +952,7 @@ mod tests {
         .with_duration_ms(42);
         let output = super::index::format_human_index_progress_event(&event, &[], false, 100);
 
+        assert!(output.starts_with("SRV   ● Semantic chunks stored"));
         assert!(output.contains("Semantic chunks stored  42ms · 4 records"));
         assert!(output.contains("10.5ms/doc"));
     }
@@ -1150,9 +1170,9 @@ mod tests {
         assert!(semantic.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_SEMANTIC}m")));
         assert!(precise.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_PRECISE}m")));
         assert!(storage.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_STORAGE}m")));
-        assert!(index.starts_with(&format!("  \u{1b}[{HUMAN_COLOR_TOPIC_INDEX}m○")));
-        assert!(precise_skip.starts_with(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_PRECISE}m╭─○")));
-        assert!(watch_skip.starts_with(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_WATCH}m╭─○")));
+        assert!(index.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_INDEX}m○")));
+        assert!(precise_skip.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_PRECISE}m╭─○")));
+        assert!(watch_skip.contains(&format!("\u{1b}[{HUMAN_COLOR_TOPIC_WATCH}m╭─○")));
         assert!(!semantic.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
         assert!(!precise.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
         assert!(!storage.contains(&format!("\u{1b}[{HUMAN_COLOR_ACTION_CREATED}m")));
@@ -1179,7 +1199,7 @@ mod tests {
             80,
         );
 
-        assert!(plain.starts_with("  ● Semantic embedding Modified src/lib.rs"));
+        assert!(plain.starts_with("SRV   ● Semantic embedding Modified src/lib.rs"));
         assert!(output.contains("Semantic embedding"));
         assert!(output.contains("\u{1b}[1;33mModified\u{1b}[0m src/lib.rs"));
         assert!(output.contains("semantic embedding input"));
@@ -1301,7 +1321,7 @@ mod tests {
             100,
         );
 
-        assert!(output.starts_with("  │ Running rust-analyzer..."));
+        assert!(output.starts_with("SRV   │ Running rust-analyzer..."));
         assert!(output.contains("rust generator"));
         assert_eq!(output.lines().count(), 1);
         assert!(!output.contains("language"));
@@ -1321,11 +1341,11 @@ mod tests {
         );
         let lines = output.lines().collect::<Vec<_>>();
 
-        assert!(lines[0].starts_with("╭─○ Serve starting"));
-        assert_eq!(char_column(lines[0], "○"), Some(2));
-        assert_eq!(char_column(lines[0], "Serve starting"), Some(4));
-        assert_eq!(char_column(lines[1], "transport"), Some(4));
-        assert!(lines[1].starts_with("╰─╮ "));
+        assert!(lines[0].starts_with("SRV ╭─○ Serve starting"));
+        assert_eq!(char_column(lines[0], "○"), Some(6));
+        assert_eq!(char_column(lines[0], "Serve starting"), Some(8));
+        assert_eq!(char_column(lines[1], "transport"), Some(8));
+        assert!(lines[1].starts_with("    ╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
@@ -1347,11 +1367,11 @@ mod tests {
         );
         let lines = output.lines().collect::<Vec<_>>();
 
-        assert_eq!(char_column(lines[1], "mode"), Some(4));
-        assert_eq!(char_column(lines[1], "changed"), Some(10));
-        assert_eq!(char_column(lines[2], "repos"), Some(4));
-        assert_eq!(char_column(lines[2], "1"), Some(10));
-        assert!(lines[2].starts_with("╰─╮ "));
+        assert_eq!(char_column(lines[1], "mode"), Some(8));
+        assert_eq!(char_column(lines[1], "changed"), Some(14));
+        assert_eq!(char_column(lines[2], "repos"), Some(8));
+        assert_eq!(char_column(lines[2], "1"), Some(14));
+        assert!(lines[2].starts_with("    ╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
@@ -1383,7 +1403,7 @@ mod tests {
         assert_eq!(repos_value_column, generators_value_column);
         assert_eq!(repos_value_column, missing_tool_value_column);
         assert_eq!(repos_value_column, skipped_value_column);
-        assert!(lines[4].starts_with("╰─╮ "));
+        assert!(lines[4].starts_with("    ╰─╮ "));
         assert!(!output.starts_with('\n'));
         assert!(!output.ends_with('\n'));
     }
@@ -1443,7 +1463,7 @@ mod tests {
             72,
         );
 
-        assert_eq!(output, "  ◇ search_hybrid  1008ms · 100% saved");
+        assert_eq!(output, "SRV   ◇ search_hybrid  1008ms · 100% saved");
         assert!(!output.contains('='));
 
         let colored = format_human_event_with_width(
@@ -1482,6 +1502,92 @@ mod tests {
         );
 
         assert!(output.contains("Custom Checkpoint  duration=7ms repo=repo-001 records=2"));
+    }
+
+    #[test]
+    fn human_tool_call_uses_session_badge_when_present() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "tool",
+            "call",
+            &[
+                field("status", "ok"),
+                field("session", "connected-session-abcdef"),
+                field("tool", "search_hybrid"),
+                field("duration_ms", 1008),
+            ],
+            None,
+            false,
+            72,
+        );
+
+        assert_eq!(output, "def   ◇ search_hybrid  1008ms");
+        assert!(!output.contains("session="));
+
+        let colored = format_human_event_with_width(
+            OutputLevel::Ok,
+            "tool",
+            "call",
+            &[
+                field("status", "ok"),
+                field("session", "connected-session-abcdef"),
+                field("tool", "search_hybrid"),
+                field("duration_ms", 1008),
+            ],
+            None,
+            true,
+            72,
+        );
+
+        assert!(colored.starts_with("\x1b[1;97;48;5;240mdef\x1b[0m "));
+    }
+
+    #[test]
+    fn human_component_session_badge_only_decorates_first_line() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "startup",
+            "semantic_model",
+            &[
+                field("status", "ok"),
+                field("session", "connected-session-abcde"),
+                field("provider", "local"),
+                field("model", "all-MiniLM-L6-v2"),
+            ],
+            None,
+            false,
+            80,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert!(lines[0].starts_with("cde ╭─○ Semantic model"));
+        assert!(lines[1].starts_with("│   provider"));
+        assert!(lines[2].starts_with("╰─╮ model"));
+        assert!(lines[1..].iter().all(|line| !line.contains("cde")));
+        assert!(!output.contains("session="));
+    }
+
+    #[test]
+    fn human_card_session_badge_only_decorates_first_line() {
+        let output = format_human_event_with_width(
+            OutputLevel::Ok,
+            "init",
+            "complete",
+            &[
+                field("status", "ok"),
+                field("session", "connected-session-xyz123"),
+                field("repos", 1),
+            ],
+            None,
+            false,
+            80,
+        );
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert!(lines[0].starts_with("123 ╭─● Init complete"));
+        assert!(lines[1].starts_with("╰─╮ repos"));
+        assert!(lines[1..].iter().all(|line| !line.contains("123")));
+        assert!(!output.contains("session="));
     }
 
     #[test]
@@ -1527,8 +1633,9 @@ mod tests {
             .find(|line| line.contains("/Users/bnomei/Library/Caches/frigg/models"))
             .expect("semantic model path line should be rendered");
 
-        assert_eq!(char_column(lines[0], "Semantic model"), Some(4));
-        assert_eq!(char_column(path_line, "path"), Some(4));
+        assert!(lines[0].starts_with("SRV "));
+        assert_eq!(char_column(lines[0], "Semantic model"), Some(8));
+        assert_eq!(char_column(path_line, "path"), Some(8));
         assert!(!path_line.contains("└─"));
         assert!(lines.iter().all(|line| line.chars().count() <= 64));
     }

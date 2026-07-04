@@ -153,6 +153,26 @@ async fn wait_for_repository_invalidation_count(
     }
 }
 
+async fn wait_for_active_task_observation(log: &Arc<RwLock<Vec<bool>>>, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if log
+            .read()
+            .expect("active task observation log poisoned")
+            .iter()
+            .any(|active| *active)
+        {
+            return true;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 fn delete_retrieval_projection_family(
     db_path: &Path,
     repository_id: &str,
@@ -1582,15 +1602,18 @@ async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_tas
     let active_task_observations = Arc::new(RwLock::new(Vec::new()));
     let recorded_observations = Arc::clone(&active_task_observations);
     let callback_task_registry = Arc::clone(&task_registry);
+    let stable_repository_id =
+        crate::domain::model::stable_repository_id_for_root(&workspace_root).0;
     let callback: RepositoryCacheInvalidationCallback = Arc::new(move |repository_id: &str| {
         if repository_id == "repo-001" {
-            let active = callback_task_registry
+            let task_registry = callback_task_registry
                 .read()
-                .expect("watch runtime task registry poisoned")
-                .has_active_task_for_repository(
-                    crate::mcp::types::RuntimeTaskKind::ChangedIndex,
-                    repository_id,
-                );
+                .expect("watch runtime task registry poisoned");
+            let repository_ids = [repository_id, stable_repository_id.as_str()];
+            let active = task_registry.has_active_task_for_any_repository(
+                crate::mcp::types::RuntimeTaskKind::ChangedIndex,
+                &repository_ids,
+            );
             recorded_observations
                 .write()
                 .expect("active task observation log poisoned")
@@ -1626,11 +1649,7 @@ async fn watch_runtime_invalidates_repository_cache_before_finishing_refresh_tas
         .expect("initial sync should create a manifest snapshot");
 
     assert!(
-        active_task_observations
-            .read()
-            .expect("active task observation log poisoned")
-            .iter()
-            .any(|active| *active),
+        wait_for_active_task_observation(&active_task_observations, Duration::from_secs(10)).await,
         "watch refresh completion must invalidate response freshness before clearing the active task"
     );
 

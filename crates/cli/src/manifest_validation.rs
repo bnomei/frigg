@@ -277,6 +277,36 @@ pub(crate) fn latest_validated_manifest_snapshot_shared(
     })
 }
 
+/// Return a cached validated snapshot without re-walking the workspace.
+///
+/// Callers must only use this when another runtime guard, such as an active
+/// watch lease plus dirty-root invalidation, is responsible for cache freshness.
+pub(crate) fn latest_cached_validated_manifest_snapshot_shared(
+    storage: &Storage,
+    repository_id: &str,
+    root: &Path,
+    cache: &Arc<RwLock<ValidatedManifestCandidateCache>>,
+) -> Option<SharedValidatedManifestSnapshot> {
+    let latest = storage
+        .load_latest_manifest_metadata_for_repository(repository_id)
+        .ok()??;
+    let snapshot_id = latest.snapshot_id.clone();
+    let lookup = cache
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lookup(root, &snapshot_id);
+    match lookup {
+        ValidatedManifestCandidateCacheLookup::Hit(digests) => {
+            Some(SharedValidatedManifestSnapshot {
+                snapshot_id,
+                digests,
+            })
+        }
+        ValidatedManifestCandidateCacheLookup::Dirty
+        | ValidatedManifestCandidateCacheLookup::Miss => None,
+    }
+}
+
 /// Manifest snapshot freshness relative to the live workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepositoryManifestFreshness {

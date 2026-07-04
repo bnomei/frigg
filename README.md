@@ -6,25 +6,27 @@
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
-Frigg is the local code evidence layer for AI coding agents.
+Frigg gives AI agents local, source-backed code search and navigation without sending whole repositories through every prompt.
 
-It gives Codex, Claude, Cursor, and other MCP clients fast, source-backed repository search, symbol navigation, structural search, and bounded reads without pushing the whole codebase through every prompt.
+It turns each repository into searchable, navigable context for Codex, Claude, Cursor, and other MCP clients: lexical and hybrid search, symbols, structural queries, definitions, references, bounded reads, and runtime health through one local MCP service.
 
 Frigg is local-first OSS. It builds a repository model under `.frigg/`, serves it over MCP, and keeps the useful parts plain: a CLI, a local SQLite store, explicit client adoption, cacheable runtime state, and source-backed answers.
 
 ## Why Frigg
 
+AI coding agents need retrieval as much as generation: the right answer starts with the right repository evidence. [Code Context Engine](https://elara-labs.github.io/code-context-engine/) shows the local-index pattern for AI coding agents, where the agent searches through MCP instead of rereading whole files. [Sourcegraph Code Search](https://sourcegraph.com/docs/code-search) documents production code-intelligence primitives such as full-text search, regular expressions, symbol search, repository scoping, ranking, and code navigation. [turbopuffer Hybrid Search](https://turbopuffer.com/docs/hybrid) shows why lexical/BM25 and vector signals are often combined with rank fusion and re-ranking. Frigg brings that shape to a local OSS MCP service for source-backed agent context.
+
 For individuals, Frigg keeps coding agents grounded in local source instead of broad scans, whole-file dumps, and model-memory guesses. It helps an agent find the right files, read only the source windows it needs, follow symbols, and answer with concrete repository evidence.
 
 For teams, Frigg standardizes how agents inspect a repository. `frigg adopt`, shared MCP config, CI-cacheable `.frigg/` state, local safety boundaries, and repeatable search/navigation tools give every agent session the same evidence layer and vocabulary across large or unfamiliar codebases.
 
-Frigg is the default for code discovery, navigation, exact code search, and bounded source reads. Start with Frigg MCP tools when you need to find code, inspect symbols, follow relationships, search exact source text, or read bounded source windows from an attached repository. Use shell tools for non-code files, git and filesystem inspection, trivial one-off checks, and live-disk correctness checks when you suspect Frigg's indexed view missed a checked-out file.
+Use Frigg when shell scans stop being enough: broad discovery, exact source windows, symbol and call navigation, structural queries, optional semantic recall, and optional SCIP-backed precision.
 
 ## What Frigg is not
 
 Frigg is not an AI pair programmer, hosted code intelligence platform, IDE replacement, Copilot alternative, or generic semantic search product. MCP is the delivery channel, not the category; SQLite, Tree-sitter, semantic recall, and SCIP are implementation proof points, not the reason to adopt Frigg.
 
-The narrow promise is local code evidence for AI agents: repository-aware search, navigation, and bounded reads that make agent work easier to verify.
+The narrow promise is source-backed context for AI agents: repository-aware search, navigation, and bounded reads that make agent work easier to verify.
 
 ## What Frigg provides
 
@@ -44,21 +46,26 @@ The narrow promise is local code evidence for AI agents: repository-aware search
 
 ### 1. Install Frigg
 
-Install a pinned release on macOS or GNU/glibc Linux:
+Fast path on macOS or GNU/glibc Linux:
 
 ```bash
-curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-  https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
-  | FRIGG_VERSION=0.5.0 sh
+curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh | FRIGG_VERSION=0.6.0 sh
 ```
 
-The installer downloads the matching GitHub Release archive, verifies its `.sha256`, and installs the `frigg` binary to `$HOME/.local/bin` unless `FRIGG_INSTALL_DIR` is set. When `FRIGG_VERSION` is unset, it resolves the latest GitHub Release. The installer supports macOS and GNU/glibc Linux on x86_64 and aarch64; Windows users should download the release `.zip` asset manually.
+The installer downloads the matching GitHub Release archive, verifies its `.sha256`, and installs the `frigg` binary to `$HOME/.local/bin` unless `FRIGG_INSTALL_DIR` is set. When `FRIGG_VERSION` is unset, it resolves the latest GitHub Release.
 
-Rust developer fallback:
+Other install surfaces:
 
-```bash
-cargo install frigg
-```
+| Channel | Command |
+| --- | --- |
+| GitHub Release installer | `curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \| sh` |
+| Cargo prebuilt binary | `cargo binstall frigg` |
+| Cargo source fallback | `cargo install frigg` |
+| npm wrapper | `npx @bnomei/frigg --version` |
+| Docker image | `docker run --rm ghcr.io/bnomei/frigg:0.6.0 --version` |
+| Scoop | `scoop bucket add frigg https://github.com/bnomei/scoop-frigg && scoop install frigg` |
+
+The prebuilt paths are the point: one local binary, no Python 3.11+ runtime, no local C compiler, and no ONNX model download unless you explicitly enable the local semantic runtime.
 
 Build from a local checkout:
 
@@ -72,7 +79,7 @@ target/release/frigg --version
 Expected output:
 
 ```text
-frigg 0.5.0
+frigg 0.6.0
 ```
 
 Frigg's source currently requires Rust 1.88 or newer.
@@ -100,9 +107,28 @@ frigg init --workspace-root /absolute/path/to/repo
 frigg index --workspace-root /absolute/path/to/repo
 ```
 
-### 3. Start the MCP service
+### 3. Choose and start the MCP transport
 
-Run:
+Frigg supports stdio and HTTP MCP transports. Use this rule before choosing a client config:
+
+| Workflow | Transport |
+| --- | --- |
+| One local MCP client, no subagents, and the client should own the Frigg process | Stdio |
+| More than one client, subagents, shared workflows, or long-running use | HTTP |
+
+Stdio works, but it is a convenience transport for one local client. It is not the best match for Frigg once work becomes shared, long-running, or agentic. A stdio config makes the MCP client spawn and own a Frigg process. Another client or subagent usually means another Frigg process with its own lifecycle, session state, in-memory caches, and access to `.frigg/storage.sqlite3`.
+
+HTTP gives Frigg a shared runtime:
+
+- One endpoint for all clients and subagents. Codex, Claude, Cursor, and worker agents can connect to the same `127.0.0.1:37444/mcp` service instead of each spawning their own Frigg process.
+- Warm process state. Repository registry state, runtime task tracking, search/navigation caches, compiled safe-regex caches, and precise graph caches can live in one service process across client sessions.
+- Better freshness behavior. `frigg serve` is the long-lived service path, and built-in watch refreshes are designed around that shape. Stdio defaults to an ephemeral profile with watch disabled unless you explicitly opt in.
+- Lower local contention. One service coordinates access to `.frigg/storage.sqlite3`; several stdio processes can duplicate work and make SQLite lock contention harder to understand.
+- Clearer operations. A single HTTP service has one lifecycle, one log stream, one endpoint, loopback-by-default binding, and optional bearer auth for non-loopback use.
+
+Use stdio only when one local MCP client should launch Frigg directly and no subagent or second client will share the same repository. Use HTTP for normal Frigg use.
+
+For HTTP shared-service mode, run:
 
 ```bash
 frigg serve
@@ -122,6 +148,8 @@ frigg serve \
   --workspace-root /absolute/path/to/repo-b
 ```
 
+`frigg serve` is the HTTP service path. Do not use it in a stdio MCP config.
+
 ### 4. Add client configuration
 
 Use `frigg adopt` to add managed Frigg instructions and MCP config entries to a project:
@@ -133,7 +161,9 @@ frigg adopt --target agents-md --target mcp-project
 
 Useful targets include `agents-md`, `claude-md`, `gemini-md`, `copilot`, `cursor`, `mcp-project`, `mcp-cursor`, and `hook`. Use `--all` to update every supported non-hook target, `--check` for a CI drift check, `--uninstall` to remove Frigg-managed entries, and `--force` to replace a diverged Frigg MCP JSON entry.
 
-Manual MCP configuration for clients that accept JSON:
+The managed MCP JSON entries use loopback HTTP, so keep `frigg serve` running while clients use Frigg.
+
+Manual HTTP configuration for clients that accept JSON:
 
 ```json
 {
@@ -153,21 +183,50 @@ claude mcp add --transport http frigg http://127.0.0.1:37444/mcp
 codex mcp add frigg --url http://127.0.0.1:37444/mcp
 ```
 
+Manual stdio configuration for a single local client:
+
+```json
+{
+  "mcpServers": {
+    "frigg": {
+      "command": "frigg",
+      "args": ["--workspace-root", "/absolute/path/to/repo"]
+    }
+  }
+}
+```
+
+This uses stdio because there is no `serve` subcommand and no `--mcp-http-port`. The MCP client owns the Frigg process lifetime. Use this only for one local client with no subagents; switch to HTTP as soon as another client or subagent needs the same Frigg runtime.
+
 ### 5. Use Frigg from an MCP client
 
 The normal MCP loop is:
 
-1. Call `list_repositories`.
-2. Call `workspace_attach` if the session is detached or if you want a specific session-default repository.
-3. Call `workspace_current` when you need the session default, adopted repositories, or runtime task state.
-4. Use `search_hybrid` for broad discovery when you do not have an exact string, symbol, or path anchor.
-5. Use `search_text` for literal, safe-regex, and `rg`-shaped matches.
-6. Use `search_symbol` for known identifiers.
-7. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
-8. Use `read_file` when you already know the canonical repository-relative path.
-9. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries.
+1. Omit `repository_id` in normal single-repo work. Frigg uses the session default, adopted repositories, or auto-adopts a sensible default when possible.
+2. Call `workspace` only when you want compact workspace status or need to adopt a specific `path` or `repository_id`.
+3. Use `list_files` when you would otherwise run `rg --files`, `find`, or `fd`.
+4. Use `workspace` when you need the session default, known repositories, or runtime task state.
+5. Use `search_hybrid` for broad discovery when you do not have an exact string, symbol, or path anchor.
+6. Use `search_text` for literal, safe-regex, and `rg`-shaped matches.
+7. Use `search_symbol` for known identifiers.
+8. Use `read_match` when a search or navigation result returned `result_handle` plus `match_id`.
+9. Use `read_file` when you already know the canonical repository-relative path.
+10. Use navigation and structure tools for definitions, references, implementations, calls, outlines, syntax trees, and structural queries.
 
-`search_text` is the Frigg surface for the same class of code scans agents often run with `rg`: known literals, safe regexes, grouped alternation, `path_regex` narrowing, context windows, per-file limits, and "which files contain this?" probes. Frigg may execute the lexical work with its native scanner or with its ripgrep accelerator; either path still returns repository-scoped matches, canonical paths, `result_handle`, and per-row `match_id` values.
+Shell replacement map:
+
+| Shell habit | Frigg tool |
+| --- | --- |
+| `rg --files` | `list_files` |
+| `rg -n "text"` | `search_text` |
+| `rg -n "foo\|bar"` | `search_text` with `pattern_type=regex` |
+| `rg -n "text" path/` | `search_text` with `path_regex` |
+| identifier/API/type/class/function lookup | `search_symbol` |
+| `cat path` | `read_file` |
+| `sed -n '10,80p' path` | `read_file` with `start_line`, `end_line`, or `line_count` |
+| follow definitions/references/calls | navigation tools |
+
+`search_text` is the Frigg surface for the same class of code scans agents often run with `rg`: known literals, safe regexes, grouped alternation, `path_regex` narrowing, context windows, per-file limits (`max_count_per_file`), and "which files contain this?" probes with `files_with_matches`. Frigg may execute the lexical work with its native scanner or with its ripgrep accelerator; either path still returns repository-scoped matches, canonical paths, `result_handle`, and per-row `match_id` values.
 
 For example, this `rg` scan:
 
@@ -187,7 +246,7 @@ maps to:
 }
 ```
 
-Use shell `rg` when you need a live filesystem correctness check, ripgrep-specific flags outside `search_text`, or a quick diagnosis of suspected index/watch drift. When `rg` finds relevant code, return to Frigg for `read_match`, `read_file`, symbols, or navigation when possible.
+Use shell only for git state and diffs, non-code files, build/test output, generated or unindexed files, explicit live-disk verification, ripgrep-specific flags outside `search_text`, or unavailable Frigg results. When shell finds relevant code, return to Frigg for `read_match`, `read_file`, symbols, or navigation when possible.
 
 Example prompts:
 
@@ -196,13 +255,14 @@ Example prompts:
 - "Who calls `handleWebhook`?"
 - "Which files are relevant to the checkout flow?"
 
-For agent-facing usage guidance, use [skills/frigg-mcp-search-navigation](skills/frigg-mcp-search-navigation/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
+For agent-facing usage guidance, use [skills/frigg-first-code-search](skills/frigg-first-code-search/). For runtime diagnosis, use the [Frigg Operator Runbook](docs/operator-runbook.md).
 
 ## CLI reference
 
 | Command | Purpose |
 | --- | --- |
-| `frigg serve` | Start the MCP service over loopback HTTP by default. |
+| `frigg` | Start the MCP server over stdio when no subcommand and no HTTP port are provided. |
+| `frigg serve` | Start the shared MCP service over loopback HTTP by default. |
 | `frigg adopt` | Add or remove managed Frigg entries in agent docs and MCP configs. |
 | `frigg init` | Create or repair `.frigg/storage.sqlite3` without scanning source files. |
 | `frigg index` | Scan files, refresh the local search index, and refresh semantic rows when semantic runtime is enabled. |
@@ -218,7 +278,8 @@ Frigg exposes the `extended` MCP tool surface by default. Set `FRIGG_MCP_TOOL_SU
 
 Core tool groups:
 
-- Workspace lifecycle: `list_repositories`, `workspace_attach`, `workspace_detach`, `workspace_prepare`, `workspace_index`, `workspace_current`.
+- Workspace status and adoption: `workspace`.
+- File listing: `list_files`.
 - Source reads: `read_file`, `read_match`.
 - Discovery: `search_text`, `search_hybrid`, `search_symbol`.
 - Navigation: `find_references`, `go_to_definition`, `find_declarations`, `find_implementations`, `incoming_calls`, `outgoing_calls`.
@@ -234,7 +295,7 @@ Feature-gated extended-only playbook tools are available only when Frigg is comp
 - `playbook_replay`
 - `playbook_compose_citations`
 
-Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics, freshness details, or selection notes matter.
+Read tools default to text-first output. Request `presentation_mode=json` only when the caller needs structured fields such as path, byte ranges, or context-efficiency metadata. Search and navigation tools default to compact responses; request `response_mode=full` when diagnostics or selection notes matter.
 
 ## Configuration
 
@@ -260,7 +321,7 @@ Precedence is `CLI flag > environment variable > default`.
 | `FRIGG_SQLITE_BUSY_TIMEOUT_MS` | `30000` | SQLite wait timeout for transient writer contention. |
 | `FRIGG_CONTEXT_EFFICIENCY_LOG` | `false` | Append compact context-efficiency rows to `.frigg/context.jsonl`. |
 | `--semantic-runtime-enabled` / `FRIGG_SEMANTIC_RUNTIME_ENABLED` | `false` | Enable semantic indexing and recall. |
-| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `local`, `openai`, or `google`. |
+| `--semantic-runtime-provider` / `FRIGG_SEMANTIC_RUNTIME_PROVIDER` | `local` when semantic runtime is enabled | Semantic provider: `openai`, `google`, or `local`. |
 | `--semantic-runtime-model` / `FRIGG_SEMANTIC_RUNTIME_MODEL` | provider default | Embedding model override. |
 | `--semantic-runtime-strict-mode` / `FRIGG_SEMANTIC_RUNTIME_STRICT_MODE` | `false` | Convert semantic provider failures into user-visible errors instead of graceful fallback. |
 
@@ -279,7 +340,7 @@ frigg index
 frigg serve
 ```
 
-The local provider uses `all-MiniLM-L6-v2` by default and does not require an API key. Missing local model artifacts are prepared automatically during semantic runtime startup. Set `FRIGG_SEMANTIC_MODEL_CACHE` to choose the local model cache root. If `HF_HOME` is set and local model loading fails, unset `HF_HOME` so Frigg's cache selection controls the prepared artifacts.
+The local provider uses `all-MiniLM-L6-v2` by default and does not require an API key. When `provider=local`, Frigg prepares missing local model artifacts automatically during startup. If local model preparation fails, startup fails with `local_model_prepare_failed`. Set `FRIGG_SEMANTIC_MODEL_CACHE` to choose the local model cache root. If `HF_HOME` is set and local model loading fails, unset `HF_HOME` so Frigg's cache selection controls the prepared artifacts.
 
 OpenAI provider:
 
@@ -301,13 +362,17 @@ frigg index
 
 Provider defaults:
 
+Defaults: `local` -> `all-MiniLM-L6-v2`, `openai` -> `text-embedding-3-small`, `google` -> `gemini-embedding-001`.
+
 | Provider | Default model | Credential |
 | --- | --- | --- |
 | `local` | `all-MiniLM-L6-v2` | none |
 | `openai` | `text-embedding-3-small` | `OPENAI_API_KEY` |
 | `google` | `gemini-embedding-001` | `GEMINI_API_KEY` |
 
-After enabling semantic search for an existing repository, or after changing provider or model, run a full `frigg index`.
+After enabling semantic search for an existing repository, or after changing the semantic provider or model, run one semantic index pass with `frigg index`.
+
+Zero-cloud semantic behavior applies only when `provider=local`.
 
 ## Precise navigation with SCIP
 
@@ -334,7 +399,7 @@ Optional repository-local precise configuration lives at `.frigg/precise.json`:
 }
 ```
 
-Use `workspace_attach` or `workspace_index` to trigger precise generation and inspect precise lifecycle, generator failures, and recommended actions.
+Use `workspace` to adopt a repository and inspect runtime task state. CLI `frigg index` remains the explicit maintenance path when you want a repository refresh outside normal auto-readiness behavior.
 
 Useful SCIP starting points:
 
@@ -359,7 +424,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.5.0
+  FRIGG_VERSION: 0.6.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
@@ -370,8 +435,7 @@ jobs:
 
       - name: Install Frigg
         run: |
-          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-            https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
+          curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
             | FRIGG_VERSION="${FRIGG_VERSION}" FRIGG_INSTALL_DIR="${FRIGG_INSTALL_DIR}" sh
 
       - run: frigg init
@@ -389,7 +453,7 @@ on:
     branches: [main]
 
 env:
-  FRIGG_VERSION: 0.5.0
+  FRIGG_VERSION: 0.6.0
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
@@ -400,8 +464,7 @@ jobs:
 
       - name: Install Frigg
         run: |
-          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-            https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
+          curl -fsSL https://raw.githubusercontent.com/bnomei/frigg/main/scripts/install.sh \
             | FRIGG_VERSION="${FRIGG_VERSION}" FRIGG_INSTALL_DIR="${FRIGG_INSTALL_DIR}" sh
 
       - name: Compute Frigg cache hash
@@ -436,10 +499,10 @@ Treat `.frigg/` as cacheable runtime state, not as source and not as a secret st
 - Frigg honors root `.gitignore` and `.ignore` files and hard-excludes `.frigg`, `.git`, and `target`.
 - Put secrets and generated private artifacts in ignored paths before indexing. Frigg stores indexed source-derived state locally.
 - Normal indexing does not edit project source files.
-- `workspace_attach` may refresh stale or missing lexical and semantic state under `.frigg/` and waits up to the attach timeout.
-- MCP `workspace_prepare` and `workspace_index` are confirm-gated because they operate on ignored `.frigg/` state.
-- Optional OpenAI and Google semantic providers call external embedding APIs. The local provider does not require an API key.
-- Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace_attach` or `workspace_index` for generator status and touch-risk details.
+- `workspace` may refresh lexical and semantic state under `.frigg/` and waits up to the attach timeout when adopting a target.
+- Explicit maintenance remains available through CLI commands such as `frigg init` and `frigg index`.
+- Optional OpenAI and Google semantic providers call their external embedding APIs. The local provider does not require an API key.
+- Optional precise generators may execute repo-local or PATH-discovered tools and write `.frigg/scip/` artifacts. Inspect `workspace` runtime status or CLI output for generator progress and failures.
 - Non-loopback HTTP serving requires `--allow-remote-http` and `--mcp-http-auth-token`.
 
 Frigg's product boundary is intentionally narrow: local code evidence over MCP. It is not a full IDE, hosted code intelligence platform, or framework runtime.
@@ -459,9 +522,12 @@ Frigg's product boundary is intentionally narrow: local code evidence over MCP. 
 | [crates/cli/tests](crates/cli/tests) | Integration and MCP tool-handler tests. |
 | [crates/cli/benches](crates/cli/benches) | Criterion benchmark harnesses. |
 | [scripts](scripts) | Release packaging, install, smoke, and helper scripts. |
+| [Dockerfile](Dockerfile) | Release-binary container image definition. |
+| [npm/frigg](npm/frigg) | npm wrapper package for `npx @bnomei/frigg`. |
+| [packaging](packaging) | Release packaging notes. |
 | [showcases](showcases) | Public corpus of 52 repository question catalogs. |
 | [docs/operator-runbook.md](docs/operator-runbook.md) | Runtime diagnosis and operator states. |
-| [skills/frigg-mcp-search-navigation](skills/frigg-mcp-search-navigation/) | Agent-facing Frigg usage skill. |
+| [skills/frigg-first-code-search](skills/frigg-first-code-search/) | Agent-facing Frigg-first code search skill. |
 
 ## Development
 
@@ -502,15 +568,15 @@ just index /absolute/path/to/repo
 
 No repositories appear in a client:
 
-1. Confirm `frigg serve` is running.
-2. Call `list_repositories`.
-3. Call `workspace_attach` with the repository path or repository id.
-4. Check `workspace_current` for the session default and adopted repositories.
+1. For HTTP, confirm `frigg serve` is running. For stdio, confirm the MCP client launches `frigg` with the intended `--workspace-root`.
+2. Call `workspace`.
+3. If needed, call `workspace` with the repository path or repository id.
+4. Check the `workspace` response for the session default and known repositories.
 
-Search results look stale:
+Search misses a recent change:
 
-1. Reattach the repository, or run `workspace_index` with confirmation.
-2. Inspect the returned index and precise lifecycle.
+1. Call `workspace` with the repository path or id, or run `frigg index --changed`.
+2. Inspect runtime task state only if the refresh did not fix the result.
 3. If you use the CLI, run `frigg index --changed`.
 
 Semantic recall is unavailable or weak:
@@ -536,6 +602,7 @@ Non-loopback HTTP bind fails:
 
 - Workspace metadata: [Cargo.toml](Cargo.toml)
 - CLI contract: [crates/cli/src/cli_args.rs](crates/cli/src/cli_args.rs)
+- MCP stdio and HTTP dispatch: [crates/cli/src/cli_dispatch.rs](crates/cli/src/cli_dispatch.rs)
 - MCP tool names and public state contracts: [crates/cli/src/mcp/types.rs](crates/cli/src/mcp/types.rs)
 - HTTP serving rules: [crates/cli/src/http_runtime.rs](crates/cli/src/http_runtime.rs)
 - Semantic provider defaults: [crates/cli/src/settings/semantic_runtime.rs](crates/cli/src/settings/semantic_runtime.rs)

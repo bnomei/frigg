@@ -4,14 +4,14 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 
 ## Bug Trace
 
-1. `list_repositories`
-2. If the session is detached or the default repo is wrong, call `workspace_attach` explicitly
+1. `workspace`
+2. If the session is detached or the default repo is wrong, call `workspace` with a target path or repository id
 3. `search_hybrid` for the failure symptom
 4. `search_symbol` for the central API or type
 5. `find_references` or call hierarchy for impact
 6. Use compact responses first; only ask for `response_mode=full` when you need diagnostics or selection detail
 7. `read_match` on the strongest witnesses when a prior Frigg result already gave you `result_handle` plus `match_id`; otherwise `read_file` or a shell slice is still fine
-8. If call hierarchy or nav underfills, check `mode`, `availability`, and the precise lifecycle from `workspace_attach` or `workspace_index` before assuming the code path is absent
+8. If call hierarchy or nav underfills, check `mode`, `availability`, and `workspace` runtime status before assuming the code path is absent
 
 ## Refactor Impact
 
@@ -40,8 +40,8 @@ Use the lightest tool that preserves the right semantics. Shell tools are still 
 
 ## Multi-Repository Investigation
 
-1. `list_repositories`
-2. `workspace_attach` the main repo you want as the session default
+1. `workspace`
+2. Call `workspace` with the main repo path or id when you need to change the session default
 3. Use `search_hybrid` or `search_symbol` without `repository_id` when the question may cross repo boundaries
 4. Re-anchor with explicit `repository_id` once the target repo is clear
 5. Use `read_file` or navigation tools on the resolved repo-specific paths

@@ -157,98 +157,11 @@ fn search_text_metadata_omits_context_efficiency_by_default() {
         lexical_backend: Some(SearchLexicalBackendMetadata::Native),
         lexical_backend_note: None,
         context_efficiency: None,
-        freshness_basis: None,
     };
 
     let value = serde_json::to_value(metadata).expect("metadata should serialize");
     assert!(value.get("context_efficiency").is_none());
     assert!(value.get("freshness_basis").is_none());
-}
-
-#[test]
-fn attach_search_text_freshness_basis_replaces_cached_rich_fields() {
-    let stale_basis = json!({
-        "mode": "manifest_only",
-        "cacheable": true,
-        "repositories": [{
-            "repository_id": "repo-001",
-            "snapshot_id": "snapshot-001",
-            "manifest": "ready",
-            "semantic": "ready",
-            "dirty_root": false,
-            "candidate_source": "manifest_snapshot",
-            "using_live_walk": false,
-            "refresh_in_progress": false,
-            "active_index_tasks": [],
-            "recommended_client_behavior": "use_cached_frigg_results"
-        }],
-        "runtime_cache_contract": {
-            "cacheable": true
-        }
-    });
-    let current_basis = json!({
-        "mode": "manifest_only",
-        "cacheable": false,
-        "repositories": [{
-            "repository_id": "repo-001",
-            "snapshot_id": "snapshot-001",
-            "manifest": "ready",
-            "semantic": "ready",
-            "dirty_root": true,
-            "cacheable_reason": "dirty_root",
-            "candidate_source": "live_walk",
-            "using_live_walk": true,
-            "refresh_in_progress": true,
-            "active_index_tasks": [{
-                "kind": "changed_index",
-                "status": "running"
-            }],
-            "recommended_client_behavior": "continue_using_frigg_live_fallback"
-        }],
-        "runtime_cache_contract": {
-            "cacheable": false
-        }
-    });
-    let mut metadata = Some(SearchTextMetadata {
-        lexical_backend: Some(SearchLexicalBackendMetadata::Native),
-        lexical_backend_note: None,
-        context_efficiency: None,
-        freshness_basis: Some(FriggMcpServer::response_freshness_basis_metadata(
-            &stale_basis,
-        )),
-    });
-
-    FriggMcpServer::attach_search_text_freshness_basis(&mut metadata, &current_basis);
-
-    let freshness = metadata
-        .and_then(|metadata| metadata.freshness_basis)
-        .expect("freshness basis should be replaced");
-    assert!(!freshness.cacheable);
-    let repository = freshness
-        .repositories
-        .first()
-        .expect("repository freshness should be present");
-    assert!(repository.dirty_root);
-    assert_eq!(repository.cacheable_reason.as_deref(), Some("dirty_root"));
-    assert_eq!(repository.candidate_source, "live_walk");
-    assert!(repository.using_live_walk);
-    assert!(repository.refresh_in_progress);
-    assert_eq!(
-        repository.active_index_tasks[0]["kind"],
-        json!("changed_index")
-    );
-    assert_eq!(
-        repository.recommended_client_behavior,
-        "continue_using_frigg_live_fallback"
-    );
-    assert_eq!(
-        freshness
-            .runtime_cache_contract
-            .as_ref()
-            .and_then(|value| value.get("cacheable"))
-            .and_then(|value| value.as_bool()),
-        Some(false)
-    );
 }
 
 #[test]
@@ -497,6 +410,7 @@ fn context_efficiency_log_for_workspaces_respects_log_state() {
         std::slice::from_ref(&workspace),
         &metadata,
         false,
+        Some("connected-session-full-123456"),
     );
 
     let log_path = root.join(".frigg/context.jsonl");
@@ -507,12 +421,14 @@ fn context_efficiency_log_for_workspaces_respects_log_state() {
         std::slice::from_ref(&workspace),
         &metadata,
         true,
+        Some("connected-session-full-123456"),
     );
 
     let logged = std::fs::read_to_string(&log_path).expect("context log should be readable");
     assert_eq!(logged.lines().count(), 1);
     let value: Value = serde_json::from_str(logged.trim()).expect("context row should be json");
     assert_eq!(value["tool"], "search_text");
+    assert_eq!(value["session_id"], "connected-session-full-123456");
     assert_eq!(value["repository_id"], "repo-001");
     assert_eq!(value["snapshot_id"], "snapshot-001");
     assert_eq!(value["returned_match_count"], 1);
@@ -618,12 +534,12 @@ fn search_hybrid_metadata_omits_context_efficiency_by_default() {
         semantic_capability: None,
         utility: None,
         context_efficiency: None,
-        freshness_basis: ResponseFreshnessBasisMetadata {
+        cache_debug: Some(ResponseFreshnessBasisMetadata {
             mode: "manifest".to_owned(),
             cacheable: false,
             repositories: vec![],
             runtime_cache_contract: None,
-        },
+        }),
     };
 
     let value = serde_json::to_value(metadata).expect("metadata should serialize");

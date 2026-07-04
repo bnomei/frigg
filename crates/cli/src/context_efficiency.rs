@@ -297,6 +297,8 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ContextEfficiencyLogRow {
     pub(crate) timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_id: Option<String>,
     pub(crate) tool: String,
     pub(crate) repository_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -582,6 +584,12 @@ fn jsonl_summary_cache() -> &'static Mutex<JsonlSummaryCache> {
     JSONL_SUMMARY_CACHE.get_or_init(|| Mutex::new(JsonlSummaryCache::default()))
 }
 
+static CONTEXT_EFFICIENCY_LOG_APPEND_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn context_efficiency_log_append_mutex() -> &'static Mutex<()> {
+    CONTEXT_EFFICIENCY_LOG_APPEND_MUTEX.get_or_init(|| Mutex::new(()))
+}
+
 impl ContextEfficiencyLogRow {
     pub(crate) fn new(
         tool: impl Into<String>,
@@ -591,11 +599,20 @@ impl ContextEfficiencyLogRow {
     ) -> Self {
         Self {
             timestamp: Utc::now().to_rfc3339(),
+            session_id: None,
             tool: tool.into(),
             repository_id: repository_id.into(),
             snapshot_id,
             metrics,
         }
+    }
+
+    pub(crate) fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        let session_id = session_id.into();
+        if !session_id.trim().is_empty() {
+            self.session_id = Some(session_id.trim().to_owned());
+        }
+        self
     }
 }
 
@@ -614,15 +631,25 @@ pub(crate) fn append_context_efficiency_log_row(
     workspace_root: &Path,
     row: &ContextEfficiencyLogRow,
 ) -> io::Result<()> {
+    let mut encoded = serde_json::to_vec(row).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize context-efficiency log row: {error}"),
+        )
+    })?;
+    encoded.push(b'\n');
+
     let frigg_dir = workspace_root.join(".frigg");
     std::fs::create_dir_all(&frigg_dir)?;
     let log_path = frigg_dir.join("context.jsonl");
+    let _guard = context_efficiency_log_append_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)?;
-    serde_json::to_writer(&mut file, row)?;
-    file.write_all(b"\n")?;
+    file.write_all(&encoded)?;
     Ok(())
 }
 
@@ -698,7 +725,9 @@ fn read_context_log_file_summary(
         if line.trim().is_empty() {
             continue;
         }
-        let row: ContextEfficiencyLogRow = serde_json::from_str(&line)?;
+        let Ok(row) = serde_json::from_str::<ContextEfficiencyLogRow>(&line) else {
+            continue;
+        };
         let Ok(timestamp) = DateTime::parse_from_rfc3339(&row.timestamp) else {
             continue;
         };
@@ -945,7 +974,8 @@ mod tests {
                 query_duration_ms: Some(6),
                 narrowing_ratio_estimate: Some(11),
             },
-        );
+        )
+        .with_session_id("connected-session-abcdef");
 
         append_context_efficiency_log_row_if_enabled(&root, true, &row)
             .expect("enabled logging should append");
@@ -956,6 +986,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(logged.trim()).expect("context row should be json");
         assert_eq!(value["tool"], "read_file");
+        assert_eq!(value["session_id"], "connected-session-abcdef");
         assert_eq!(value["repository_id"], "repo-1");
         assert_eq!(value["snapshot_id"], "snapshot-1");
         assert_eq!(value["query_duration_ms"], 6);
@@ -968,6 +999,67 @@ mod tests {
         assert!(value.get("query").is_none());
         assert!(value.get("content").is_none());
         assert!(value.get("excerpt").is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_jsonl_append_keeps_concurrent_rows_valid() {
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-log-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let writers: usize = 16;
+        let writes_per_writer: usize = 4;
+
+        let handles = (0..writers)
+            .map(|writer| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    for write_index in 0..writes_per_writer {
+                        let row = ContextEfficiencyLogRow::new(
+                            format!("read_file_{writer}"),
+                            format!("repo-{writer}"),
+                            Some(format!("snapshot-{write_index}")),
+                            ContextEfficiencyLogMetrics {
+                                indexed_readable_files: 2,
+                                indexed_readable_bytes: 140,
+                                indexed_min_mtime_ns: Some(10),
+                                indexed_max_mtime_ns: Some(20),
+                                candidate_input_count: None,
+                                candidate_output_count: None,
+                                returned_match_count: None,
+                                returned_unique_paths: Some(1),
+                                returned_unique_file_bytes: Some(100),
+                                returned_source_bytes_estimate: Some(9),
+                                matched_file_context_saved_bytes_estimate: Some(91),
+                                matched_file_context_saved_percent_estimate: Some(91.0),
+                                query_duration_ms: Some(6),
+                                narrowing_ratio_estimate: Some(11),
+                            },
+                        );
+                        append_context_efficiency_log_row(&root, &row)
+                            .expect("concurrent append should succeed");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("context-efficiency append thread should not panic");
+        }
+
+        let logged = std::fs::read_to_string(root.join(".frigg/context.jsonl"))
+            .expect("context log should be readable");
+        let lines = logged.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), writers * writes_per_writer);
+        for line in lines {
+            serde_json::from_str::<ContextEfficiencyLogRow>(line)
+                .expect("each appended line should remain valid JSON");
+        }
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1058,6 +1150,7 @@ mod tests {
         let rows = [
             ContextEfficiencyLogRow {
                 timestamp: "2026-05-31T23:59:59Z".to_owned(),
+                session_id: None,
                 tool: "search_text".to_owned(),
                 repository_id: "repo-1".to_owned(),
                 snapshot_id: Some("snapshot-1".to_owned()),
@@ -1080,6 +1173,7 @@ mod tests {
             },
             ContextEfficiencyLogRow {
                 timestamp: "2026-06-10T00:00:00Z".to_owned(),
+                session_id: Some("session-full-001".to_owned()),
                 tool: "search_text".to_owned(),
                 repository_id: "repo-1".to_owned(),
                 snapshot_id: Some("snapshot-2".to_owned()),
@@ -1102,6 +1196,7 @@ mod tests {
             },
             ContextEfficiencyLogRow {
                 timestamp: "2026-06-11T00:00:00Z".to_owned(),
+                session_id: Some("session-full-002".to_owned()),
                 tool: "read_file".to_owned(),
                 repository_id: "repo-1".to_owned(),
                 snapshot_id: Some("snapshot-2".to_owned()),
@@ -1164,6 +1259,89 @@ mod tests {
     }
 
     #[test]
+    fn context_efficiency_summary_skips_malformed_jsonl_fragments() {
+        let _guard = context_efficiency_test_lock();
+        clear_jsonl_summary_cache_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-summary-malformed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".frigg")).expect("frigg dir should be created");
+        let log_path = root.join(".frigg/context.jsonl");
+
+        let first = ContextEfficiencyLogRow {
+            timestamp: "2026-06-10T00:00:00Z".to_owned(),
+            session_id: None,
+            tool: "search_text".to_owned(),
+            repository_id: "repo-1".to_owned(),
+            snapshot_id: Some("snapshot-1".to_owned()),
+            metrics: ContextEfficiencyLogMetrics {
+                indexed_readable_files: 10,
+                indexed_readable_bytes: 100,
+                indexed_min_mtime_ns: None,
+                indexed_max_mtime_ns: None,
+                candidate_input_count: Some(20),
+                candidate_output_count: Some(10),
+                returned_match_count: Some(4),
+                returned_unique_paths: Some(2),
+                returned_unique_file_bytes: Some(80),
+                returned_source_bytes_estimate: Some(30),
+                matched_file_context_saved_bytes_estimate: Some(50),
+                matched_file_context_saved_percent_estimate: Some(62.5),
+                query_duration_ms: Some(7),
+                narrowing_ratio_estimate: Some(3),
+            },
+        };
+        let second = ContextEfficiencyLogRow {
+            timestamp: "2026-06-11T00:00:00Z".to_owned(),
+            session_id: None,
+            tool: "read_file".to_owned(),
+            repository_id: "repo-1".to_owned(),
+            snapshot_id: Some("snapshot-2".to_owned()),
+            metrics: ContextEfficiencyLogMetrics {
+                indexed_readable_files: 12,
+                indexed_readable_bytes: 120,
+                indexed_min_mtime_ns: None,
+                indexed_max_mtime_ns: None,
+                candidate_input_count: None,
+                candidate_output_count: None,
+                returned_match_count: None,
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes: Some(40),
+                returned_source_bytes_estimate: Some(10),
+                matched_file_context_saved_bytes_estimate: Some(30),
+                matched_file_context_saved_percent_estimate: Some(75.0),
+                query_duration_ms: Some(5),
+                narrowing_ratio_estimate: Some(4),
+            },
+        };
+        let encoded = format!(
+            "{}\n{{\"timestamp\":\"2026-06-10T00:00:01Z\",\"tool\":\"search_text\"\n:1,\"returned_unique_paths\":1}}\n{}\n",
+            serde_json::to_string(&first).expect("first row should serialize"),
+            serde_json::to_string(&second).expect("second row should serialize")
+        );
+        std::fs::write(&log_path, encoded).expect("log should be written");
+
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-07-01"), now)
+            .expect("window should resolve");
+        let summary = summarize_context_logs_for_roots(&[root.clone()], &window)
+            .expect("malformed rows should be skipped");
+
+        assert_eq!(summary.totals.events, 2);
+        assert_eq!(summary.totals.indexed_readable_files_max, 12);
+        assert_eq!(summary.totals.returned_unique_file_bytes, 120);
+        assert_eq!(summary.totals.matched_file_context_saved_bytes_estimate, 80);
+        assert_eq!(summary.roots[0].tools["search_text"], 1);
+        assert_eq!(summary.roots[0].tools["read_file"], 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn context_efficiency_jsonl_summary_cache_keys_file_metadata_and_window() {
         let _guard = context_efficiency_test_lock();
         clear_jsonl_summary_cache_for_tests();
@@ -1176,6 +1354,7 @@ mod tests {
         let log_path = root.join(".frigg/context.jsonl");
         let row = ContextEfficiencyLogRow {
             timestamp: "2026-06-10T00:00:00Z".to_owned(),
+            session_id: Some("session-full-cache".to_owned()),
             tool: "search_text".to_owned(),
             repository_id: "repo-1".to_owned(),
             snapshot_id: Some("snapshot-1".to_owned()),

@@ -1,19 +1,26 @@
 //! Shared semantic embedding provider construction for indexing and query-time recall.
 
 use std::collections::BTreeMap;
+#[cfg(feature = "local-embeddings")]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials, SemanticRuntimeProvider};
+#[cfg(feature = "local-embeddings")]
+use crate::settings::SemanticRuntimeConfig;
+use crate::settings::{SemanticRuntimeCredentials, SemanticRuntimeProvider};
 
+#[cfg(feature = "local-embeddings")]
+use super::LocalEmbeddingProvider;
+#[cfg(feature = "local-embeddings")]
 use super::local::{local_model_error_to_embedding_error, reject_hf_home_override_for_provider};
+#[cfg(feature = "local-embeddings")]
 use super::local_model::{
     LocalModelArtifact, prepare_local_semantic_model, require_prepared_local_model,
     resolve_local_model_artifact, resolve_model_alias,
 };
 use super::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderKind, EmbeddingResult,
-    GoogleEmbeddingProvider, LocalEmbeddingProvider, OpenAiEmbeddingProvider, ProviderFailure,
+    GoogleEmbeddingProvider, OpenAiEmbeddingProvider, ProviderFailure,
 };
 
 /// Policy controlling whether local model artifacts may be prepared during provider construction.
@@ -61,11 +68,25 @@ fn build_semantic_embedding_provider(
             let api_key = require_api_key(config.provider, config.credentials)?;
             Ok(Arc::new(GoogleEmbeddingProvider::new(api_key.to_owned())))
         }
-        SemanticRuntimeProvider::Local => {
-            prepare_local_artifacts_for_policy(config.local_artifact_policy, model)?;
-            Ok(Arc::new(LocalEmbeddingProvider::new(model)?))
-        }
+        SemanticRuntimeProvider::Local => build_local_embedding_provider(config, model),
     }
+}
+
+#[cfg(feature = "local-embeddings")]
+fn build_local_embedding_provider(
+    config: SemanticEmbeddingProviderFactoryConfig<'_>,
+    model: &str,
+) -> EmbeddingResult<Arc<dyn EmbeddingProvider>> {
+    prepare_local_artifacts_for_policy(config.local_artifact_policy, model)?;
+    Ok(Arc::new(LocalEmbeddingProvider::new(model)?))
+}
+
+#[cfg(not(feature = "local-embeddings"))]
+fn build_local_embedding_provider(
+    _config: SemanticEmbeddingProviderFactoryConfig<'_>,
+    _model: &str,
+) -> EmbeddingResult<Arc<dyn EmbeddingProvider>> {
+    Err(local_embeddings_unavailable_error())
 }
 
 /// Builds or reuses a process-resident semantic embedding provider for the selected target.
@@ -116,9 +137,12 @@ pub(crate) fn canonical_provider_model(
     model: &str,
 ) -> EmbeddingResult<String> {
     match provider {
+        #[cfg(feature = "local-embeddings")]
         SemanticRuntimeProvider::Local => resolve_model_alias(model)
             .map(|alias| alias.semantic_model.to_owned())
             .map_err(local_model_error_to_embedding_error),
+        #[cfg(not(feature = "local-embeddings"))]
+        SemanticRuntimeProvider::Local => Err(local_embeddings_unavailable_error()),
         SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
             Ok(model.trim().to_owned())
         }
@@ -170,6 +194,7 @@ fn provider_cache_key(
     config: &SemanticEmbeddingProviderFactoryConfig<'_>,
 ) -> EmbeddingResult<SemanticEmbeddingProviderCacheKey> {
     let (model, local_artifact_identity) = match config.provider {
+        #[cfg(feature = "local-embeddings")]
         SemanticRuntimeProvider::Local => {
             let artifact = resolve_local_model_artifact(config.model)
                 .map_err(local_model_error_to_embedding_error)?;
@@ -177,6 +202,8 @@ fn provider_cache_key(
             let model = canonical_provider_model(config.provider, config.model)?;
             (model, Some(local_artifact_cache_identity(&artifact)))
         }
+        #[cfg(not(feature = "local-embeddings"))]
+        SemanticRuntimeProvider::Local => return Err(local_embeddings_unavailable_error()),
         SemanticRuntimeProvider::OpenAi | SemanticRuntimeProvider::Google => {
             (config.model.trim().to_owned(), None)
         }
@@ -193,6 +220,7 @@ fn provider_cache_key(
     })
 }
 
+#[cfg(feature = "local-embeddings")]
 fn prepare_local_artifacts_for_policy(
     policy: LocalArtifactPolicy,
     model: &str,
@@ -200,6 +228,7 @@ fn prepare_local_artifacts_for_policy(
     validate_local_artifacts_for_policy(policy, model).map(|_| ())
 }
 
+#[cfg(feature = "local-embeddings")]
 fn validate_local_artifacts_for_policy(
     policy: LocalArtifactPolicy,
     model: &str,
@@ -215,6 +244,7 @@ fn validate_local_artifacts_for_policy(
     Ok(artifact)
 }
 
+#[cfg(feature = "local-embeddings")]
 fn local_artifact_cache_identity(artifact: &LocalModelArtifact) -> String {
     format!(
         "semantic_model={};cache_root={};cache_key={};repository={};model_file={};required_files={}",
@@ -227,6 +257,7 @@ fn local_artifact_cache_identity(artifact: &LocalModelArtifact) -> String {
     )
 }
 
+#[cfg(feature = "local-embeddings")]
 fn prepare_local_artifacts_for_policy_with(
     policy: LocalArtifactPolicy,
     model: &str,
@@ -246,10 +277,22 @@ fn prepare_local_artifacts_for_policy_with(
     }
 }
 
+#[cfg(feature = "local-embeddings")]
 fn hf_home_from_process_env() -> Option<PathBuf> {
     std::env::var_os("HF_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+#[cfg(not(feature = "local-embeddings"))]
+fn local_embeddings_unavailable_error() -> EmbeddingError {
+    EmbeddingError::Provider(ProviderFailure::non_retryable(
+        EmbeddingProviderKind::Local,
+        "local semantic provider is not available in this build; rebuild Frigg with the `local-embeddings` feature",
+        Some("local_provider_unavailable".to_owned()),
+        None,
+        None,
+    ))
 }
 
 fn require_api_key<'a>(
@@ -280,7 +323,9 @@ fn provider_kind(provider: SemanticRuntimeProvider) -> EmbeddingProviderKind {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "local-embeddings")]
     use std::cell::Cell;
+    #[cfg(feature = "local-embeddings")]
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -297,6 +342,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "local-embeddings")]
     fn local_artifact_for_test(cache_root: &str) -> LocalModelArtifact {
         LocalModelArtifact {
             semantic_model: "all-MiniLM-L6-v2".to_owned(),
@@ -315,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-embeddings")]
     fn require_prepared_policy_does_not_invoke_local_preparer() {
         prepare_local_artifacts_for_policy_with(
             LocalArtifactPolicy::RequirePrepared,
@@ -327,6 +374,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-embeddings")]
     fn allow_preparation_policy_invokes_local_preparer_with_selected_model() {
         let called = Cell::new(false);
 
@@ -353,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-embeddings")]
     fn local_artifact_cache_identity_includes_cache_root() {
         let first = local_artifact_cache_identity(&local_artifact_for_test("/tmp/frigg-cache-a"));
         let second = local_artifact_cache_identity(&local_artifact_for_test("/tmp/frigg-cache-b"));
@@ -363,6 +412,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-embeddings")]
     fn local_provider_cache_key_canonicalizes_supported_aliases() {
         let credentials = SemanticRuntimeCredentials::default();
         let canonical = provider_cache_key(&SemanticEmbeddingProviderFactoryConfig {
@@ -393,6 +443,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-embeddings")]
     fn canonical_provider_model_only_canonicalizes_local_aliases() {
         assert_eq!(
             canonical_provider_model(SemanticRuntimeProvider::Local, "AllMiniLML6V2")

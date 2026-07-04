@@ -8,18 +8,18 @@ use serde::{Deserialize, Serialize};
 /// Parameters for `find_references`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesParams {
-    /// Optional symbol query. Omit when resolving the target by source location.
+    /// Symbol query.
     pub symbol: Option<String>,
     pub repository_id: Option<String>,
-    /// Optional source path used for deterministic location-aware target resolution.
+    /// Source path for location-aware resolution.
     pub path: Option<String>,
-    /// Optional 1-based line used for deterministic location-aware target resolution.
+    /// 1-based source line.
     pub line: Option<usize>,
-    /// Optional 1-based column used for deterministic location-aware target resolution.
+    /// 1-based source column.
     pub column: Option<usize>,
-    /// Whether definition rows should be included in the returned reference set. Omit to default to `true`.
+    /// Include definition rows.
     pub include_definition: Option<bool>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -83,7 +83,7 @@ pub struct GoToDefinitionParams {
     pub path: Option<String>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -136,7 +136,7 @@ pub struct FindDeclarationsParams {
     pub path: Option<String>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -167,7 +167,7 @@ pub struct FindImplementationsParams {
     pub path: Option<String>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -222,7 +222,7 @@ pub struct IncomingCallsParams {
     pub path: Option<String>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -237,7 +237,7 @@ pub struct OutgoingCallsParams {
     pub path: Option<String>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored match.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     pub limit: Option<usize>,
     /// Response detail profile. Omit to default to `compact`.
@@ -325,7 +325,7 @@ pub struct NavigationAvailability {
 pub struct DocumentSymbolsParams {
     pub path: String,
     pub repository_id: Option<String>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each anchored symbol.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
     /// Return only top-level symbols when true.
     pub top_level_only: Option<bool>,
@@ -378,7 +378,7 @@ pub struct InspectSyntaxTreeParams {
     pub column: Option<usize>,
     pub max_ancestors: Option<usize>,
     pub max_children: Option<usize>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from the focused AST node.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
 }
 
@@ -440,11 +440,11 @@ pub struct SearchStructuralParams {
     pub repository_id: Option<String>,
     pub path_regex: Option<String>,
     pub limit: Option<usize>,
-    /// Optional grouped-versus-raw result shaping. Omit to default to grouped match rows.
+    /// Grouped or raw result shape.
     pub result_mode: Option<StructuralResultMode>,
-    /// Optional grouped-result anchor capture name. Omit to use the deterministic default anchor policy.
+    /// Anchor capture name for grouped results.
     pub primary_capture: Option<String>,
-    /// Optional opt-in for best-effort replayable `search_structural` suggestions derived from each matched AST node.
+    /// Include structural follow-up suggestions.
     pub include_follow_up_structural: Option<bool>,
 }
 

@@ -135,8 +135,9 @@ impl FriggMcpServer {
                 let read_params = ReadFileParams {
                     path: params_for_blocking.path.clone(),
                     repository_id: params_for_blocking.repository_id.clone(),
-                    line_start: None,
-                    line_end: None,
+                    start_line: None,
+                    end_line: None,
+                    line_count: None,
                     max_bytes: None,
                     presentation_mode: None,
                     include_context_efficiency: None,

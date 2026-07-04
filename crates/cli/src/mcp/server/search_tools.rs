@@ -20,6 +20,7 @@ use crate::searcher::{
 
 mod cache;
 mod document_symbols;
+mod files;
 mod hybrid;
 mod inspect;
 mod symbol;
@@ -156,16 +157,19 @@ impl FriggMcpServer {
     }
 
     pub(crate) fn append_context_efficiency_log_for_workspaces(
+        &self,
         tool_name: &str,
         workspaces: &[AttachedWorkspace],
         metadata: &ContextEfficiencyMetadata,
     ) {
         let log_enabled = crate::context_efficiency::context_efficiency_log_enabled();
+        let session_id = self.session_state.display_session_id();
         Self::append_context_efficiency_log_for_workspaces_with_log_state(
             tool_name,
             workspaces,
             metadata,
             log_enabled,
+            Some(session_id.as_str()),
         );
     }
 
@@ -174,6 +178,7 @@ impl FriggMcpServer {
         workspaces: &[AttachedWorkspace],
         metadata: &ContextEfficiencyMetadata,
         log_enabled: bool,
+        session_id: Option<&str>,
     ) {
         if !log_enabled {
             return;
@@ -188,12 +193,18 @@ impl FriggMcpServer {
                 .ok()
                 .flatten()
                 .map(|summary| summary.snapshot_id);
-            let row = ContextEfficiencyLogRow::new(
+            let mut row = ContextEfficiencyLogRow::new(
                 tool_name,
                 workspace.repository_id.clone(),
                 snapshot_id,
                 metrics.clone(),
             );
+            if let Some(session_id) = session_id
+                .map(str::trim)
+                .filter(|session_id| !session_id.is_empty())
+            {
+                row = row.with_session_id(session_id);
+            }
             let _ = crate::context_efficiency::append_context_efficiency_log_row_if_enabled(
                 &workspace.root,
                 log_enabled,
@@ -220,7 +231,6 @@ impl FriggMcpServer {
             lexical_backend: Some(Self::search_lexical_backend_metadata(backend)?),
             lexical_backend_note: note,
             context_efficiency: None,
-            freshness_basis: None,
         })
     }
 
@@ -229,20 +239,6 @@ impl FriggMcpServer {
     ) -> ResponseFreshnessBasisMetadata {
         serde_json::from_value(freshness_basis.clone())
             .expect("response freshness basis should deserialize")
-    }
-
-    pub(super) fn attach_search_text_freshness_basis(
-        metadata: &mut Option<SearchTextMetadata>,
-        freshness_basis: &Value,
-    ) {
-        metadata
-            .get_or_insert_with(|| SearchTextMetadata {
-                lexical_backend: None,
-                lexical_backend_note: None,
-                context_efficiency: None,
-                freshness_basis: None,
-            })
-            .freshness_basis = Some(Self::response_freshness_basis_metadata(freshness_basis));
     }
 
     fn returned_unique_file_bytes_estimate(

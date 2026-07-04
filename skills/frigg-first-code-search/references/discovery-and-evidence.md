@@ -1,5 +1,34 @@
 # Discovery And Evidence
 
+## `list_files`
+
+Use `list_files` as the repository-aware replacement for `rg --files`, `find`, and `fd` when listing files in a code repository.
+
+Important inputs:
+- `repository_id`
+- `path_regex`
+- `glob`
+- `language`
+- `path_class`
+- `include_hidden`
+- `limit`
+- `resume_from`
+
+Parameter mapping:
+- `repository_id`: optional in normal single-repo work; set only for multi-repo searches
+- `path_regex`: repository-relative path filter replacing `rg --files path/`, `find path/`, or `fd`
+- `glob`: repository-relative glob filter replacing common `fd`/`rg -g` file-listing habits
+- `language`: source language filter when you want only one language family
+- `path_class`: runtime/support/project path family filter
+- `include_hidden`: equivalent to including hidden path segments
+- `limit`: bounded result count
+- `resume_from`: continuation token from a truncated response
+
+Typical next move:
+- `search_text` when you now have a path family and a literal/regex
+- `read_file` when you already know the canonical repository-relative path
+- shell listing only for non-code, generated/unindexed, or unavailable Frigg cases
+
 ## `search_hybrid`
 
 Use `search_hybrid` for broad discovery when you do not yet have a stable symbol, string, or path anchor. It is the discovery surface, not the final proof step or the cleanest direct-string lookup. Use `search_text` for known literal, safe-regex, or `rg`-shaped text scans, and use `search_symbol` for known identifiers.
@@ -15,12 +44,12 @@ Important inputs:
 Important output shape:
 - `matches[]`
 - `result_handle`
-- optional top-level compatibility mirrors such as `semantic_status` and `warning`
 - `metadata` only when `response_mode=full`
 
 Compact-first rule:
 - read-only search tools default to compact responses
-- ask for `response_mode=full` only when you need diagnostics, freshness detail, or channel-level reasoning
+- ask for `response_mode=full` only when you are diagnosing ranking or runtime behavior
+- compact responses omit metadata unless `include_context_efficiency=true`
 - in compact mode, use `result_handle` plus per-row `match_id` values to continue with `read_match`
 
 What to inspect on each match:
@@ -36,21 +65,16 @@ What to inspect on each match:
 - `surface_families`
 - `navigation_hint`
 
-What to inspect in `metadata`:
+Full-mode diagnostics, only when needed:
 - `channels`
-- `semantic_status`
-- `semantic_reason`
 - `lexical_only_mode`
-- `warning`
 - `semantic_capability`
 - `utility`
-- `freshness_basis`
+- ranking notes
 
 Interpretation rules:
 - direct exact string, regex, or known symbol query: start with `search_text` or `search_symbol` instead of `search_hybrid`
-- `warning` present: ranking is weaker than normal, pivot sooner
-- `semantic_status != ok`: semantic is missing, disabled, or degraded
-- `lexical_only_mode = true`: broad natural-language ranking is weaker; use matches as candidate pivots and move to `search_symbol`, `search_text`, `read_file`, or navigation sooner
+- if full-mode diagnostics show ranking notes or `lexical_only_mode = true`, treat matches as candidate pivots and move to `search_symbol`, `search_text`, `read_file`, or navigation sooner
 - `utility.best_pivot_*`: good hint for the first file to open next
 
 Typical next move:
@@ -78,7 +102,7 @@ Use `path_class` or `path_regex` when overloaded names are noisy.
 
 Compact-first rule:
 - default responses omit `metadata` and `note`
-- use `response_mode=full` when you need ranking or freshness detail
+- use `response_mode=full` when you need ranking diagnostics
 - compact responses still return `result_handle` and row `match_id` values for `read_match`
 
 Practical caution:
@@ -87,7 +111,7 @@ Practical caution:
 
 ## `search_text`
 
-Use `search_text` when you need direct exact or regex search plus Frigg semantics:
+Use `search_text` as the repository-aware replacement for `rg`/`grep` source-code search when you need direct exact or regex search plus Frigg semantics:
 - canonical repository-relative paths
 - repository scoping
 - regex search over indexed files
@@ -100,33 +124,41 @@ Use it for the same class of code scans agents often reach for `rg` to run:
 - grouped alternation
 - `path_regex` path narrowing
 - context windows with `context_lines`
-- per-file shaping with `max_matches_per_file` or `collapse_by_file`
-- "which files contain this?" probes
+- per-file shaping with `max_count_per_file` or `files_with_matches`
+- "which files contain this?" probes with `files_with_matches`
 
 Notes:
 - Frigg may use its native scanner, its ripgrep accelerator, or a mixed path depending on configuration and file content
 - on macOS and Linux, Frigg may use `rg` internally as a lexical accelerator when it is available
 - that does not change the public flow: Frigg still owns candidate scope, ordering, metadata, and fallback behavior
-- shell `rg` remains appropriate for live-disk correctness checks, ripgrep-specific flags outside `search_text`, and suspected index/watch drift
+- shell `rg` remains appropriate for explicit live-disk verification or ripgrep-specific flags outside `search_text`
 - for review-style work, `search_text` is often the best first proof surface when the repo has stable narrative terms, API names, or deterministic contract phrases
 
 Important inputs:
-- `query`
+- `query`: pattern argument equivalent to `rg -n PATTERN`; use literal text by default and do not include shell quotes
 - `pattern_type`
   - `literal`
   - `regex`
-- `repository_id`
-- `path_regex`
+- `repository_id`: optional in normal single-repo work; set only for multi-repo searches
+- `path_regex`: repository-relative path filter replacing `rg PATTERN path/` or `rg -g`
+- `glob`: repository-relative glob replacing `rg -g`
+- `exclude_glob`: repository-relative exclusion glob replacing `rg -g '!pattern'`
+- `include_hidden`: equivalent to `rg --hidden`
 - `limit`
-- `context_lines`
-- `max_matches_per_file`
+- `context_lines`: like `rg -C`; use 2-5 when you need surrounding code
+- `case_sensitive` / `ignore_case`
+- `word`
+- `files_with_matches`
+- `count_only`
+- `max_count_per_file`
 - `collapse_by_file`
 - `response_mode`
 
 Shaping guidance:
 - `context_lines` is the cheap first-pass alternative to a separate read for small review windows
-- `max_matches_per_file` keeps one noisy file from dominating the result set
-- `collapse_by_file=true` is the quickest way to reduce repeated-path spam
+- `max_count_per_file` keeps one noisy file from dominating the result set
+- `files_with_matches=true` is the quickest way to reduce repeated-path spam
+- `count_only=true` returns the count contract without bulky match rows
 - compact responses still return `result_handle` and row `match_id` values so you can reopen one hit with `read_match`
 
 ## `read_match`
@@ -145,28 +177,29 @@ Important outputs:
 - `path`
 - `line`
 - `column`
-- `line_start`
-- `line_end`
+- `start_line`
+- `end_line`
 - `bytes`
 - `content`
 
 Default behavior:
 - 10 lines of context before the hit
 - 10 lines of context after the hit
-- text-first output by default, with compact `structured_content` metadata for repository, path, and effective line window
-- `presentation_mode=json` restores the structured compatibility payload with `content`
+- text-first output by default: selected source bytes only, with no `structuredContent`
+- use `presentation_mode=json` for repository, path, line window, byte, metadata, or machine-readable `content` fields
 - typed `resource_not_found` if the handle or match has expired
 
 ## `read_file`
 
-Use `read_file` for a bounded repository-backed read once the path matters to the Frigg investigation flow, not as the default replacement for every quick shell slice.
+Use `read_file` as the repository-backed replacement for `cat`, `sed -n`, and bounded source-code reads once the path matters to the Frigg investigation flow.
 
 Important inputs:
 - `path`
-- `repository_id`
+- `repository_id`: optional in normal single-repo work; set only for multi-repo searches
 - `max_bytes`
-- `line_start`
-- `line_end`
+- `start_line`: replacement for the start side of `sed -n 'start,endp'`
+- `end_line`: replacement for the end side of `sed -n 'start,endp'`
+- `line_count`: line-count alternative to `end_line`
 - `presentation_mode`
 
 Important outputs:
@@ -179,8 +212,8 @@ Notes:
 - paths are canonical repository-relative paths
 - line numbers are 1-based
 - reads reflect live disk state
-- default output is text-first, with compact `structured_content` metadata for repository, path, and effective line window
-- use `presentation_mode=json` when a downstream step needs the structured compatibility payload with `content`
+- default output is text-first: selected source bytes only, with no `structuredContent`
+- use `presentation_mode=json` for repository, path, byte, metadata, or machine-readable `content` fields
 
 ## `explore` (extended profile)
 
@@ -205,7 +238,8 @@ Important inputs:
 
 Important outputs:
 - `probe` and `refine`: structured `scan_scope`, `window`, `matches`, `truncated`, `resume_from`, and `metadata`
-- `zoom` default: text-first MCP content plus compact `structured_content` metadata for the resolved file window
+- `zoom` default: selected source bytes only
+- `zoom` with `presentation_mode=json`: structured window and metadata fields
 - `zoom` with `presentation_mode=json`: the structured compatibility payload
 
 Default behavior:

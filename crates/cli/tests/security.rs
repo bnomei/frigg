@@ -11,10 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frigg::mcp::FriggMcpServer;
 use frigg::mcp::types::{
     ExploreOperation, ExploreParams, FindReferencesParams, GoToDefinitionParams,
-    ListRepositoriesParams, PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES,
-    PUBLIC_TOOL_NAMES, PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse,
-    ReadPresentationMode, SearchPatternType, SearchSymbolParams, SearchTextParams,
-    WRITE_CONFIRM_PARAM, WorkspaceAttachIndexMode, WorkspaceAttachParams,
+    PUBLIC_READ_ONLY_TOOL_NAMES, PUBLIC_SESSION_STATEFUL_TOOL_NAMES, PUBLIC_TOOL_NAMES,
+    PUBLIC_WRITE_TOOL_NAMES, ReadFileParams, ReadFileResponse, ReadPresentationMode,
+    SearchPatternType, SearchSymbolParams, SearchTextParams, WRITE_CONFIRM_PARAM, WorkspaceParams,
 };
 use frigg::searcher::MAX_REGEX_QUANTIFIERS;
 use frigg::settings::FriggConfig;
@@ -60,26 +59,22 @@ fn cleanup_workspace(root: &Path) {
 async fn attach_session_repositories(server: &FriggMcpServer) {
     for repository_id in public_repository_ids(server).await {
         server
-            .workspace_attach(Parameters(WorkspaceAttachParams {
+            .workspace(Parameters(WorkspaceParams {
                 path: None,
                 repository_id: Some(repository_id),
                 set_default: Some(true),
                 resolve_mode: None,
-                wait_for_precise: Some(false),
-                index_mode: Some(WorkspaceAttachIndexMode::Skip),
-                wait_for_index: Some(false),
-                index_timeout_ms: None,
             }))
             .await
-            .expect("workspace_attach should adopt the startup repository");
+            .expect("workspace should adopt the startup repository");
     }
 }
 
 async fn public_repository_ids(server: &FriggMcpServer) -> Vec<String> {
     server
-        .list_repositories(Parameters(ListRepositoriesParams::default()))
+        .workspace(Parameters(WorkspaceParams::default()))
         .await
-        .expect("list_repositories should succeed")
+        .expect("workspace should succeed")
         .0
         .repositories
         .into_iter()
@@ -243,16 +238,11 @@ fn tool_feature_enabled(feature: &str) -> bool {
 fn security_public_tool_surface_remains_non_destructive_and_explicit() {
     let parsed = parse_tool_annotation_flags();
 
-    let actual_names = parsed
-        .iter()
-        .filter(|entry| {
-            entry
-                .gated_feature
-                .as_deref()
-                .map(tool_feature_enabled)
-                .unwrap_or(true)
-        })
-        .map(|entry| entry.name.clone())
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty config should be valid");
+    let actual_names = FriggMcpServer::new(config)
+        .runtime_registered_tool_names()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     let expected_names = PUBLIC_TOOL_NAMES
         .iter()
@@ -273,11 +263,12 @@ fn security_public_tool_surface_remains_non_destructive_and_explicit() {
     );
 
     for entry in parsed.into_iter().filter(|entry| {
-        entry
-            .gated_feature
-            .as_deref()
-            .map(tool_feature_enabled)
-            .unwrap_or(true)
+        expected_names.contains(&entry.name)
+            && entry
+                .gated_feature
+                .as_deref()
+                .map(tool_feature_enabled)
+                .unwrap_or(true)
     }) {
         assert_eq!(
             entry.read_only_hint,
@@ -313,26 +304,27 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
         .next()
         .expect("server should expose one repository");
 
-    let list_result = server
-        .list_repositories(Parameters(ListRepositoriesParams::default()))
+    let workspace_result = server
+        .workspace(Parameters(WorkspaceParams::default()))
         .await;
-    if let Err(error) = &list_result {
+    if let Err(error) = &workspace_result {
         assert_ne!(
             error_code_tag(error),
             Some("confirmation_required"),
-            "list_repositories must not require `{}` on the public non-destructive tool surface",
+            "workspace must not require `{}` on the public non-destructive tool surface",
             WRITE_CONFIRM_PARAM
         );
     }
-    list_result.expect("list_repositories should succeed");
+    workspace_result.expect("workspace should succeed");
 
     let read_result = server
         .read_file(Parameters(ReadFileParams {
             path: "src/lib.rs".to_owned(),
             repository_id: Some(repository_id.clone()),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -446,7 +438,7 @@ async fn security_read_only_tool_calls_do_not_require_confirm_param() {
 
 #[test]
 fn security_session_state_tools_are_public_read_only_hinted_and_classified() {
-    for tool_name in ["workspace_attach", "workspace_detach"] {
+    for tool_name in ["workspace"] {
         assert!(
             PUBLIC_TOOL_NAMES.contains(&tool_name),
             "{tool_name} must be part of the public tool surface"
@@ -467,25 +459,11 @@ fn security_session_state_tools_are_public_read_only_hinted_and_classified() {
 }
 
 #[test]
-fn security_confirmed_maintenance_tools_are_public_read_only_hinted_and_confirm_gated() {
-    for tool_name in ["workspace_prepare", "workspace_index"] {
-        assert!(
-            PUBLIC_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be part of the public tool surface"
-        );
-        assert!(
-            PUBLIC_WRITE_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be classified as confirm-gated .frigg maintenance"
-        );
-        assert!(
-            PUBLIC_READ_ONLY_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must be declared read-only at the MCP hint layer"
-        );
-        assert!(
-            !PUBLIC_SESSION_STATEFUL_TOOL_NAMES.contains(&tool_name),
-            "{tool_name} must not be misclassified as session-state-only"
-        );
-    }
+fn security_public_surface_exposes_no_confirm_gated_maintenance_tools() {
+    assert!(
+        PUBLIC_WRITE_TOOL_NAMES.is_empty(),
+        "maintenance refreshes should stay out of the public MCP tool surface"
+    );
 }
 
 #[tokio::test]
@@ -606,8 +584,9 @@ async fn security_read_file_rejects_relative_path_traversal_outside_workspace() 
             path: "../outside.txt".to_owned(),
             repository_id: Some(repository_id),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -653,8 +632,9 @@ async fn security_read_file_rejects_symlink_escape_outside_workspace() {
             path: "src/linked-outside.txt".to_owned(),
             repository_id: Some(repository_id),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -695,8 +675,9 @@ async fn security_read_file_rejects_absolute_path_outside_workspace() {
             path: outside_path.display().to_string(),
             repository_id: Some(repository_id),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -837,8 +818,9 @@ async fn security_read_file_resolves_absolute_path_under_later_workspace_root() 
             path: second_root.join("src/lib.rs").display().to_string(),
             repository_id: None,
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: Some(ReadPresentationMode::Json),
             include_context_efficiency: None,
         }))
@@ -884,8 +866,9 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             path: outside_existing_path.display().to_string(),
             repository_id: Some(repository_id.clone()),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -899,8 +882,9 @@ async fn security_read_file_outside_workspace_denial_is_uniform_for_existing_and
             path: outside_missing_path.display().to_string(),
             repository_id: Some(repository_id),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -945,8 +929,9 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
             path: "src/outside-link.txt".to_owned(),
             repository_id: Some(repository_id),
             max_bytes: None,
-            line_start: None,
-            line_end: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
             presentation_mode: None,
             include_context_efficiency: None,
         }))
@@ -983,14 +968,14 @@ async fn security_storage_rejects_symlink_escape_before_write() {
         .expect("workspace root must produce valid config");
     let server = FriggMcpServer::new(config);
     let response = server
-        .list_repositories(Parameters(ListRepositoriesParams::default()))
+        .workspace(Parameters(WorkspaceParams::default()))
         .await
-        .expect("list_repositories should succeed even when storage path is unsafe")
+        .expect("workspace should succeed even when storage path is unsafe")
         .0;
 
     assert!(
         !response.repositories.is_empty(),
-        "list_repositories should still return configured repositories"
+        "workspace should still return configured repositories"
     );
     assert!(
         !escaped_store.join("storage.sqlite3").exists(),

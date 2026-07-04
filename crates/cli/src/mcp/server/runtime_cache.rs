@@ -223,23 +223,17 @@ impl FriggMcpServer {
         if discovery.artifact_digests.is_empty() {
             return Ok(());
         }
-        if self
-            .try_reuse_latest_precise_graph_for_repository(
-                &workspace.repository_id,
-                &workspace.root,
+        let corpus = self
+            .collect_repository_symbol_corpus(
+                workspace.repository_id.clone(),
+                workspace.runtime_repository_id.clone(),
+                workspace.root.clone(),
             )
-            .is_some()
-        {
-            return Ok(());
-        }
+            .map_err(|err| err.message.to_string())?;
 
-        self.precise_graph_for_repository_root(
-            &workspace.repository_id,
-            &workspace.root,
-            self.find_references_resource_budgets(),
-        )
-        .map(|_| ())
-        .map_err(|err| err.message.to_string())
+        self.precise_graph_for_corpus(corpus.as_ref(), self.find_references_resource_budgets())
+            .map(|_| ())
+            .map_err(|err| err.message.to_string())
     }
 
     pub(super) fn runtime_status_summary(&self) -> RuntimeStatusSummary {
@@ -260,7 +254,7 @@ impl FriggMcpServer {
                 .persistent_state_available(),
             watch_active: self.runtime_state.runtime_watch_active,
             tool_surface_profile: self.tool_surface_profile.as_str().to_owned(),
-            status_tool: "workspace_current".to_owned(),
+            status_tool: "workspace".to_owned(),
             active_tasks,
             recent_tasks,
         }

@@ -3,6 +3,13 @@
 //! Regression tests for navigation tool modes, result handles, and precise partial coverage.
 
 use super::*;
+use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
+use crate::mcp::types::{
+    CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
+    FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
+    NavigationLocation, NavigationMode, OutgoingCallsResponse,
+};
+use serde::Serialize;
 
 #[test]
 fn precise_graph_prewarm_populates_latest_precise_cache() {
@@ -48,6 +55,16 @@ fn precise_graph_prewarm_populates_latest_precise_cache() {
         cached.coverage_mode,
         crate::mcp::server_state::PreciseCoverageMode::Full
     );
+    assert!(
+        server
+            .cache_state
+            .symbol_corpus_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .keys()
+            .any(|key| key.repository_id == workspace.repository_id),
+        "precise prewarm should also warm the symbol corpus cache used by navigation"
+    );
 
     let _ = fs::remove_dir_all(workspace_root);
 }
@@ -79,9 +96,13 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
     server
         .adopt_workspace(&workspace, true)
         .expect("server should adopt known workspace");
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&workspace.repository_id))
+        .expect("symbol corpus should build before precise fast path");
 
     let response = server
         .try_precise_definition_fast_path(
+            &corpora,
             Some(&workspace.repository_id),
             "src/lib.rs",
             1,
@@ -112,7 +133,7 @@ fn precise_definition_fast_path_resolves_location_without_symbol_corpus_rebuild(
 }
 
 #[test]
-fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
+fn symbol_corpus_uses_runtime_repository_id_for_validated_live_storage() {
     let workspace_root = temp_workspace_root("symbol-corpus-runtime-repository-id");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace src directory");
@@ -169,7 +190,13 @@ fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
                 .to_path_buf()
         })
         .collect::<Vec<_>>();
-    assert_eq!(source_paths, vec![PathBuf::from("src/manifest.rs")]);
+    assert_eq!(
+        source_paths,
+        vec![
+            PathBuf::from("src/live.rs"),
+            PathBuf::from("src/manifest.rs")
+        ]
+    );
     assert!(
         corpus
             .symbols
@@ -177,7 +204,7 @@ fn symbol_corpus_uses_runtime_repository_id_for_manifest_storage() {
             .any(|symbol| symbol.name == "StoredOnly")
     );
     assert!(
-        !corpus
+        corpus
             .symbols
             .iter()
             .any(|symbol| symbol.name == "LiveOnly")
@@ -509,4 +536,244 @@ fn call_hierarchy_availability_distinguishes_heuristic_and_unavailable_modes() {
         Some("no_scip_artifacts_discovered")
     );
     assert!(heuristic.precise_required_for_complete_results);
+}
+
+#[test]
+fn compact_navigation_presenters_strip_metadata_and_keep_handles() {
+    let server = FriggMcpServer::new_with_runtime_options(fixture_config(), false);
+
+    let (metadata, note) = compact_metadata_note();
+    let references = server.present_find_references_response(
+        FindReferencesResponse {
+            total_matches: 1,
+            matches: vec![reference_match()],
+            result_handle: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            target_selection: None,
+            metadata,
+            note,
+        },
+        None,
+    );
+    let serialized = assert_compact_shape("find_references", &references);
+    assert_eq!(references.total_matches, 1);
+    assert_eq!(references.mode, NavigationMode::HeuristicNoPrecise);
+    assert_eq!(references.matches[0].match_id.as_deref(), Some("m1"));
+    assert_compact_handle(&server, &references.result_handle, 11, Some(7));
+    assert!(serialized.get("matches").is_some());
+
+    let (metadata, note) = compact_metadata_note();
+    let declarations = server.present_find_declarations_response(
+        FindDeclarationsResponse {
+            matches: vec![navigation_location(12, 4)],
+            result_handle: None,
+            mode: NavigationMode::PrecisePartial,
+            target_selection: None,
+            metadata,
+            note,
+        },
+        None,
+    );
+    assert_compact_shape("find_declarations", &declarations);
+    assert_eq!(declarations.mode, NavigationMode::PrecisePartial);
+    assert_eq!(declarations.matches[0].match_id.as_deref(), Some("m1"));
+    assert_compact_handle(&server, &declarations.result_handle, 12, Some(4));
+
+    let (metadata, note) = compact_metadata_note();
+    let implementations = server.present_find_implementations_response(
+        FindImplementationsResponse {
+            matches: vec![implementation_match()],
+            result_handle: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            target_selection: None,
+            metadata,
+            note,
+        },
+        None,
+    );
+    assert_compact_shape("find_implementations", &implementations);
+    assert_eq!(implementations.mode, NavigationMode::HeuristicNoPrecise);
+    assert_eq!(implementations.matches[0].match_id.as_deref(), Some("m1"));
+    assert_compact_handle(&server, &implementations.result_handle, 13, Some(5));
+
+    let availability = NavigationAvailability {
+        status: "heuristic".to_owned(),
+        reason: Some("fixture".to_owned()),
+        precise_required_for_complete_results: true,
+    };
+
+    let (metadata, note) = compact_metadata_note();
+    let incoming = server.present_incoming_calls_response(
+        IncomingCallsResponse {
+            matches: vec![call_match(17, 9, "calls")],
+            result_handle: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            availability: Some(availability.clone()),
+            target_selection: None,
+            metadata,
+            note,
+        },
+        None,
+    );
+    let serialized = assert_compact_shape("incoming_calls", &incoming);
+    assert_eq!(incoming.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(
+        incoming
+            .availability
+            .as_ref()
+            .map(|value| value.status.as_str()),
+        Some("heuristic")
+    );
+    assert_eq!(
+        serialized
+            .get("availability")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str),
+        Some("heuristic")
+    );
+    assert_compact_handle(&server, &incoming.result_handle, 17, Some(9));
+
+    let (metadata, note) = compact_metadata_note();
+    let outgoing = server.present_outgoing_calls_response(
+        OutgoingCallsResponse {
+            matches: vec![call_match(19, 3, "calls")],
+            result_handle: None,
+            mode: NavigationMode::HeuristicNoPrecise,
+            availability: Some(availability),
+            target_selection: None,
+            metadata,
+            note,
+        },
+        None,
+    );
+    let serialized = assert_compact_shape("outgoing_calls", &outgoing);
+    assert_eq!(outgoing.matches[0].match_id.as_deref(), Some("m1"));
+    assert_eq!(
+        serialized
+            .get("availability")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str),
+        Some("heuristic")
+    );
+    assert_compact_handle(&server, &outgoing.result_handle, 19, Some(3));
+}
+
+fn compact_metadata_note() -> (Option<crate::mcp::types::MetadataObject>, Option<String>) {
+    FriggMcpServer::metadata_note_pair(serde_json::json!({ "diagnostic": true }))
+}
+
+fn assert_compact_shape<T: Serialize>(label: &str, response: &T) -> Value {
+    let serialized = serde_json::to_value(response)
+        .unwrap_or_else(|error| panic!("{label} should serialize: {error}"));
+    assert!(
+        serialized.get("metadata").is_none(),
+        "{label} compact response should omit metadata"
+    );
+    assert!(
+        serialized.get("note").is_none(),
+        "{label} compact response should omit note"
+    );
+    assert!(
+        serialized.get("result_handle").is_some(),
+        "{label} compact response should keep result_handle"
+    );
+    serialized
+}
+
+fn assert_compact_handle(
+    server: &FriggMcpServer,
+    result_handle: &Option<String>,
+    line: usize,
+    column: Option<usize>,
+) {
+    let handle = result_handle
+        .as_deref()
+        .expect("compact presenter should return a result handle");
+    let anchor = server
+        .session_result_handle_match(handle, "m1")
+        .expect("compact presenter should store match m1");
+    assert_eq!(anchor.repository_id, "repo-compact");
+    assert_eq!(anchor.path, "src/lib.rs");
+    assert_eq!(anchor.line, line);
+    assert_eq!(anchor.column, column);
+}
+
+fn reference_match() -> ReferenceMatch {
+    ReferenceMatch {
+        match_id: None,
+        stable_symbol_id: None,
+        repository_id: "repo-compact".to_owned(),
+        symbol: "target".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line: 11,
+        column: 7,
+        match_kind: ReferenceMatchKind::Reference,
+        precision: Some("heuristic".to_owned()),
+        fallback_reason: Some("fixture".to_owned()),
+        container: None,
+        signature: None,
+        follow_up_structural: Vec::new(),
+    }
+}
+
+fn navigation_location(line: usize, column: usize) -> NavigationLocation {
+    NavigationLocation {
+        match_id: None,
+        stable_symbol_id: None,
+        symbol: "target".to_owned(),
+        repository_id: "repo-compact".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line,
+        column,
+        kind: Some("function".to_owned()),
+        container: None,
+        signature: None,
+        precision: Some("heuristic".to_owned()),
+        follow_up_structural: Vec::new(),
+    }
+}
+
+fn implementation_match() -> ImplementationMatch {
+    ImplementationMatch {
+        match_id: None,
+        stable_symbol_id: None,
+        symbol: "target".to_owned(),
+        kind: Some("function".to_owned()),
+        repository_id: "repo-compact".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line: 13,
+        column: 5,
+        relation: Some("implementation".to_owned()),
+        container: None,
+        signature: None,
+        precision: Some("heuristic".to_owned()),
+        fallback_reason: Some("fixture".to_owned()),
+        follow_up_structural: Vec::new(),
+    }
+}
+
+fn call_match(line: usize, column: usize, relation: &str) -> CallHierarchyMatch {
+    CallHierarchyMatch {
+        match_id: None,
+        source_stable_symbol_id: None,
+        target_stable_symbol_id: None,
+        source_symbol: "caller".to_owned(),
+        target_symbol: "target".to_owned(),
+        repository_id: "repo-compact".to_owned(),
+        path: "src/lib.rs".to_owned(),
+        line,
+        column,
+        relation: relation.to_owned(),
+        source_container: None,
+        target_container: None,
+        source_signature: None,
+        target_signature: None,
+        precision: Some("heuristic".to_owned()),
+        call_path: Some("src/lib.rs".to_owned()),
+        call_line: Some(line),
+        call_column: Some(column),
+        call_end_line: Some(line),
+        call_end_column: Some(column + 4),
+        follow_up_structural: Vec::new(),
+    }
 }

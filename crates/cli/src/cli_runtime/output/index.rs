@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use frigg::human_output::HumanRow;
+use frigg::human_output::{HumanRow, format_human_badged_line, human_badge_prefix_width};
 use frigg::indexer::{
     IndexPlan, IndexProgressEvent, IndexProgressPhase, IndexProgressStatus, SemanticRefreshMode,
 };
@@ -12,8 +12,9 @@ use super::human_block::{
     compact_human_fields, display_width, duration_detail, field_display, field_is, field_value,
     format_human_component, format_human_continuation, human_delta, human_diagnostics,
     human_file_counts, human_mode_label, human_precise_counts, human_provider_model,
-    human_symbol_with_color, human_terminal_width, human_title_token, human_uses_detail_rail,
-    push_field_row, push_human_row, push_human_separator, short_identifier, truncate_display,
+    human_session_badge, human_symbol_with_color, human_terminal_width, human_title_token,
+    human_uses_detail_rail, push_field_row, push_human_row, push_human_separator, short_identifier,
+    truncate_display,
 };
 use super::human_topic::{HumanTopic, human_severity_accent_color, human_title_accent_color};
 use super::{CliOutput, OutputField, OutputLevel, field};
@@ -193,11 +194,13 @@ fn format_human_index_phase_row_with_semantic(
 ) -> String {
     let title = human_index_phase_title(fields, semantic_mode);
     let fields_bag = FieldBag::new(fields);
+    let badge = human_session_badge(fields_bag);
+    let badge_prefix_width = human_badge_prefix_width(badge.as_deref());
     let accent = human_title_accent_color(level, fields_bag, None, &title);
     let symbol =
         human_symbol_with_color(level, fields_bag, HumanMarkerKind::Progress, color, accent);
     let detail = human_index_phase_detail(fields, semantic_mode);
-    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
+    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN + badge_prefix_width);
     let title_budget = content_width.saturating_sub(2);
     let detail_budget = detail
         .as_ref()
@@ -210,7 +213,7 @@ fn format_human_index_phase_row_with_semantic(
         colorize(color, accent, &title)
     );
     if let Some(detail) = detail {
-        let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
+        let used_width = badge_prefix_width + HUMAN_TEXT_COLUMN + display_width(&title);
         let remaining = width.saturating_sub(used_width + 2);
         if remaining >= 8 {
             line.push_str("  ");
@@ -227,7 +230,7 @@ fn format_human_index_phase_row_with_semantic(
         line.push('\n');
         line.push_str(&detail);
     }
-    line
+    format_human_badged_line(badge.as_deref(), line, color)
 }
 
 pub(crate) fn format_human_index_paths_component(
@@ -306,10 +309,18 @@ fn format_human_action_line(
     color: bool,
     width: usize,
 ) -> String {
-    let fields = FieldBag::new(fields);
-    let accent = human_title_accent_color(level, fields, None, title_prefix);
-    let symbol = human_symbol_with_color(level, fields, HumanMarkerKind::Checkpoint, color, accent);
-    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
+    let fields_bag = FieldBag::new(fields);
+    let badge = human_session_badge(fields_bag);
+    let badge_prefix_width = human_badge_prefix_width(badge.as_deref());
+    let accent = human_title_accent_color(level, fields_bag, None, title_prefix);
+    let symbol = human_symbol_with_color(
+        level,
+        fields_bag,
+        HumanMarkerKind::Checkpoint,
+        color,
+        accent,
+    );
+    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN + badge_prefix_width);
     let title_budget = content_width.saturating_sub(2);
     let prefix_width = display_width(title_prefix);
     let suffix_budget = title_budget.saturating_sub(prefix_width + 1);
@@ -320,7 +331,7 @@ fn format_human_action_line(
         colorize_action_title(color, action.as_str(), title_prefix, accent),
         title_suffix
     );
-    let used_width = HUMAN_TEXT_COLUMN + title_width;
+    let used_width = badge_prefix_width + HUMAN_TEXT_COLUMN + title_width;
     let detail_budget = width.saturating_sub(used_width + 2);
     if !details.is_empty() && detail_budget >= 8 {
         line.push_str("  ");
@@ -330,7 +341,7 @@ fn format_human_action_line(
             truncate_display(&details, detail_budget),
         ));
     }
-    line
+    format_human_badged_line(badge.as_deref(), line, color)
 }
 
 fn human_event_title_static(area: &str, kind: PathEventKind) -> &'static str {
@@ -356,16 +367,18 @@ pub(crate) fn human_index_complete_rows(fields: &[OutputField]) -> Vec<HumanRow>
 
 pub(crate) fn format_human_index_progress_event(
     event: &IndexProgressEvent,
-    _extra_fields: &[OutputField],
+    extra_fields: &[OutputField],
     color: bool,
     width: usize,
 ) -> String {
     let level = index_progress_level(event.status);
     let title = human_index_progress_title(event);
+    let badge = human_session_badge(FieldBag::new(extra_fields));
+    let badge_prefix_width = human_badge_prefix_width(badge.as_deref());
     let accent = index_progress_accent(level, event);
     let symbol = colorize(color, accent, index_progress_symbol(event.status));
     let detail = human_index_progress_detail(event);
-    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN);
+    let content_width = width.saturating_sub(HUMAN_TEXT_COLUMN + badge_prefix_width);
     let title_budget = content_width.saturating_sub(2);
     let detail_budget = detail
         .as_ref()
@@ -378,14 +391,14 @@ pub(crate) fn format_human_index_progress_event(
         colorize(color, accent, &title)
     );
     if let Some(detail) = detail {
-        let used_width = HUMAN_TEXT_COLUMN + display_width(&title);
+        let used_width = badge_prefix_width + HUMAN_TEXT_COLUMN + display_width(&title);
         let remaining = width.saturating_sub(used_width + 2);
         if remaining >= 8 {
             line.push_str("  ");
             line.push_str(&colorize(color, "2", truncate_display(&detail, remaining)));
         }
     }
-    line
+    format_human_badged_line(badge.as_deref(), line, color)
 }
 
 fn index_progress_symbol(status: IndexProgressStatus) -> &'static str {

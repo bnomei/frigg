@@ -206,7 +206,7 @@ fn citation_payloads_fixture_deterministic_ordering() {
     assert_eq!(by_tool_call.get("tool-005"), Some(&1));
     assert!(
         !by_tool_call.contains_key("tool-001"),
-        "list_repositories is non-file evidence and should not emit citations"
+        "workspace is non-file evidence and should not emit citations"
     );
 }
 
