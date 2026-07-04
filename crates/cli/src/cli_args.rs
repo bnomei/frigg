@@ -298,6 +298,7 @@ pub(crate) enum Command {
     /// Summarize local context-efficiency logs.
     ///
     /// Reads Frigg JSONL logs and reports recent context-use totals.
+    #[command(visible_alias = "content")]
     Context {
         /// Start date or RFC3339 time. Defaults to `now - Duration::days(30)`.
         #[arg(long, value_name = "DATE_OR_RFC3339")]
@@ -305,6 +306,9 @@ pub(crate) enum Command {
         /// End date or RFC3339 time. Defaults to `now`.
         #[arg(long, value_name = "DATE_OR_RFC3339")]
         until: Option<String>,
+        /// Print the full JSON summary.
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 }
 

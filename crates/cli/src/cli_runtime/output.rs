@@ -264,7 +264,7 @@ impl CliOutput {
     }
 }
 
-fn format_context_saved_percent(percent: Option<f64>) -> Option<String> {
+pub(crate) fn format_context_saved_percent(percent: Option<f64>) -> Option<String> {
     let percent = percent?;
     if !percent.is_finite() {
         return None;

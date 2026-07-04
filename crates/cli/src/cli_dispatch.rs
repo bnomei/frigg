@@ -118,9 +118,9 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     &cli_output,
                 )?
             }
-            Command::Context { since, until } => {
+            Command::Context { since, until, json } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                run_context_summary_command(&config, since.as_deref(), until.as_deref())?
+                run_context_summary_command(&config, since.as_deref(), until.as_deref(), json)?
             }
         }
         if !matches!(command, Command::Serve) {

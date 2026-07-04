@@ -322,6 +322,51 @@ fn help_inlines_stable_defaults_for_env_and_context_options() {
     let context_help = stdout(&output);
     assert!(context_help.contains("Defaults to `now - Duration::days(30)`"));
     assert!(context_help.contains("Defaults to `now`"));
+    assert!(context_help.contains("--json"));
+}
+
+#[test]
+fn context_summary_defaults_to_compact_saved_percent_and_json_alias_keeps_full_summary() {
+    let root = temp_workspace_root("context-summary-compact");
+    fs::create_dir_all(root.join(".frigg")).expect("create frigg dir");
+    fs::write(
+        root.join(".frigg/context.jsonl"),
+        r#"{"timestamp":"2026-06-10T00:00:00Z","tool":"read_file","repository_id":"repo-1","snapshot_id":"snapshot-1","indexed_readable_files":2,"indexed_readable_bytes":200,"returned_unique_paths":1,"returned_unique_file_bytes":100,"returned_source_bytes_estimate":12,"matched_file_context_saved_bytes_estimate":88,"matched_file_context_saved_percent_estimate":88.0,"narrowing_ratio_estimate":8}"#,
+    )
+    .expect("context log should be written");
+
+    let compact = run_frigg(
+        &root,
+        &["context", "--since", "2026-06-01", "--until", "2026-07-01"],
+    );
+
+    assert_success(&compact);
+    assert_eq!(stdout(&compact), "88% saved, 1 tool call\n");
+    assert_eq!(stderr(&compact), "");
+
+    let json = run_frigg(
+        &root,
+        &[
+            "content",
+            "--json",
+            "--since",
+            "2026-06-01",
+            "--until",
+            "2026-07-01",
+        ],
+    );
+
+    assert_success(&json);
+    assert_eq!(stderr(&json), "");
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&json)).expect("json summary should parse");
+    assert_eq!(value["totals"]["events"], 1);
+    assert_eq!(
+        value["totals"]["matched_file_context_saved_bytes_estimate"],
+        88
+    );
+    assert!(!stdout(&json).contains("88% saved"));
+    cleanup_workspace(&root);
 }
 
 #[test]
