@@ -612,7 +612,7 @@ impl FriggMcpServer {
                 let repositories = server
                     .known_workspaces()
                     .into_iter()
-                    .map(|workspace| server.repository_summary(&workspace))
+                    .map(|workspace| server.public_repository_summary(&workspace))
                     .collect::<Vec<_>>();
                 let repository_ids = repositories
                     .iter()
@@ -666,27 +666,15 @@ impl FriggMcpServer {
         let set_default = params.set_default.unwrap_or(true);
         let resolve_mode = params.resolve_mode.unwrap_or(WorkspaceResolveMode::GitRoot);
         let wait_for_precise = params.wait_for_precise.unwrap_or(true);
-        let index_mode = params
-            .index_mode
-            .unwrap_or(WorkspaceAttachIndexMode::Ensure);
-        let wait_for_index = params
-            .wait_for_index
-            .unwrap_or(matches!(index_mode, WorkspaceAttachIndexMode::Ensure));
-        const MAX_INDEX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
-        let index_timeout = Duration::from_millis(
-            params
-                .index_timeout_ms
-                .unwrap_or(30_000)
-                .min(MAX_INDEX_TIMEOUT_MS),
-        );
+        let index_mode = WorkspaceAttachIndexMode::Ensure;
+        let wait_for_index = true;
+        let index_timeout = Duration::from_millis(30_000);
         let started_at = Instant::now();
         info!(
             requested_path = params.path.as_deref().unwrap_or(""),
             requested_repository_id = params.repository_id.as_deref().unwrap_or(""),
             set_default,
             resolve_mode = ?resolve_mode,
-            index_mode = ?index_mode,
-            wait_for_index,
             "workspace attach started"
         );
         let attach_path = params.path.as_deref();
@@ -739,7 +727,7 @@ impl FriggMcpServer {
                 } else {
                     WorkspacePreciseGenerationAction::NotApplicable
                 };
-                let mut repository = self.repository_summary(&workspace);
+                let mut repository = self.public_repository_summary(&workspace);
                 let storage = repository
                     .storage
                     .clone()
@@ -767,7 +755,7 @@ impl FriggMcpServer {
                 .wait_for_repository_precise_generation(&repository_id, Duration::from_secs(30))
                 .await;
             if let Some(workspace) = self.workspace_by_repository_id(&repository_id) {
-                let mut repository = self.repository_summary(&workspace);
+                let mut repository = self.public_repository_summary(&workspace);
                 let storage = repository
                     .storage
                     .clone()
@@ -823,12 +811,6 @@ impl FriggMcpServer {
                     "waited_for_completion": response.precise_lifecycle.waited_for_completion,
                     "generation_action": response.precise_lifecycle.generation_action,
                 },
-                "index_lifecycle": {
-                    "phase": response.index_lifecycle.phase,
-                    "mode": response.index_lifecycle.mode,
-                    "waited_for_completion": response.index_lifecycle.waited_for_completion,
-                    "action_taken": response.index_lifecycle.action_taken,
-                },
             }),
             Some(FriggMcpServer::provenance_normalized_workload_metadata(
                 "workspace_attach",
@@ -850,9 +832,6 @@ impl FriggMcpServer {
                     "set_default": params.set_default,
                     "resolve_mode": params.resolve_mode,
                     "wait_for_precise": params.wait_for_precise,
-                    "index_mode": params.index_mode,
-                    "wait_for_index": params.wait_for_index,
-                    "index_timeout_ms": params.index_timeout_ms,
                 }),
                 finalization.source_refs,
                 &result,
@@ -1065,7 +1044,7 @@ impl FriggMcpServer {
         self.maybe_spawn_workspace_runtime_prewarm(&workspace);
         let _ = self.maybe_spawn_workspace_precise_generation_for_paths(&workspace, &[], &[]);
 
-        let mut repository = self.repository_summary(&workspace);
+        let mut repository = self.public_repository_summary(&workspace);
         repository.storage = None;
         let response = WorkspacePrepareResponse {
             repository,
@@ -1277,7 +1256,7 @@ impl FriggMcpServer {
             false,
             false,
         );
-        let mut repository = self.repository_summary(&workspace);
+        let mut repository = self.public_repository_summary(&workspace);
         let storage = repository
             .storage
             .clone()
@@ -1313,7 +1292,7 @@ impl FriggMcpServer {
                 let generation_action = response.precise_lifecycle.generation_action;
                 let precise = self
                     .workspace_precise_summary_for_workspace(&workspace, Some(generation_action));
-                let mut repository = self.repository_summary(&workspace);
+                let mut repository = self.public_repository_summary(&workspace);
                 let storage = repository
                     .storage
                     .clone()
@@ -1402,7 +1381,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "workspace_current",
-        description = "Inspect the session default, adopted repositories, runtime tasks, and compact precise/index status.",
+        description = "Inspect the session default, adopted repositories, runtime tasks, and compact precise status.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1418,37 +1397,27 @@ impl FriggMcpServer {
         let current_workspace = self.current_workspace();
         let current_repository = current_workspace
             .as_ref()
-            .map(|workspace| self.repository_summary(workspace));
+            .map(|workspace| self.public_repository_summary(workspace));
+        let current_repository_health = current_workspace
+            .as_ref()
+            .and_then(|workspace| self.repository_summary(workspace).health);
         let repositories = self
             .attached_workspaces()
             .into_iter()
-            .map(|workspace| self.repository_summary(&workspace))
+            .map(|workspace| self.public_repository_summary(&workspace))
             .collect::<Vec<_>>();
         let runtime = self.runtime_status_summary();
         let precise = current_workspace
             .as_ref()
             .map(|workspace| self.workspace_precise_summary_for_workspace(workspace, None));
-        let precise_ingest = current_repository
-            .as_ref()
-            .and_then(|repository| repository.health.as_ref())
-            .and_then(|health| health.precise_ingest.clone());
-        let index_lifecycle = current_workspace.as_ref().map(|workspace| {
-            self.workspace_index_lifecycle_summary(
-                workspace,
-                WorkspaceAttachIndexMode::Ensure,
-                false,
-                false,
-                WorkspaceIndexAction::SkippedNoWork,
-                None,
-            )
-        });
+        let precise_ingest =
+            current_repository_health.and_then(|health| health.precise_ingest.clone());
         let response = WorkspaceCurrentResponse {
             repository: current_repository,
             session_default: current_workspace.is_some(),
             repositories,
             precise,
             precise_ingest,
-            index_lifecycle,
             runtime: Some(runtime),
         };
         let repository_ids = response
@@ -1549,7 +1518,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_text",
-        description = "Use Frigg for direct exact literal or regex code search when you already know the text. Prefer this over search_hybrid for direct string matches; it preserves repository scoping, path_regex narrowing, result handles, and bounded follow-up reads. Keep shell scans for non-code files, git/filesystem inspection, or trivial one-offs.",
+        description = "Use Frigg for rg-shaped direct literal or safe-regex code search when you already know the text. Supports grouped alternation, path_regex narrowing, context/per-file shaping, result handles, and bounded follow-up reads. Frigg may use native or ripgrep internally; keep shell rg for live-disk checks and ripgrep-specific behavior.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1565,7 +1534,7 @@ impl FriggMcpServer {
 
     #[tool(
         name = "search_hybrid",
-        description = "Use Frigg for broad discovery-style code questions across attached repositories when you do not yet have an exact string, symbol, or path anchor. It returns candidate pivots, not clean direct-string matches; use search_text for literal/regex text and search_symbol for known identifiers. If semantic is unavailable, treat ranking as weaker evidence and pivot sooner.",
+        description = "Use Frigg for broad discovery-style code questions across attached repositories when you do not yet have an exact string, symbol, or path anchor. It returns candidate pivots, not clean direct-string matches; use search_text for literal or safe-regex text and search_symbol for known identifiers. If semantic is unavailable, treat ranking as weaker evidence and pivot sooner.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1836,7 +1805,7 @@ impl ServerHandler for FriggMcpServer {
                     .with_description("Local-first code search + navigation MCP server"),
             )
             .with_instructions(agent_directive::mcp_instructions(&format!(
-                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for repository health, precise status, and runtime task status. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid only for broad discovery-style repository questions when you do not yet have an exact string, symbol, or path anchor; for direct literal/regex matches call search_text, and for known identifiers call search_symbol. Then use navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and pivot to exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file.{playbook_guidance} {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
+                "Start with list_repositories. If the session is detached, call workspace_attach explicitly. Use workspace_current for the adopted repository list, precise status, and runtime task status. Read-only MCP tools default to compact responses; request response_mode=full only when you need diagnostics, freshness detail, or selection notes. Search and navigation results now return result_handle plus per-row match_id values, and read_match reopens a bounded source window around one prior hit. `read_file`, `read_match`, and `explore(operation=zoom)` are text-first by default; request presentation_mode=json only when a downstream consumer needs the structured compatibility payload. `explore(operation=probe|refine)` stays structured by default. Use search_hybrid only for broad discovery-style repository questions when you do not yet have an exact string, symbol, or path anchor; for direct literal/safe-regex matches call search_text, including rg-shaped grouped alternation, path_regex narrowing, context windows, and per-file shaping; for known identifiers call search_symbol. Frigg may use its native scanner or ripgrep internally for search_text. Use shell rg for live-disk correctness checks, suspected index/watch drift, or ripgrep-specific behavior. Then use navigation tools, read_match, or read_file once you have a concrete anchor. If search_hybrid reports lexical_only_mode or non-ok semantic status, treat broad natural-language ranking as weaker evidence and pivot to exact tools sooner. Use top_level_only=true on document_symbols for a cheap first outline, and use include_follow_up_structural=true on inspect_syntax_tree, search_structural, or anchored navigation and outline tools when you want replayable search_structural follow-ups derived from the resolved AST focus. Use explore for bounded follow-up inside one file.{playbook_guidance} {tool_surface_note} Runtime tool-surface profile is `{tool_surface_profile}`. Runtime profile is `{runtime_profile}`. Policy resources remain available at `{SUPPORT_MATRIX_RESOURCE_URI}`, `{TOOL_SURFACE_RESOURCE_URI}`, and `{SHELL_GUIDANCE_RESOURCE_URI}`. Prompt guidance is available via `{ROUTING_GUIDE_PROMPT_NAME}`."
             )))
     }
 

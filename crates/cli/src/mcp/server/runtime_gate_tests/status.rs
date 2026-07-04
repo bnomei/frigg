@@ -81,7 +81,7 @@ fn server_info_enables_resources_and_prompts() {
         .expect("server info should publish MCP usage instructions");
     assert!(instructions.starts_with(FRIGG_FIRST_DIRECTIVE.trim()));
     assert!(instructions.contains("call workspace_attach explicitly"));
-    assert!(instructions.contains("Use workspace_current for repository health"));
+    assert!(instructions.contains("Use workspace_current for the adopted repository list"));
     assert!(instructions.contains("Use shell tools for non-code files"));
     assert!(instructions.contains("restricted core tool surface"));
     assert!(instructions.contains("Set `FRIGG_MCP_TOOL_SURFACE_PROFILE=extended`"));

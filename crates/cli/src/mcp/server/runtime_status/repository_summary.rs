@@ -127,4 +127,13 @@ impl FriggMcpServer {
             health: Some(health),
         }
     }
+
+    pub(in crate::mcp::server) fn public_repository_summary(
+        &self,
+        workspace: &AttachedWorkspace,
+    ) -> RepositorySummary {
+        let mut summary = self.repository_summary(workspace);
+        summary.health = None;
+        summary
+    }
 }

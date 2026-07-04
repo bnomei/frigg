@@ -475,8 +475,6 @@ impl FriggMcpServer {
         } else if failure_summary.is_some() || matches!(action_taken, WorkspaceIndexAction::Failed)
         {
             WorkspaceIndexLifecyclePhase::Failed
-        } else if matches!(action_taken, WorkspaceIndexAction::SkippedByRequest) {
-            WorkspaceIndexLifecyclePhase::Skipped
         } else if !active_tasks.is_empty()
             || matches!(action_taken, WorkspaceIndexAction::SkippedActiveTask)
         {
@@ -867,7 +865,7 @@ impl FriggMcpServer {
 
         self.invalidate_workspace_index_runtime_caches(&workspace, false);
 
-        let mut repository = self.repository_summary(&workspace);
+        let mut repository = self.public_repository_summary(&workspace);
         let storage = repository
             .storage
             .clone()
@@ -879,7 +877,6 @@ impl FriggMcpServer {
                 self.maybe_spawn_workspace_runtime_prewarm(&workspace);
                 WorkspaceIndexAction::Queued
             }
-            WorkspaceAttachIndexMode::Skip => WorkspaceIndexAction::SkippedByRequest,
         };
         let precise_generation_action = if matches!(index_mode, WorkspaceAttachIndexMode::Ensure) {
             WorkspacePreciseGenerationAction::NotApplicable
@@ -938,7 +935,7 @@ impl FriggMcpServer {
             None,
             set_default,
             resolve_mode,
-            WorkspaceAttachIndexMode::Skip,
+            WorkspaceAttachIndexMode::Defer,
         )
         .map(|outcome| {
             if let Some(guard) = outcome.rollback_guard {

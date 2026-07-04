@@ -227,7 +227,6 @@ pub struct WorkspacePreciseLifecycleSummary {
 pub enum WorkspaceAttachIndexMode {
     Ensure,
     Defer,
-    Skip,
 }
 
 /// Lifecycle phase for attach-time or background index refresh work.
@@ -252,7 +251,6 @@ pub enum WorkspaceIndexAction {
     Queued,
     SkippedNoWork,
     SkippedActiveTask,
-    SkippedByRequest,
     Failed,
     Unavailable,
 }
@@ -275,6 +273,23 @@ pub struct WorkspaceIndexLifecycleSummary {
     pub recommended_action: Option<WorkspaceRecommendedAction>,
 }
 
+impl Default for WorkspaceIndexLifecycleSummary {
+    fn default() -> Self {
+        Self {
+            phase: WorkspaceIndexLifecyclePhase::Ready,
+            mode: WorkspaceAttachIndexMode::Ensure,
+            waited_for_completion: false,
+            timed_out: false,
+            action_taken: WorkspaceIndexAction::SkippedNoWork,
+            lexical_ready: true,
+            semantic_ready: true,
+            active_tasks: Vec::new(),
+            failure_summary: None,
+            recommended_action: None,
+        }
+    }
+}
+
 /// Whether attach created a fresh session adoption or reused an existing workspace entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -295,12 +310,6 @@ pub struct WorkspaceAttachParams {
     pub resolve_mode: Option<WorkspaceResolveMode>,
     /// Whether to wait for triggered or active precise generation before returning. Omit to default to `true`.
     pub wait_for_precise: Option<bool>,
-    /// How attach should handle stale or missing lexical/semantic index state. Omit to default to `ensure`.
-    pub index_mode: Option<WorkspaceAttachIndexMode>,
-    /// Whether to wait for attach-time index work before returning. Omit to default to `true` for `ensure`, otherwise `false`.
-    pub wait_for_index: Option<bool>,
-    /// Attach-time index wait timeout in milliseconds. Omit to default to 30000.
-    pub index_timeout_ms: Option<u64>,
 }
 
 /// Response from `workspace_attach` with storage, index, and precise lifecycle state.
@@ -314,6 +323,8 @@ pub struct WorkspaceAttachResponse {
     pub action: WorkspaceAttachAction,
     pub precise: WorkspacePreciseSummary,
     pub precise_lifecycle: WorkspacePreciseLifecycleSummary,
+    #[serde(skip)]
+    #[schemars(skip)]
     pub index_lifecycle: WorkspaceIndexLifecycleSummary,
 }
 
@@ -419,8 +430,6 @@ pub struct WorkspaceCurrentResponse {
     pub precise: Option<WorkspacePreciseSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub precise_ingest: Option<WorkspacePreciseIngestSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_lifecycle: Option<WorkspaceIndexLifecycleSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeStatusSummary>,
 }

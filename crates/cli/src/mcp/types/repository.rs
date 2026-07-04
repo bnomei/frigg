@@ -30,7 +30,8 @@ pub struct RepositorySummary {
     pub watch: RepositoryWatchSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<WorkspaceStorageSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
+    #[schemars(skip)]
     pub health: Option<WorkspaceIndexHealthSummary>,
 }
 
