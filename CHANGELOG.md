@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-07-05
+
+- Hardened MCP search, navigation, SCIP ingest, and adopt paths against symlink and workspace-boundary escapes.
+- Fixed workspace attach/index edge cases, including Git-root validation, default attach rejection for non-Git parents, and stale precise-generation lifecycle reporting.
+- Improved precise-generation failure diagnostics, including spawn failures and generator argument handling.
+- Refined `search_text` guidance and compatibility by accepting the legacy `pattern` alias while documenting `query`.
+- Polished CLI/TUI badge and intro-color rendering.
+
 ## 0.6.2 - 2026-07-05
 
 - Fixed the release build process for Intel macOS assets and Docker image publishing.

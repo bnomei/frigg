@@ -17,7 +17,7 @@ concurrency:
 env:
   # This job runs on PRs and main pushes, before the current release assets may exist.
   # Keep it on the previous completed release, or move dogfood behind the Release workflow.
-  FRIGG_VERSION: "0.6.1"
+  FRIGG_VERSION: "0.6.2"
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG FRIGG_VERSION=0.6.2
+ARG FRIGG_VERSION=0.6.3
 ARG FRIGG_REPOSITORY=bnomei/frigg
 ARG FRIGG_RUNTIME_IMAGE=gcr.io/distroless/cc-debian13:nonroot
 

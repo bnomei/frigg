@@ -1,6 +1,6 @@
 {
   "name": "@bnomei/frigg",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Frigg gives AI agents local, source-backed code search and navigation without sending whole repositories through every prompt.",
   "homepage": "https://github.com/bnomei/frigg",
   "repository": {
