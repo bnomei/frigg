@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-07-05
+
+- Fixed the release build process for Intel macOS assets and Docker image publishing.
+- Refreshed the release packaging defaults and install examples for `v0.6.2`.
+
 ## 0.6.0 - 2026-07-04
 
 - Added a canonical Frigg-first directive and aligned the README, MCP guidance, and bundled skill guidance around it.

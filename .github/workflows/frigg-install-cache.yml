@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FRIGG_VERSION: "0.6.0"
+  FRIGG_VERSION: "0.6.2"
   FRIGG_INSTALL_DIR: ${{ github.workspace }}/.frigg-bin
 
 jobs:
