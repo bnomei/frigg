@@ -77,6 +77,7 @@ impl FriggMcpServer {
         let mut artifacts = Vec::new();
         let mut candidate_directories = Vec::new();
         let mut candidate_directory_digests = Vec::new();
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         for directory in Self::scip_candidate_directories(root) {
             candidate_directories.push(directory.display().to_string());
             let directory_metadata = fs::metadata(&directory).ok();
@@ -103,6 +104,9 @@ impl FriggMcpServer {
                 let Some(format) = ScipArtifactFormat::from_path(&path) else {
                     continue;
                 };
+                if !Self::scip_artifact_path_within_root(&canonical_root, &path) {
+                    continue;
+                }
                 let metadata = match entry.metadata() {
                     Ok(metadata) => metadata,
                     Err(_) => continue,
@@ -135,6 +139,12 @@ impl FriggMcpServer {
             candidate_directory_digests,
             artifact_digests: artifacts,
         }
+    }
+
+    fn scip_artifact_path_within_root(canonical_root: &Path, path: &Path) -> bool {
+        path.canonicalize()
+            .map(|canonical_path| canonical_path.starts_with(canonical_root))
+            .unwrap_or(false)
     }
 
     fn ingest_precise_artifacts_for_repository(

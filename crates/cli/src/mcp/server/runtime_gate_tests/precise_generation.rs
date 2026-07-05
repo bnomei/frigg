@@ -1820,6 +1820,27 @@ fn precise_artifact_discovery_includes_json_and_scip_files() {
     let _ = fs::remove_dir_all(workspace_root);
 }
 
+#[cfg(unix)]
+#[test]
+fn precise_artifact_discovery_rejects_symlink_escape() {
+    let workspace_root = temp_workspace_root("scip-discovery-symlink-escape");
+    let scip_root = workspace_root.join(".frigg/scip");
+    fs::create_dir_all(&scip_root).expect("failed to create scip fixture directory");
+    let outside_path = workspace_root.with_extension("outside.scip");
+    fs::write(&outside_path, [0_u8, 1_u8, 2_u8]).expect("failed to write outside fixture");
+    std::os::unix::fs::symlink(&outside_path, scip_root.join("leak.scip"))
+        .expect("failed to create symlinked scip fixture");
+
+    let discovery = FriggMcpServer::collect_scip_artifact_digests(&workspace_root);
+    assert!(
+        discovery.artifact_digests.is_empty(),
+        "escaping symlinked SCIP artifacts must not be discovered for ingest"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_file(outside_path);
+}
+
 #[test]
 fn manifest_source_paths_filter_to_symbol_corpus_capability() {
     let digests = vec![
