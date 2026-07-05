@@ -297,7 +297,17 @@ impl FriggMcpServer {
                     Some(json!({ "repository_id": found.repository_id })),
                 )
             })?;
-        let canonical_path = workspace.root.join(&found.path);
+        let read_params = ReadFileParams {
+            path: found.path.clone(),
+            repository_id: Some(found.repository_id.clone()),
+            max_bytes: None,
+            start_line: None,
+            end_line: None,
+            line_count: None,
+            presentation_mode: None,
+            include_context_efficiency: None,
+        };
+        let (_, canonical_path, _) = self.resolve_file_path(&read_params)?;
         let snapshot = self.file_content_snapshot_for_workspace(&workspace, &canonical_path)?;
         let line_start = found.line.saturating_sub(context_lines).max(1);
         let line_end = found.line.saturating_add(context_lines);
@@ -532,5 +542,93 @@ impl FriggMcpServer {
             response.note = None;
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::types::SearchPatternType;
+    use crate::settings::FriggConfig;
+    use rmcp::model::ErrorCode;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_workspace_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "frigg-presentation-{test_name}-{nonce}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_text_excerpt_rejects_symlink_escape_hit() {
+        let workspace_root = temp_workspace_root("search-text-symlink-escape");
+        let repo_root = workspace_root.join("repo");
+        let src_root = repo_root.join("src");
+        fs::create_dir_all(&src_root).expect("fixture src root should be creatable");
+        fs::write(src_root.join("lib.rs"), "pub fn safe() {}\n")
+            .expect("safe source fixture should be writable");
+        let outside_path = workspace_root.join("outside_secret.rs");
+        fs::write(&outside_path, "pub fn secret_token() {}\n")
+            .expect("outside source fixture should be writable");
+        std::os::unix::fs::symlink(&outside_path, src_root.join("leak.rs"))
+            .expect("symlink fixture should be creatable");
+
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![repo_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        server
+            .adopt_workspace(&workspace, true)
+            .expect("server should adopt fixture workspace");
+
+        let error = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 1,
+                    matches: vec![TextMatch {
+                        match_id: None,
+                        repository_id: workspace.repository_id.clone(),
+                        path: "src/leak.rs".to_owned(),
+                        line: 1,
+                        column: 8,
+                        excerpt: "secret_token".to_owned(),
+                        witness_score_hint_millis: None,
+                        witness_provenance_ids: None,
+                    }],
+                    result_handle: None,
+                    metadata: None,
+                },
+                &SearchTextParams {
+                    query: "secret_token".to_owned(),
+                    pattern_type: Some(SearchPatternType::Literal),
+                    repository_id: Some(workspace.repository_id),
+                    context_lines: Some(2),
+                    limit: Some(5),
+                    ..Default::default()
+                },
+            )
+            .expect_err("search_text excerpt expansion should reject symlink escapes");
+
+        assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
+        assert!(
+            error.message.contains("outside workspace roots"),
+            "unexpected symlink escape error message: {}",
+            error.message
+        );
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 }

@@ -951,6 +951,44 @@ async fn security_read_file_rejects_symlink_escape_inside_workspace() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn security_search_text_rejects_symlink_escape() {
+    let workspace = temp_workspace_root("search-text-symlink-escape");
+    let repo_root = workspace.join("repo");
+    let src_root = repo_root.join("src");
+    fs::create_dir_all(&src_root).expect("failed to create fixture repo root");
+    fs::write(src_root.join("lib.rs"), "pub fn safe() {}\n").expect("failed to seed fixture file");
+    let outside_path = workspace.join("outside_secret.rs");
+    fs::write(&outside_path, "pub fn secret_token() {}\n").expect("failed to seed outside file");
+    std::os::unix::fs::symlink(&outside_path, src_root.join("leak.rs"))
+        .expect("failed to create symlink to outside file");
+
+    let server = build_server_for_repo(&repo_root).await;
+    let repository_id = public_repository_ids(&server)
+        .await
+        .into_iter()
+        .next()
+        .expect("server should expose one repository");
+    let response = server
+        .search_text(Parameters(SearchTextParams {
+            query: "secret_token".to_owned(),
+            pattern_type: Some(SearchPatternType::Literal),
+            repository_id: Some(repository_id),
+            context_lines: Some(2),
+            limit: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .expect("search_text should not expose symlink escape matches");
+    assert!(
+        response.0.matches.is_empty(),
+        "search_text must not return context excerpts for symlink escape matches"
+    );
+
+    cleanup_workspace(&workspace);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn security_storage_rejects_symlink_escape_before_write() {
     let workspace = temp_workspace_root("storage-symlink-escape");
     let repo_root = workspace.join("repo");
