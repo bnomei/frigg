@@ -71,6 +71,7 @@ pub enum WorkspacePreciseState {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspacePreciseGenerationAction {
     Triggered,
+    Failed,
     SkippedNoWork,
     SkippedActiveTask,
     NotApplicable,

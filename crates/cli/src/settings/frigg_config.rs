@@ -130,6 +130,12 @@ impl FriggConfig {
                     root.display()
                 )));
             }
+            if !Self::is_git_workspace_root(root) {
+                return Err(FriggError::InvalidInput(format!(
+                    "workspace root is not a Git repository: {}",
+                    root.display()
+                )));
+            }
         }
 
         self.semantic_runtime
@@ -137,6 +143,12 @@ impl FriggConfig {
             .map_err(|err| FriggError::InvalidInput(err.to_string()))?;
 
         Ok(())
+    }
+
+    fn is_git_workspace_root(root: &Path) -> bool {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        root.ancestors()
+            .any(|ancestor| ancestor.join(".git").exists())
     }
 
     /// Materializes repository records from configured workspace roots.

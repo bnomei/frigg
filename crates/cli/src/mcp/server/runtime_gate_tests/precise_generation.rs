@@ -269,6 +269,119 @@ printf '%s' "fake-scip-rust"
 }
 
 #[test]
+fn precise_generation_spawn_failure_returns_failed_and_preserves_detail() {
+    let workspace_root = temp_workspace_root("precise-spawn-failure");
+    let bin_dir = temp_workspace_root("precise-spawn-failure-bin");
+    fs::create_dir_all(workspace_root.join(".git")).expect("failed to create git fixture");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+
+    let _rust_analyzer = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "rust-analyzer",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "rust-analyzer 1.85.0"
+  exit 0
+fi
+printf '%s' "fake-scip-rust"
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+        server.scip_cache_workspace_precise_generation(
+            &workspace.repository_id,
+            "rust",
+            crate::mcp::types::WorkspacePreciseGenerationSummary {
+                status: crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded,
+                generated_at_ms: 0,
+                duration_ms: None,
+                artifact_path: None,
+                artifact_count: None,
+                artifact_bytes: None,
+                artifact_sample_paths: Vec::new(),
+                failure_class: None,
+                recommended_action: None,
+                detail: Some("stale successful generation".to_owned()),
+            },
+        );
+
+        FriggMcpServer::force_next_precise_generation_thread_spawn_failure();
+        let action = server.maybe_spawn_workspace_precise_generation(
+            &workspace,
+            &[String::from("Cargo.toml")],
+            &[],
+        );
+        assert!(matches!(
+            action,
+            crate::mcp::types::WorkspacePreciseGenerationAction::Failed
+        ));
+
+        let tasks = server
+            .runtime_state
+            .runtime_task_registry
+            .read()
+            .expect("runtime task registry should not be poisoned")
+            .recent_tasks();
+        let task = tasks
+            .iter()
+            .find(|task| {
+                task.kind == RuntimeTaskKind::PreciseGenerate
+                    && task.repository_id == workspace.repository_id
+            })
+            .expect("failed spawn should leave a recent precise generation task");
+        assert_eq!(task.status, RuntimeTaskStatus::Failed);
+        assert!(
+            task.detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("failed to spawn precise generation thread")),
+            "failed task should preserve the spawn error detail, got {:?}",
+            task.detail
+        );
+
+        let lifecycle = server.workspace_precise_lifecycle_summary(
+            &workspace,
+            action,
+            &server.workspace_precise_summary_for_workspace(&workspace, Some(action)),
+            false,
+            false,
+        );
+        assert_eq!(
+            lifecycle
+                .last_generation
+                .as_ref()
+                .map(|summary| summary.status),
+            Some(crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded),
+            "fixture should retain a stale successful generation to prove the fresh action wins"
+        );
+        assert_eq!(
+            lifecycle.phase,
+            crate::mcp::types::WorkspacePreciseLifecyclePhase::Failed,
+            "spawn failure should surface as failed lifecycle instead of not_started"
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
+
+#[test]
 fn workspace_detach_clears_pending_precise_dirty_paths_after_last_adoption() {
     let workspace_root = temp_workspace_root("precise-detach-clears-pending");
     let bin_dir = temp_workspace_root("precise-detach-clears-pending-bin");

@@ -152,6 +152,22 @@ fn search_text_params_accept_context_efficiency_opt_in() {
 }
 
 #[test]
+fn search_text_params_accept_legacy_pattern_alias() {
+    let params: SearchTextParams = serde_json::from_value(json!({
+        "pattern": "unwrap\\(|expect\\(",
+        "pattern_type": "regex",
+        "glob": "crates/cli/src/**/*.rs",
+        "limit": 30
+    }))
+    .expect("search_text params should accept legacy pattern alias");
+
+    assert_eq!(params.query, "unwrap\\(|expect\\(");
+    assert_eq!(params.pattern_type, Some(SearchPatternType::Regex));
+    assert_eq!(params.glob.as_deref(), Some("crates/cli/src/**/*.rs"));
+    assert_eq!(params.limit, Some(30));
+}
+
+#[test]
 fn search_text_metadata_omits_context_efficiency_by_default() {
     let metadata = SearchTextMetadata {
         lexical_backend: Some(SearchLexicalBackendMetadata::Native),

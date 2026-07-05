@@ -119,7 +119,16 @@ impl FriggMcpServer {
                 let (root, resolution) = match resolve_mode {
                     WorkspaceResolveMode::GitRoot => match Self::find_git_root(&resolved_from) {
                         Some(git_root) => (git_root, WorkspaceResolveMode::GitRoot),
-                        None => (resolved_from.clone(), WorkspaceResolveMode::Direct),
+                        None => {
+                            return Err(Self::invalid_params(
+                                "workspace_attach could not resolve a Git root; pass resolve_mode=\"direct\" for an intentional non-git workspace",
+                                Some(json!({
+                                    "path": path.display().to_string(),
+                                    "resolved_from": resolved_from.display().to_string(),
+                                    "resolve_mode": WorkspaceResolveMode::GitRoot,
+                                })),
+                            ));
+                        }
                     },
                     WorkspaceResolveMode::Direct => {
                         (resolved_from.clone(), WorkspaceResolveMode::Direct)
@@ -261,6 +270,8 @@ impl FriggMcpServer {
             WorkspacePreciseLifecyclePhase::Timeout
         } else if let Some(_task) = active_task.as_ref() {
             WorkspacePreciseLifecyclePhase::Running
+        } else if matches!(generation_action, WorkspacePreciseGenerationAction::Failed) {
+            WorkspacePreciseLifecyclePhase::Failed
         } else if let Some(summary) = last_generation.as_ref() {
             match summary.status {
                 WorkspacePreciseGenerationStatus::Succeeded => {
@@ -284,6 +295,7 @@ impl FriggMcpServer {
                 WorkspacePreciseGenerationAction::Triggered => {
                     WorkspacePreciseLifecyclePhase::NotStarted
                 }
+                WorkspacePreciseGenerationAction::Failed => WorkspacePreciseLifecyclePhase::Failed,
                 WorkspacePreciseGenerationAction::SkippedActiveTask => {
                     WorkspacePreciseLifecyclePhase::Running
                 }

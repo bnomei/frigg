@@ -135,7 +135,8 @@ pub struct ExploreResponse {
 /// Parameters for `search_text`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchTextParams {
-    /// Pattern to match. Literal by default.
+    /// Text query to match. Literal by default.
+    #[serde(alias = "pattern")]
     pub query: String,
     /// Match mode for `query`.
     pub pattern_type: Option<SearchPatternType>,

@@ -1031,6 +1031,25 @@ mod tests {
     }
 
     #[test]
+    fn frigg_config_rejects_non_git_workspace_root_by_default() {
+        let workspace_root = temp_workspace_root("startup-non-git-root");
+        fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        let mut cli = base_cli();
+        cli.workspace_roots = vec![workspace_root.clone()];
+
+        let error = resolve_startup_config(&cli, RuntimeTransportKind::Stdio)
+            .expect_err("default startup config should reject non-git workspace roots");
+        assert!(
+            error
+                .to_string()
+                .contains("workspace root is not a Git repository"),
+            "unexpected startup config error: {error}"
+        );
+
+        cleanup_workspace(&workspace_root);
+    }
+
+    #[test]
     fn startup_config_allows_empty_workspace_roots_for_http_serving() {
         let mut cli = base_cli();
         cli.workspace_roots.clear();
@@ -1084,6 +1103,8 @@ mod tests {
     fn stdio_watch_runtime_config_preserves_existing_startup_roots() {
         let workspace_root = temp_workspace_root("watch-runtime-existing-root");
         fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("workspace git marker should be creatable");
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
@@ -1236,6 +1257,8 @@ mod tests {
     fn startup_gate_rejects_uninitialized_vector_store() {
         let workspace_root = temp_workspace_root("startup-uninitialized");
         fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("workspace git marker should be creatable");
 
         let config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
             .expect("config should load from temp workspace root");
@@ -1255,6 +1278,8 @@ mod tests {
     fn startup_gate_rejects_legacy_non_sqlite_vec_schema() {
         let workspace_root = temp_workspace_root("startup-fallback");
         fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("workspace git marker should be creatable");
         let db_dir = workspace_root.join(PROVENANCE_STORAGE_DIR);
         fs::create_dir_all(&db_dir).expect("storage directory should be creatable");
         let db_path = db_dir.join(PROVENANCE_STORAGE_DB_FILE);
@@ -1440,6 +1465,8 @@ mod tests {
     fn storage_maintenance_reports_missing_db_without_creating_file() {
         let workspace_root = temp_workspace_root("storage-maintenance-missing-db");
         fs::create_dir_all(&workspace_root).expect("workspace root should be creatable");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("workspace git marker should be creatable");
         let db_path = resolve_storage_db_path(&workspace_root, "repair-storage")
             .expect("storage db path should resolve for an existing workspace root");
 
@@ -1735,6 +1762,7 @@ mod tests {
     }
 
     fn create_simple_workspace(root: &Path) {
+        fs::create_dir_all(root.join(".git")).expect("workspace git marker should be creatable");
         fs::create_dir_all(root.join("src")).expect("workspace src directory should be creatable");
         fs::write(root.join("README.md"), "hello from frigg\n")
             .expect("workspace readme should be writable");

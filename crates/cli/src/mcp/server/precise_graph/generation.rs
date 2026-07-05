@@ -5,6 +5,10 @@
 
 use super::*;
 
+#[cfg(test)]
+static PRECISE_GENERATION_FORCE_THREAD_SPAWN_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 const PRECISE_GENERATION_EXCLUDED_DIRECTORY_NAMES: &[&str] = &[
     ".git",
     ".frigg",
@@ -44,6 +48,12 @@ struct WorkspacePythonGenerationRequest<'a> {
 }
 
 impl FriggMcpServer {
+    #[cfg(test)]
+    pub(in crate::mcp::server) fn force_next_precise_generation_thread_spawn_failure() {
+        PRECISE_GENERATION_FORCE_THREAD_SPAWN_FAILURE
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn workspace_source_scan_includes_entry(
         workspace_root: &Path,
         entry: &walkdir::DirEntry,
@@ -1692,12 +1702,18 @@ impl FriggMcpServer {
         );
         let spawn_task_id = task_guard.task_id().to_owned();
         let spawn_repository_id = workspace.repository_id.clone();
-        let spawn_result = std::thread::Builder::new()
-            .name(format!(
-                "frigg-precise-generate-{}",
-                workspace.repository_id
-            ))
-            .spawn(move || {
+        let task_guard_slot = Arc::new(Mutex::new(Some(task_guard)));
+        let task_guard_slot_for_thread = Arc::clone(&task_guard_slot);
+        let spawn_result = spawn_precise_generation_thread(
+            format!("frigg-precise-generate-{}", workspace.repository_id),
+            move || {
+                let mut task_guard = {
+                    let mut slot = task_guard_slot_for_thread
+                        .lock()
+                        .expect("precise generation task guard slot poisoned");
+                    slot.take()
+                        .expect("precise generation worker should own its task guard")
+                };
                 let mut succeeded = 0usize;
                 let mut failed = 0usize;
                 for spec in selected_generators {
@@ -1729,7 +1745,6 @@ impl FriggMcpServer {
                     failed,
                     "workspace precise generation finished"
                 );
-                let mut task_guard = task_guard;
                 let pending_after_finish = {
                     let mut pending = server
                         .runtime_state
@@ -1766,23 +1781,55 @@ impl FriggMcpServer {
                         );
                     }
                 }
-            });
+            },
+        );
         if let Err(err) = spawn_result {
-            self.runtime_state
-                .runtime_task_registry
-                .write()
-                .expect("runtime task registry poisoned")
-                .update_task_detail(
-                    &spawn_task_id,
-                    Some(format!("failed to spawn precise generation thread: {err}")),
+            let detail = format!("failed to spawn precise generation thread: {err}");
+            let task_guard = {
+                let mut slot = task_guard_slot
+                    .lock()
+                    .expect("precise generation task guard slot poisoned");
+                slot.take()
+            };
+            if let Some(mut task_guard) = task_guard {
+                task_guard.finish(
+                    crate::mcp::types::RuntimeTaskStatus::Failed,
+                    Some(detail.clone()),
                 );
+            } else {
+                self.runtime_state
+                    .runtime_task_registry
+                    .write()
+                    .expect("runtime task registry poisoned")
+                    .update_task_detail(&spawn_task_id, Some(detail.clone()));
+            }
             tracing::warn!(
                 repository_id = spawn_repository_id,
                 error = %err,
                 "failed to spawn precise generation thread"
             );
+            return WorkspacePreciseGenerationAction::Failed;
         }
 
         WorkspacePreciseGenerationAction::Triggered
     }
+}
+
+fn spawn_precise_generation_thread<F>(
+    name: String,
+    f: F,
+) -> std::io::Result<std::thread::JoinHandle<()>>
+where
+    F: FnOnce() + Send + 'static,
+{
+    #[cfg(test)]
+    if PRECISE_GENERATION_FORCE_THREAD_SPAWN_FAILURE
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(std::io::Error::other(
+            "forced precise generation thread spawn failure",
+        ));
+    }
+
+    std::thread::Builder::new().name(name).spawn(f)
 }

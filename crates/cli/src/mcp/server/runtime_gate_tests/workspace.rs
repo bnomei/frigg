@@ -421,6 +421,46 @@ async fn workspace_detach_prunes_ephemeral_known_workspace_after_last_session() 
 }
 
 #[test]
+fn workspace_attach_default_gitroot_rejects_non_git_parent() {
+    let workspace_root = authorized_temp_workspace_root("attach-default-gitroot-non-git-parent");
+    let child_repo = workspace_root.join("rust-mcp-mongodb-railway");
+    fs::create_dir_all(child_repo.join(".git")).expect("child git marker should be creatable");
+    fs::create_dir_all(child_repo.join("target/debug/.fingerprint"))
+        .expect("child target fixture should be creatable");
+
+    let config = FriggConfig::from_optional_workspace_roots(Vec::new())
+        .expect("empty serving config should be valid");
+    let server = FriggMcpServer::new_with_runtime_options(config, false);
+
+    let rejected = server
+        .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::GitRoot)
+        .expect_err("default GitRoot attach must reject a non-git parent");
+    assert!(
+        rejected.message.contains("could not resolve a Git root"),
+        "unexpected GitRoot attach rejection: {rejected:?}"
+    );
+    assert!(
+        server.known_workspaces().is_empty(),
+        "rejected GitRoot attach must not leave the non-git parent registered"
+    );
+
+    let direct = server
+        .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::Direct)
+        .expect("explicit Direct attach should still support non-git scratch workspaces");
+    assert_eq!(direct.resolution, WorkspaceResolveMode::Direct);
+    assert_eq!(
+        direct.repository.root_path,
+        workspace_root
+            .canonicalize()
+            .expect("workspace root should canonicalize")
+            .display()
+            .to_string()
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn provisional_path_workspace_can_be_pruned_after_pre_adoption_failure() {
     let workspace_root = authorized_temp_workspace_root("pre-adoption-failure-prunes-workspace");
     fs::create_dir_all(workspace_root.join("src"))
