@@ -201,6 +201,17 @@ impl FriggMcpServer {
         let source_max_total_bytes = Self::usize_to_u64(resource_budgets.source_max_total_bytes);
 
         for (index, path) in candidate_source_paths.iter().enumerate() {
+            if !Self::navigation_path_within_root(&target_corpus.root, path) {
+                source_read_diagnostics_count += 1;
+                warn!(
+                    repository_id = target_corpus.repository_id,
+                    path = %path.display(),
+                    root = %target_corpus.root.display(),
+                    "skipping source file outside repository root while resolving heuristic references"
+                );
+                continue;
+            }
+
             if source_started_at.elapsed() > source_max_elapsed {
                 let elapsed_ms =
                     u64::try_from(source_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1155,5 +1166,122 @@ impl FriggMcpServer {
             Json(self.present_find_references_response(response, params.response_mode))
         });
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::SymbolKind;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_workspace_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "frigg-find-references-{test_name}-{nonce}-{}",
+            std::process::id()
+        ))
+    }
+
+    fn test_symbol(path: PathBuf) -> SymbolDefinition {
+        SymbolDefinition {
+            stable_id: "repo::Target".to_owned(),
+            language: SymbolLanguage::Rust,
+            kind: SymbolKind::Function,
+            name: "Target".to_owned(),
+            path,
+            line: 1,
+            span: SourceSpan {
+                start_byte: 0,
+                end_byte: 6,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        }
+    }
+
+    fn test_corpus(
+        root: PathBuf,
+        source_paths: Vec<PathBuf>,
+        target_symbol: SymbolDefinition,
+    ) -> RepositorySymbolCorpus {
+        RepositorySymbolCorpus {
+            repository_id: "repo".to_owned(),
+            runtime_repository_id: "repo".to_owned(),
+            root,
+            root_signature: "test-root-signature".to_owned(),
+            source_paths,
+            symbols: vec![target_symbol],
+            container_symbol_index_by_index: vec![None],
+            symbols_by_relative_path: BTreeMap::new(),
+            symbol_index_by_stable_id: BTreeMap::new(),
+            symbol_indices_by_name: BTreeMap::new(),
+            symbol_indices_by_lower_name: BTreeMap::new(),
+            canonical_symbol_name_by_stable_id: BTreeMap::new(),
+            symbol_indices_by_canonical_name: BTreeMap::new(),
+            symbol_indices_by_lower_canonical_name: BTreeMap::new(),
+            rust_symbol_context_by_index: vec![None],
+            rust_implementation_facts: Vec::new(),
+            php_evidence_by_relative_path: BTreeMap::new(),
+            blade_evidence_by_relative_path: BTreeMap::new(),
+            diagnostics: RepositoryDiagnosticsSummary::default(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_heuristic_references_rejects_symlink_escape_source() {
+        let workspace_root = temp_workspace_root("symlink-escape-source");
+        let repo_root = workspace_root.join("repo");
+        let src_root = repo_root.join("src");
+        fs::create_dir_all(&src_root).expect("fixture src root should be creatable");
+
+        let target_path = src_root.join("target.rs");
+        let safe_path = src_root.join("safe.rs");
+        let symlink_path = src_root.join("leak.rs");
+        let outside_path = workspace_root.join("outside_secret.rs");
+        fs::write(&target_path, "fn Target() {}\n").expect("target fixture should be writable");
+        fs::write(&safe_path, "fn inside() { Target(); }\n")
+            .expect("inside fixture should be writable");
+        fs::write(&outside_path, "fn outside() { Target(); }\n")
+            .expect("outside fixture should be writable");
+        std::os::unix::fs::symlink(&outside_path, &symlink_path)
+            .expect("symlink fixture should be creatable");
+
+        let server = FriggMcpServer::new_with_runtime_options(
+            FriggConfig::from_workspace_roots(vec![repo_root.clone()])
+                .expect("workspace root must produce valid config"),
+            false,
+        );
+        let target_symbol = test_symbol(target_path.clone());
+        let corpus = test_corpus(
+            repo_root,
+            vec![safe_path.clone(), symlink_path.clone()],
+            target_symbol.clone(),
+        );
+
+        let loaded = server
+            .load_heuristic_references(
+                &corpus,
+                &target_symbol,
+                &SymbolGraph::default(),
+                "test-scip-signature".to_owned(),
+                server.find_references_resource_budgets(),
+            )
+            .expect("heuristic references should load");
+
+        assert_eq!(loaded.source_files_discovered, 2);
+        assert_eq!(loaded.source_files_loaded, 1);
+        assert_eq!(loaded.source_read_diagnostics_count, 1);
+        assert!(loaded.source_bytes_loaded > 0);
+        assert_eq!(loaded.references.len(), 1);
+        assert_eq!(loaded.references[0].path, safe_path);
+
+        let _ = fs::remove_dir_all(workspace_root);
     }
 }
