@@ -311,6 +311,7 @@ fn literal_search_small_limit_matches_sorted_prefix_of_full_results() -> FriggRe
 fn diagnostics_literal_search_reports_read_failures_deterministically() -> FriggResult<()> {
     let root = temp_workspace_root("literal-search-diagnostics-read-failure");
     fs::create_dir_all(root.join("src")).map_err(FriggError::Io)?;
+    fs::create_dir_all(root.join(".git")).map_err(FriggError::Io)?;
     fs::write(
         root.join("src/good.rs"),
         "pub fn hotspot() { let _ = \"needle_hotspot\"; }\n",
@@ -556,6 +557,7 @@ fn literal_search_low_limit_large_corpus_matches_sorted_prefix_deterministically
 
     let root = temp_workspace_root("literal-search-large-corpus-low-limit");
     fs::create_dir_all(root.join("src/nested")).map_err(FriggError::Io)?;
+    fs::create_dir_all(root.join(".git")).map_err(FriggError::Io)?;
     for file_idx in 0..FILE_COUNT {
         let relative = if file_idx % 2 == 0 {
             format!("src/file_{file_idx:03}.rs")

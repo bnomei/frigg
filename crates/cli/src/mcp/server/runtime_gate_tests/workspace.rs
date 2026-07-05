@@ -422,8 +422,9 @@ async fn workspace_detach_prunes_ephemeral_known_workspace_after_last_session() 
 
 #[test]
 fn workspace_attach_default_gitroot_rejects_non_git_parent() {
-    let workspace_root = authorized_temp_workspace_root("attach-default-gitroot-non-git-parent");
-    let child_repo = workspace_root.join("rust-mcp-mongodb-railway");
+    let non_git_workspace_root =
+        non_git_temp_workspace_root("attach-default-gitroot-non-git-parent");
+    let child_repo = non_git_workspace_root.join("rust-mcp-mongodb-railway");
     fs::create_dir_all(child_repo.join(".git")).expect("child git marker should be creatable");
     fs::create_dir_all(child_repo.join("target/debug/.fingerprint"))
         .expect("child target fixture should be creatable");
@@ -433,7 +434,7 @@ fn workspace_attach_default_gitroot_rejects_non_git_parent() {
     let server = FriggMcpServer::new_with_runtime_options(config, false);
 
     let rejected = server
-        .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::GitRoot)
+        .attach_workspace_internal(&non_git_workspace_root, true, WorkspaceResolveMode::GitRoot)
         .expect_err("default GitRoot attach must reject a non-git parent");
     assert!(
         rejected.message.contains("could not resolve a Git root"),
@@ -444,6 +445,9 @@ fn workspace_attach_default_gitroot_rejects_non_git_parent() {
         "rejected GitRoot attach must not leave the non-git parent registered"
     );
 
+    let workspace_root = authorized_temp_workspace_root("attach-direct-non-git-path");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("authorized direct workspace should be creatable");
     let direct = server
         .attach_workspace_internal(&workspace_root, true, WorkspaceResolveMode::Direct)
         .expect("explicit Direct attach should still support non-git scratch workspaces");
@@ -457,6 +461,7 @@ fn workspace_attach_default_gitroot_rejects_non_git_parent() {
             .to_string()
     );
 
+    let _ = fs::remove_dir_all(non_git_workspace_root);
     let _ = fs::remove_dir_all(workspace_root);
 }
 

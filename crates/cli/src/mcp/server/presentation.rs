@@ -572,6 +572,7 @@ mod tests {
         let workspace_root = temp_workspace_root("search-text-symlink-escape");
         let repo_root = workspace_root.join("repo");
         let src_root = repo_root.join("src");
+        fs::create_dir_all(repo_root.join(".git")).expect("repo git marker should be creatable");
         fs::create_dir_all(&src_root).expect("fixture src root should be creatable");
         fs::write(src_root.join("lib.rs"), "pub fn safe() {}\n")
             .expect("safe source fixture should be writable");

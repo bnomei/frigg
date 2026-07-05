@@ -23,6 +23,7 @@ fn cleanup_workspace(root: &Path) {
 }
 
 fn create_simple_workspace(root: &Path) {
+    fs::create_dir_all(root.join(".git")).expect("create git marker");
     fs::create_dir_all(root.join("src")).expect("create source dir");
     fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("write source file");
     fs::write(root.join("README.md"), "# Fixture\n").expect("write readme");
@@ -328,6 +329,7 @@ fn help_inlines_stable_defaults_for_env_and_context_options() {
 #[test]
 fn context_summary_defaults_to_compact_saved_percent_and_json_alias_keeps_full_summary() {
     let root = temp_workspace_root("context-summary-compact");
+    fs::create_dir_all(root.join(".git")).expect("create git marker");
     fs::create_dir_all(root.join(".frigg")).expect("create frigg dir");
     fs::write(
         root.join(".frigg/context.jsonl"),
@@ -388,7 +390,7 @@ fn quiet_verbose_conflict_fails_before_machine_output() {
 #[test]
 fn startup_gate_failure_writes_summary_to_stderr_not_stdout() {
     let root = temp_workspace_root("startup-failure");
-    fs::create_dir_all(&root).expect("create temp root");
+    fs::create_dir_all(root.join(".git")).expect("create git marker");
 
     let output = run_frigg(&root, &[]);
 

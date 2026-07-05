@@ -23,6 +23,8 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("frigg-test-support-{suffix}"));
         fs::create_dir_all(&root).expect("temp workspace root should be creatable");
+        fs::create_dir_all(root.join(".git"))
+            .expect("temp workspace git marker should be creatable");
         root
     }
 

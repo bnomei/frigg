@@ -26,7 +26,9 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("frigg-watch-{test_name}-{unique}"))
+    let root = std::env::temp_dir().join(format!("frigg-watch-{test_name}-{unique}"));
+    fs::create_dir_all(root.join(".git")).expect("temp watch workspace git marker should exist");
+    root
 }
 
 fn cleanup_workspace(path: &Path) {

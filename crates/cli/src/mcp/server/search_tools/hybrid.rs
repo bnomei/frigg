@@ -1225,10 +1225,13 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "frigg-hybrid-search-tools-{test_name}-{nonce}-{}",
             std::process::id()
-        ))
+        ));
+        fs::create_dir_all(root.join(".git"))
+            .expect("temp hybrid search workspace git marker should be creatable");
+        root
     }
 
     fn hybrid_match_fixture_for_repository(

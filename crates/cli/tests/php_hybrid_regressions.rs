@@ -27,6 +27,8 @@ fn cleanup_workspace_root(workspace_root: &Path) {
 }
 
 fn prepare_workspace(workspace_root: &Path, files: &[(&str, &str)]) {
+    fs::create_dir_all(workspace_root.join(".git"))
+        .expect("failed to create temporary fixture git marker");
     for (relative_path, contents) in files {
         let absolute_path = workspace_root.join(relative_path);
         if let Some(parent) = absolute_path.parent() {

@@ -72,6 +72,19 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "frigg-runtime-gate-tests-{test_name}-{}-{nanos_since_epoch}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join(".git")).expect("temp workspace git marker should be creatable");
+    root
+}
+
+fn non_git_temp_workspace_root(test_name: &str) -> PathBuf {
+    let nanos_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
     std::env::temp_dir().join(format!(
         "frigg-runtime-gate-tests-{test_name}-{}-{nanos_since_epoch}",
         std::process::id()

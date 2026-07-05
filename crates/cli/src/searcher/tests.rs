@@ -316,6 +316,7 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
 
 fn prepare_workspace(root: &Path, files: &[(&str, &str)]) -> FriggResult<()> {
     fs::create_dir_all(root).map_err(FriggError::Io)?;
+    fs::create_dir_all(root.join(".git")).map_err(FriggError::Io)?;
     for (relative_path, contents) in files {
         let path = root.join(relative_path);
         if let Some(parent) = path.parent() {
