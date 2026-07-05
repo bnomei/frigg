@@ -4,6 +4,7 @@
 //! workflows, root-scoped runtime config) into per-repository candidate sets used by every
 //! retrieval channel.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -131,13 +132,12 @@ impl TextSearcher {
                 );
                 candidate_intake_elapsed_us =
                     candidate_intake_elapsed_us.saturating_add(elapsed_us(root_config_started_at));
-                let candidates = candidates
-                    .into_iter()
-                    .map(|(relative_path, absolute_path)| SearchCandidateFile {
-                        relative_path,
-                        absolute_path,
-                    })
-                    .collect::<Vec<_>>();
+                let candidates = contained_search_candidate_files(
+                    &repository_id,
+                    &root,
+                    candidates,
+                    &mut diagnostics,
+                );
                 RepositoryCandidateUniverse {
                     repository_id,
                     root,
@@ -205,13 +205,12 @@ impl TextSearcher {
                     &mut candidate_universe.diagnostics,
                 ),
             );
-            repository.candidates = candidates
-                .into_iter()
-                .map(|(relative_path, absolute_path)| SearchCandidateFile {
-                    relative_path,
-                    absolute_path,
-                })
-                .collect::<Vec<_>>();
+            repository.candidates = contained_search_candidate_files(
+                &repository.repository_id,
+                &repository.root,
+                candidates,
+                &mut candidate_universe.diagnostics,
+            );
         }
 
         sort_search_diagnostics_deterministically(&mut candidate_universe.diagnostics.entries);
@@ -276,5 +275,92 @@ impl TextSearcher {
             candidate_intake_elapsed_us: elapsed_us(candidate_intake_started_at),
             freshness_validation_elapsed_us,
         }))
+    }
+}
+
+fn contained_search_candidate_files(
+    repository_id: &str,
+    root: &Path,
+    candidates: Vec<(String, PathBuf)>,
+    diagnostics: &mut SearchExecutionDiagnostics,
+) -> Vec<SearchCandidateFile> {
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    candidates
+        .into_iter()
+        .filter_map(|(relative_path, absolute_path)| {
+            if candidate_resolves_inside_root(&canonical_root, &absolute_path) {
+                return Some(SearchCandidateFile {
+                    relative_path,
+                    absolute_path,
+                });
+            }
+
+            diagnostics.entries.push(SearchDiagnostic {
+                repository_id: repository_id.to_owned(),
+                path: Some(relative_path),
+                kind: SearchDiagnosticKind::Read,
+                message:
+                    "skipped search candidate whose canonical target is outside the repository root"
+                        .to_owned(),
+            });
+            None
+        })
+        .collect()
+}
+
+fn candidate_resolves_inside_root(canonical_root: &Path, absolute_path: &Path) -> bool {
+    match fs::canonicalize(absolute_path) {
+        Ok(canonical_path) => canonical_path.starts_with(canonical_root),
+        Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn temp_search_root(test_name: &str) -> PathBuf {
+        let nanos_since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "frigg-searcher-{test_name}-{}-{nanos_since_epoch}",
+            std::process::id()
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contained_search_candidate_files_drops_symlink_escape() {
+        let workspace = temp_search_root("candidate-symlink-escape");
+        let repo_root = workspace.join("repo");
+        let src_root = repo_root.join("src");
+        fs::create_dir_all(&src_root).expect("failed to create repo fixture");
+        let outside_path = workspace.join("outside-secret.rs");
+        fs::write(&outside_path, "pub fn outside_secret() {}\n")
+            .expect("failed to seed outside fixture");
+        let link_path = src_root.join("leak.rs");
+        std::os::unix::fs::symlink(&outside_path, &link_path)
+            .expect("failed to create symlink fixture");
+
+        let mut diagnostics = SearchExecutionDiagnostics::default();
+        let candidates = contained_search_candidate_files(
+            "repo",
+            &repo_root,
+            vec![("src/leak.rs".to_owned(), link_path)],
+            &mut diagnostics,
+        );
+
+        assert!(
+            candidates.is_empty(),
+            "escaped symlink candidates must not reach native scan or ripgrep"
+        );
+        assert_eq!(diagnostics.entries.len(), 1);
+        assert_eq!(diagnostics.entries[0].path.as_deref(), Some("src/leak.rs"));
+
+        let _ = fs::remove_dir_all(&workspace);
     }
 }
