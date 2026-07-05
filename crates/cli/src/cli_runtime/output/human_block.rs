@@ -11,7 +11,7 @@ use frigg::human_output::{
 
 use super::fields::FieldBag;
 use super::human_topic::{
-    HUMAN_COLOR_DIM, HUMAN_COLOR_NEUTRAL, HumanTopic, action_color, human_severity_accent_color,
+    HUMAN_COLOR_NEUTRAL, HumanTopic, action_color, human_severity_accent_color,
     human_sidecar_line_color, human_title_accent_color,
 };
 use super::{OutputField, OutputLevel};
@@ -749,7 +749,7 @@ pub(crate) fn format_human_intro(color: bool) -> String {
         vec![HumanRow::note(HUMAN_INTRO_TAGLINE)],
         HUMAN_INTRO_MARKER,
         HUMAN_COLOR_NEUTRAL,
-        HUMAN_COLOR_DIM,
+        HUMAN_COLOR_NEUTRAL,
     )
     .with_empty_badge_column()
     .render(color, HUMAN_DEFAULT_WIDTH);

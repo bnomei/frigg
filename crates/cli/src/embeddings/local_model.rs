@@ -28,6 +28,7 @@ mod enabled {
     const DEFAULT_MODEL_REPOSITORY: &str = "Qdrant/all-MiniLM-L6-v2-onnx";
     const DOWNLOAD_PROGRESS_LABEL_WIDTH: usize = 28;
     const DOWNLOAD_PROGRESS_WIDTH: usize = 80;
+    const DOWNLOAD_PROGRESS_SERVER_BADGE: &str = "SRV";
     const DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE: &str = "1;38;2;90;205;210";
     #[cfg(test)]
     const DOWNLOAD_PROGRESS_SEMANTIC_COLOR: &str = "\x1b[1;38;2;90;205;210m";
@@ -611,6 +612,7 @@ mod enabled {
             DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE,
             DOWNLOAD_PROGRESS_SEMANTIC_COLOR_CODE,
         )
+        .with_badge_column(DOWNLOAD_PROGRESS_SERVER_BADGE)
         .render_with_min_label_width(
             color,
             DOWNLOAD_PROGRESS_WIDTH,
@@ -872,8 +874,9 @@ mod enabled {
 
             assert_eq!(
                 preview,
-                "╭─○ Loading semantic model\n│   model.onnx                   86.20 MiB/86.20 MiB\n│   config.json                  650 B/650 B\n╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
+                "SRV ╭─○ Loading semantic model\n    │   model.onnx                   86.20 MiB/86.20 MiB\n    │   config.json                  650 B/650 B\n    ╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
             );
+            assert!(colored.starts_with("\x1b[1;97;48;5;240mSRV\x1b[0m "));
             assert!(colored.contains(DOWNLOAD_PROGRESS_SEMANTIC_COLOR));
             assert!(colored.contains("model.onnx"));
             assert!(colored.contains("19.53 MiB/86.20 MiB"));
@@ -895,7 +898,7 @@ mod enabled {
             assert_eq!(group.row_count_for_test(), 1);
             assert_eq!(
                 group.rendered_card_for_test(),
-                "╭─○ Loading semantic model\n╰─╮ config.json                  325 B/650 B"
+                "SRV ╭─○ Loading semantic model\n    ╰─╮ config.json                  325 B/650 B"
             );
 
             first.finish();
@@ -909,7 +912,7 @@ mod enabled {
             assert!(group.all_rows_finished_for_test());
             assert_eq!(
                 group.rendered_card_for_test(),
-                "╭─○ Loading semantic model\n│   config.json                  650 B/650 B\n╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
+                "SRV ╭─○ Loading semantic model\n    │   config.json                  650 B/650 B\n    ╰─╮ tokenizer.json               694.98 KiB/694.98 KiB"
             );
         }
 

@@ -520,7 +520,8 @@ mod tests {
         let output = format_human_intro(true);
 
         assert!(output.contains(&format!("\u{1b}[{HUMAN_COLOR_NEUTRAL}m╭─◆ Frigg\u{1b}[0m")));
-        assert!(output.contains("\u{1b}[2m╰─╮ \u{1b}[0m"));
+        assert!(output.contains(&format!("\u{1b}[{HUMAN_COLOR_NEUTRAL}m╰─╮ \u{1b}[0m")));
+        assert!(!output.contains("\u{1b}[2m╰─╮ \u{1b}[0m"));
         assert!(output.contains(
             "\u{1b}[2mLocal, source-backed code search and navigation for AI agents.\u{1b}[0m"
         ));
