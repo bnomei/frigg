@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use frigg::settings::FriggConfig;
 use frigg::storage::resolve_workspace_relative_write_path;
@@ -268,19 +268,11 @@ fn classify_target_action(
     uninstall: bool,
     force: bool,
 ) -> (AdoptPlanAction, Option<String>) {
-    let path = root.join(target.path());
-    if !path.exists() {
-        return if uninstall {
-            (
-                AdoptPlanAction::Unchanged,
-                Some("target-missing".to_owned()),
-            )
-        } else {
-            (AdoptPlanAction::Create, Some("target-missing".to_owned()))
-        };
-    };
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
+    let contents = match read_existing_target_contents(root, target) {
+        Ok(Some(contents)) => contents,
+        Ok(None) => {
+            return classify_missing_target(uninstall);
+        }
         Err(err) => return (AdoptPlanAction::Error, Some(format!("read-error:{err}"))),
     };
 
@@ -290,6 +282,91 @@ fn classify_target_action(
         classify_mcp_target(&contents, uninstall, force)
     } else {
         classify_markdown_target(&contents, uninstall)
+    }
+}
+
+fn read_existing_target_contents(root: &Path, target: AdoptTarget) -> io::Result<Option<String>> {
+    read_existing_workspace_relative_file(root, Path::new(target.path()))
+}
+
+fn read_existing_workspace_relative_file(
+    root: &Path,
+    relative_path: &Path,
+) -> io::Result<Option<String>> {
+    validate_adopt_target_relative_path(relative_path)?;
+    let root_canonical = root.canonicalize().map_err(|err| {
+        io::Error::other(format!(
+            "failed to canonicalize workspace root {}: {err}",
+            root.display()
+        ))
+    })?;
+    let path = root_canonical.join(relative_path);
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+
+    let canonical_path = path.canonicalize().map_err(|err| {
+        io::Error::other(format!(
+            "failed to canonicalize adopt target read path {}: {err}",
+            path.display()
+        ))
+    })?;
+    if !canonical_path.starts_with(&root_canonical) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "adopt target read path escapes canonical workspace root boundary: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    fs::read_to_string(canonical_path).map(Some)
+}
+
+fn validate_adopt_target_relative_path(relative_path: &Path) -> io::Result<()> {
+    if relative_path.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "adopt target read path must not be empty",
+        ));
+    }
+
+    for component in relative_path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "adopt target read path contains parent traversal: {}",
+                        relative_path.display()
+                    ),
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "adopt target read path must be relative: {}",
+                        relative_path.display()
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn classify_missing_target(uninstall: bool) -> (AdoptPlanAction, Option<String>) {
+    if uninstall {
+        (
+            AdoptPlanAction::Unchanged,
+            Some("target-missing".to_owned()),
+        )
+    } else {
+        (AdoptPlanAction::Create, Some("target-missing".to_owned()))
     }
 }
 
@@ -353,12 +430,8 @@ fn apply_plan_entries(
             continue;
         }
 
+        let contents = read_existing_target_contents(&entry.root, entry.target)?;
         let write_path = resolve_entry_write_path(entry)?;
-        let contents = match fs::read_to_string(&entry.path) {
-            Ok(contents) => Some(contents),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-            Err(err) => return Err(Box::new(err)),
-        };
 
         let edit = if matches!(entry.target, AdoptTarget::Hook) {
             apply_claude_hook_edit(contents.as_deref(), uninstall)
@@ -908,6 +981,76 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn adopt_plan_rejects_symlink_target_escape_before_classification_read() {
+        let root = temp_dir("adopt-plan-symlink-target-root");
+        let outside = temp_dir("adopt-plan-symlink-target-outside");
+        fs::create_dir_all(root.join(".cursor")).expect("create cursor dir");
+        fs::create_dir_all(&outside).expect("create outside root");
+        let outside_mcp = outside.join("mcp.json");
+        fs::write(&outside_mcp, "{not json").expect("write outside mcp");
+        std::os::unix::fs::symlink(&outside_mcp, root.join(".cursor/mcp.json"))
+            .expect("create mcp symlink");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(&config, &[AdoptTarget::McpCursor], false, false, false)
+            .expect("build adopt plan");
+
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
+        let reason = plan.entries[0]
+            .reason
+            .as_deref()
+            .expect("read error reason should be present");
+        assert!(
+            reason.contains("escapes canonical workspace root boundary"),
+            "unexpected reason: {reason}"
+        );
+        assert!(
+            !reason.contains("invalid-json"),
+            "classification must not read escaped target contents: {reason}"
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+        fs::remove_dir_all(outside).expect("remove outside root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopt_apply_rejects_symlink_target_escape_before_apply_read() {
+        let root = temp_dir("adopt-apply-symlink-target-root");
+        let outside = temp_dir("adopt-apply-symlink-target-outside");
+        fs::create_dir_all(root.join(".cursor")).expect("create cursor dir");
+        fs::create_dir_all(&outside).expect("create outside root");
+        let outside_mcp = outside.join("mcp.json");
+        fs::write(&outside_mcp, "{not json").expect("write outside mcp");
+        std::os::unix::fs::symlink(&outside_mcp, root.join(".cursor/mcp.json"))
+            .expect("create mcp symlink");
+        let plan = super::AdoptPlan::new(vec![super::AdoptPlanEntry {
+            repository_id: "repo-001".to_owned(),
+            root: root.clone(),
+            target: AdoptTarget::McpCursor,
+            path: root.join(AdoptTarget::McpCursor.path()),
+            action: super::AdoptPlanAction::Update,
+            reason: Some("test-forced-update".to_owned()),
+        }]);
+
+        let err = apply_plan_entries(&plan, false, true)
+            .expect_err("symlinked target escape should fail before reading");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("escapes canonical workspace root boundary"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("invalid JSON"),
+            "apply must not read escaped target contents: {message}"
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+        fs::remove_dir_all(outside).expect("remove outside root");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn adopt_apply_rejects_symlink_parent_escape_before_write() {
         let root = temp_dir("adopt-apply-symlink-root");
         let outside = temp_dir("adopt-apply-symlink-outside");
@@ -933,6 +1076,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("{stem}-{unique}"))
+        let path = std::env::temp_dir().join(format!("{stem}-{unique}"));
+        fs::create_dir_all(path.join(".git")).expect("create fixture git root");
+        path
     }
 }

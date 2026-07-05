@@ -12,10 +12,12 @@ fn temp_workspace_root(test_name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!(
+    let root = std::env::temp_dir().join(format!(
         "frigg-cli-adopt-{test_name}-{}-{nanos_since_epoch}",
         std::process::id()
-    ))
+    ));
+    fs::create_dir_all(root.join(".git")).expect("create fixture git root");
+    root
 }
 
 fn cleanup_workspace(root: &Path) {
