@@ -420,9 +420,7 @@ impl FriggMcpServer {
                     }
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return Self::collapse_consecutive_slashes(
-                        normalized.trim_start_matches("./"),
-                    );
+                    return Self::collapse_consecutive_slashes(normalized.trim_start_matches("./"));
                 }
             }
         }
@@ -601,16 +599,27 @@ impl FriggMcpServer {
 
         let matching_paths =
             Self::navigation_location_absolute_paths(corpora, raw_path, repository_id_hint);
-        if matching_paths.len() != 1 {
+        if matching_paths.is_empty() {
             return Ok(());
         }
 
-        let absolute_path = &matching_paths[0];
-        let snapshot = FileContentSnapshot::from_path(absolute_path).map_err(|err| {
-            Self::map_lossy_line_slice_error(absolute_path, LossyLineSliceError::Io(err))
-        })?;
-        if let Err(error) = snapshot.read_line_slice_lossy(line, Some(line), usize::MAX) {
-            return Err(Self::map_lossy_line_slice_error(absolute_path, error));
+        let mut first_bounds_error = None;
+        for absolute_path in &matching_paths {
+            let snapshot = FileContentSnapshot::from_path(absolute_path).map_err(|err| {
+                Self::map_lossy_line_slice_error(absolute_path, LossyLineSliceError::Io(err))
+            })?;
+            match snapshot.read_line_slice_lossy(line, Some(line), usize::MAX) {
+                Ok(_) => return Ok(()),
+                Err(error) => {
+                    first_bounds_error.get_or_insert_with(|| {
+                        Self::map_lossy_line_slice_error(absolute_path, error)
+                    });
+                }
+            }
+        }
+
+        if let Some(error) = first_bounds_error {
+            return Err(error);
         }
 
         Ok(())

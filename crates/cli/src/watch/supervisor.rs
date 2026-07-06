@@ -38,6 +38,10 @@ const WATCH_INDEX_WORKER_PANIC_MESSAGE: &str = "watch index worker panicked";
 /// Callback invoked when watch-driven index work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
+fn startup_refresh_error_blocks_retry(error: &FriggError) -> bool {
+    matches!(error, FriggError::InvalidInput(_))
+}
+
 /// Callback invoked for user-facing watch progress events.
 pub type WatchEventReporter = Arc<dyn Fn(WatchEvent) + Send + Sync + 'static>;
 
@@ -1148,6 +1152,15 @@ fn queue_startup_refresh_if_needed(
     ) {
         Ok(status) => status,
         Err(error) => {
+            if startup_refresh_error_blocks_retry(&error) {
+                warn!(
+                    repository_id = %repository.repository_id,
+                    root = %repository.root.display(),
+                    error = %error,
+                    "built-in watch mode failed startup freshness validation; skipping doomed refresh"
+                );
+                return;
+            }
             warn!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -1228,6 +1241,15 @@ pub(super) fn queue_semantic_followup_if_needed(
     let status = match startup_refresh_status(repository, semantic_runtime, semantic_credentials) {
         Ok(status) => status,
         Err(error) => {
+            if startup_refresh_error_blocks_retry(&error) {
+                warn!(
+                    repository_id = %repository.repository_id,
+                    root = %repository.root.display(),
+                    error = %error,
+                    "built-in watch mode failed semantic follow-up validation; skipping doomed refresh"
+                );
+                return;
+            }
             warn!(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
@@ -1532,7 +1554,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_refresh_eval_failure_queues_manifest_fast_instead_of_silent_drop() {
+    fn startup_refresh_validation_failure_does_not_queue_doomed_manifest_fast() {
         use super::super::repository::watched_repository_for_root;
         use crate::settings::SemanticRuntimeProvider;
 
@@ -1565,8 +1587,8 @@ mod tests {
         );
 
         assert!(
-            scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
-            "a startup freshness evaluation failure must still queue a manifest-fast refresh"
+            !scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
+            "a startup validation failure must not queue a doomed manifest-fast refresh"
         );
     }
 

@@ -4,12 +4,12 @@
 
 use super::*;
 use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
-use rmcp::model::ErrorCode;
 use crate::mcp::types::{
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
     NavigationLocation, NavigationMode, OutgoingCallsResponse,
 };
+use rmcp::model::ErrorCode;
 use serde::Serialize;
 
 #[test]
@@ -530,6 +530,69 @@ fn navigation_rejects_line_past_eof_like_read_file_bounds() {
             .as_ref()
             .and_then(|value| value.get("total_lines")),
         Some(&serde_json::Value::from(5))
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn navigation_rejects_line_past_eof_for_ambiguous_corpus_path() {
+    let workspace_root = temp_workspace_root("navigation-ambiguous-line-past-eof");
+    let repo_a = workspace_root.join("repo-a");
+    let repo_b = workspace_root.join("repo-b");
+    for repo in [&repo_a, &repo_b] {
+        fs::create_dir_all(repo.join("src")).expect("failed to create workspace src directory");
+        fs::write(repo.join("src/lib.rs"), "fn helper() {}\n")
+            .expect("failed to write source fixture");
+    }
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![repo_a.clone(), repo_b.clone()])
+            .expect("workspace roots must produce valid config"),
+    );
+    let workspaces = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces();
+    for workspace in &workspaces {
+        server
+            .adopt_workspace(workspace, true)
+            .expect("server should adopt known workspace");
+    }
+    let corpora = server
+        .collect_repository_symbol_corpora(None)
+        .expect("symbol corpus collection should succeed");
+
+    let past_eof_line = 5usize;
+    let error = match FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src/lib.rs"),
+        Some(past_eof_line),
+        Some(1),
+        None,
+    ) {
+        Ok(_) => panic!("navigation should reject line numbers past EOF"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error.message, "start_line is outside file bounds");
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("start_line")),
+        Some(&serde_json::Value::from(past_eof_line))
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("total_lines")),
+        Some(&serde_json::Value::from(1))
     );
 
     let _ = fs::remove_dir_all(workspace_root);

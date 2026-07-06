@@ -348,6 +348,7 @@ impl FriggMcpServer {
             };
         if requested_limit == 0 {
             response.matches.clear();
+            response.total_matches = 0;
         } else if per_file_limit != usize::MAX {
             let mut retained = Vec::with_capacity(response.matches.len());
             let mut counts = BTreeMap::<(String, String), usize>::new();
@@ -682,6 +683,7 @@ mod tests {
             .expect("limit-zero collapse_by_file shaping should succeed");
 
         assert_eq!(response.matches.len(), 0);
+        assert_eq!(response.total_matches, 0);
         assert!(response.result_handle.is_none());
     }
 
@@ -706,6 +708,7 @@ mod tests {
             .expect("limit-zero files_with_matches shaping should succeed");
 
         assert_eq!(response.matches.len(), 0);
+        assert_eq!(response.total_matches, 0);
         assert!(response.result_handle.is_none());
     }
 }

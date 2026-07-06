@@ -54,8 +54,14 @@ pub(crate) fn run_adopt_command_with_output(
         None,
     )?;
 
-    let plan =
-        build_adopt_plan(config, &requested_targets, all, uninstall, force, mcp_server_url)?;
+    let plan = build_adopt_plan(
+        config,
+        &requested_targets,
+        all,
+        uninstall,
+        force,
+        mcp_server_url,
+    )?;
     let pending_changes = plan.pending_changes();
     let status = if plan.is_empty() {
         "noop"
@@ -572,7 +578,11 @@ fn classify_mcp_target(
     force: bool,
     mcp_server_url: &str,
 ) -> (AdoptPlanAction, Option<String>) {
-    let state = match json_merge::classify_mcp_entry(contents, mcp_server_url) {
+    let state = match if uninstall {
+        json_merge::classify_mcp_entry_for_uninstall(contents)
+    } else {
+        json_merge::classify_mcp_entry(contents, mcp_server_url)
+    } {
         Ok(state) => state,
         Err(err) => {
             return (AdoptPlanAction::Error, Some(format!("invalid-json:{err}")));
@@ -734,6 +744,32 @@ mod tests {
     }
 
     #[test]
+    fn adopt_plan_uninstall_removes_custom_port_mcp_entry() {
+        let root = temp_dir("adopt-plan-uninstall-custom-port-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:5000/mcp"}}}"#,
+        )
+        .expect("write mcp");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            true,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Remove);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
     fn adopt_apply_creates_missing_mcp_config() {
         let root = temp_dir("adopt-apply-create-mcp");
         fs::create_dir_all(&root).expect("create temp root");
@@ -887,6 +923,39 @@ mod tests {
         assert!(value["mcpServers"].get("frigg").is_none());
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
         assert_eq!(value["unrelated"], true);
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn adopt_apply_removes_custom_port_mcp_server_on_uninstall() {
+        let root = temp_dir("adopt-apply-remove-custom-port-mcp");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:5000/mcp"},"other":{"command":"other"}}}"#,
+        )
+        .expect("write mcp");
+        let config = FriggConfig::from_workspace_roots(vec![root.clone()])
+            .expect("config should accept workspace root");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            true,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
+
+        assert_eq!(
+            apply_mcp_json_entries(&plan, true, false, TEST_MCP_SERVER_URL).expect("apply mcp"),
+            1
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
+                .expect("parse mcp");
+        assert!(value["mcpServers"].get("frigg").is_none());
+        assert_eq!(value["mcpServers"]["other"]["command"], "other");
         fs::remove_dir_all(root).expect("remove temp root");
     }
 

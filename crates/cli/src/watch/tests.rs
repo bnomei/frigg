@@ -1206,7 +1206,7 @@ fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projec
 }
 
 #[test]
-fn watch_semantic_followup_freshness_error_queues_followup_after_manifest_success() {
+fn watch_semantic_followup_validation_error_skips_doomed_followup_after_manifest_success() {
     use crate::settings::SemanticRuntimeProvider;
 
     let now = Instant::now();
@@ -1224,10 +1224,7 @@ fn watch_semantic_followup_freshness_error_queues_followup_after_manifest_succes
         model: Some("text-embedding-3-small".to_owned()),
         strict_mode: false,
     };
-    let credentials = SemanticRuntimeCredentials {
-        openai_api_key: Some("test-openai-key".to_owned()),
-        gemini_api_key: None,
-    };
+    let credentials = SemanticRuntimeCredentials::default();
 
     let mut scheduler = WatchSchedulerState::new(0);
     scheduler.add_repository("repo-001");
@@ -1241,8 +1238,8 @@ fn watch_semantic_followup_freshness_error_queues_followup_after_manifest_succes
     );
 
     assert!(
-        scheduler.repository_pending("repo-001", WatchRefreshClass::SemanticFollowup),
-        "a semantic follow-up freshness evaluation failure must still queue semantic follow-up"
+        !scheduler.repository_pending("repo-001", WatchRefreshClass::SemanticFollowup),
+        "a semantic follow-up validation failure must not queue doomed work"
     );
 }
 

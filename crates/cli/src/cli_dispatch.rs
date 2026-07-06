@@ -5,6 +5,7 @@
 //! configured, and hands off long-lived MCP serve to the stdio or HTTP runtime entry points.
 
 use std::error::Error;
+use std::io;
 use std::sync::{Arc, RwLock};
 
 use clap::Parser;
@@ -69,8 +70,9 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 force,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
-                let adopt_mcp_http = resolve_http_runtime_config(&cli, true)?
-                    .expect("adopt resolves the same default MCP HTTP endpoint as serve");
+                let adopt_mcp_http = resolve_http_runtime_config(&cli, true)?.ok_or_else(|| {
+                    io::Error::other("adopt could not resolve the MCP HTTP endpoint")
+                })?;
                 let mcp_server_url = mcp_http_endpoint_url(adopt_mcp_http.bind_addr);
                 run_adopt_command_with_output(
                     &config,

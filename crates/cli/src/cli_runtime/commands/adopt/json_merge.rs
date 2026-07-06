@@ -99,6 +99,37 @@ pub(crate) fn classify_mcp_entry(
     }
 }
 
+/// Classifies an existing Frigg MCP server entry for uninstall.
+///
+/// Install/update remains strict about the exact resolved endpoint URL so user-diverged entries
+/// are not overwritten accidentally. Uninstall treats any HTTP entry under the Frigg key as owned,
+/// because earlier `adopt` runs may have resolved a different CLI bind address or port.
+pub(crate) fn classify_mcp_entry_for_uninstall(
+    contents: &str,
+) -> Result<McpEntryState, McpJsonError> {
+    let value: Value = serde_json::from_str(contents).map_err(McpJsonError::Parse)?;
+    let root = value.as_object().ok_or(McpJsonError::InvalidShape(
+        "MCP config root must be a JSON object",
+    ))?;
+    let Some(servers) = root.get(MCP_SERVERS_KEY) else {
+        return Ok(McpEntryState::Missing);
+    };
+    let Some(servers) = servers.as_object() else {
+        return Err(McpJsonError::InvalidShape(
+            "mcpServers must be a JSON object when present",
+        ));
+    };
+    let Some(existing) = servers.get(MCP_SERVER_KEY) else {
+        return Ok(McpEntryState::Missing);
+    };
+
+    if is_frigg_http_mcp_entry(existing) {
+        Ok(McpEntryState::Desired)
+    } else {
+        Ok(McpEntryState::Diverged)
+    }
+}
+
 pub(crate) fn desired_mcp_config(mcp_server_url: &str) -> Value {
     let mut servers = Map::new();
     servers.insert(
@@ -142,7 +173,7 @@ pub(crate) fn upsert_mcp_server(
 pub(crate) fn remove_mcp_server(
     contents: &str,
     force: bool,
-    mcp_server_url: &str,
+    _mcp_server_url: &str,
 ) -> Result<McpJsonEdit, McpJsonError> {
     let mut root = parse_object_root(contents)?;
     let Some(servers) = root.get_mut(MCP_SERVERS_KEY) else {
@@ -155,7 +186,7 @@ pub(crate) fn remove_mcp_server(
     };
 
     match servers.get(MCP_SERVER_KEY) {
-        Some(existing) if *existing == desired_mcp_server(mcp_server_url) || force => {}
+        Some(existing) if is_frigg_http_mcp_entry(existing) || force => {}
         Some(_) => return Ok(McpJsonEdit::Skipped),
         None => return Ok(McpJsonEdit::Unchanged),
     }
@@ -274,6 +305,13 @@ fn contains_desired_claude_hook(root: &Value) -> bool {
         .is_some_and(|pre_tool_use| pre_tool_use_contains_desired_hook(pre_tool_use))
 }
 
+fn is_frigg_http_mcp_entry(entry: &Value) -> bool {
+    entry.as_object().is_some_and(|server| {
+        server.get("type").and_then(Value::as_str) == Some("http")
+            && server.get("url").and_then(Value::as_str).is_some()
+    })
+}
+
 fn pre_tool_use_contains_desired_hook(pre_tool_use: &[Value]) -> bool {
     pre_tool_use.iter().any(|entry| {
         entry
@@ -358,8 +396,9 @@ mod tests {
 
     use super::{
         DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
-        classify_mcp_entry, desired_claude_hook_command, desired_mcp_config, desired_mcp_server,
-        remove_claude_hook, remove_mcp_server, upsert_claude_hook, upsert_mcp_server,
+        classify_mcp_entry, classify_mcp_entry_for_uninstall, desired_claude_hook_command,
+        desired_mcp_config, desired_mcp_server, remove_claude_hook, remove_mcp_server,
+        upsert_claude_hook, upsert_mcp_server,
     };
 
     #[test]
@@ -423,6 +462,21 @@ mod tests {
             )
             .expect("parse diverged"),
             McpEntryState::Diverged
+        );
+    }
+
+    #[test]
+    fn adopt_json_merge_uninstall_classifies_custom_http_port_as_owned() {
+        let contents =
+            r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:5000/mcp"}}}"#;
+
+        assert_eq!(
+            classify_mcp_entry(contents, DEFAULT_MCP_SERVER_URL).expect("strict classify"),
+            McpEntryState::Diverged
+        );
+        assert_eq!(
+            classify_mcp_entry_for_uninstall(contents).expect("uninstall classify"),
+            McpEntryState::Desired
         );
     }
 
@@ -509,6 +563,23 @@ mod tests {
         assert!(value["mcpServers"].get("frigg").is_none());
         assert_eq!(value["mcpServers"]["other"]["url"], "x");
         assert_eq!(value["unrelated"], 1);
+    }
+
+    #[test]
+    fn adopt_json_merge_uninstall_removes_custom_http_port() {
+        let edit = remove_mcp_server(
+            r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:5000/mcp"},"other":{"url":"x"}}}"#,
+            false,
+            DEFAULT_MCP_SERVER_URL,
+        )
+        .expect("remove custom-port config");
+
+        let McpJsonEdit::Changed(updated) = edit else {
+            panic!("expected changed edit");
+        };
+        let value: serde_json::Value = serde_json::from_str(&updated).expect("parse updated");
+        assert!(value["mcpServers"].get("frigg").is_none());
+        assert_eq!(value["mcpServers"]["other"]["url"], "x");
     }
 
     #[test]
