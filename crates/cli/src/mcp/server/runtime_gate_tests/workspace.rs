@@ -5,9 +5,10 @@
 use super::*;
 use crate::mcp::types::{
     ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode,
-    WorkspacePreciseGenerationAction, WorkspacePreciseGenerationStatus,
-    WorkspacePreciseLifecyclePhase,
+    WorkspaceIndexAction, WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
+    WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
 };
+use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 
 #[tokio::test]
 async fn list_files_auto_adopts_single_known_repository_without_repository_id() {
@@ -1383,6 +1384,66 @@ printf '%s' "nonblocking-python-scip" > "${{6}}"
     assert_eq!(
         fs::read(&expected_artifact).expect("non-blocking precise generation should publish"),
         b"nonblocking-python-scip"
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn workspace_index_lifecycle_summary_ready_with_failed_reports_failed_phase() {
+    let workspace_root = temp_workspace_root("index-lifecycle-ready-with-failed");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace root fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub struct ReadyWithFailed;\n")
+        .expect("failed to write workspace root fixture");
+
+    let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+        .expect("workspace root must produce valid config");
+    config.semantic_runtime.enabled = false;
+
+    let server = FriggMcpServer::new(config);
+    let workspace = server
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("startup roots should register globally known workspaces");
+    fs::create_dir_all(
+        workspace
+            .db_path
+            .parent()
+            .expect("workspace db path should have a parent directory"),
+    )
+    .expect("workspace db parent should be creatable");
+    crate::indexer::index_repository_with_runtime_config(
+        &workspace.runtime_repository_id,
+        &workspace.root,
+        &workspace.db_path,
+        crate::indexer::IndexMode::Full,
+        &SemanticRuntimeConfig::default(),
+        &SemanticRuntimeCredentials::from_process_env(),
+    )
+    .expect("fixture index should seed a ready manifest snapshot");
+
+    let failure_summary = Some("attach index refresh task failed".to_owned());
+    let summary = server.workspace_index_lifecycle_summary(
+        &workspace,
+        WorkspaceAttachIndexMode::Ensure,
+        true,
+        false,
+        WorkspaceIndexAction::Failed,
+        failure_summary.clone(),
+    );
+
+    assert!(
+        summary.lexical_ready && summary.semantic_ready,
+        "counterexample requires concurrent readiness while attach refresh failed"
+    );
+    assert_eq!(summary.action_taken, WorkspaceIndexAction::Failed);
+    assert_eq!(summary.failure_summary, failure_summary);
+    assert_eq!(
+        summary.phase,
+        WorkspaceIndexLifecyclePhase::Failed,
+        "attach failure must not be masked as Ready when index freshness is already true"
     );
 
     let _ = fs::remove_dir_all(workspace_root);

@@ -503,13 +503,13 @@ impl FriggMcpServer {
             self.workspace_index_readiness(workspace);
         let active_tasks = self.active_repository_index_tasks(&workspace.repository_id);
         let failure_summary = failure_summary.or(readiness_error);
-        let phase = if lexical_ready && semantic_ready {
-            WorkspaceIndexLifecyclePhase::Ready
-        } else if timed_out {
+        let phase = if timed_out {
             WorkspaceIndexLifecyclePhase::Timeout
         } else if failure_summary.is_some() || matches!(action_taken, WorkspaceIndexAction::Failed)
         {
             WorkspaceIndexLifecyclePhase::Failed
+        } else if lexical_ready && semantic_ready {
+            WorkspaceIndexLifecyclePhase::Ready
         } else if !active_tasks.is_empty()
             || matches!(action_taken, WorkspaceIndexAction::SkippedActiveTask)
         {
