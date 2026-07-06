@@ -545,6 +545,55 @@ impl FriggMcpServer {
         3
     }
 
+    fn navigation_location_absolute_paths(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        repository_id_hint: Option<&str>,
+    ) -> Vec<PathBuf> {
+        corpora
+            .iter()
+            .filter(|corpus| {
+                repository_id_hint.is_none_or(|hint| {
+                    corpus.repository_id == hint || corpus.runtime_repository_id == hint
+                })
+            })
+            .filter_map(|corpus| {
+                let requested_path = Self::requested_location_path_for_corpus(corpus, raw_path);
+                let absolute_path = corpus.root.join(&requested_path);
+                (Self::navigation_path_within_root(&corpus.root, &absolute_path)
+                    && absolute_path.is_file())
+                .then_some(absolute_path)
+            })
+            .collect()
+    }
+
+    pub(in crate::mcp::server) fn validate_navigation_location_line_bounds(
+        corpora: &[Arc<RepositorySymbolCorpus>],
+        raw_path: &str,
+        line: usize,
+        repository_id_hint: Option<&str>,
+    ) -> Result<(), ErrorData> {
+        if line == 0 {
+            return Ok(());
+        }
+
+        let matching_paths =
+            Self::navigation_location_absolute_paths(corpora, raw_path, repository_id_hint);
+        if matching_paths.len() != 1 {
+            return Ok(());
+        }
+
+        let absolute_path = &matching_paths[0];
+        let snapshot = FileContentSnapshot::from_path(absolute_path).map_err(|err| {
+            Self::map_lossy_line_slice_error(absolute_path, LossyLineSliceError::Io(err))
+        })?;
+        if let Err(error) = snapshot.read_line_slice_lossy(line, Some(line), usize::MAX) {
+            return Err(Self::map_lossy_line_slice_error(absolute_path, error));
+        }
+
+        Ok(())
+    }
+
     fn resolve_navigation_symbol_query_from_location(
         corpora: &[Arc<RepositorySymbolCorpus>],
         raw_path: &str,
@@ -1074,6 +1123,12 @@ impl FriggMcpServer {
         repository_id_hint: Option<&str>,
         location_hint: Option<NavigationLocationTokenHint>,
     ) -> Result<ResolvedNavigationTarget, ErrorData> {
+        Self::validate_navigation_location_line_bounds(
+            corpora,
+            raw_path,
+            line,
+            repository_id_hint,
+        )?;
         if let Some(location_hint) = location_hint
             && let Ok(target) = Self::resolve_navigation_symbol_target(
                 corpora,

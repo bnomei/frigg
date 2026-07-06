@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::domain::model::{ReferenceMatch, ReferenceMatchKind};
+use rmcp::model::ErrorCode;
 use crate::mcp::types::{
     CallHierarchyMatch, FindDeclarationsResponse, FindImplementationsResponse,
     FindReferencesResponse, ImplementationMatch, IncomingCallsResponse, NavigationAvailability,
@@ -464,6 +465,71 @@ async fn search_structural_invalid_query_returns_recovery_guidance() {
         fallback_tools
             .iter()
             .any(|value| value.as_str() == Some("inspect_syntax_tree"))
+    );
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
+fn navigation_rejects_line_past_eof_like_read_file_bounds() {
+    let workspace_root = temp_workspace_root("navigation-line-past-eof");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "fn helper() {}\n\nfn wrapper() {\n    helper();\n}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&repository_id))
+        .expect("symbol corpus collection should succeed");
+
+    let past_eof_line = 11usize;
+    let error = match FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src/lib.rs"),
+        Some(past_eof_line),
+        Some(1),
+        None,
+    ) {
+        Ok(_) => panic!("navigation should reject line numbers past EOF"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error.message, "start_line is outside file bounds");
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("start_line")),
+        Some(&serde_json::Value::from(past_eof_line))
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("total_lines")),
+        Some(&serde_json::Value::from(5))
     );
 
     let _ = fs::remove_dir_all(workspace_root);
