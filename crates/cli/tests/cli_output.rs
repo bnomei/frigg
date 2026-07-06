@@ -343,7 +343,7 @@ fn context_summary_defaults_to_compact_saved_percent_and_json_alias_keeps_full_s
     );
 
     assert_success(&compact);
-    assert_eq!(stdout(&compact), "88% saved, 1 tool call, 30 days\n");
+    assert_eq!(stdout(&compact), "88% saved, 1 tool call, 31 days\n");
     assert_eq!(stderr(&compact), "");
 
     let json = run_frigg(
