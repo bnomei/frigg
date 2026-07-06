@@ -336,7 +336,17 @@ impl ContextSummaryWindow {
         let (date_since, date_until) = match (parsed_since, parsed_until) {
             (Some(date_since), Some(date_until)) => (date_since, date_until),
             (Some(date_since), None) => (date_since, now),
-            (None, Some(date_until)) => (date_until - Duration::days(30), date_until),
+            (None, Some(date_until)) => {
+                let date_since = date_until
+                    .checked_sub_signed(Duration::days(30))
+                    .ok_or_else(|| {
+                        ContextSummaryError::InvalidDate(format!(
+                            "date_until minus 30 days is out of range: {}",
+                            date_until.to_rfc3339()
+                        ))
+                    })?;
+                (date_since, date_until)
+            }
             (None, None) => (now - Duration::days(30), now),
         };
 
@@ -1073,6 +1083,20 @@ mod tests {
 
         assert_eq!(window.date_since.to_rfc3339(), "2026-06-02T12:00:00+00:00");
         assert_eq!(window.date_until.to_rfc3339(), "2026-07-02T12:00:00+00:00");
+    }
+
+    #[test]
+    fn context_efficiency_summary_window_rejects_until_minus_30_days_underflow() {
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+
+        let result = ContextSummaryWindow::resolve(None, Some("-262143-01-15"), now);
+        assert!(result.is_err());
+        match result {
+            Err(ContextSummaryError::InvalidDate(_)) => {}
+            other => panic!("expected InvalidDate, got {other:?}"),
+        }
     }
 
     #[test]
