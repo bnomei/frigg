@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::domain::{FriggError, FriggResult};
+use crate::embeddings::provider_factory::canonical_provider_model;
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
 use crate::storage::{Storage, StorageSession};
 
@@ -412,15 +413,16 @@ pub(crate) fn build_semantic_refresh_plan(
         .provider
         .ok_or_else(|| {
             FriggError::Internal("semantic runtime provider missing after validation".to_owned())
-        })?
-        .as_str()
-        .to_owned();
+        })?;
     let model = semantic_runtime
         .normalized_model()
         .ok_or_else(|| {
             FriggError::Internal("semantic runtime model missing after validation".to_owned())
-        })?
-        .to_owned();
+        })?;
+    let model = canonical_provider_model(provider, model).map_err(|err| {
+        FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
+    })?;
+    let provider = provider.as_str().to_owned();
     let semantic_head_snapshot_id = match storage {
         Some(storage) => storage
             .load_semantic_head_for_repository_model(repository_id, &provider, &model)?

@@ -128,6 +128,46 @@ fn semantic_indexing_local_provider_persists_local_model_rows_and_projects_short
 }
 
 #[test]
+fn semantic_indexing_local_model_alias_indexes_with_canonical_partition() -> FriggResult<()> {
+    let db_path = temp_db_path("semantic-local-model-alias");
+    let workspace_root = temp_workspace_root("semantic-local-model-alias");
+    prepare_workspace(
+        &workspace_root,
+        &[("src/alias.rs", "pub fn local_model_alias_index() {}\n")],
+    )?;
+
+    let semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::Local),
+        model: Some("AllMiniLML6V2".to_owned()),
+        strict_mode: false,
+    };
+    let summary = index_repository_with_semantic_executor(
+        "repo-001",
+        &workspace_root,
+        &db_path,
+        IndexMode::Full,
+        &semantic_runtime,
+        &SemanticRuntimeCredentials::default(),
+        &ShortSemanticEmbeddingExecutor,
+    )?;
+
+    assert_eq!(summary.semantic_model.as_deref(), Some("all-MiniLM-L6-v2"));
+
+    let storage = Storage::new(&db_path);
+    let semantic_rows = storage
+        .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
+    assert!(!semantic_rows.is_empty());
+    assert!(semantic_rows.iter().all(|record| {
+        record.provider == "local" && record.model == "all-MiniLM-L6-v2"
+    }));
+
+    cleanup_workspace(&workspace_root);
+    cleanup_db(&db_path);
+    Ok(())
+}
+
+#[test]
 fn semantic_full_index_skips_stale_deleted_absolute_paths_outside_workspace() -> FriggResult<()> {
     let db_path = temp_db_path("semantic-full-stale-deleted-outside-root");
     let workspace_root = temp_workspace_root("semantic-full-stale-deleted-outside-root");
