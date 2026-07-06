@@ -339,14 +339,14 @@ impl ContextSummaryWindow {
             (None, Some(date_until)) => {
                 let date_since = match date_until.date_only {
                     Some(until_date) => {
-                        let since_date = until_date.checked_sub_signed(Duration::days(30)).ok_or_else(
-                            || {
+                        let since_date = until_date
+                            .checked_sub_signed(Duration::days(30))
+                            .ok_or_else(|| {
                                 ContextSummaryError::InvalidDate(format!(
                                     "date_until minus 30 days is out of range: {}",
                                     date_until.instant.to_rfc3339()
                                 ))
-                            },
-                        )?;
+                            })?;
                         start_of_utc_day(since_date).map_err(ContextSummaryError::InvalidDate)?
                     }
                     None => date_until
@@ -1198,10 +1198,7 @@ mod tests {
             .expect("missing context log should summarize");
 
         assert_eq!(summary.date_since, "2026-06-01T00:00:00+00:00");
-        assert_eq!(
-            summary.date_until,
-            "2026-07-01T23:59:59.999999999+00:00"
-        );
+        assert_eq!(summary.date_until, "2026-07-01T23:59:59.999999999+00:00");
         assert_eq!(summary.roots.len(), 1);
         assert!(!summary.roots[0].exists);
         assert_eq!(summary.totals.events, 0);
@@ -1269,10 +1266,7 @@ mod tests {
 
         assert_eq!(summary.totals.events, 1);
         assert_eq!(summary.totals.returned_unique_file_bytes, 40);
-        assert_eq!(
-            summary.totals.matched_file_context_saved_bytes_estimate,
-            32
-        );
+        assert_eq!(summary.totals.matched_file_context_saved_bytes_estimate, 32);
 
         let _ = std::fs::remove_dir_all(root);
     }

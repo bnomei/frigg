@@ -2082,7 +2082,8 @@ exit 1
         );
         assert!(
             run.generators.iter().all(|item| {
-                item.summary.status != crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
+                item.summary.status
+                    != crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
             }),
             "every selected generator should fail in this fixture"
         );

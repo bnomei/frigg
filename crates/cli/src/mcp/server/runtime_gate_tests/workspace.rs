@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::mcp::types::{
-    ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode,
-    WorkspaceIndexAction, WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
+    ListRepositoriesParams, WorkspaceAttachAction, WorkspaceAttachIndexMode, WorkspaceIndexAction,
+    WorkspaceIndexLifecyclePhase, WorkspacePreciseGenerationAction,
     WorkspacePreciseGenerationStatus, WorkspacePreciseLifecyclePhase,
 };
 use crate::settings::{SemanticRuntimeConfig, SemanticRuntimeCredentials};
@@ -1394,8 +1394,11 @@ fn workspace_index_lifecycle_summary_ready_with_failed_reports_failed_phase() {
     let workspace_root = temp_workspace_root("index-lifecycle-ready-with-failed");
     fs::create_dir_all(workspace_root.join("src"))
         .expect("failed to create workspace root fixture");
-    fs::write(workspace_root.join("src/lib.rs"), "pub struct ReadyWithFailed;\n")
-        .expect("failed to write workspace root fixture");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "pub struct ReadyWithFailed;\n",
+    )
+    .expect("failed to write workspace root fixture");
 
     let mut config = FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
         .expect("workspace root must produce valid config");

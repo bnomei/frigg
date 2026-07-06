@@ -409,16 +409,12 @@ pub(crate) fn build_semantic_refresh_plan(
         });
     }
 
-    let provider = semantic_runtime
-        .provider
-        .ok_or_else(|| {
-            FriggError::Internal("semantic runtime provider missing after validation".to_owned())
-        })?;
-    let model = semantic_runtime
-        .normalized_model()
-        .ok_or_else(|| {
-            FriggError::Internal("semantic runtime model missing after validation".to_owned())
-        })?;
+    let provider = semantic_runtime.provider.ok_or_else(|| {
+        FriggError::Internal("semantic runtime provider missing after validation".to_owned())
+    })?;
+    let model = semantic_runtime.normalized_model().ok_or_else(|| {
+        FriggError::Internal("semantic runtime model missing after validation".to_owned())
+    })?;
     let model = canonical_provider_model(provider, model).map_err(|err| {
         FriggError::InvalidInput(format!("semantic runtime model validation failed: {err}"))
     })?;

@@ -158,9 +158,11 @@ fn semantic_indexing_local_model_alias_indexes_with_canonical_partition() -> Fri
     let semantic_rows = storage
         .load_semantic_embeddings_for_repository_snapshot("repo-001", &summary.snapshot_id)?;
     assert!(!semantic_rows.is_empty());
-    assert!(semantic_rows.iter().all(|record| {
-        record.provider == "local" && record.model == "all-MiniLM-L6-v2"
-    }));
+    assert!(
+        semantic_rows
+            .iter()
+            .all(|record| { record.provider == "local" && record.model == "all-MiniLM-L6-v2" })
+    );
 
     cleanup_workspace(&workspace_root);
     cleanup_db(&db_path);
