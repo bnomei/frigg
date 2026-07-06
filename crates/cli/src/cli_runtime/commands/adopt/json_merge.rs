@@ -5,6 +5,7 @@
 
 use serde_json::{Map, Value, json};
 
+#[cfg(test)]
 pub(crate) const DEFAULT_MCP_SERVER_URL: &str = "http://127.0.0.1:37444/mcp";
 pub(crate) const MCP_SERVER_KEY: &str = "frigg";
 const MCP_SERVERS_KEY: &str = "mcpServers";
@@ -63,15 +64,18 @@ impl std::error::Error for McpJsonError {
 }
 
 /// Returns the canonical Frigg MCP HTTP server entry written by adopt.
-pub(crate) fn desired_mcp_server() -> Value {
+pub(crate) fn desired_mcp_server(mcp_server_url: &str) -> Value {
     json!({
         "type": "http",
-        "url": DEFAULT_MCP_SERVER_URL,
+        "url": mcp_server_url,
     })
 }
 
 /// Classifies the Frigg MCP server entry in existing `.mcp.json` or Cursor MCP config contents.
-pub(crate) fn classify_mcp_entry(contents: &str) -> Result<McpEntryState, McpJsonError> {
+pub(crate) fn classify_mcp_entry(
+    contents: &str,
+    mcp_server_url: &str,
+) -> Result<McpEntryState, McpJsonError> {
     let value: Value = serde_json::from_str(contents).map_err(McpJsonError::Parse)?;
     let root = value.as_object().ok_or(McpJsonError::InvalidShape(
         "MCP config root must be a JSON object",
@@ -88,16 +92,19 @@ pub(crate) fn classify_mcp_entry(contents: &str) -> Result<McpEntryState, McpJso
         return Ok(McpEntryState::Missing);
     };
 
-    if *existing == desired_mcp_server() {
+    if *existing == desired_mcp_server(mcp_server_url) {
         Ok(McpEntryState::Desired)
     } else {
         Ok(McpEntryState::Diverged)
     }
 }
 
-pub(crate) fn desired_mcp_config() -> Value {
+pub(crate) fn desired_mcp_config(mcp_server_url: &str) -> Value {
     let mut servers = Map::new();
-    servers.insert(MCP_SERVER_KEY.to_owned(), desired_mcp_server());
+    servers.insert(
+        MCP_SERVER_KEY.to_owned(),
+        desired_mcp_server(mcp_server_url),
+    );
 
     let mut root = Map::new();
     root.insert(MCP_SERVERS_KEY.to_owned(), Value::Object(servers));
@@ -108,25 +115,35 @@ pub(crate) fn desired_mcp_config() -> Value {
 pub(crate) fn upsert_mcp_server(
     contents: Option<&str>,
     force: bool,
+    mcp_server_url: &str,
 ) -> Result<McpJsonEdit, McpJsonError> {
     let Some(contents) = contents else {
-        return serialize_changed(desired_mcp_config());
+        return serialize_changed(desired_mcp_config(mcp_server_url));
     };
 
     let mut root = parse_object_root(contents)?;
     let servers = ensure_servers_object(&mut root)?;
     match servers.get(MCP_SERVER_KEY) {
-        Some(existing) if *existing == desired_mcp_server() => return Ok(McpJsonEdit::Unchanged),
+        Some(existing) if *existing == desired_mcp_server(mcp_server_url) => {
+            return Ok(McpJsonEdit::Unchanged);
+        }
         Some(_) if !force => return Ok(McpJsonEdit::Skipped),
         _ => {}
     }
 
-    servers.insert(MCP_SERVER_KEY.to_owned(), desired_mcp_server());
+    servers.insert(
+        MCP_SERVER_KEY.to_owned(),
+        desired_mcp_server(mcp_server_url),
+    );
     serialize_if_changed(Value::Object(root), contents)
 }
 
 /// Removes the Frigg MCP server entry, skipping diverged entries unless `force` is set.
-pub(crate) fn remove_mcp_server(contents: &str, force: bool) -> Result<McpJsonEdit, McpJsonError> {
+pub(crate) fn remove_mcp_server(
+    contents: &str,
+    force: bool,
+    mcp_server_url: &str,
+) -> Result<McpJsonEdit, McpJsonError> {
     let mut root = parse_object_root(contents)?;
     let Some(servers) = root.get_mut(MCP_SERVERS_KEY) else {
         return Ok(McpJsonEdit::Unchanged);
@@ -138,7 +155,7 @@ pub(crate) fn remove_mcp_server(contents: &str, force: bool) -> Result<McpJsonEd
     };
 
     match servers.get(MCP_SERVER_KEY) {
-        Some(existing) if *existing == desired_mcp_server() || force => {}
+        Some(existing) if *existing == desired_mcp_server(mcp_server_url) || force => {}
         Some(_) => return Ok(McpJsonEdit::Skipped),
         None => return Ok(McpJsonEdit::Unchanged),
     }
@@ -337,6 +354,8 @@ fn serialize_value(value: Value) -> Result<String, McpJsonError> {
 mod tests {
     #![allow(clippy::panic, clippy::unwrap_used)]
 
+    use serde_json::json;
+
     use super::{
         DEFAULT_MCP_SERVER_URL, MCP_SERVER_KEY, McpEntryState, McpJsonEdit, classify_claude_hook,
         classify_mcp_entry, desired_claude_hook_command, desired_mcp_config, desired_mcp_server,
@@ -351,32 +370,58 @@ mod tests {
 
     #[test]
     fn adopt_json_merge_desired_config_has_frigg_server_key() {
-        let config = desired_mcp_config();
+        let config = desired_mcp_config(DEFAULT_MCP_SERVER_URL);
 
         assert_eq!(
             config["mcpServers"][MCP_SERVER_KEY],
-            desired_mcp_server(),
+            desired_mcp_server(DEFAULT_MCP_SERVER_URL),
             "desired config should contain the fixed Frigg MCP entry"
+        );
+    }
+
+    #[test]
+    fn desired_mcp_server_uses_resolved_http_endpoint_url() {
+        let custom_url = "http://127.0.0.1:5000/mcp";
+        assert_eq!(
+            desired_mcp_server(custom_url),
+            json!({
+                "type": "http",
+                "url": custom_url,
+            })
+        );
+        assert_eq!(
+            upsert_mcp_server(None, false, custom_url).expect("create custom config"),
+            McpJsonEdit::Changed(
+                "{\n  \"mcpServers\": {\n    \"frigg\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:5000/mcp\"\n    }\n  }\n}\n"
+                    .to_owned()
+            )
         );
     }
 
     #[test]
     fn adopt_json_merge_classifies_missing_desired_and_diverged_entries() {
         assert_eq!(
-            classify_mcp_entry(r#"{"mcpServers":{"other":{"url":"http://localhost"}}}"#)
-                .expect("parse missing"),
+            classify_mcp_entry(
+                r#"{"mcpServers":{"other":{"url":"http://localhost"}}}"#,
+                DEFAULT_MCP_SERVER_URL
+            )
+            .expect("parse missing"),
             McpEntryState::Missing
         );
         assert_eq!(
             classify_mcp_entry(
-                r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:37444/mcp"}}}"#
+                r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:37444/mcp"}}}"#,
+                DEFAULT_MCP_SERVER_URL
             )
             .expect("parse desired"),
             McpEntryState::Desired
         );
         assert_eq!(
-            classify_mcp_entry(r#"{"mcpServers":{"frigg":{"command":"frigg"}}}"#)
-                .expect("parse diverged"),
+            classify_mcp_entry(
+                r#"{"mcpServers":{"frigg":{"command":"frigg"}}}"#,
+                DEFAULT_MCP_SERVER_URL
+            )
+            .expect("parse diverged"),
             McpEntryState::Diverged
         );
     }
@@ -384,7 +429,7 @@ mod tests {
     #[test]
     fn adopt_json_merge_creates_missing_config() {
         assert_eq!(
-            upsert_mcp_server(None, false).expect("create config"),
+            upsert_mcp_server(None, false, DEFAULT_MCP_SERVER_URL).expect("create config"),
             McpJsonEdit::Changed(
                 "{\n  \"mcpServers\": {\n    \"frigg\": {\n      \"type\": \"http\",\n      \"url\": \"http://127.0.0.1:37444/mcp\"\n    }\n  }\n}\n"
                     .to_owned()
@@ -399,6 +444,7 @@ mod tests {
                 r#"{"unrelated":true,"mcpServers":{"other":{"command":"other","args":["serve"]}}}"#,
             ),
             false,
+            DEFAULT_MCP_SERVER_URL,
         )
         .expect("merge config");
 
@@ -408,7 +454,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&updated).expect("parse updated");
         assert_eq!(value["unrelated"], true);
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
-        assert_eq!(value["mcpServers"][MCP_SERVER_KEY], desired_mcp_server());
+        assert_eq!(
+            value["mcpServers"][MCP_SERVER_KEY],
+            desired_mcp_server(DEFAULT_MCP_SERVER_URL)
+        );
     }
 
     #[test]
@@ -416,7 +465,8 @@ mod tests {
         assert_eq!(
             upsert_mcp_server(
                 Some(r#"{"mcpServers":{"frigg":{"command":"frigg"}}}"#),
-                false
+                false,
+                DEFAULT_MCP_SERVER_URL
             )
             .expect("merge config"),
             McpJsonEdit::Skipped
@@ -428,6 +478,7 @@ mod tests {
         let edit = upsert_mcp_server(
             Some(r#"{"mcpServers":{"frigg":{"command":"frigg"},"other":{"url":"x"}}}"#),
             true,
+            DEFAULT_MCP_SERVER_URL,
         )
         .expect("force merge config");
 
@@ -435,7 +486,10 @@ mod tests {
             panic!("expected changed edit");
         };
         let value: serde_json::Value = serde_json::from_str(&updated).expect("parse updated");
-        assert_eq!(value["mcpServers"]["frigg"], desired_mcp_server());
+        assert_eq!(
+            value["mcpServers"]["frigg"],
+            desired_mcp_server(DEFAULT_MCP_SERVER_URL)
+        );
         assert_eq!(value["mcpServers"]["other"]["url"], "x");
     }
 
@@ -444,6 +498,7 @@ mod tests {
         let edit = remove_mcp_server(
             r#"{"mcpServers":{"frigg":{"type":"http","url":"http://127.0.0.1:37444/mcp"},"other":{"url":"x"}},"unrelated":1}"#,
             false,
+            DEFAULT_MCP_SERVER_URL,
         )
         .expect("remove config");
 
@@ -458,21 +513,23 @@ mod tests {
 
     #[test]
     fn adopt_json_merge_rejects_malformed_json_without_output() {
-        let err = upsert_mcp_server(Some("{not json"), false).expect_err("reject malformed JSON");
+        let err = upsert_mcp_server(Some("{not json"), false, DEFAULT_MCP_SERVER_URL)
+            .expect_err("reject malformed JSON");
 
         assert!(err.to_string().contains("invalid JSON"));
     }
 
     #[test]
     fn adopt_json_merge_rejects_non_object_root() {
-        let err = upsert_mcp_server(Some("[]"), false).expect_err("reject non-object root");
+        let err = upsert_mcp_server(Some("[]"), false, DEFAULT_MCP_SERVER_URL)
+            .expect_err("reject non-object root");
 
         assert_eq!(err.to_string(), "MCP config root must be a JSON object");
     }
 
     #[test]
     fn adopt_json_merge_rejects_non_object_mcp_servers() {
-        let err = upsert_mcp_server(Some(r#"{"mcpServers":[]}"#), false)
+        let err = upsert_mcp_server(Some(r#"{"mcpServers":[]}"#), false, DEFAULT_MCP_SERVER_URL)
             .expect_err("reject non-object mcpServers");
 
         assert_eq!(

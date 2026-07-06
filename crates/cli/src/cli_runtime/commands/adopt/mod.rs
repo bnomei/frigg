@@ -34,6 +34,7 @@ pub(crate) fn run_adopt_command_with_output(
     check: bool,
     dry_run: bool,
     force: bool,
+    mcp_server_url: &str,
     output: &CliOutput,
 ) -> Result<(), Box<dyn Error>> {
     output.progress_event(
@@ -53,7 +54,8 @@ pub(crate) fn run_adopt_command_with_output(
         None,
     )?;
 
-    let plan = build_adopt_plan(config, &requested_targets, all, uninstall, force)?;
+    let plan =
+        build_adopt_plan(config, &requested_targets, all, uninstall, force, mcp_server_url)?;
     let pending_changes = plan.pending_changes();
     let status = if plan.is_empty() {
         "noop"
@@ -137,7 +139,7 @@ pub(crate) fn run_adopt_command_with_output(
         )?;
     }
 
-    let writes = apply_plan_entries(&plan, uninstall, force)?;
+    let writes = apply_plan_entries(&plan, uninstall, force, mcp_server_url)?;
     output.summary_event(
         adopt_level_for_status(status),
         "adopt",
@@ -225,6 +227,7 @@ fn build_adopt_plan(
     all: bool,
     uninstall: bool,
     force: bool,
+    mcp_server_url: &str,
 ) -> io::Result<AdoptPlan> {
     let repositories = config.repositories();
     let mut entries = Vec::new();
@@ -247,7 +250,8 @@ fn build_adopt_plan(
             })?;
 
         for target in select_targets(root, requested_targets, all) {
-            let (action, reason) = classify_target_action(root, target, uninstall, force);
+            let (action, reason) =
+                classify_target_action(root, target, uninstall, force, mcp_server_url);
             entries.push(AdoptPlanEntry {
                 repository_id: repo.repository_id.0.clone(),
                 root: root.to_path_buf(),
@@ -267,6 +271,7 @@ fn classify_target_action(
     target: AdoptTarget,
     uninstall: bool,
     force: bool,
+    mcp_server_url: &str,
 ) -> (AdoptPlanAction, Option<String>) {
     let contents = match read_existing_target_contents(root, target) {
         Ok(Some(contents)) => contents,
@@ -279,7 +284,7 @@ fn classify_target_action(
     if matches!(target, AdoptTarget::Hook) {
         classify_claude_hook_target(&contents, uninstall)
     } else if matches!(target, AdoptTarget::McpProject | AdoptTarget::McpCursor) {
-        classify_mcp_target(&contents, uninstall, force)
+        classify_mcp_target(&contents, uninstall, force, mcp_server_url)
     } else {
         classify_markdown_target(&contents, uninstall)
     }
@@ -419,6 +424,7 @@ fn apply_plan_entries(
     plan: &AdoptPlan,
     uninstall: bool,
     force: bool,
+    mcp_server_url: &str,
 ) -> Result<usize, Box<dyn Error>> {
     let mut writes = 0;
 
@@ -439,7 +445,7 @@ fn apply_plan_entries(
             entry.target,
             AdoptTarget::McpProject | AdoptTarget::McpCursor
         ) {
-            apply_mcp_json_edit(contents.as_deref(), uninstall, force)
+            apply_mcp_json_edit(contents.as_deref(), uninstall, force, mcp_server_url)
         } else {
             apply_markdown_edit(contents.as_deref(), uninstall)
         }?;
@@ -465,8 +471,14 @@ fn apply_plan_entries(
 }
 
 #[cfg(test)]
-fn apply_mcp_json_entries(plan: &AdoptPlan, uninstall: bool, force: bool) -> io::Result<usize> {
-    apply_plan_entries(plan, uninstall, force).map_err(|err| io::Error::other(err.to_string()))
+fn apply_mcp_json_entries(
+    plan: &AdoptPlan,
+    uninstall: bool,
+    force: bool,
+    mcp_server_url: &str,
+) -> io::Result<usize> {
+    apply_plan_entries(plan, uninstall, force, mcp_server_url)
+        .map_err(|err| io::Error::other(err.to_string()))
 }
 
 fn resolve_entry_write_path(entry: &AdoptPlanEntry) -> Result<PathBuf, Box<dyn Error>> {
@@ -514,14 +526,15 @@ fn apply_mcp_json_edit(
     contents: Option<&str>,
     uninstall: bool,
     force: bool,
+    mcp_server_url: &str,
 ) -> Result<AdoptApplyEdit, Box<dyn Error>> {
     let edit = if uninstall {
         match contents {
-            Some(contents) => json_merge::remove_mcp_server(contents, force),
+            Some(contents) => json_merge::remove_mcp_server(contents, force, mcp_server_url),
             None => Ok(json_merge::McpJsonEdit::Unchanged),
         }
     } else {
-        json_merge::upsert_mcp_server(contents, force)
+        json_merge::upsert_mcp_server(contents, force, mcp_server_url)
     }?;
 
     Ok(match edit {
@@ -557,8 +570,9 @@ fn classify_mcp_target(
     contents: &str,
     uninstall: bool,
     force: bool,
+    mcp_server_url: &str,
 ) -> (AdoptPlanAction, Option<String>) {
-    let state = match json_merge::classify_mcp_entry(contents) {
+    let state = match json_merge::classify_mcp_entry(contents, mcp_server_url) {
         Ok(state) => state,
         Err(err) => {
             return (AdoptPlanAction::Error, Some(format!("invalid-json:{err}")));
@@ -641,6 +655,8 @@ mod tests {
     use super::{apply_mcp_json_entries, apply_plan_entries, build_adopt_plan};
     use crate::cli_args::AdoptTarget;
 
+    const TEST_MCP_SERVER_URL: &str = super::json_merge::DEFAULT_MCP_SERVER_URL;
+
     #[test]
     fn adopt_plan_uses_workspace_roots_and_targets() {
         let root = temp_dir("adopt-plan");
@@ -648,8 +664,15 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(plan.len(), 1);
         assert_eq!(plan.entries[0].repository_id, "repo-001");
@@ -670,8 +693,15 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         fs::remove_dir_all(root).expect("remove temp root");
@@ -689,8 +719,15 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Skipped);
         fs::remove_dir_all(root).expect("remove temp root");
@@ -702,11 +739,18 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
+            apply_mcp_json_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply mcp"),
             1
         );
         let value: serde_json::Value =
@@ -714,7 +758,7 @@ mod tests {
                 .expect("parse mcp");
         assert_eq!(
             value["mcpServers"]["frigg"],
-            super::json_merge::desired_mcp_server()
+            super::json_merge::desired_mcp_server(TEST_MCP_SERVER_URL)
         );
         fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -725,11 +769,18 @@ mod tests {
         fs::create_dir_all(&root).expect("create temp root");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, false, false).expect("apply markdown"),
+            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply markdown"),
             1
         );
         assert_eq!(
@@ -750,11 +801,18 @@ mod tests {
         .expect("write agents");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::AgentsMd], false, true, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::AgentsMd],
+            false,
+            true,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, true, false).expect("apply uninstall"),
+            apply_plan_entries(&plan, true, false, TEST_MCP_SERVER_URL).expect("apply uninstall"),
             1
         );
         assert!(!root.join("AGENTS.md").exists());
@@ -772,11 +830,18 @@ mod tests {
         .expect("write mcp");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_mcp_json_entries(&plan, false, false).expect("apply mcp"),
+            apply_mcp_json_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply mcp"),
             1
         );
         let value: serde_json::Value =
@@ -786,7 +851,7 @@ mod tests {
         assert_eq!(value["unrelated"], true);
         assert_eq!(
             value["mcpServers"]["frigg"],
-            super::json_merge::desired_mcp_server()
+            super::json_merge::desired_mcp_server(TEST_MCP_SERVER_URL)
         );
         fs::remove_dir_all(root).expect("remove temp root");
     }
@@ -802,11 +867,18 @@ mod tests {
         .expect("write mcp");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpProject], false, true, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpProject],
+            false,
+            true,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_mcp_json_entries(&plan, true, false).expect("apply mcp"),
+            apply_mcp_json_entries(&plan, true, false, TEST_MCP_SERVER_URL).expect("apply mcp"),
             1
         );
         let value: serde_json::Value =
@@ -825,11 +897,18 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Create);
         assert_eq!(
-            apply_plan_entries(&plan, false, false).expect("apply hook"),
+            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
 
@@ -842,11 +921,18 @@ mod tests {
             super::json_merge::desired_claude_hook_command()
         );
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
-            .expect("build adopt plan again");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan again");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Unchanged);
         assert_eq!(
-            apply_plan_entries(&plan, false, false).expect("reapply hook"),
+            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("reapply hook"),
             0
         );
         fs::remove_dir_all(root).expect("remove temp root");
@@ -859,15 +945,22 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], true, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            true,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
         assert!(
             plan.entries
                 .iter()
                 .any(|entry| entry.target == AdoptTarget::Hook)
         );
 
-        apply_plan_entries(&plan, false, false).expect("apply all with hook");
+        apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply all with hook");
         let value: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(root.join(".claude/settings.json")).expect("read settings"),
         )
@@ -890,11 +983,18 @@ mod tests {
         .expect("write settings");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, false, false).expect("apply hook"),
+            apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL).expect("apply hook"),
             1
         );
         let value: serde_json::Value = serde_json::from_str(
@@ -928,11 +1028,19 @@ mod tests {
         .expect("write settings");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, true, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            true,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(
-            apply_plan_entries(&plan, true, false).expect("apply hook uninstall"),
+            apply_plan_entries(&plan, true, false, TEST_MCP_SERVER_URL)
+                .expect("apply hook uninstall"),
             1
         );
         let value: serde_json::Value = serde_json::from_str(
@@ -965,8 +1073,15 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Hook], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Hook],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
 
         let err = super::apply_claude_hook_edit(Some("{not json"), false)
@@ -993,8 +1108,15 @@ mod tests {
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
 
-        let plan = build_adopt_plan(&config, &[AdoptTarget::McpCursor], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::McpCursor],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
         assert_eq!(plan.entries[0].action, super::AdoptPlanAction::Error);
         let reason = plan.entries[0]
@@ -1033,7 +1155,7 @@ mod tests {
             reason: Some("test-forced-update".to_owned()),
         }]);
 
-        let err = apply_plan_entries(&plan, false, true)
+        let err = apply_plan_entries(&plan, false, true, TEST_MCP_SERVER_URL)
             .expect_err("symlinked target escape should fail before reading");
 
         let message = err.to_string();
@@ -1059,10 +1181,17 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join(".cursor")).expect("create cursor symlink");
         let config = FriggConfig::from_workspace_roots(vec![root.clone()])
             .expect("config should accept workspace root");
-        let plan = build_adopt_plan(&config, &[AdoptTarget::Cursor], false, false, false)
-            .expect("build adopt plan");
+        let plan = build_adopt_plan(
+            &config,
+            &[AdoptTarget::Cursor],
+            false,
+            false,
+            false,
+            TEST_MCP_SERVER_URL,
+        )
+        .expect("build adopt plan");
 
-        let err = apply_plan_entries(&plan, false, false)
+        let err = apply_plan_entries(&plan, false, false, TEST_MCP_SERVER_URL)
             .expect_err("symlinked parent escape should fail");
 
         assert!(err.to_string().contains("escapes canonical workspace root"));

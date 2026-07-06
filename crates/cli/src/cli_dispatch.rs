@@ -24,7 +24,9 @@ use crate::cli_runtime::{
     run_storage_init_command_with_output, run_storage_maintenance_command_with_output,
     run_strict_startup_vector_readiness_gate_with_output,
 };
-use crate::http_runtime::{HttpRuntimeConfig, resolve_http_runtime_config, serve_http};
+use crate::http_runtime::{
+    HttpRuntimeConfig, mcp_http_endpoint_url, resolve_http_runtime_config, serve_http,
+};
 use crate::{Cli, Command, default_tracing_filter, init_tracing, startup_trace};
 
 pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dyn Error>> {
@@ -67,6 +69,9 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                 force,
             } => {
                 let config = resolve_command_config(&cli, command.clone())?;
+                let adopt_mcp_http = resolve_http_runtime_config(&cli, true)?
+                    .expect("adopt resolves the same default MCP HTTP endpoint as serve");
+                let mcp_server_url = mcp_http_endpoint_url(adopt_mcp_http.bind_addr);
                 run_adopt_command_with_output(
                     &config,
                     target,
@@ -75,6 +80,7 @@ pub(super) async fn async_main(startup_trace_enabled: bool) -> Result<(), Box<dy
                     check,
                     dry_run,
                     force,
+                    &mcp_server_url,
                     &cli_output,
                 )?
             }

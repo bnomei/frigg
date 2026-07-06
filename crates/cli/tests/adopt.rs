@@ -236,6 +236,33 @@ fn adopt_cli_uninstall_removes_only_frigg_owned_content() {
 }
 
 #[test]
+fn adopt_cli_honors_custom_mcp_http_port() {
+    let root = temp_workspace_root("custom-mcp-port");
+    fs::create_dir_all(&root).expect("create temp root");
+
+    let output = run_frigg(
+        &root,
+        &[
+            "adopt",
+            "--target",
+            "mcp-project",
+            "--mcp-http-port",
+            "5000",
+        ],
+    );
+    assert_success(&output);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".mcp.json")).expect("read mcp"))
+            .expect("parse mcp");
+    assert_eq!(
+        value["mcpServers"]["frigg"]["url"],
+        "http://127.0.0.1:5000/mcp"
+    );
+    cleanup_workspace(&root);
+}
+
+#[test]
 fn adopt_cli_force_replaces_diverged_frigg_mcp_entry() {
     let root = temp_workspace_root("force");
     fs::create_dir_all(&root).expect("create temp root");

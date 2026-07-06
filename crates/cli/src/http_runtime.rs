@@ -43,6 +43,11 @@ impl HttpRuntimeConfig {
     }
 }
 
+/// Builds the MCP HTTP client URL for the resolved serve bind address.
+pub(super) fn mcp_http_endpoint_url(bind_addr: SocketAddr) -> String {
+    format!("http://{bind_addr}/mcp")
+}
+
 /// Resolves optional HTTP transport settings from CLI flags and serve intent.
 pub(super) fn resolve_http_runtime_config(
     cli: &Cli,
