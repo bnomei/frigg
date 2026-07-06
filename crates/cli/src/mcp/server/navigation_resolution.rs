@@ -378,11 +378,28 @@ impl FriggMcpServer {
         repository_path_class_rank(path_class)
     }
 
+    fn collapse_consecutive_slashes(path: &str) -> String {
+        let mut collapsed = String::with_capacity(path.len());
+        let mut previous_was_slash = false;
+        for ch in path.chars() {
+            if ch == '/' {
+                if !previous_was_slash {
+                    collapsed.push(ch);
+                    previous_was_slash = true;
+                }
+            } else {
+                collapsed.push(ch);
+                previous_was_slash = false;
+            }
+        }
+        collapsed
+    }
+
     fn normalize_relative_input_path(raw_path: &str) -> String {
-        let normalized = raw_path.replace('\\', "/");
+        let normalized = Self::collapse_consecutive_slashes(&raw_path.replace('\\', "/"));
         let path = Path::new(&normalized);
         if path.is_absolute() {
-            return normalized.trim_start_matches("./").to_owned();
+            return Self::collapse_consecutive_slashes(normalized.trim_start_matches("./"));
         }
 
         let mut components = Vec::<String>::new();
@@ -390,7 +407,10 @@ impl FriggMcpServer {
             match component {
                 Component::CurDir => {}
                 Component::Normal(part) => {
-                    components.push(part.to_string_lossy().into_owned());
+                    let part = part.to_string_lossy();
+                    if !part.is_empty() {
+                        components.push(part.into_owned());
+                    }
                 }
                 Component::ParentDir => {
                     if components.last().is_some_and(|part| part != "..") {
@@ -400,13 +420,15 @@ impl FriggMcpServer {
                     }
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return normalized.trim_start_matches("./").to_owned();
+                    return Self::collapse_consecutive_slashes(
+                        normalized.trim_start_matches("./"),
+                    );
                 }
             }
         }
 
         if components.is_empty() {
-            normalized.trim_start_matches("./").to_owned()
+            Self::collapse_consecutive_slashes(normalized.trim_start_matches("./"))
         } else {
             components.join("/")
         }
@@ -1173,6 +1195,26 @@ mod tests {
     use super::{FriggMcpServer, NavigationPhpHelperKind};
     use crate::indexer::byte_offset_for_line_column;
     use std::path::Path;
+
+    #[test]
+    fn navigation_relative_input_path_collapses_double_slash_segments() {
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path("src//lib.rs"),
+            "src/lib.rs"
+        );
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path("src///lib.rs"),
+            "src/lib.rs"
+        );
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path("./src//lib.rs"),
+            "src/lib.rs"
+        );
+        assert_eq!(
+            FriggMcpServer::normalize_relative_input_path("crates//cli//src//lib.rs"),
+            "crates/cli/src/lib.rs"
+        );
+    }
 
     #[test]
     fn navigation_relative_input_path_collapses_internal_parent_segments() {

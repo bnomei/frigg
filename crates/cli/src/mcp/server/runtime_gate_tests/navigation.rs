@@ -536,6 +536,68 @@ fn navigation_rejects_line_past_eof_like_read_file_bounds() {
 }
 
 #[test]
+fn navigation_double_slash_path_resolves_same_as_single_slash() {
+    let workspace_root = temp_workspace_root("navigation-double-slash");
+    fs::create_dir_all(workspace_root.join("src"))
+        .expect("failed to create workspace src directory");
+    fs::write(
+        workspace_root.join("src/lib.rs"),
+        "fn helper() {}\n\nfn wrapper() {\n    helper();\n}\n",
+    )
+    .expect("failed to write source fixture");
+
+    let server = FriggMcpServer::new(
+        FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+            .expect("workspace root must produce valid config"),
+    );
+    let workspace = server
+        .runtime_state
+        .workspace_registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .known_workspaces()
+        .into_iter()
+        .next()
+        .expect("server should register workspace");
+    server
+        .adopt_workspace(&workspace, true)
+        .expect("server should adopt known workspace");
+    let repository_id = workspace.repository_id.clone();
+    let corpora = server
+        .collect_repository_symbol_corpora(Some(&repository_id))
+        .expect("symbol corpus collection should succeed");
+
+    let single_slash = FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src/lib.rs"),
+        Some(4),
+        Some(8),
+        None,
+    )
+    .expect("single-slash location target resolution should succeed");
+    let double_slash = FriggMcpServer::resolve_navigation_target(
+        &corpora,
+        None,
+        Some("src//lib.rs"),
+        Some(4),
+        Some(8),
+        None,
+    )
+    .expect("double-slash location target resolution should succeed");
+
+    assert_eq!(double_slash.symbol_query, single_slash.symbol_query);
+    assert_eq!(
+        double_slash.resolution_source,
+        single_slash.resolution_source
+    );
+    assert_eq!(double_slash.symbol_query, "helper");
+    assert_eq!(double_slash.resolution_source, "location_token_rust");
+
+    let _ = fs::remove_dir_all(workspace_root);
+}
+
+#[test]
 fn location_navigation_prefers_token_under_cursor_before_enclosing_symbol() {
     let workspace_root = temp_workspace_root("location-token-resolution");
     fs::create_dir_all(workspace_root.join("src"))
