@@ -346,10 +346,15 @@ impl FriggMcpServer {
             } else {
                 params.max_count_per_file.unwrap_or(usize::MAX)
             };
-        if per_file_limit != usize::MAX {
+        if requested_limit == 0 {
+            response.matches.clear();
+        } else if per_file_limit != usize::MAX {
             let mut retained = Vec::with_capacity(response.matches.len());
             let mut counts = BTreeMap::<(String, String), usize>::new();
             for found in response.matches {
+                if retained.len() >= requested_limit {
+                    break;
+                }
                 let key = (found.repository_id.clone(), found.path.clone());
                 let count = counts.entry(key).or_insert(0);
                 if *count >= per_file_limit {
@@ -357,9 +362,6 @@ impl FriggMcpServer {
                 }
                 *count += 1;
                 retained.push(found);
-                if retained.len() >= requested_limit {
-                    break;
-                }
             }
             response.matches = retained;
         } else if response.matches.len() > requested_limit {
@@ -631,5 +633,79 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(workspace_root);
+    }
+
+    fn presentation_test_server() -> FriggMcpServer {
+        let workspace_root = temp_workspace_root("limit-zero-presentation");
+        fs::create_dir_all(workspace_root.join(".git"))
+            .expect("fixture git marker should be creatable");
+        FriggMcpServer::new(
+            FriggConfig::from_workspace_roots(vec![workspace_root])
+                .expect("workspace root must produce valid config"),
+        )
+    }
+
+    fn sample_text_match(repository_id: &str, path: &str) -> TextMatch {
+        TextMatch {
+            match_id: None,
+            repository_id: repository_id.to_owned(),
+            path: path.to_owned(),
+            line: 1,
+            column: 1,
+            excerpt: "needle".to_owned(),
+            witness_score_hint_millis: None,
+            witness_provenance_ids: None,
+        }
+    }
+
+    #[test]
+    fn search_text_limit_zero_with_collapse_by_file_returns_no_matches() {
+        let server = presentation_test_server();
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 2,
+                    matches: vec![
+                        sample_text_match("repo-001", "src/a.rs"),
+                        sample_text_match("repo-001", "src/b.rs"),
+                    ],
+                    result_handle: None,
+                    metadata: None,
+                },
+                &SearchTextParams {
+                    query: "needle".to_owned(),
+                    limit: Some(0),
+                    collapse_by_file: Some(true),
+                    ..Default::default()
+                },
+            )
+            .expect("limit-zero collapse_by_file shaping should succeed");
+
+        assert_eq!(response.matches.len(), 0);
+        assert!(response.result_handle.is_none());
+    }
+
+    #[test]
+    fn search_text_limit_zero_with_files_with_matches_returns_no_matches() {
+        let server = presentation_test_server();
+        let response = server
+            .present_search_text_response(
+                SearchTextResponse {
+                    total_matches: 1,
+                    matches: vec![sample_text_match("repo-001", "src/a.rs")],
+                    result_handle: None,
+                    metadata: None,
+                },
+                &SearchTextParams {
+                    query: "needle".to_owned(),
+                    limit: Some(0),
+                    files_with_matches: Some(true),
+                    ..Default::default()
+                },
+            )
+            .expect("limit-zero files_with_matches shaping should succeed");
+
+        assert_eq!(response.matches.len(), 0);
+        assert!(response.result_handle.is_none());
     }
 }
