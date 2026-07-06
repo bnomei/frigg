@@ -1217,7 +1217,7 @@ fn queue_startup_refresh_if_needed(
     );
 }
 
-fn queue_semantic_followup_if_needed(
+pub(super) fn queue_semantic_followup_if_needed(
     repository: &WatchedRepository,
     scheduler: &mut WatchSchedulerState,
     now: Instant,
@@ -1232,7 +1232,24 @@ fn queue_semantic_followup_if_needed(
                 repository_id = %repository.repository_id,
                 root = %repository.root.display(),
                 error = %error,
-                "built-in watch mode failed to evaluate semantic follow-up freshness; skipping"
+                "built-in watch mode failed to evaluate semantic follow-up freshness; queueing semantic follow-up conservatively"
+            );
+            scheduler.enqueue_semantic_followup(&repository.repository_id, now);
+            info!(
+                repository_id = %repository.repository_id,
+                root = %repository.root.display(),
+                "built-in watch mode queued semantic follow-up after manifest refresh freshness probe error"
+            );
+            report_watch_event(
+                reporter,
+                WatchEvent::RefreshQueued {
+                    repository_id: repository.repository_id.clone(),
+                    root: repository.root.clone(),
+                    refresh_class: WatchRefreshClass::SemanticFollowup.as_str(),
+                    reason: "semantic_followup_freshness_error".to_owned(),
+                    snapshot_id: None,
+                    debounce_ms: None,
+                },
             );
             return;
         }

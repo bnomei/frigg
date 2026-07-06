@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use notify::{Event, EventKind};
 
 use super::scheduler::MAX_RETRY_BACKOFF_EXPONENT;
+use super::supervisor::queue_semantic_followup_if_needed;
 use super::*;
 use crate::indexer::{IndexMode, ManifestStore, index_repository_with_runtime_config};
 use crate::manifest_validation::ValidatedManifestCandidateCache;
@@ -1202,6 +1203,47 @@ fn startup_refresh_status_requests_manifest_refresh_for_missing_retrieval_projec
     assert_eq!(status.refresh_class, Some(WatchRefreshClass::ManifestFast));
 
     cleanup_workspace(&workspace_root);
+}
+
+#[test]
+fn watch_semantic_followup_freshness_error_queues_followup_after_manifest_success() {
+    use crate::settings::SemanticRuntimeProvider;
+
+    let now = Instant::now();
+    let root = std::path::PathBuf::from("/nonexistent/frigg-watch-semantic-followup-eval");
+    let repository = WatchedRepository {
+        repository_id: "repo-001".to_owned(),
+        canonical_root: None,
+        root_ignore_matcher: build_root_ignore_matcher(&root),
+        root: root.clone(),
+        db_path: root.join("frigg.db"),
+    };
+    let semantic_runtime = SemanticRuntimeConfig {
+        enabled: true,
+        provider: Some(SemanticRuntimeProvider::OpenAi),
+        model: Some("text-embedding-3-small".to_owned()),
+        strict_mode: false,
+    };
+    let credentials = SemanticRuntimeCredentials {
+        openai_api_key: Some("test-openai-key".to_owned()),
+        gemini_api_key: None,
+    };
+
+    let mut scheduler = WatchSchedulerState::new(0);
+    scheduler.add_repository("repo-001");
+    queue_semantic_followup_if_needed(
+        &repository,
+        &mut scheduler,
+        now,
+        &semantic_runtime,
+        &credentials,
+        &None,
+    );
+
+    assert!(
+        scheduler.repository_pending("repo-001", WatchRefreshClass::SemanticFollowup),
+        "a semantic follow-up freshness evaluation failure must still queue semantic follow-up"
+    );
 }
 
 #[test]
