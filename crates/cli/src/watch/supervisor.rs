@@ -33,6 +33,7 @@ use super::repository::{
 use super::scheduler::{ScheduledRefresh, WatchRefreshClass, WatchSchedulerState};
 
 const WATCH_TICK_MS: u64 = 50;
+const WATCH_INDEX_WORKER_PANIC_MESSAGE: &str = "watch index worker panicked";
 
 /// Callback invoked when watch-driven index work invalidates MCP repository caches.
 pub type RepositoryCacheInvalidationCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
@@ -700,7 +701,7 @@ async fn run_supervisor(
             let reporter = reporter.clone();
             // Side effect: blocking index runs off the supervisor tick loop.
             tokio::task::spawn_blocking(move || {
-                let result = match class {
+                let result = run_caught_watch_index_work(|| match class {
                     WatchRefreshClass::ManifestFast => {
                         let mut lexical_only_runtime = semantic_runtime.clone();
                         lexical_only_runtime.enabled = false;
@@ -780,8 +781,7 @@ async fn run_supervisor(
                             },
                         )
                     }
-                }
-                .map_err(WatchRefreshFailure::from_error);
+                });
                 let detail = match &result {
                     Ok(summary) => Some(format!(
                         "refresh_class={} snapshot={} files_changed={} files_deleted={} changed_paths={} deleted_paths={} duration_ms={}",
@@ -822,6 +822,21 @@ async fn run_supervisor(
                 });
             });
         }
+    }
+}
+
+fn run_caught_watch_index_work<F>(
+    work: F,
+) -> Result<crate::indexer::IndexSummary, WatchRefreshFailure>
+where
+    F: FnOnce() -> FriggResult<crate::indexer::IndexSummary>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(result) => result.map_err(WatchRefreshFailure::from_error),
+        Err(_) => Err(WatchRefreshFailure {
+            message: WATCH_INDEX_WORKER_PANIC_MESSAGE.to_owned(),
+            kind: WatchRefreshFailureKind::Retryable,
+        }),
     }
 }
 
@@ -1631,6 +1646,100 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, WatchEvent::RefreshFailed { .. })),
             "typed storage schema errors must not schedule RefreshFailed retry events"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn watch_panic_worker_maps_to_retryable_refresh_failure() {
+        let result = run_caught_watch_index_work(|| {
+            panic!("simulate watch index worker panic");
+        });
+
+        let failure = result.expect_err("panicked watch worker should become a refresh failure");
+        assert_eq!(failure.message, WATCH_INDEX_WORKER_PANIC_MESSAGE);
+        assert_eq!(failure.kind, WatchRefreshFailureKind::Retryable);
+        assert!(!failure.blocks_retry());
+    }
+
+    #[test]
+    fn watch_panic_orphan_scheduler_clears_latch_via_synthetic_failure() {
+        use super::super::repository::watched_repository_for_root;
+
+        let root = std::env::temp_dir().join("frigg-watch-supervisor-panic-orphan-root");
+        let db_path = temp_supervisor_db_path("panic-orphan-completion");
+        let repository =
+            watched_repository_for_root("repo-001".to_owned(), root.clone(), db_path.clone())
+                .expect("watched repository should build for test root");
+        let repositories = Arc::new(RwLock::new(BTreeMap::from([(
+            repository.repository_id.clone(),
+            repository,
+        )])));
+        let mut scheduler = WatchSchedulerState::new(0);
+        scheduler.add_repository("repo-001");
+        let now = Instant::now();
+        let retry = Duration::from_millis(250);
+        scheduler.enqueue_initial_sync("repo-001", WatchRefreshClass::ManifestFast, now);
+        scheduler.mark_started("repo-001", WatchRefreshClass::ManifestFast);
+
+        assert!(
+            scheduler.next_ready_refresh(now).is_none(),
+            "latched scheduler should not dispatch while active_class is set"
+        );
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_events = Arc::clone(&events);
+        let reporter: WatchEventReporter = Arc::new(move |event| {
+            recorded_events
+                .lock()
+                .expect("watch event log poisoned")
+                .push(event);
+        });
+        handle_index_completed(
+            &repositories,
+            &mut scheduler,
+            "repo-001",
+            WatchRefreshClass::ManifestFast,
+            Err(WatchRefreshFailure {
+                message: WATCH_INDEX_WORKER_PANIC_MESSAGE.to_owned(),
+                kind: WatchRefreshFailureKind::Retryable,
+            }),
+            None,
+            now,
+            retry,
+            &SemanticRuntimeConfig::default(),
+            &SemanticRuntimeCredentials::default(),
+            &Some(reporter),
+        );
+
+        assert!(
+            scheduler.repository_pending("repo-001", WatchRefreshClass::ManifestFast),
+            "panic completion should schedule a retry instead of leaving the latch stuck"
+        );
+        assert_eq!(
+            scheduler.next_ready_refresh(now + retry),
+            Some(ScheduledRefresh {
+                root_idx: 0,
+                repository_id: "repo-001".to_owned(),
+                class: WatchRefreshClass::ManifestFast,
+            })
+        );
+        let events = events.lock().expect("watch event log poisoned");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WatchEvent::RefreshFailed {
+                    repository_id,
+                    refresh_class,
+                    error,
+                    ..
+                } if repository_id == "repo-001"
+                    && *refresh_class == WatchRefreshClass::ManifestFast.as_str()
+                    && error == WATCH_INDEX_WORKER_PANIC_MESSAGE
+            )),
+            "synthetic panic completion should emit RefreshFailed"
         );
 
         let _ = std::fs::remove_file(&db_path);

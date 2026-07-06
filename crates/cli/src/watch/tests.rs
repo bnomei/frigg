@@ -470,6 +470,34 @@ fn scheduler_coalesces_rerun_when_event_arrives_in_flight() {
 }
 
 #[test]
+fn watch_panic_scheduler_latch_cleared_by_failed_completion() {
+    let mut scheduler = WatchSchedulerState::new(1);
+    let now = Instant::now();
+    let retry = Duration::from_millis(5_000);
+
+    scheduler.enqueue_initial_sync(0, WatchRefreshClass::ManifestFast, now);
+    scheduler.mark_started(0, WatchRefreshClass::ManifestFast);
+    assert!(
+        scheduler.next_ready_refresh(now).is_none(),
+        "orphaned in-flight latch should block further dispatch"
+    );
+
+    assert_eq!(
+        scheduler.mark_failed(0, WatchRefreshClass::ManifestFast, now, retry),
+        Some(retry)
+    );
+    assert!(scheduler.repository_pending(0, WatchRefreshClass::ManifestFast));
+    assert_eq!(
+        scheduler.next_ready_refresh(now + retry),
+        Some(ScheduledRefresh {
+            root_idx: 0,
+            repository_id: "repo-000".to_owned(),
+            class: WatchRefreshClass::ManifestFast,
+        })
+    );
+}
+
+#[test]
 fn scheduler_failure_schedules_retry_without_parallel_restart() {
     let mut scheduler = WatchSchedulerState::new(1);
     let now = Instant::now();
