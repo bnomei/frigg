@@ -325,27 +325,41 @@ impl ContextSummaryWindow {
         now: DateTime<Utc>,
     ) -> Result<Self, ContextSummaryError> {
         let parsed_since = since
-            .map(parse_context_summary_datetime)
+            .map(|value| parse_context_summary_bound(value, ContextSummaryBoundRole::Since))
             .transpose()
             .map_err(ContextSummaryError::InvalidDate)?;
         let parsed_until = until
-            .map(parse_context_summary_datetime)
+            .map(|value| parse_context_summary_bound(value, ContextSummaryBoundRole::Until))
             .transpose()
             .map_err(ContextSummaryError::InvalidDate)?;
 
         let (date_since, date_until) = match (parsed_since, parsed_until) {
-            (Some(date_since), Some(date_until)) => (date_since, date_until),
-            (Some(date_since), None) => (date_since, now),
+            (Some(date_since), Some(date_until)) => (date_since.instant, date_until.instant),
+            (Some(date_since), None) => (date_since.instant, now),
             (None, Some(date_until)) => {
-                let date_since = date_until
-                    .checked_sub_signed(Duration::days(30))
-                    .ok_or_else(|| {
-                        ContextSummaryError::InvalidDate(format!(
-                            "date_until minus 30 days is out of range: {}",
-                            date_until.to_rfc3339()
-                        ))
-                    })?;
-                (date_since, date_until)
+                let date_since = match date_until.date_only {
+                    Some(until_date) => {
+                        let since_date = until_date.checked_sub_signed(Duration::days(30)).ok_or_else(
+                            || {
+                                ContextSummaryError::InvalidDate(format!(
+                                    "date_until minus 30 days is out of range: {}",
+                                    date_until.instant.to_rfc3339()
+                                ))
+                            },
+                        )?;
+                        start_of_utc_day(since_date).map_err(ContextSummaryError::InvalidDate)?
+                    }
+                    None => date_until
+                        .instant
+                        .checked_sub_signed(Duration::days(30))
+                        .ok_or_else(|| {
+                            ContextSummaryError::InvalidDate(format!(
+                                "date_until minus 30 days is out of range: {}",
+                                date_until.instant.to_rfc3339()
+                            ))
+                        })?,
+                };
+                (date_since, date_until.instant)
             }
             (None, None) => (now - Duration::days(30), now),
         };
@@ -752,16 +766,52 @@ fn read_context_log_file_summary(
     Ok(summary)
 }
 
-fn parse_context_summary_datetime(input: &str) -> Result<DateTime<Utc>, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextSummaryBoundRole {
+    Since,
+    Until,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedContextBound {
+    instant: DateTime<Utc>,
+    date_only: Option<NaiveDate>,
+}
+
+fn parse_context_summary_bound(
+    input: &str,
+    role: ContextSummaryBoundRole,
+) -> Result<ParsedContextBound, String> {
     if let Ok(timestamp) = DateTime::parse_from_rfc3339(input) {
-        return Ok(timestamp.with_timezone(&Utc));
+        return Ok(ParsedContextBound {
+            instant: timestamp.with_timezone(&Utc),
+            date_only: None,
+        });
     }
 
     let date = NaiveDate::parse_from_str(input, "%Y-%m-%d")
         .map_err(|_| format!("expected RFC3339 timestamp or YYYY-MM-DD date, got {input:?}"))?;
+    let instant = match role {
+        ContextSummaryBoundRole::Since => start_of_utc_day(date)?,
+        ContextSummaryBoundRole::Until => end_of_utc_day(date)?,
+    };
+    Ok(ParsedContextBound {
+        instant,
+        date_only: Some(date),
+    })
+}
+
+fn start_of_utc_day(date: NaiveDate) -> Result<DateTime<Utc>, String> {
     let datetime = date
         .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| format!("invalid date: {input:?}"))?;
+        .ok_or_else(|| format!("invalid date: {date:?}"))?;
+    Ok(DateTime::from_naive_utc_and_offset(datetime, Utc))
+}
+
+fn end_of_utc_day(date: NaiveDate) -> Result<DateTime<Utc>, String> {
+    let datetime = date
+        .and_hms_nano_opt(23, 59, 59, 999_999_999)
+        .ok_or_else(|| format!("invalid date: {date:?}"))?;
     Ok(DateTime::from_naive_utc_and_offset(datetime, Utc))
 }
 
@@ -1148,11 +1198,82 @@ mod tests {
             .expect("missing context log should summarize");
 
         assert_eq!(summary.date_since, "2026-06-01T00:00:00+00:00");
-        assert_eq!(summary.date_until, "2026-07-01T00:00:00+00:00");
+        assert_eq!(
+            summary.date_until,
+            "2026-07-01T23:59:59.999999999+00:00"
+        );
         assert_eq!(summary.roots.len(), 1);
         assert!(!summary.roots[0].exists);
         assert_eq!(summary.totals.events, 0);
         assert_eq!(jsonl_summary_cache_entry_count_for_tests(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn context_efficiency_summary_until_day_includes_end_day_rows() {
+        let _guard = context_efficiency_test_lock();
+        clear_jsonl_summary_cache_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "frigg-context-efficiency-summary-until-day-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let frigg_dir = root.join(".frigg");
+        std::fs::create_dir_all(&frigg_dir).expect("frigg dir should be created");
+        let log_path = frigg_dir.join("context.jsonl");
+
+        let row = ContextEfficiencyLogRow {
+            timestamp: "2026-06-30T10:00:00Z".to_owned(),
+            session_id: None,
+            tool: "search_text".to_owned(),
+            repository_id: "repo-1".to_owned(),
+            snapshot_id: Some("snapshot-1".to_owned()),
+            metrics: ContextEfficiencyLogMetrics {
+                indexed_readable_files: 10,
+                indexed_readable_bytes: 100,
+                indexed_min_mtime_ns: None,
+                indexed_max_mtime_ns: None,
+                candidate_input_count: Some(10),
+                candidate_output_count: Some(1),
+                returned_match_count: Some(1),
+                returned_unique_paths: Some(1),
+                returned_unique_file_bytes: Some(40),
+                returned_source_bytes_estimate: Some(8),
+                matched_file_context_saved_bytes_estimate: Some(32),
+                matched_file_context_saved_percent_estimate: Some(80.0),
+                query_duration_ms: Some(4),
+                narrowing_ratio_estimate: Some(5),
+            },
+        };
+        std::fs::write(
+            &log_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&row).expect("row should serialize")
+            ),
+        )
+        .expect("log should be written");
+
+        let now = DateTime::parse_from_rfc3339("2026-07-02T12:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        let window = ContextSummaryWindow::resolve(Some("2026-06-01"), Some("2026-06-30"), now)
+            .expect("window should resolve");
+        assert_eq!(
+            window.date_until.to_rfc3339(),
+            "2026-06-30T23:59:59.999999999+00:00"
+        );
+
+        let summary = summarize_context_logs_for_roots(std::slice::from_ref(&root), &window)
+            .expect("context log should summarize");
+
+        assert_eq!(summary.totals.events, 1);
+        assert_eq!(summary.totals.returned_unique_file_bytes, 40);
+        assert_eq!(
+            summary.totals.matched_file_context_saved_bytes_estimate,
+            32
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 
