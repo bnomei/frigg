@@ -1529,15 +1529,17 @@ impl FriggMcpServer {
             });
         }
 
-        self.invalidate_repository_navigation_caches(&workspace.repository_id);
-        self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
-        if any_success && let Err(err) = self.prewarm_precise_graph_for_workspace(&workspace) {
-            warn!(
-                repository_id = %workspace.repository_id,
-                root = %workspace.root.display(),
-                error = %err,
-                "failed to prewarm precise graph after synchronous generation"
-            );
+        if any_success {
+            self.invalidate_repository_navigation_caches(&workspace.repository_id);
+            self.invalidate_repository_precise_graph_caches(&workspace.repository_id);
+            if let Err(err) = self.prewarm_precise_graph_for_workspace(&workspace) {
+                warn!(
+                    repository_id = %workspace.repository_id,
+                    root = %workspace.root.display(),
+                    error = %err,
+                    "failed to prewarm precise graph after synchronous generation"
+                );
+            }
         }
 
         Ok(WorkspacePreciseGenerationRunSummary {

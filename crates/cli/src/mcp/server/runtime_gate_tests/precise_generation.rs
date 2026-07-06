@@ -1990,3 +1990,126 @@ fn manifest_source_paths_filter_to_symbol_corpus_capability() {
         ]
     );
 }
+
+#[test]
+fn sync_precise_generation_total_failure_preserves_navigation_and_graph_caches() {
+    let workspace_root = temp_workspace_root("sync-precise-cache-survive-total-failure");
+    let bin_dir = temp_workspace_root("sync-precise-cache-survive-total-failure-bin");
+    fs::create_dir_all(workspace_root.join("src")).expect("failed to create source fixture");
+    fs::create_dir_all(&bin_dir).expect("failed to create fake bin dir");
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write Cargo fixture");
+    fs::write(workspace_root.join("src/lib.rs"), "pub fn alpha() {}\n")
+        .expect("failed to write source fixture");
+    write_scip_protobuf_fixture(&workspace_root, "fixture.scip");
+
+    let _rust_analyzer = write_fake_precise_generator_script_with_body(
+        &bin_dir,
+        "rust-analyzer",
+        r#"#!/bin/sh
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "version" ]; then
+  printf '%s\n' "rust-analyzer 1.85.0"
+  exit 0
+fi
+printf '%s\n' "forced generation failure" >&2
+exit 1
+"#,
+    );
+
+    with_fake_precise_generator_path(&bin_dir, || {
+        let server = FriggMcpServer::new_with_runtime_options(
+            FriggConfig::from_workspace_roots(vec![workspace_root.clone()])
+                .expect("workspace root must produce valid config"),
+            false,
+        );
+        let workspace = server
+            .known_workspaces()
+            .into_iter()
+            .next()
+            .expect("server should register workspace");
+
+        server.cache_heuristic_references(
+            HeuristicReferenceCacheKey {
+                repository_id: workspace.repository_id.clone(),
+                symbol_id: "symbol-001".to_owned(),
+                corpus_signature: "corpus-001".to_owned(),
+                scip_signature: "scip-001".to_owned(),
+            },
+            Vec::new(),
+            0,
+            0,
+            0,
+            0,
+        );
+        server
+            .prewarm_precise_graph_for_workspace(&workspace)
+            .expect("precise graph prewarm should seed cache before sync generation");
+        assert!(
+            server
+                .cache_state
+                .latest_precise_graph_cache
+                .read()
+                .expect("latest precise graph cache should not be poisoned")
+                .contains_key(&workspace.repository_id),
+            "precise graph cache should be seeded before sync generation"
+        );
+        let navigation_before = server
+            .cache_state
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .keys()
+            .filter(|key| key.repository_id == workspace.repository_id)
+            .count();
+
+        let run = server
+            .run_precise_generation_for_repository(
+                &workspace.repository_id,
+                &[String::from("Cargo.toml")],
+                &[],
+            )
+            .expect("sync precise generation should return Ok even when generators fail");
+        assert!(matches!(
+            run.action,
+            crate::mcp::types::WorkspacePreciseGenerationAction::Triggered
+        ));
+        assert!(
+            !run.generators.is_empty(),
+            "sync precise generation should run at least one generator"
+        );
+        assert!(
+            run.generators.iter().all(|item| {
+                item.summary.status != crate::mcp::types::WorkspacePreciseGenerationStatus::Succeeded
+            }),
+            "every selected generator should fail in this fixture"
+        );
+
+        assert!(
+            server
+                .cache_state
+                .latest_precise_graph_cache
+                .read()
+                .expect("latest precise graph cache should not be poisoned")
+                .contains_key(&workspace.repository_id),
+            "total generator failure must not evict the precise graph cache"
+        );
+        let navigation_after = server
+            .cache_state
+            .heuristic_reference_cache
+            .read()
+            .expect("heuristic reference cache should not be poisoned")
+            .keys()
+            .filter(|key| key.repository_id == workspace.repository_id)
+            .count();
+        assert_eq!(
+            navigation_after, navigation_before,
+            "total generator failure must not evict navigation helper caches"
+        );
+    });
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(bin_dir);
+}
