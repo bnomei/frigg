@@ -606,6 +606,41 @@ async fn core_search_text_regex_mode_executes_regex_search() {
 }
 
 #[tokio::test]
+async fn core_search_text_rejects_empty_matching_regex_with_typed_invalid_params() {
+    let server = server_for_fixture().await;
+    let error = match server
+        .search_text(Parameters(SearchTextParams {
+            query: ".*".to_owned(),
+            pattern_type: Some(SearchPatternType::Regex),
+            repository_id: Some("repo-001".to_owned()),
+            path_regex: None,
+            limit: Some(10),
+            ..Default::default()
+        }))
+        .await
+    {
+        Ok(_) => panic!("empty-matching query regex should be rejected"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(error_code_tag(&error), Some("invalid_params"));
+    assert_eq!(retryable_tag(&error), Some(false));
+    assert_eq!(
+        error.message, "query regex must not match empty strings",
+        "search_text should reject empty-matching regexes like explore"
+    );
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|value| value.get("query"))
+            .and_then(|value| value.as_str()),
+        Some(".*")
+    );
+}
+
+#[tokio::test]
 async fn core_search_text_defaults_to_compact_and_supports_read_match_handles() {
     let server = server_for_fixture().await;
     let repository_id = public_repository_id(&server).await;

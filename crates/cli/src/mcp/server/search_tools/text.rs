@@ -54,6 +54,9 @@ impl FriggMcpServer {
 
                     let (query, pattern_type) =
                         Self::normalize_search_text_rg_pattern(&params_for_blocking, query)?;
+                    if pattern_type == SearchPatternType::Regex {
+                        Self::reject_empty_matching_search_query_regex(&server, &query)?;
+                    }
 
                     let explicit_path_regex =
                         Self::compile_optional_path_regex(&server, &params_for_blocking)?;
@@ -305,6 +308,28 @@ impl FriggMcpServer {
 
         let result = execution.result;
         self.finalize_read_only_tool(&execution_context, result, execution.provenance_result)
+    }
+
+    fn reject_empty_matching_search_query_regex(
+        server: &FriggMcpServer,
+        query: &str,
+    ) -> Result<(), ErrorData> {
+        let regex = server.compile_cached_safe_regex(query).map_err(|err| {
+            Self::invalid_params(
+                format!("invalid query regex: {err}"),
+                Some(serde_json::json!({
+                    "query": query,
+                    "regex_error_code": err.code(),
+                })),
+            )
+        })?;
+        if regex.is_match("") {
+            return Err(Self::invalid_params(
+                "query regex must not match empty strings",
+                Some(serde_json::json!({ "query": query })),
+            ));
+        }
+        Ok(())
     }
 
     fn normalize_search_text_rg_pattern(
